@@ -1,0 +1,62 @@
+[package]
+name = "gui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "adpa-gui"
+path = "src/main.rs"
+
+[dependencies]
+adpa_core = { path = "../core" }
+validation = { path = "../validation" }
+permission_engine = { path = "../permission_engine" }
+fs_scanner = { path = "../fs_scanner" }
+share_scanner = { path = "../share_scanner" }
+ad_resolver = { path = "../ad_resolver" }
+persistence = { path = "../persistence" }
+risk_engine = { path = "../risk_engine" }
+exporter = { path = "../exporter" }
+
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+# Slint GUI mit Software-Backend (femtovg deaktiviert).
+# Begründung: Zielsystem ist ein Windows-Server-Domain-Controller unter
+# Proxmox mit VirtIO-GPU. Dort gibt es weder ein modernes OpenGL-ICD noch
+# einen D3D11/12-Pfad — GPU-basierte Toolkits (eframe/wgpu, iced) starten
+# nicht. Slints Software-Renderer schreibt direkt in eine GDI-Bitmap und
+# braucht keinerlei GPU.
+# Slint GUI with software backend (femtovg disabled).
+# Reason: target system is a Windows Server domain controller on Proxmox
+# with VirtIO-GPU. There is neither a modern OpenGL ICD nor a D3D11/12
+# path on that box — GPU-based toolkits (eframe/wgpu, iced) fail to start.
+# Slint's software renderer writes directly into a GDI bitmap and needs
+# no GPU at all.
+slint = { version = "1.8", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "renderer-software",
+    "compat-1-2",
+] }
+
+# Tracing-Subscriber-Erweiterungen: Layer-Komposition und Datei-Appender.
+# Tracing subscriber extensions: layer composition and file appender.
+tracing-appender = "0.2"
+
+# Windows-API: MessageBoxW, damit fatale Startfehler dem Benutzer als Dialog
+# angezeigt werden.
+# Windows API: MessageBoxW so fatal startup errors are shown to the user
+# as a dialog.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }

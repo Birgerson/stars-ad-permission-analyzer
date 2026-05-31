@@ -1,0 +1,29 @@
+[package]
+name = "cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "adpa"
+path = "src/main.rs"
+
+[dependencies]
+adpa_core = { path = "../core" }
+ad_resolver = { path = "../ad_resolver" }
+fs_scanner = { path = "../fs_scanner" }
+share_scanner = { path = "../share_scanner" }
+permission_engine = { path = "../permission_engine" }
+risk_engine = { path = "../risk_engine" }
+persistence = { path = "../persistence" }
+exporter = { path = "../exporter" }
+validation = { path = "../validation" }
+thiserror.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+uuid.workspace = true

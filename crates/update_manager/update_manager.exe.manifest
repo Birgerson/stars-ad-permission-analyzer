@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity
+    version="1.0.0.0"
+    processorArchitecture="amd64"
+    name="ad-permission-analyzer.update-manager"
+    type="win32"
+  />
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <!-- asInvoker: kein UAC-Elevation; Programm läuft mit den Rechten des aufrufenden Prozesses -->
+        <!-- asInvoker: no UAC elevation; program runs with the calling process privileges -->
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

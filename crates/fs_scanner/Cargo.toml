@@ -1,0 +1,14 @@
+[package]
+name = "fs_scanner"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+adpa_core = { path = "../core" }
+validation = { path = "../validation" }
+thiserror.workspace = true
+serde.workspace = true
+tracing.workspace = true
+windows-sys.workspace = true
+tokio.workspace = true

@@ -1,0 +1,82 @@
+name: CI
+
+# Hinweis: Das Projekt zielt auf Windows (NTFS-/Net-API-Aufrufe). Linux-/macOS-
+# Runner würden für viele Crates nicht kompilieren (windows-sys, windows-NetAPI).
+# Wir laufen daher auf windows-latest, der gleichen Plattform wie die Release-
+# Pipeline.
+#
+# Note: the project targets Windows (NTFS / Net API calls). Linux/macOS runners
+# would fail to compile several crates (windows-sys, windows NetAPI). We run on
+# windows-latest, matching the release pipeline.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Kürzere Compile-Zeit für CI; lokal bleibt der Default.
+  # Shorter compile time for CI; local builds keep the default.
+  CARGO_INCREMENTAL: 0
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    name: cargo fmt --check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: cargo clippy -D warnings
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-clippy-
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: cargo test --workspace
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+      # AD-Integrationstests sind mit #[ignore] markiert und brauchen einen
+      # laufenden DC mit gesetzten DEVMS_TEST_LDAP_*-Variablen. Im CI werden
+      # nur die normalen Tests ausgeführt — die laufen ohne Netzwerk und
+      # ohne die TESTDOMAIN-VM.
+      # AD integration tests are marked #[ignore] and require a running DC
+      # with DEVMS_TEST_LDAP_* set. CI only runs the regular tests — they
+      # do not need network or the TESTDOMAIN VM.
+      - run: cargo test --workspace

@@ -1,0 +1,11 @@
+[package]
+name = "permission_engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+adpa_core = { path = "../core" }
+thiserror.workspace = true
+serde.workspace = true
+tracing.workspace = true

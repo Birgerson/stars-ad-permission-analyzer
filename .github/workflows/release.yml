@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build and Package (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      - name: Build release binary
+        run: cargo build --release --bin adpa-gui
+
+      - name: Prepare installer assets
+        run: |
+          New-Item -ItemType Directory -Force installer-build
+          Copy-Item target\release\adpa-gui.exe installer-build\Stars.exe
+          Copy-Item installer\setup.nsi installer-build\setup.nsi
+
+      - name: Locate or install NSIS
+        run: |
+          $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) {
+            Write-Host "NSIS not found, installing via Chocolatey..."
+            choco install nsis --yes --no-progress
+          }
+          Write-Host "NSIS found at $nsis"
+
+      - name: Build NSIS installer
+        run: |
+          $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          # Version aus dem Tag ableiten: v0.2.0-rc15 -> 0.2.0-rc15.
+          # Wird per /DAPP_VERSION an makensis uebergeben, damit der
+          # Eintrag in "Programme und Features" die echte Release-Version
+          # zeigt statt des Hardcoded-Werts.
+          # Derive the version from the tag: v0.2.0-rc15 -> 0.2.0-rc15.
+          # Passed to makensis via /DAPP_VERSION so the "Programs and
+          # Features" entry shows the real release version instead of a
+          # hardcoded value.
+          $appVersion = "${{ github.ref_name }}".TrimStart('v')
+          Set-Location installer-build
+          & $nsis "/DAPP_VERSION=$appVersion" setup.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
+
+      - name: Stage release artifact
+        run: |
+          $tag = "${{ github.ref_name }}"
+          Move-Item installer-build\Stars-Setup.exe "Stars-${tag}-Setup.exe"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Stars ${{ github.ref_name }}"
+          # Tags mit '-' (z. B. v0.2.0-rc1, v1.0.0-beta) als Pre-Release markieren.
+          # Tags containing '-' (e.g. v0.2.0-rc1, v1.0.0-beta) are marked as pre-release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body: |
+            ## Stars — AD Permission Analyzer ${{ github.ref_name }}
+
+            ### Installation
+            1. Download **Stars-${{ github.ref_name }}-Setup.exe** below.
+            2. Doppelklick auf den Installer — keine Administratorrechte erforderlich.
+            3. Ein **Stars**-Symbol erscheint auf dem Desktop.
+
+            ### Systemvoraussetzungen
+            - Windows 10 / Windows 11 / Windows Server 2016 oder neuer
+            - Keine zusätzliche Software erforderlich (eigenständige EXE)
+
+            ### Features
+            - NTFS-ACL-Analyse mit vollständigem Berechtigungspfad
+            - Rekursiver Baum-Scan mit Live-Ergebnistabelle
+            - Risikoanalyse (5 Regeln: Full Control, Write Access, Broad Group, Direct ACE, Sensitive Path)
+            - HTML-Berichtsexport (eigenständig, Dark Theme)
+            - Delta-Vergleich zwischen zwei Scan-Läufen
+            - Optionale LDAP / Active Directory Identitätsauflösung
+            - Optionale SMB-Share-Berechtigungsüberlagerung
+            - SQLite-Scan-Historie neben der EXE
+          files: "Stars-${{ github.ref_name }}-Setup.exe"
+          generate_release_notes: false

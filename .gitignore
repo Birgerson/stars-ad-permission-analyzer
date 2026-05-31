@@ -1,0 +1,11 @@
+# Zugangsdaten / Credentials — niemals committen / never commit
+PASSWORD.md
+
+# AI-Tooling — Arbeitsanweisungen für AI-Tools, kein Projektinhalt
+CLAUDE.md
+AGENTS.md
+.claude/
+review.md
+
+# Rust build artifacts
+/target/

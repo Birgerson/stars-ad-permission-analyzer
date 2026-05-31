@@ -1,0 +1,15 @@
+[package]
+name = "ad_resolver"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+adpa_core = { path = "../core" }
+thiserror.workspace = true
+serde.workspace = true
+tracing.workspace = true
+ldap3.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+windows-sys.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "adpa_core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+async-trait.workspace = true

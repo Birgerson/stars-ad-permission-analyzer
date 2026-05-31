@@ -1,0 +1,25 @@
+# Statisches CRT-Linking für die MSVC-Toolchain.
+#
+# Ohne diese Einstellung verlinkt der Rust-MSVC-Build dynamisch gegen die
+# Visual-C++-Runtime (VCRUNTIME140.dll, MSVCP140.dll …). Auf einem frischen
+# Windows-Server oder einer minimalen Workstation ohne installierte
+# „Visual C++ Redistributable"-Pakete bricht die EXE beim Start mit
+# „VCRUNTIME140.dll was not found" ab. Da Stars als eigenständiges Tool
+# ausgeliefert wird (siehe Release-Note: „Keine zusätzliche Software
+# erforderlich"), muss die CRT statisch in die EXE gelinkt sein.
+#
+# Static MSVC CRT linking.
+#
+# Without this setting the Rust MSVC build links the Visual C++ runtime
+# dynamically (VCRUNTIME140.dll, MSVCP140.dll …). On a fresh Windows Server
+# or a minimal workstation without the "Visual C++ Redistributable"
+# packages installed, the EXE fails at startup with "VCRUNTIME140.dll was
+# not found". Because Stars ships as a standalone tool (see release note:
+# "no additional software required"), the CRT must be statically linked
+# into the EXE.
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
