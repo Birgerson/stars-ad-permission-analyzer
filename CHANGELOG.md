@@ -10,7 +10,11 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ## [Unreleased]
 
-_Keine offenen Änderungen._
+### Geändert
+- `validate_path` akzeptiert jetzt zusätzlich die Windows-Long-Path-Schreibweise (`\\?\C:\…` und `\\?\UNC\server\share\…`) und normalisiert sie auf die kanonische Anzeigeform. CLI- und GUI-Eingaben verhalten sich damit nicht mehr strenger als die darunterliegende Scanner-API (ChatGPT-Code-Review Finding 2).
+
+### Tests
+- Zehn neue Tests für `validate_path` mit Long-Path-Eingaben: lokale und UNC-Long-Path-Form, Überlänge > MAX_PATH, Roundtrip mit `to_windows_api_path`, Ablehnung für fehlende Drive-/Share-Komponente, leeres Präfix und nach Strip noch verbotene Zeichen.
 
 ---
 

@@ -179,10 +179,45 @@ pub fn validate_local_path(input: &str) -> Result<ValidatedLocalPath, CoreError>
     Ok(ValidatedLocalPath(trimmed.to_string()))
 }
 
-/// Validates a user-supplied path as either a UNC path (\\server\share\...) or
-/// an absolute local Windows path (C:\...). Returns the normalised path on success.
+/// Validiert einen Benutzer-Pfad und liefert die normalisierte Anzeigeform.
+///
+/// Akzeptiert:
+/// - UNC-Pfade `\\server\share\…`
+/// - absolute lokale Pfade `X:\…`
+/// - Windows-Long-Path-Form `\\?\X:\…` (lokal)
+/// - Windows-Long-Path-UNC-Form `\\?\UNC\server\share\…`
+///
+/// Das `\\?\`-Präfix wird vor der Segmentprüfung entfernt und durch die
+/// kanonische Anzeigeform ersetzt, weil `?` sonst von der Segmentvalidierung
+/// als verbotenes Zeichen abgelehnt würde. Downstream-Code, der das Präfix
+/// für Win32-APIs benötigt, fügt es über [`to_windows_api_path`] wieder
+/// hinzu — die Funktion ist idempotent.
+///
+/// Validates a user-supplied path and returns the canonical display form.
+///
+/// Accepts:
+/// - UNC paths `\\server\share\…`
+/// - absolute local Windows paths `X:\…`
+/// - Windows long-path form `\\?\X:\…` (local)
+/// - Windows long-path UNC form `\\?\UNC\server\share\…`
+///
+/// The `\\?\` prefix is stripped before segment checking and replaced with
+/// the canonical display form, because `?` would otherwise be rejected as
+/// a forbidden character. Downstream code that needs the prefix for Win32
+/// APIs re-adds it via [`to_windows_api_path`] — that function is idempotent.
 pub fn validate_path(input: &str) -> Result<NormalizedPath, CoreError> {
     let trimmed = input.trim();
+    // \\?\UNC\server\share\… → kanonische UNC-Form \\server\share\…
+    // \\?\UNC\server\share\… → canonical UNC form \\server\share\…
+    if let Some(rest) = trimmed.strip_prefix(r"\\?\UNC\") {
+        let canonical = format!(r"\\{rest}");
+        return validate_unc_path(&canonical).map(Into::into);
+    }
+    // \\?\X:\… → lokale Anzeigeform X:\…
+    // \\?\X:\… → local display form X:\…
+    if let Some(rest) = trimmed.strip_prefix(r"\\?\") {
+        return validate_local_path(rest).map(Into::into);
+    }
     if trimmed.starts_with(r"\\") {
         validate_unc_path(trimmed).map(Into::into)
     } else {
@@ -542,6 +577,92 @@ mod tests {
         let original = r"\\dc\share\sub\file.txt";
         let api = to_windows_api_path(original);
         assert_eq!(strip_long_path_prefix(&api), original);
+    }
+
+    // --- Finding 2: Long-Path-Eingaben an validate_path / long-path inputs at validate_path ---
+
+    #[test]
+    fn validate_path_accepts_long_local_prefix() {
+        let np = validate_path(r"\\?\C:\Windows\System32").expect("must accept long-path local");
+        // Anzeigeform ohne Präfix — to_windows_api_path setzt es bei Bedarf wieder.
+        // Display form without prefix — to_windows_api_path re-adds it when needed.
+        assert_eq!(np.0, r"C:\Windows\System32");
+    }
+
+    #[test]
+    fn validate_path_accepts_long_unc_prefix() {
+        let np = validate_path(r"\\?\UNC\dc\share\folder").expect("must accept long-path UNC");
+        assert_eq!(np.0, r"\\dc\share\folder");
+    }
+
+    #[test]
+    fn validate_path_accepts_long_unc_ip_prefix() {
+        let np = validate_path(r"\\?\UNC\192.168.11.100\Shared\sub")
+            .expect("must accept long-path UNC with IP");
+        assert_eq!(np.0, r"\\192.168.11.100\Shared\sub");
+    }
+
+    #[test]
+    fn validate_path_accepts_overlong_local_with_prefix() {
+        // Ein Pfad > MAX_PATH (260) muss in Long-Path-Form akzeptiert werden,
+        // solange er unter MAX_PATH_LEN (32767) bleibt.
+        // A path > MAX_PATH (260) must be accepted in long-path form as long as
+        // it stays under MAX_PATH_LEN (32767).
+        let long = format!(r"\\?\C:\{}", "a".repeat(400));
+        let np = validate_path(&long).expect("must accept overlong long-path local");
+        assert!(np.0.starts_with(r"C:\"));
+        assert!(np.0.len() > 260);
+    }
+
+    #[test]
+    fn validate_path_long_local_roundtrips_via_to_windows_api_path() {
+        let np = validate_path(r"\\?\C:\Users\test\file.txt").unwrap();
+        let api = to_windows_api_path(&np.0);
+        assert_eq!(api, r"\\?\C:\Users\test\file.txt");
+    }
+
+    #[test]
+    fn validate_path_long_unc_roundtrips_via_to_windows_api_path() {
+        let np = validate_path(r"\\?\UNC\dc\share\folder").unwrap();
+        let api = to_windows_api_path(&np.0);
+        assert_eq!(api, r"\\?\UNC\dc\share\folder");
+    }
+
+    #[test]
+    fn validate_path_rejects_long_prefix_without_drive() {
+        // `\\?\foo` ist nach Strip ein relativer Pfad und damit ungültig.
+        // `\\?\foo` becomes a relative path after stripping and is invalid.
+        assert!(validate_path(r"\\?\foo").is_err());
+    }
+
+    #[test]
+    fn validate_path_rejects_long_unc_prefix_without_share() {
+        // `\\?\UNC\server` hat keine Share-Komponente.
+        // `\\?\UNC\server` lacks a share component.
+        assert!(validate_path(r"\\?\UNC\server").is_err());
+    }
+
+    #[test]
+    fn validate_path_rejects_bare_long_prefix() {
+        // `\\?\` ohne Inhalt darf nicht akzeptiert werden.
+        // `\\?\` with no content must not be accepted.
+        assert!(validate_path(r"\\?\").is_err());
+    }
+
+    #[test]
+    fn validate_path_rejects_bare_long_unc_prefix() {
+        // `\\?\UNC\` ohne Server/Share darf nicht akzeptiert werden.
+        // `\\?\UNC\` without server/share must not be accepted.
+        assert!(validate_path(r"\\?\UNC\").is_err());
+    }
+
+    #[test]
+    fn validate_path_rejects_long_path_with_forbidden_char_in_segment() {
+        // Das Präfix `\\?\` wird gestrippt; ein `?` *im Segment* danach bleibt
+        // verboten.
+        // The `\\?\` prefix is stripped; a `?` *inside a segment* after that
+        // is still forbidden.
+        assert!(validate_path(r"\\?\C:\bad?name").is_err());
     }
 
     #[test]
