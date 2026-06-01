@@ -10,6 +10,14 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ## [Unreleased]
 
+_Keine offenen Änderungen._
+
+---
+
+## [1.1.1] — 2026-06-01
+
+**Patch-Release.** Beseitigt eine UX-Falle im Analyze-Tab: bisher wurden Analyse-Ergebnisse nicht persistiert und tauchten deshalb im Delta-Tab nie auf.
+
 ### Geändert
 - Analyze-Tab persistiert das Ergebnis jetzt automatisch in die Scan-Historie — eine `EffectivePermission` landet als Scan-Lauf mit genau einer Permission. Damit sind Analyze-Auswertungen im Delta-Tab vergleichbar; vorher schrieb nur der Scan-Tree-Tab in die DB, was sich für Endnutzer als „Liste lädt meine Auswertung nicht" bemerkbar machte.
 - Statuszeile des Analyze-Tabs spiegelt das Persistenz-Ergebnis: „Analyse abgeschlossen — in der Scan-Historie gespeichert." bei Erfolg, sichtbarer Fehler­text bei Persistenz-Problemen.
@@ -17,6 +25,9 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ### Hinzugefügt
 - Hinweistext direkt unter dem „Analysieren"-Button: „Hinweis: jede Analyse wird automatisch in der Scan-Historie gespeichert und ist anschließend im Delta-Tab vergleichbar." — macht die Semantik vor dem Klick sichtbar.
+
+### Versionsbump
+- Workspace-Version: `1.1.0` → `1.1.1`.
 
 ---
 
