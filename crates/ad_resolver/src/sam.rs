@@ -45,7 +45,9 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 
 use adpa_core::error::CoreError;
-use adpa_core::model::{GroupMembership, Identity, IdentityKind, Sid};
+use adpa_core::model::{
+    GroupMembership, Identity, IdentityKind, MembershipPath, MembershipPathSource, Sid,
+};
 use tracing::{debug, warn};
 use windows_sys::Win32::Foundation::{LocalFree, ERROR_ACCESS_DENIED, FALSE, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
@@ -365,16 +367,41 @@ pub fn resolve_identity_via_sam(
             Ok(names) => {
                 for group_name in names {
                     match lookup_sid_for_account(None, &group_name) {
-                        Ok(group_sid) => memberships.push(GroupMembership {
-                            member_sid: Sid(sid_str.to_owned()),
-                            group_sid,
-                            direct: true,
-                            // NetUserGetGroups liefert den Namen direkt;
-                            // den geben wir 1:1 weiter.
-                            // NetUserGetGroups returns the name directly;
-                            // we pass it through verbatim.
-                            group_name: Some(group_name.clone()),
-                        }),
+                        Ok(group_sid) => {
+                            let member_sid_val = Sid(sid_str.to_owned());
+                            memberships.push(GroupMembership {
+                                member_sid: member_sid_val.clone(),
+                                group_sid: group_sid.clone(),
+                                direct: true,
+                                // NetUserGetGroups liefert den Namen direkt;
+                                // den geben wir 1:1 weiter.
+                                // NetUserGetGroups returns the name directly;
+                                // we pass it through verbatim.
+                                group_name: Some(group_name.clone()),
+                                // SAM/NetAPI liefert eine flache Liste —
+                                // wir kennen nur Benutzer → Gruppe als
+                                // direkte Kante; verschachtelte Beziehungen
+                                // (nested groups) sind über diese API nicht
+                                // sichtbar. Pfad bleibt zwei SIDs lang und
+                                // gilt als vollständig für die direkte
+                                // Kante.
+                                // SAM/NetAPI returns a flat list — only the
+                                // user → group direct edge is visible;
+                                // nested relationships are not exposed
+                                // through this API. The path stays two SIDs
+                                // long and is considered complete for the
+                                // direct edge.
+                                path: Some(MembershipPath {
+                                    nodes: vec![member_sid_val, group_sid],
+                                    names: vec![
+                                        Some(account.name.clone()),
+                                        Some(group_name.clone()),
+                                    ],
+                                    source: MembershipPathSource::DomainGroup,
+                                    complete: true,
+                                }),
+                            });
+                        }
                         Err(e) => warn!(
                             group_name,
                             error = %e,
@@ -411,11 +438,35 @@ pub fn resolve_identity_via_sam(
                             format!("{}\\{}", info.domain, info.name)
                         }
                     });
+                    let member_sid_val = Sid(sid_str.to_owned());
                     memberships.push(GroupMembership {
-                        member_sid: Sid(sid_str.to_owned()),
-                        group_sid,
+                        member_sid: member_sid_val.clone(),
+                        group_sid: group_sid.clone(),
                         direct: false, // lokale Mitgliedschaft ggf. transitiv / local membership may be transitive
-                        group_name,
+                        group_name: group_name.clone(),
+                        // NetUserGetLocalGroups liefert die Endmenge der
+                        // lokalen Gruppen, in denen der Benutzer enthalten
+                        // ist — direkt oder über verschachtelte lokale
+                        // Mitgliedschaften. Die konkrete Zwischenkette ist
+                        // über diese API nicht ohne weiteres beobachtbar,
+                        // daher markieren wir den Pfad als
+                        // LdapMatchingRule mit `complete = false`. Wer den
+                        // exakten Weg benötigt, kann später per
+                        // NetLocalGroupGetMembers nachladen.
+                        // NetUserGetLocalGroups returns the final set of
+                        // local groups the user belongs to — either
+                        // directly or via nested local memberships. The
+                        // intermediate chain is not readily observable
+                        // through this API, so we mark the path as
+                        // LdapMatchingRule with `complete = false`. The
+                        // exact route can be supplied later via
+                        // NetLocalGroupGetMembers.
+                        path: Some(MembershipPath {
+                            nodes: vec![member_sid_val, group_sid],
+                            names: vec![Some(account.name.clone()), group_name],
+                            source: MembershipPathSource::LocalGroup,
+                            complete: false,
+                        }),
                     });
                 }
             }

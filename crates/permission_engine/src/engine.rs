@@ -28,8 +28,8 @@ use adpa_core::{
     error::CoreError,
     model::{
         AccessContext, AccessMask, AceEntry, AceKind, ContributingAce, EffectivePermission,
-        GroupMembership, Identity, PermissionDiagnostic, PermissionPath, ShareEvalStatus,
-        ShareMaskStatus, Sid,
+        GroupMembership, Identity, MembershipPathSource, PermissionDiagnostic, PermissionPath,
+        ShareEvalStatus, ShareMaskStatus, Sid,
     },
     traits::{PermissionEvaluationInput, PermissionEvaluator},
 };
@@ -474,6 +474,105 @@ fn first_non_canonical_position(dacl: &[AceEntry]) -> Option<usize> {
     None
 }
 
+/// Bezeichnung der Quelle für das Erklärungs-Label.
+/// Human-readable label for the source kind shown in the explanation.
+fn source_label(source: &MembershipPathSource) -> &'static str {
+    match source {
+        MembershipPathSource::PrimaryGroup => "PrimaryGroup",
+        MembershipPathSource::DomainGroup => "DomainGroup",
+        MembershipPathSource::LocalGroup => "LocalGroup",
+        MembershipPathSource::LdapMatchingRule => "LdapMatchingRule",
+    }
+}
+
+/// Bevorzugte Anzeige für eine SID in der Kette: explizit gesetzter Name,
+/// dann globale SID→Name-Tabelle, dann nackte SID.
+/// Preferred display for a SID in the chain: explicitly attached name,
+/// then global SID→name table, then raw SID.
+fn display_for_sid<'a>(
+    sid: &'a Sid,
+    explicit_name: Option<&'a str>,
+    sid_names: &'a std::collections::BTreeMap<String, String>,
+) -> String {
+    if let Some(name) = explicit_name {
+        return name.to_owned();
+    }
+    if let Some(name) = sid_names.get(&sid.0) {
+        return name.clone();
+    }
+    sid.0.clone()
+}
+
+/// Formatiert einen einzelnen Membership-Schritt im Berechtigungspfad.
+/// Wenn die Mitgliedschaft eine konkrete Kette mitliefert (`gm.path`),
+/// wird diese als geordnete Sequenz „A → B → C" ausgegeben — der Auditor
+/// kann den Weg vom Benutzer zur ACE-tragenden Gruppe direkt ablesen
+/// (Finding 1 aus Review 2026-05-31).
+///
+/// Formats a single membership step in the explanation path. When the
+/// membership carries a concrete chain (`gm.path`), the chain is rendered
+/// as an ordered sequence „A → B → C" — the auditor can read the path
+/// from the user to the ACE-bearing group directly (finding 1 from the
+/// 2026-05-31 review).
+fn format_membership_step(
+    gm: &GroupMembership,
+    sid_names: &std::collections::BTreeMap<String, String>,
+) -> String {
+    let target_name = gm
+        .group_name
+        .as_deref()
+        .or_else(|| sid_names.get(&gm.group_sid.0).map(String::as_str));
+    let target_display = match target_name {
+        Some(name) => format!("{} ({})", name, gm.group_sid.0),
+        None => gm.group_sid.0.clone(),
+    };
+
+    let Some(path) = gm.path.as_ref() else {
+        // Kein konkreter Pfad bekannt — alter Anzeigeformat als Fallback.
+        // No concrete path known — fall back to the legacy format.
+        let via = if gm.direct { "direct" } else { "transitive" };
+        return format!("Member of {target_display} [{via}]");
+    };
+
+    let source = source_label(&path.source);
+
+    if !path.complete {
+        // Transitive Zugehörigkeit gesichert, exakter Weg nicht
+        // rekonstruierbar — explizit kennzeichnen, damit Audits den
+        // Unterschied zur vollständigen Kette sehen.
+        // Transitive membership confirmed, exact route not
+        // reconstructable — flag explicitly so audits can tell apart
+        // from a fully reconstructed chain.
+        return format!(
+            "Member of {target_display} [transitive, exact chain unknown — source: {source}, possibly truncated memberOf]"
+        );
+    }
+
+    if path.nodes.len() <= 2 {
+        // Zwei Knoten = direkter Sprung; keine Zwischenstufen.
+        // Two nodes = direct hop; no intermediates.
+        return format!("Member of {target_display} [direct, source: {source}]");
+    }
+
+    // Konkrete Kette: Knoten nach SID/Name auflösen und durch „ → " trennen.
+    // Concrete chain: render each node by SID/name and join with „ → ".
+    let chain_text: Vec<String> = path
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node_sid)| {
+            let explicit = path
+                .names
+                .get(i)
+                .and_then(|opt| opt.as_deref())
+                .filter(|s| !s.is_empty());
+            display_for_sid(node_sid, explicit, sid_names)
+        })
+        .collect();
+    let chain_joined = chain_text.join(" → ");
+    format!("Member of {target_display} [via {chain_joined}, source: {source}]")
+}
+
 /// Erstellt einen erklärbaren Berechtigungspfad.
 /// Creates an explainable permission path.
 #[allow(clippy::too_many_arguments)]
@@ -495,21 +594,7 @@ fn build_explanation(
 
     // 2. Gruppenmitgliedschaften / group memberships
     for gm in memberships {
-        let via = if gm.direct { "direct" } else { "transitive" };
-        // Anzeige-Reihenfolge: erst Name aus der Membership selbst (vom
-        // jeweiligen Resolver gesetzt), sonst aus der globalen SID→Name-
-        // Tabelle, sonst nur die SID.
-        // Display order: first the name carried on the membership itself
-        // (set by the respective resolver), then the global SID→name
-        // table, finally the raw SID.
-        let display = gm
-            .group_name
-            .as_deref()
-            .or_else(|| sid_names.get(&gm.group_sid.0).map(String::as_str));
-        match display {
-            Some(name) => steps.push(format!("Member of {} ({}) [{}]", name, gm.group_sid.0, via)),
-            None => steps.push(format!("Member of {} [{}]", gm.group_sid.0, via)),
-        }
+        steps.push(format_membership_step(gm, sid_names));
     }
 
     // 3. Zutreffende ACEs / matching ACEs
@@ -598,7 +683,7 @@ mod tests {
     use crate::mask::*;
     use adpa_core::model::{
         AccessMask, AceEntry, AceKind, FileSystemObject, GroupMembership, Identity, IdentityKind,
-        NormalizedPath, Sid,
+        MembershipPath, MembershipPathSource, NormalizedPath, Sid,
     };
 
     const USER: &str = "S-1-5-21-1000-1000-1000-1001";
@@ -623,6 +708,7 @@ mod tests {
             group_sid: Sid(group_sid.into()),
             direct: true,
             group_name: None,
+            path: None,
         }
     }
 
@@ -2055,6 +2141,246 @@ mod tests {
         assert!(
             !token.contains(SID_NETWORK),
             "NETWORK must NOT be added for LocalInteractive"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Finding 1 / Review 2026-05-31 — Membership-Pfad in der Erklärung
+    // Finding 1 / Review 2026-05-31 — Membership path in the explanation
+    // ------------------------------------------------------------------
+
+    /// Baut eine geschachtelte Mitgliedschaft mit konkretem Pfad. Die
+    /// resultierende Erklärung muss die Zwischengruppen in der richtigen
+    /// Reihenfolge enthalten — Kernforderung aus Finding 1.
+    /// Builds a nested membership with a concrete path. The resulting
+    /// explanation must contain the intermediate groups in the correct
+    /// order — core requirement from finding 1.
+    fn nested_membership(
+        user_sid: &str,
+        user_name: &str,
+        group_a_sid: &str,
+        group_a_name: &str,
+        group_b_sid: &str,
+        group_b_name: &str,
+    ) -> GroupMembership {
+        GroupMembership {
+            member_sid: Sid(user_sid.into()),
+            group_sid: Sid(group_b_sid.into()),
+            direct: false,
+            group_name: Some(group_b_name.into()),
+            path: Some(MembershipPath {
+                nodes: vec![
+                    Sid(user_sid.into()),
+                    Sid(group_a_sid.into()),
+                    Sid(group_b_sid.into()),
+                ],
+                names: vec![
+                    Some(user_name.into()),
+                    Some(group_a_name.into()),
+                    Some(group_b_name.into()),
+                ],
+                source: MembershipPathSource::DomainGroup,
+                complete: true,
+            }),
+        }
+    }
+
+    fn direct_membership_with_path(
+        user_sid: &str,
+        user_name: &str,
+        group_sid: &str,
+        group_name: &str,
+        source: MembershipPathSource,
+    ) -> GroupMembership {
+        GroupMembership {
+            member_sid: Sid(user_sid.into()),
+            group_sid: Sid(group_sid.into()),
+            direct: true,
+            group_name: Some(group_name.into()),
+            path: Some(MembershipPath {
+                nodes: vec![Sid(user_sid.into()), Sid(group_sid.into())],
+                names: vec![Some(user_name.into()), Some(group_name.into())],
+                source,
+                complete: true,
+            }),
+        }
+    }
+
+    fn incomplete_transitive_membership(
+        user_sid: &str,
+        user_name: &str,
+        group_sid: &str,
+        group_name: &str,
+    ) -> GroupMembership {
+        GroupMembership {
+            member_sid: Sid(user_sid.into()),
+            group_sid: Sid(group_sid.into()),
+            direct: false,
+            group_name: Some(group_name.into()),
+            path: Some(MembershipPath {
+                nodes: vec![Sid(user_sid.into()), Sid(group_sid.into())],
+                names: vec![Some(user_name.into()), Some(group_name.into())],
+                source: MembershipPathSource::LdapMatchingRule,
+                complete: false,
+            }),
+        }
+    }
+
+    fn fso_with_dacl(dacl: Vec<AceEntry>) -> FileSystemObject {
+        FileSystemObject {
+            path: NormalizedPath(r"C:\test".into()),
+            is_directory: true,
+            owner_sid: None,
+            dacl,
+            inheritance_disabled: false,
+            is_reparse_point: false,
+            unsupported_aces: vec![],
+            null_dacl: false,
+        }
+    }
+
+    #[test]
+    fn explanation_contains_nested_chain_in_order() {
+        // User → GRP_A → GRP_B → ACE auf GRP_B → Modify.
+        // Der Erklärungstext muss „GRP_A → GRP_B" exakt in dieser
+        // Reihenfolge enthalten — und zwar in einem einzigen Schritt
+        // (kein Splitten erlaubt).
+        // User → GRP_A → GRP_B → ACE on GRP_B → Modify. The explanation
+        // text must contain "GRP_A → GRP_B" exactly in that order — in
+        // a single step (no splitting allowed).
+        let identity = user(USER);
+        let memberships = vec![nested_membership(
+            USER,
+            "max.mustermann",
+            GROUP_A,
+            "GRP_A",
+            GROUP_B,
+            "GRP_B",
+        )];
+        let dacl = vec![allow_ace(
+            GROUP_B,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+            true,
+        )];
+        let result = eval(identity, memberships, fso_with_dacl(dacl), None);
+        let joined = result.path_explanation.steps.join("\n");
+
+        // Genau ein Membership-Step für die nested chain.
+        // Exactly one membership step for the nested chain.
+        let chain_step = result
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("Member of") && s.contains("GRP_B"))
+            .unwrap_or_else(|| panic!("no membership step for GRP_B found in:\n{joined}"));
+
+        // Reihenfolge im Chain-Block (nach „via ") prüfen — Zielgruppe
+        // taucht im Anzeigeteil davor schon einmal auf.
+        // Verify order within the chain block (after "via ") — the target
+        // group already appears in the display prefix.
+        let via_block = chain_step
+            .split_once("via ")
+            .map(|(_, rest)| rest)
+            .unwrap_or_else(|| panic!("chain step missing 'via' marker:\n{chain_step}"));
+        let user_pos = via_block.find("max.mustermann").unwrap_or_else(|| {
+            panic!("user name not in chain block:\n{via_block}");
+        });
+        let a_pos = via_block
+            .find("GRP_A")
+            .unwrap_or_else(|| panic!("GRP_A not in chain block:\n{via_block}"));
+        let b_pos = via_block
+            .find("GRP_B")
+            .unwrap_or_else(|| panic!("GRP_B not in chain block:\n{via_block}"));
+        assert!(
+            user_pos < a_pos && a_pos < b_pos,
+            "chain order must be User → A → B, got:\n{via_block}"
+        );
+        assert!(
+            chain_step.contains("DomainGroup"),
+            "source label must be present in chain step:\n{chain_step}"
+        );
+    }
+
+    #[test]
+    fn explanation_direct_membership_with_source_label() {
+        let identity = user(USER);
+        let memberships = vec![direct_membership_with_path(
+            USER,
+            "max.mustermann",
+            GROUP_A,
+            "GRP_A",
+            MembershipPathSource::PrimaryGroup,
+        )];
+        let dacl = vec![allow_ace(GROUP_A, FILE_GENERIC_READ, true)];
+        let result = eval(identity, memberships, fso_with_dacl(dacl), None);
+        let step = result
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("Member of"))
+            .expect("membership step missing");
+        assert!(
+            step.contains("direct, source: PrimaryGroup"),
+            "expected '[direct, source: PrimaryGroup]', got: {step}"
+        );
+    }
+
+    #[test]
+    fn explanation_incomplete_transitive_marks_unknown_chain() {
+        let identity = user(USER);
+        let memberships = vec![incomplete_transitive_membership(
+            USER,
+            "max.mustermann",
+            GROUP_B,
+            "GRP_B",
+        )];
+        let dacl = vec![allow_ace(GROUP_B, FILE_GENERIC_READ, true)];
+        let result = eval(identity, memberships, fso_with_dacl(dacl), None);
+        let step = result
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("Member of"))
+            .expect("membership step missing");
+        assert!(
+            step.contains("exact chain unknown"),
+            "incomplete chain must be flagged, got: {step}"
+        );
+        assert!(
+            step.contains("LdapMatchingRule"),
+            "source must be labelled, got: {step}"
+        );
+    }
+
+    #[test]
+    fn explanation_falls_back_to_legacy_format_when_path_missing() {
+        // Cache-Reads liefern path=None; das Engine-Format muss dann das
+        // alte Schema „[direct]" / „[transitive]" produzieren.
+        // Cache reads return path=None; the engine must then fall back
+        // to the legacy "[direct]" / "[transitive]" format.
+        let identity = user(USER);
+        let memberships = vec![GroupMembership {
+            member_sid: Sid(USER.into()),
+            group_sid: Sid(GROUP_A.into()),
+            direct: true,
+            group_name: Some("GRP_A".into()),
+            path: None,
+        }];
+        let dacl = vec![allow_ace(GROUP_A, FILE_GENERIC_READ, true)];
+        let result = eval(identity, memberships, fso_with_dacl(dacl), None);
+        let step = result
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("Member of"))
+            .expect("membership step missing");
+        assert!(
+            step.contains("[direct]"),
+            "legacy format must be used when path is None, got: {step}"
+        );
+        assert!(
+            !step.contains("source:"),
+            "legacy format must NOT contain the new source label, got: {step}"
         );
     }
 }

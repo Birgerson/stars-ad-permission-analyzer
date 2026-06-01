@@ -10,11 +10,16 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ## [Unreleased]
 
+### Hinzugefügt
+- `MembershipPath` als neues Datenmodell in `adpa_core`: trägt pro `GroupMembership` die konkrete SID-Kette vom Benutzer zur Zielgruppe, indexweise zugeordnete Anzeigenamen, eine Herkunfts­quelle (`PrimaryGroup`, `DomainGroup`, `LocalGroup`, `LdapMatchingRule`) und ein `complete`-Flag. Der LDAP-Resolver rekonstruiert die Ketten per BFS über die `memberOf`-Edges der schon geladenen Gruppen-Entries; ist die Rekonstruktion nicht möglich (z. B. wegen trunkiertem `memberOf` einer Zwischengruppe), bleibt der Pfad zwei SIDs lang und wird als `complete = false` markiert (ChatGPT-Code-Review Finding 1).
+
 ### Geändert
 - `validate_path` akzeptiert jetzt zusätzlich die Windows-Long-Path-Schreibweise (`\\?\C:\…` und `\\?\UNC\server\share\…`) und normalisiert sie auf die kanonische Anzeigeform. CLI- und GUI-Eingaben verhalten sich damit nicht mehr strenger als die darunterliegende Scanner-API (ChatGPT-Code-Review Finding 2).
+- Erklärungstext der `PermissionPath`-Steps zeigt für jede Mitgliedschaft mit konkretem Pfad die geordnete Kette `User → Group A → Group B` plus Quellen-Label statt nur `Member of X [transitive]`. Direkte Mitgliedschaften erhalten `[direct, source: …]`, unvollständige transitive Ketten werden mit `exact chain unknown — source: LdapMatchingRule, possibly truncated memberOf` markiert. Cache-Lesepfade ohne `MembershipPath` fallen auf das alte Format zurück.
 
 ### Tests
 - Zehn neue Tests für `validate_path` mit Long-Path-Eingaben: lokale und UNC-Long-Path-Form, Überlänge > MAX_PATH, Roundtrip mit `to_windows_api_path`, Ablehnung für fehlende Drive-/Share-Komponente, leeres Präfix und nach Strip noch verbotene Zeichen.
+- Vier neue Engine-Tests für das Membership-Pfad-Rendering: verschachtelte Kette in geordneter Reihenfolge (`User → A → B`), direkte Kante mit Quellen-Label, unvollständige transitive Kette mit explizitem Hinweis, Rückfall auf Legacy-Format bei `path = None` (Cache-Reads).
 
 ---
 

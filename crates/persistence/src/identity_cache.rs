@@ -99,6 +99,14 @@ impl<'a> IdentityCache<'a> {
                     // evaluation; the cache only carries the membership
                     // topology.
                     group_name: None,
+                    // Wie group_name auch: konkrete Mitgliedschafts-Pfade
+                    // sind eine Live-Auswertung und werden hier nicht
+                    // persistiert, weil sie pro Lauf neu rekonstruiert
+                    // werden.
+                    // Like group_name: concrete membership paths are a
+                    // live-resolution concern and are not persisted here —
+                    // they are reconstructed on every run.
+                    path: None,
                 })
             })
             .map_err(|e| CoreError::Database(format!("Group membership query failed: {e}")))?;
@@ -253,12 +261,14 @@ mod tests {
                 group_sid: Sid("S-1-5-21-1-2-3-500".to_owned()),
                 direct: true,
                 group_name: None,
+                path: None,
             },
             GroupMembership {
                 member_sid: sid.clone(),
                 group_sid: Sid("S-1-5-21-1-2-3-501".to_owned()),
                 direct: false,
                 group_name: None,
+                path: None,
             },
         ];
         cache.upsert_memberships(&memberships).unwrap();
@@ -292,6 +302,7 @@ mod tests {
                 group_sid: group.clone(),
                 direct: false,
                 group_name: None,
+                path: None,
             }])
             .unwrap();
         cache
@@ -300,6 +311,7 @@ mod tests {
                 group_sid: group.clone(),
                 direct: true,
                 group_name: None,
+                path: None,
             }])
             .unwrap();
         let found = cache.lookup_memberships(&sid).unwrap();

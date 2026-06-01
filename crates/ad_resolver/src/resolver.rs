@@ -26,7 +26,7 @@
 //!   The primary group of a user is handled separately because it is
 //!   modelled via `primaryGroupID` (not `member`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -35,7 +35,7 @@ use tracing::{debug, warn};
 
 use adpa_core::{
     error::CoreError,
-    model::{GroupMembership, Identity, IdentityKind, Sid},
+    model::{GroupMembership, Identity, IdentityKind, MembershipPath, MembershipPathSource, Sid},
     traits::IdentityResolver,
 };
 
@@ -157,146 +157,340 @@ impl LdapResolver {
     /// `LDAP_MATCHING_RULE_IN_CHAIN`, ergänzt um die Primärgruppe (die nicht
     /// über `member` verlinkt ist) und deren transitive Eltern.
     ///
+    /// Zusätzlich wird pro Mitgliedschaft ein konkreter [`MembershipPath`]
+    /// rekonstruiert: ausgehend von den `memberOf`-Edges des Benutzers wird
+    /// per BFS durch die `memberOf`-Edges der jeweiligen Gruppen die kürzeste
+    /// Kette zur Zielgruppe gebaut. Wenn die Rekonstruktion nicht möglich ist
+    /// (z. B. weil `memberOf` einer Zwischengruppe vom Server trunkiert
+    /// wurde), bleibt der Pfad zwei SIDs lang und wird als
+    /// `complete = false` mit Quelle [`MembershipPathSource::LdapMatchingRule`]
+    /// markiert — die transitive Zugehörigkeit ist dann gesichert, der
+    /// konkrete Weg jedoch nicht.
+    ///
     /// Resolves all group memberships transitively — server-side via
     /// `LDAP_MATCHING_RULE_IN_CHAIN`, plus the primary group (which is not
     /// linked via `member`) and its transitive parents.
+    ///
+    /// In addition, each membership carries a concrete
+    /// [`MembershipPath`] reconstructed from the `memberOf` edges:
+    /// starting from the user's direct `memberOf` set, a BFS through each
+    /// group's `memberOf` finds the shortest chain to the target group.
+    /// When reconstruction is not possible (e.g. because an intermediate
+    /// group's `memberOf` was truncated by the server), the path stays
+    /// two SIDs long and is marked `complete = false` with source
+    /// [`MembershipPathSource::LdapMatchingRule`] — transitive membership
+    /// is certain, the concrete route is not.
     async fn resolve_memberships_internal(
         &self,
         sid: &Sid,
     ) -> Result<Vec<GroupMembership>, CoreError> {
         let mut ldap = ldap_client::connect(&self.config).await?;
 
-        let mut memberships = Vec::new();
-        let mut visited: HashSet<String> = HashSet::new();
-        visited.insert(sid.0.clone());
+        // 1) Principal-Entry laden.
+        // 1) Load the principal entry.
+        let Some(entry) =
+            ldap_client::search_by_sid(&mut ldap, &self.config.base_dn, &sid.0).await?
+        else {
+            ldap_client::disconnect(ldap).await;
+            return Ok(Vec::new());
+        };
 
-        // 1) Den Benutzer-/Gruppen-Eintrag laden — wir brauchen den DN für
-        //    die transitive Suche und ggf. die primaryGroupID.
-        // 1) Load the principal entry — we need the DN for the transitive
-        //    search and possibly the primaryGroupID.
-        let entry = ldap_client::search_by_sid(&mut ldap, &self.config.base_dn, &sid.0).await?;
+        // 2) Primärgruppe nachschlagen (separat von der `member`-Kette).
+        // 2) Resolve the primary group (separate from the `member` chain).
+        let primary_group_sid =
+            resolve_primary_group(&entry, &self.config.base_dn, &mut ldap).await;
 
-        if let Some(entry) = entry {
-            // 2) Primärgruppe verarbeiten. Sie ist über primaryGroupID an
-            //    den Benutzer gebunden und taucht NICHT in `member`-basierten
-            //    Suchen auf — wir müssen sie separat auflösen.
-            // 2) Handle primary group. It is bound to the user via
-            //    primaryGroupID and does NOT show up in `member`-based
-            //    searches — resolve it separately.
-            let primary_group_sid =
-                resolve_primary_group(&entry, &self.config.base_dn, &mut ldap).await;
-            if let Some(ref pg_sid) = primary_group_sid {
-                if visited.insert(pg_sid.0.clone()) {
-                    memberships.push(GroupMembership {
-                        member_sid: sid.clone(),
-                        group_sid: pg_sid.clone(),
-                        direct: true,
-                        // Primärgruppe wird per primaryGroupID referenziert,
-                        // ohne dass wir hier ihren Namen aus dem Entry haben.
-                        // Der Worker löst das später via LSA nach.
-                        // Primary group is referenced via primaryGroupID
-                        // without giving us its name from the entry here.
-                        // The worker resolves it later via LSA.
-                        group_name: None,
-                    });
-                }
+        // 3) Transitive Mitgliedschaft des Principals serverseitig holen.
+        // 3) Server-side transitive membership of the principal.
+        let transitive_groups = ldap_client::search_transitive_groups_for_member(
+            &mut ldap,
+            &self.config.base_dn,
+            &entry.dn,
+        )
+        .await?;
+
+        // 4) Primärgruppen-Entry und ihre transitiven Eltern. Werden
+        //    benötigt, um auch über die Primärgruppe verschachtelte
+        //    Ketten korrekt rekonstruieren zu können.
+        // 4) Primary group entry and its transitive parents — needed to
+        //    correctly reconstruct chains that run through the primary
+        //    group.
+        let (pg_entry, pg_parents) = if let Some(ref pg_sid) = primary_group_sid {
+            let pg_entry =
+                ldap_client::search_by_sid(&mut ldap, &self.config.base_dn, &pg_sid.0).await?;
+            let parents = if let Some(ref e) = pg_entry {
+                ldap_client::search_transitive_groups_for_member(
+                    &mut ldap,
+                    &self.config.base_dn,
+                    &e.dn,
+                )
+                .await?
+            } else {
+                Vec::new()
+            };
+            (pg_entry, parents)
+        } else {
+            (None, Vec::new())
+        };
+
+        ldap_client::disconnect(ldap).await;
+
+        // 5) Forward-Graph aufbauen: group_dn → Liste von Eltern-DNs (aus
+        //    deren `memberOf`-Attribut). Eine Kante G_x → G_y bedeutet
+        //    „G_x ist direktes Mitglied von G_y", also „G_y enthält G_x".
+        //    SID- und Name-Indizes parallel pflegen.
+        // 5) Build the forward graph: group_dn → list of parent DNs (from
+        //    its `memberOf` attribute). Edge G_x → G_y means "G_x is a
+        //    direct member of G_y", i.e. "G_y contains G_x". SID and name
+        //    indices kept in parallel.
+        let mut forward: HashMap<String, Vec<String>> = HashMap::new();
+        let mut dn_to_sid: HashMap<String, Sid> = HashMap::new();
+        let mut dn_to_name: HashMap<String, Option<String>> = HashMap::new();
+
+        let mut register_group_entry = |g: &ldap_client::RawEntry| {
+            let dn_key = g.dn.to_ascii_lowercase();
+            if dn_to_sid.contains_key(&dn_key) {
+                return;
             }
-
-            // 3) Transitive Mitgliedschaft serverseitig auflösen. Liefert in
-            //    einem Roundtrip ALLE Gruppen, in denen der Principal über
-            //    geschachtelte `member`-Ketten enthalten ist. Damit entfällt
-            //    der Range-Retrieval-Trick auf `memberOf` und der N+1-Lookup.
-            // 3) Resolve transitive membership server-side. One round-trip
-            //    returns ALL groups in which the principal is nested via
-            //    `member` chains. Avoids `memberOf` range-retrieval and N+1.
-            let transitive_groups = ldap_client::search_transitive_groups_for_member(
-                &mut ldap,
-                &self.config.base_dn,
-                &entry.dn,
-            )
-            .await?;
-
-            // 4) Direkte vs. transitive Mitgliedschaft markieren. Eine
-            //    Gruppe ist direkt, wenn ihr DN in der `memberOf`-Liste des
-            //    Principal steht; ansonsten transitiv. memberOf kann bei
-            //    sehr großen Tokens trunkiert sein — die Liste der
-            //    Mitgliedschaften kommt aus der Transitivsuche; memberOf
-            //    dient hier nur als „direkt"-Marker.
-            // 4) Mark direct vs. transitive. A group is direct if its DN
-            //    is in the principal's `memberOf` list; otherwise
-            //    transitive. `memberOf` may be truncated on very large
-            //    tokens — the membership *list* comes from the transitive
-            //    search; `memberOf` is used here only as a "direct" marker.
-            let direct_dns: HashSet<String> = entry
-                .all_attr("memberOf")
-                .iter()
-                .map(|dn| dn.to_ascii_lowercase())
-                .collect();
-
-            for group_entry in &transitive_groups {
-                let group_sid = match extract_sid_from_entry(group_entry) {
-                    Some(s) => s,
-                    None => continue,
-                };
-                if !visited.insert(group_sid.0.clone()) {
-                    continue;
-                }
-                let direct = direct_dns.contains(&group_entry.dn.to_ascii_lowercase());
-                // sAMAccountName ist der NetBIOS-Name der Gruppe (z. B.
-                // "Domain Admins"). Fallback auf cn, weil ältere Gruppen
-                // ohne sAMAccountName möglich sind.
-                // sAMAccountName is the group's NetBIOS name (e.g.
-                // "Domain Admins"). Falls back to cn since older groups
-                // may not carry sAMAccountName.
-                let group_name = group_entry
+            if let Some(sid) = extract_sid_from_entry(g) {
+                let name = g
                     .first_attr("sAMAccountName")
-                    .or_else(|| group_entry.first_attr("cn"))
+                    .or_else(|| g.first_attr("cn"))
                     .map(str::to_owned);
-                memberships.push(GroupMembership {
-                    member_sid: sid.clone(),
-                    group_sid,
-                    direct,
-                    group_name,
-                });
+                dn_to_sid.insert(dn_key.clone(), sid);
+                dn_to_name.insert(dn_key.clone(), name);
+                let parents: Vec<String> = g
+                    .all_attr("memberOf")
+                    .iter()
+                    .map(|d| d.to_ascii_lowercase())
+                    .collect();
+                forward.insert(dn_key, parents);
             }
+        };
 
-            // 5) Eltern der Primärgruppe transitiv ergänzen, da die
-            //    LDAP_MATCHING_RULE_IN_CHAIN-Suche oben den Principal —
-            //    nicht die Primärgruppe — als Member behandelt.
-            // 5) Add the primary group's transitive parents, since the
-            //    LDAP_MATCHING_RULE_IN_CHAIN search above starts at the
-            //    principal — not at the primary group.
-            if let Some(ref pg_sid) = primary_group_sid {
-                if let Ok(Some(pg_entry)) =
-                    ldap_client::search_by_sid(&mut ldap, &self.config.base_dn, &pg_sid.0).await
-                {
-                    let pg_parents = ldap_client::search_transitive_groups_for_member(
-                        &mut ldap,
-                        &self.config.base_dn,
-                        &pg_entry.dn,
-                    )
-                    .await?;
-                    for parent_entry in &pg_parents {
-                        if let Some(parent_sid) = extract_sid_from_entry(parent_entry) {
-                            if visited.insert(parent_sid.0.clone()) {
-                                let group_name = parent_entry
-                                    .first_attr("sAMAccountName")
-                                    .or_else(|| parent_entry.first_attr("cn"))
-                                    .map(str::to_owned);
-                                memberships.push(GroupMembership {
-                                    member_sid: sid.clone(),
-                                    group_sid: parent_sid,
-                                    direct: false,
-                                    group_name,
-                                });
-                            }
-                        }
+        for g in &transitive_groups {
+            register_group_entry(g);
+        }
+        for g in &pg_parents {
+            register_group_entry(g);
+        }
+        if let Some(ref e) = pg_entry {
+            register_group_entry(e);
+        }
+
+        // 6) Startknoten der BFS: die direkten Gruppen des Benutzers
+        //    (`memberOf` des Principals) plus die Primärgruppe (falls
+        //    bekannt). Beide gelten als Hop-1 vom Benutzer aus.
+        // 6) BFS starting nodes: the user's direct groups (`memberOf` of
+        //    the principal) plus the primary group (if known). Both count
+        //    as hop 1 from the user.
+        let direct_dns_lc: HashSet<String> = entry
+            .all_attr("memberOf")
+            .iter()
+            .map(|dn| dn.to_ascii_lowercase())
+            .collect();
+
+        let primary_dn_lc: Option<String> = pg_entry.as_ref().map(|e| e.dn.to_ascii_lowercase());
+
+        // 7) BFS von allen Startknoten gleichzeitig — pro Ziel-DN den
+        //    Vorgänger merken (`came_from`). Daraus lassen sich die
+        //    konkreten DN-Ketten rekonstruieren.
+        // 7) Multi-source BFS — track each reached DN's predecessor in
+        //    `came_from`. Concrete DN chains can then be reconstructed.
+        let mut came_from: HashMap<String, Option<String>> = HashMap::new();
+        let mut queue: VecDeque<String> = VecDeque::new();
+        for d in direct_dns_lc.iter() {
+            if dn_to_sid.contains_key(d) {
+                came_from.insert(d.clone(), None);
+                queue.push_back(d.clone());
+            }
+        }
+        if let Some(ref d) = primary_dn_lc {
+            if dn_to_sid.contains_key(d) && !came_from.contains_key(d) {
+                came_from.insert(d.clone(), None);
+                queue.push_back(d.clone());
+            }
+        }
+        while let Some(node) = queue.pop_front() {
+            if let Some(parents) = forward.get(&node) {
+                for p in parents {
+                    if !dn_to_sid.contains_key(p) {
+                        continue;
                     }
+                    if came_from.contains_key(p) {
+                        continue;
+                    }
+                    came_from.insert(p.clone(), Some(node.clone()));
+                    queue.push_back(p.clone());
                 }
             }
         }
 
-        ldap_client::disconnect(ldap).await;
+        // 8) Mitgliedschaften zusammenstellen und Pfade anhängen.
+        // 8) Assemble memberships and attach paths.
+        let mut memberships = Vec::new();
+        let mut visited: HashSet<String> = HashSet::new();
+        visited.insert(sid.0.clone());
+
+        let user_name = entry
+            .first_attr("sAMAccountName")
+            .or_else(|| entry.first_attr("cn"))
+            .map(str::to_owned);
+
+        // Hilfs-Closure: BFS-Pfad zu group_dn als SID-Kette inkl. Benutzer
+        // am Anfang rekonstruieren. Liefert None, wenn group_dn nicht
+        // erreichbar war.
+        // Helper closure: reconstruct the BFS path to group_dn as a SID
+        // chain prefixed with the user. Returns None when group_dn was
+        // not reached.
+        let reconstruct = |group_dn_lc: &str| -> Option<(Vec<Sid>, Vec<Option<String>>)> {
+            if !came_from.contains_key(group_dn_lc) {
+                return None;
+            }
+            let mut chain_dns: Vec<String> = Vec::new();
+            let mut cur = group_dn_lc.to_owned();
+            chain_dns.push(cur.clone());
+            while let Some(Some(prev)) = came_from.get(&cur) {
+                chain_dns.push(prev.clone());
+                cur = prev.clone();
+            }
+            chain_dns.reverse(); // jetzt Hop-1 → ... → Ziel / now hop-1 → ... → target
+            let mut nodes = Vec::with_capacity(chain_dns.len() + 1);
+            let mut names = Vec::with_capacity(chain_dns.len() + 1);
+            nodes.push(sid.clone());
+            names.push(user_name.clone());
+            for d in &chain_dns {
+                if let Some(s) = dn_to_sid.get(d) {
+                    nodes.push(s.clone());
+                    names.push(dn_to_name.get(d).cloned().flatten());
+                } else {
+                    return None;
+                }
+            }
+            Some((nodes, names))
+        };
+
+        // 8a) Primärgruppe als eigene Mitgliedschaft (direkt).
+        // 8a) Primary group as its own membership (direct).
+        if let Some(ref pg_sid) = primary_group_sid {
+            if visited.insert(pg_sid.0.clone()) {
+                let pg_name = pg_entry
+                    .as_ref()
+                    .and_then(|e| {
+                        e.first_attr("sAMAccountName")
+                            .or_else(|| e.first_attr("cn"))
+                    })
+                    .map(str::to_owned);
+                memberships.push(GroupMembership {
+                    member_sid: sid.clone(),
+                    group_sid: pg_sid.clone(),
+                    direct: true,
+                    group_name: pg_name.clone(),
+                    path: Some(MembershipPath {
+                        nodes: vec![sid.clone(), pg_sid.clone()],
+                        names: vec![user_name.clone(), pg_name],
+                        source: MembershipPathSource::PrimaryGroup,
+                        complete: true,
+                    }),
+                });
+            }
+        }
+
+        // 8b) Transitive Mitgliedschaften des Principals.
+        // 8b) Transitive memberships of the principal.
+        for group_entry in &transitive_groups {
+            let group_sid = match extract_sid_from_entry(group_entry) {
+                Some(s) => s,
+                None => continue,
+            };
+            if !visited.insert(group_sid.0.clone()) {
+                continue;
+            }
+            let dn_lc = group_entry.dn.to_ascii_lowercase();
+            let direct = direct_dns_lc.contains(&dn_lc);
+            let group_name = group_entry
+                .first_attr("sAMAccountName")
+                .or_else(|| group_entry.first_attr("cn"))
+                .map(str::to_owned);
+
+            let path = match reconstruct(&dn_lc) {
+                Some((nodes, names)) => MembershipPath {
+                    nodes,
+                    names,
+                    source: MembershipPathSource::DomainGroup,
+                    complete: true,
+                },
+                None => {
+                    // Transitive Zugehörigkeit ist gesichert (steht ja in
+                    // der Trefferliste), nur die Zwischenstufen sind
+                    // unbekannt — typischerweise wegen trunkiertem
+                    // memberOf in einer Zwischengruppe.
+                    // Transitive membership is certain (it is in the
+                    // result set) but intermediate hops are unknown —
+                    // typically due to a truncated memberOf in an
+                    // intermediate group.
+                    debug!(
+                        target_dn = %group_entry.dn,
+                        "Konkreter Mitgliedschaftspfad nicht rekonstruierbar / could not reconstruct concrete membership path"
+                    );
+                    MembershipPath {
+                        nodes: vec![sid.clone(), group_sid.clone()],
+                        names: vec![user_name.clone(), group_name.clone()],
+                        source: MembershipPathSource::LdapMatchingRule,
+                        complete: false,
+                    }
+                }
+            };
+
+            memberships.push(GroupMembership {
+                member_sid: sid.clone(),
+                group_sid,
+                direct,
+                group_name,
+                path: Some(path),
+            });
+        }
+
+        // 8c) Transitive Eltern der Primärgruppe (separate Hop-Kette über
+        //     die Primärgruppe).
+        // 8c) Transitive parents of the primary group (separate chain
+        //     that runs through the primary group).
+        for parent_entry in &pg_parents {
+            let parent_sid = match extract_sid_from_entry(parent_entry) {
+                Some(s) => s,
+                None => continue,
+            };
+            if !visited.insert(parent_sid.0.clone()) {
+                continue;
+            }
+            let dn_lc = parent_entry.dn.to_ascii_lowercase();
+            let group_name = parent_entry
+                .first_attr("sAMAccountName")
+                .or_else(|| parent_entry.first_attr("cn"))
+                .map(str::to_owned);
+            let path = match reconstruct(&dn_lc) {
+                Some((nodes, names)) => MembershipPath {
+                    nodes,
+                    names,
+                    source: MembershipPathSource::DomainGroup,
+                    complete: true,
+                },
+                None => MembershipPath {
+                    nodes: vec![sid.clone(), parent_sid.clone()],
+                    names: vec![user_name.clone(), group_name.clone()],
+                    source: MembershipPathSource::LdapMatchingRule,
+                    complete: false,
+                },
+            };
+            memberships.push(GroupMembership {
+                member_sid: sid.clone(),
+                group_sid: parent_sid,
+                direct: false,
+                group_name,
+                path: Some(path),
+            });
+        }
+
         Ok(memberships)
     }
 }

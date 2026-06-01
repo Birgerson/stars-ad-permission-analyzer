@@ -129,6 +129,94 @@ pub struct GroupMembership {
     /// compatible.
     #[serde(default)]
     pub group_name: Option<String>,
+    /// Konkreter Mitgliedschafts-Pfad von `member_sid` zu `group_sid`
+    /// (siehe [`MembershipPath`]). Vom Live-Resolver befüllt; der
+    /// SQLite-Cache speichert ihn nicht zurück, weil er bei jedem Lauf
+    /// neu rekonstruiert wird. `None` bedeutet „dieser Resolver hat
+    /// keinen Pfad geliefert" — die Engine fällt dann auf die alte
+    /// „direkt/transitiv"-Anzeige zurück. `#[serde(default)]` hält
+    /// ältere Cache-Einträge kompatibel.
+    /// Concrete membership path from `member_sid` to `group_sid` (see
+    /// [`MembershipPath`]). Populated by the live resolver; the SQLite
+    /// cache does not store it because it is reconstructed on every
+    /// run. `None` means "this resolver did not supply a path" — the
+    /// engine then falls back to the old "direct/transitive" display.
+    /// `#[serde(default)]` keeps older cache entries compatible.
+    #[serde(default)]
+    pub path: Option<MembershipPath>,
+}
+
+/// Konkrete Mitgliedschafts-Kette von einer Identität zu einer Gruppe.
+///
+/// `nodes[0]` ist die Ausgangs-SID (Benutzer, Computer oder Gruppe),
+/// `nodes[n-1]` die Zielgruppe. Zwischen-Indizes sind die verschachtelten
+/// Gruppen in der Reihenfolge der direkten `member`-Edges.
+///
+/// `names` ist index-aligned zu `nodes` und enthält den Anzeigenamen
+/// pro SID, sofern bekannt — die Engine kann daraus einen lesbaren
+/// Berechtigungspfad bauen, ohne erneut zu serialisieren.
+///
+/// `complete` ist `true`, wenn die Kette vollständig aus konkreten
+/// `member`-Edges rekonstruiert wurde. `false` bedeutet, dass nur die
+/// transitive Zugehörigkeit feststeht (z. B. über
+/// `LDAP_MATCHING_RULE_IN_CHAIN`), die exakte Zwischenstufen-Sequenz
+/// aber nicht — typisch, wenn `memberOf` eines Zwischengruppen-Eintrags
+/// vom Server abgeschnitten wurde.
+///
+/// Concrete membership chain from an identity to a group.
+///
+/// `nodes[0]` is the starting SID (user, computer or group), `nodes[n-1]`
+/// is the target group. Intermediate indices are the nested groups in
+/// direct `member`-edge order.
+///
+/// `names` is index-aligned with `nodes` and carries the display name
+/// per SID when known — the engine can render a readable explanation
+/// path without re-resolving.
+///
+/// `complete` is `true` when the chain was fully reconstructed from
+/// concrete `member` edges. `false` means only the transitive
+/// membership is established (e.g. via `LDAP_MATCHING_RULE_IN_CHAIN`)
+/// but the exact intermediate sequence is not — typical when the
+/// `memberOf` of an intermediate group entry was truncated by the
+/// server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MembershipPath {
+    pub nodes: Vec<Sid>,
+    #[serde(default)]
+    pub names: Vec<Option<String>>,
+    pub source: MembershipPathSource,
+    pub complete: bool,
+}
+
+/// Herkunftsquelle einer rekonstruierten Mitgliedschafts-Kette.
+/// Source of a reconstructed membership chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MembershipPathSource {
+    /// Primäre AD-Gruppe (`primaryGroupID`) — eine Kante vom Benutzer
+    /// direkt zur Primärgruppe, plus transitive Eltern als eigene
+    /// Mitgliedschaften.
+    /// Primary AD group (`primaryGroupID`) — a single edge from the user
+    /// to the primary group, with transitive parents recorded as their
+    /// own memberships.
+    PrimaryGroup,
+    /// Direkte oder verschachtelte Domänen-Gruppenmitgliedschaft, die
+    /// über konkrete `member`-Edges rekonstruiert wurde.
+    /// Direct or nested domain group membership reconstructed via
+    /// concrete `member` edges.
+    DomainGroup,
+    /// Lokale Gruppe auf dem Zielserver (NetUserGetLocalGroups oder
+    /// NetLocalGroupGetMembers).
+    /// Local group on the target server (NetUserGetLocalGroups or
+    /// NetLocalGroupGetMembers).
+    LocalGroup,
+    /// Die transitive Zugehörigkeit ist sicher (z. B. via
+    /// `LDAP_MATCHING_RULE_IN_CHAIN`), der konkrete Weg konnte aber
+    /// nicht vollständig rekonstruiert werden. `complete` ist in diesem
+    /// Fall `false`.
+    /// Transitive membership is certain (e.g. via
+    /// `LDAP_MATCHING_RULE_IN_CHAIN`) but the concrete path could not
+    /// be fully reconstructed. `complete` is `false` in this case.
+    LdapMatchingRule,
 }
 
 /// Art des ACE
