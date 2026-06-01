@@ -19,6 +19,151 @@ use serde::{Deserialize, Serialize};
 
 use crate::UpdateChannel;
 
+/// In Windows-Pfadkomponenten verbotene Zeichen — gleicher Satz wie in
+/// [`validation::path`], damit Manifest-Pfade nicht laxer akzeptiert
+/// werden als Benutzerpfade.
+/// Characters forbidden inside Windows path components — same set as in
+/// [`validation::path`] so manifest paths are not accepted more leniently
+/// than user-supplied paths.
+const FORBIDDEN_PATH_CHARS: &[char] = &['<', '>', '"', '|', '?', '*'];
+
+/// Reservierte Windows-Gerätenamen (case-insensitive). Ein Segment, dessen
+/// Stamm einem dieser Namen entspricht, ist unzulässig — egal mit welcher
+/// Endung.
+/// Reserved Windows device names (case-insensitive). A segment whose stem
+/// matches one of these is invalid regardless of its extension.
+const RESERVED_DEVICE_NAMES: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+    "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// Validiert einen relativen Manifest-Zielpfad gegen Windows-spezifische
+/// Pfadangriffe.
+///
+/// Akzeptiert: `bin/stars.exe`, `bin\stars.exe`, `docs/de/handbuch.html`.
+///
+/// Lehnt ab:
+/// - leere Pfade
+/// - absolute Pfade mit Laufwerksbuchstaben (`C:\…`, `c:foo` — durch das
+///   Verbot von `:` in Segmenten)
+/// - UNC-Präfixe (`\\…`, `//…`) und Long-Path-Präfixe (`\\?\…`)
+/// - `.` und `..` als Segmente (Traversal)
+/// - leere Segmente (`a//b`, `a\\\\b`) — verhindert UNC-Spoofing
+/// - reservierte Windows-Gerätenamen (`NUL`, `CON`, `COM1`, …)
+/// - ADS-Notation (`file.txt:ads`) — gleicher `:`-Filter wie für Laufwerke
+/// - Zeichen aus [`FORBIDDEN_PATH_CHARS`] und Steuerzeichen
+/// - Null-Bytes
+///
+/// Schließt ChatGPT-Code-Review 2026-05-31 Finding 6.
+///
+/// Validates a relative manifest target path against Windows-specific
+/// path-shape attacks.
+///
+/// Accepts: `bin/stars.exe`, `bin\stars.exe`, `docs/de/handbuch.html`.
+///
+/// Rejects:
+/// - empty paths
+/// - absolute paths with drive letters (`C:\…`, `c:foo` — via the `:`
+///   ban in segments)
+/// - UNC prefixes (`\\…`, `//…`) and long-path prefixes (`\\?\…`)
+/// - `.` and `..` segments (traversal)
+/// - empty segments (`a//b`, `a\\\\b`) — prevents UNC spoofing
+/// - reserved Windows device names (`NUL`, `CON`, `COM1`, …)
+/// - ADS notation (`file.txt:ads`) — same `:` filter as for drives
+/// - characters in [`FORBIDDEN_PATH_CHARS`] and control characters
+/// - NUL bytes
+///
+/// Closes ChatGPT code review 2026-05-31 finding 6.
+pub fn validate_manifest_relative_path(path: &str) -> Result<(), CoreError> {
+    if path.is_empty() {
+        return Err(CoreError::Validation("file.path must not be empty".into()));
+    }
+    if path.contains('\0') {
+        return Err(CoreError::Validation(format!(
+            "file path '{path}' must not contain null bytes"
+        )));
+    }
+    // Long-Path-Präfix vorab abfangen, bevor der `\`-Split greift.
+    // Catch the long-path prefix before the `\`-split kicks in.
+    if path.starts_with(r"\\?\") || path.starts_with("//?/") {
+        return Err(CoreError::Validation(format!(
+            "file path '{path}' must be relative (Windows long-path prefix not allowed)"
+        )));
+    }
+    // UNC-Präfix.
+    // UNC prefix.
+    if path.starts_with(r"\\") || path.starts_with("//") {
+        return Err(CoreError::Validation(format!(
+            "file path '{path}' must be relative (UNC prefix not allowed)"
+        )));
+    }
+    // Führende Separatoren — Pfad würde sonst aus dem Installationsbaum
+    // zeigen.
+    // Leading separators — path would otherwise point outside the
+    // install tree.
+    if path.starts_with('\\') || path.starts_with('/') {
+        return Err(CoreError::Validation(format!(
+            "file path '{path}' must be relative (leading separator not allowed)"
+        )));
+    }
+    // Segment für Segment prüfen — wir akzeptieren sowohl `\` als auch
+    // `/` als Trenner, weil Manifeste plattform-neutral geschrieben
+    // werden können (die Installation läuft trotzdem auf Windows).
+    // Check each segment — we accept both `\` and `/` as separators
+    // because manifests may be written platform-neutrally (installation
+    // still runs on Windows).
+    let segments: Vec<&str> = path.split(['\\', '/']).collect();
+    for segment in &segments {
+        check_manifest_segment(segment, path)?;
+    }
+    Ok(())
+}
+
+fn check_manifest_segment(segment: &str, full_path: &str) -> Result<(), CoreError> {
+    if segment.is_empty() {
+        return Err(CoreError::Validation(format!(
+            "file path '{full_path}' contains an empty segment (consecutive separators)"
+        )));
+    }
+    if segment == "." || segment == ".." {
+        return Err(CoreError::Validation(format!(
+            "file path '{full_path}' contains a '{segment}' segment — traversal not allowed"
+        )));
+    }
+    if let Some(c) = segment.chars().find(|c| c.is_control()) {
+        return Err(CoreError::Validation(format!(
+            "file path '{full_path}' segment '{segment}' contains a control character (U+{:04X})",
+            c as u32
+        )));
+    }
+    if let Some(bad) = segment.chars().find(|c| FORBIDDEN_PATH_CHARS.contains(c)) {
+        return Err(CoreError::Validation(format!(
+            "file path '{full_path}' segment '{segment}' contains a forbidden character '{bad}'"
+        )));
+    }
+    // `:` deckt sowohl Laufwerksbuchstaben (`C:`) als auch ADS-Notation
+    // (`file.txt:ads`) ab — beides ist im Manifest unerwünscht.
+    // `:` covers both drive letters (`C:`) and ADS notation
+    // (`file.txt:ads`) — neither is acceptable in a manifest.
+    if segment.contains(':') {
+        return Err(CoreError::Validation(format!(
+            "file path '{full_path}' segment '{segment}' must not contain ':'"
+        )));
+    }
+    // Reservierter Windows-Gerätename — Stamm ohne Endung prüfen.
+    // Reserved Windows device name — check the stem without extension.
+    let stem = segment.split('.').next().unwrap_or(segment);
+    if RESERVED_DEVICE_NAMES
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case(stem))
+    {
+        return Err(CoreError::Validation(format!(
+            "file path '{full_path}' segment '{segment}' uses reserved Windows device name '{stem}'"
+        )));
+    }
+    Ok(())
+}
+
 /// Erlaubte Zielplattformen — entspricht der Read-only-Constraint von Windows.
 /// Allowed target platforms — matches the Windows-only read-only constraint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,9 +256,14 @@ impl UpdateManifest {
             ));
         }
         for f in &self.files {
-            if f.path.trim().is_empty() {
-                return Err(CoreError::Validation("file.path must not be empty".into()));
-            }
+            // Windows-sichere Pfadprüfung: blockiert absolute Pfade,
+            // Laufwerksbuchstaben, UNC-/Long-Path-Präfixe, `.`/`..`,
+            // leere Segmente, `:` (Drive/ADS), reservierte Geräte­namen
+            // und verbotene Zeichen.
+            // Windows-safe path validation: blocks absolute paths, drive
+            // letters, UNC/long-path prefixes, `.`/`..`, empty segments,
+            // `:` (drive/ADS), reserved device names and forbidden chars.
+            validate_manifest_relative_path(&f.path)?;
             // SHA-256 als Hex: exakt 64 Zeichen, alle hex.
             // SHA-256 as hex: exactly 64 chars, all hex digits.
             if f.sha256.len() != 64 || !f.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -125,16 +275,6 @@ impl UpdateManifest {
             if f.size_bytes == 0 {
                 return Err(CoreError::Validation(format!(
                     "file '{}' size_bytes must be > 0",
-                    f.path
-                )));
-            }
-            // Pfad-Traversal verhindern. Eine harmlos aussehende `..`-Sequenz
-            // im Manifest darf nie aus dem Installationsverzeichnis zeigen.
-            // Prevent path traversal. A harmless-looking `..` sequence in the
-            // manifest must never point outside the install directory.
-            if f.path.contains("..") || f.path.starts_with('/') || f.path.starts_with('\\') {
-                return Err(CoreError::Validation(format!(
-                    "file '{}' contains unsafe path traversal",
                     f.path
                 )));
             }
@@ -221,7 +361,11 @@ mod tests {
     fn rejects_path_traversal() {
         let json = valid_manifest_json().replace("stars.exe", "../etc/payload.exe");
         let err = UpdateManifest::from_json(&json).unwrap_err();
-        assert!(format!("{err}").contains("path traversal"));
+        // Neue Fehlermeldung aus validate_manifest_relative_path; Inhalt ist
+        // strenger formuliert als der alte „path traversal"-Substring.
+        // New error message from validate_manifest_relative_path; phrased
+        // more precisely than the old "path traversal" substring.
+        assert!(format!("{err}").contains("traversal"));
     }
 
     #[test]
@@ -229,6 +373,162 @@ mod tests {
         let json = valid_manifest_json().replace("\"size_bytes\": 1024", "\"size_bytes\": 0");
         let err = UpdateManifest::from_json(&json).unwrap_err();
         assert!(format!("{err}").contains("size_bytes"));
+    }
+
+    // ----------------------------------------------------------------
+    // Finding 6 — Windows-sichere Pfadvalidierung
+    // Finding 6 — Windows-safe path validation
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn relative_path_accepts_normal_relative_paths() {
+        for ok in &[
+            "stars.exe",
+            "bin/stars.exe",
+            "bin\\stars.exe",
+            "docs/de/handbuch.html",
+            "docs\\de\\handbuch.html",
+            "data/x.bin",
+            "a/b/c/d/e/file.txt",
+        ] {
+            validate_manifest_relative_path(ok)
+                .unwrap_or_else(|e| panic!("expected '{ok}' to be valid, got: {e}"));
+        }
+    }
+
+    #[test]
+    fn relative_path_rejects_absolute_with_drive_letter() {
+        for bad in &[r"C:\Temp\evil.exe", r"c:\foo", r"D:\stars.exe"] {
+            assert!(
+                validate_manifest_relative_path(bad).is_err(),
+                "must reject absolute drive path: {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_path_rejects_drive_relative_with_colon() {
+        // `C:evil.exe` ist Windows-„drive-relative": kein klassischer
+        // absoluter Pfad, aber auch nicht relativ zum Installations­ziel.
+        // `C:evil.exe` is Windows "drive-relative": not absolute in the
+        // classic sense, but also not relative to the install target.
+        for bad in &["C:evil.exe", "c:foo", "Z:weird"] {
+            assert!(
+                validate_manifest_relative_path(bad).is_err(),
+                "must reject drive-relative path: {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_path_rejects_parent_dir_traversal() {
+        for bad in &[r"dir\..\x", "dir/../x", "..", "../etc/passwd", r"..\evil"] {
+            let err = validate_manifest_relative_path(bad).unwrap_err();
+            assert!(
+                format!("{err}").contains("traversal"),
+                "must flag traversal for '{bad}', got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_path_rejects_current_dir_segment() {
+        for bad in &[r".\x", "./x", "a/./b"] {
+            let err = validate_manifest_relative_path(bad).unwrap_err();
+            assert!(
+                format!("{err}").contains("traversal"),
+                "must flag '.' segment for '{bad}', got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_path_rejects_reserved_device_names() {
+        for bad in &["NUL", "CON", "AUX", "PRN", "COM1", "LPT9", "nul.exe"] {
+            assert!(
+                validate_manifest_relative_path(bad).is_err(),
+                "must reject reserved device name: {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_path_rejects_ads_notation() {
+        // Alternate Data Streams: `file.txt:ads` würde NTFS-seitig in einen
+        // versteckten Stream schreiben — im Manifest ein klares Nein.
+        // Alternate Data Streams: `file.txt:ads` would write to a hidden
+        // NTFS stream — clear no in a manifest.
+        let err = validate_manifest_relative_path("file.txt:ads").unwrap_err();
+        assert!(format!("{err}").contains("':'"));
+    }
+
+    #[test]
+    fn relative_path_rejects_unc_prefix() {
+        for bad in &[r"\\server\share\file.exe", "//server/share/file.exe"] {
+            assert!(
+                validate_manifest_relative_path(bad).is_err(),
+                "must reject UNC prefix: {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_path_rejects_long_path_prefix() {
+        for bad in &[r"\\?\C:\evil.exe", r"\\?\UNC\srv\sh\x", "//?/C:/evil.exe"] {
+            assert!(
+                validate_manifest_relative_path(bad).is_err(),
+                "must reject long-path prefix: {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_path_rejects_leading_separator() {
+        for bad in &["/abs/path", "\\abs\\path"] {
+            assert!(
+                validate_manifest_relative_path(bad).is_err(),
+                "must reject leading separator: {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_path_rejects_empty_segments() {
+        for bad in &["a//b", "a\\\\b", "x/", "y\\"] {
+            assert!(
+                validate_manifest_relative_path(bad).is_err(),
+                "must reject empty segment in: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_path_rejects_forbidden_chars() {
+        for bad in &[
+            "bad<name",
+            "bad>name",
+            "bad\"name",
+            "bad|name",
+            "bad?name",
+            "bad*name",
+        ] {
+            assert!(
+                validate_manifest_relative_path(bad).is_err(),
+                "must reject forbidden char in: {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_path_rejects_control_chars_and_null() {
+        assert!(validate_manifest_relative_path("bad\x07name").is_err());
+        assert!(validate_manifest_relative_path("bad\0byte").is_err());
+    }
+
+    #[test]
+    fn relative_path_rejects_empty() {
+        let err = validate_manifest_relative_path("").unwrap_err();
+        assert!(format!("{err}").contains("not be empty"));
     }
 
     #[test]

@@ -7,4 +7,7 @@ pub mod verifier;
 
 pub use manager::{UpdateChannel, UpdateManager};
 pub use manifest::{ManifestFile, TargetPlatform, UpdateManifest};
-pub use verifier::{sha256_hex, verify_manifest, RejectAllVerifier, SignatureVerifier};
+pub use verifier::{
+    sha256_hex, verify_manifest_integrity, verify_update_policy, RejectAllVerifier,
+    SignatureVerifier, UpdatePolicyContext,
+};

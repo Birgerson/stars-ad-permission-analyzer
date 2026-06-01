@@ -13,10 +13,14 @@
 //! this trait later; until then a reject-by-default stub is in place so no
 //! unverified update can sneak through.
 
+use std::cmp::Ordering;
+
 use adpa_core::error::CoreError;
+use chrono::{DateTime, Duration, Utc};
 use sha2::{Digest, Sha256};
 
-use crate::manifest::{ManifestFile, UpdateManifest};
+use crate::manifest::{ManifestFile, TargetPlatform, UpdateManifest};
+use crate::UpdateChannel;
 
 /// Backend für die Signaturprüfung. Implementierungen wählen den
 /// kryptografischen Algorithmus (Ed25519, RSA-PSS, …) und tragen den
@@ -80,14 +84,34 @@ pub fn verify_file_bytes(entry: &ManifestFile, content: &[u8]) -> Result<(), Cor
     Ok(())
 }
 
-/// Komplette Prüfung eines Manifests: Schema → Signatur → optional
-/// Dateiinhalte. Der Caller liefert die Datei-Bytes als (path, content)-
-/// Paare; fehlende Dateien führen zu einem Fehler.
+/// Integritätsprüfung eines Manifests: Schema → Signatur → Dateiinhalte.
 ///
-/// Complete manifest check: schema → signature → optional file contents.
-/// The caller supplies file bytes as (path, content) pairs; missing files
-/// produce an error.
-pub fn verify_manifest<V: SignatureVerifier>(
+/// Diese Funktion deckt ausschließlich die kryptografische und
+/// strukturelle Korrektheit ab — sie sagt nichts darüber aus, ob das
+/// Update für die aktuelle Installation überhaupt anwendbar ist
+/// (Plattform, Kanal, Version, Zeit). Diese Policy-Prüfung leistet
+/// [`verify_update_policy`].
+///
+/// Caller liefert die Datei-Bytes als `(path, content)`-Paare; fehlende
+/// Dateien führen zu einem Fehler.
+///
+/// Integrity check for a manifest: schema → signature → file contents.
+///
+/// This function covers only cryptographic and structural correctness —
+/// it does not decide whether the update applies to the current
+/// installation (platform, channel, version, time). That policy check is
+/// the job of [`verify_update_policy`].
+///
+/// The caller supplies file bytes as `(path, content)` pairs; missing
+/// files produce an error.
+///
+/// Schließt ChatGPT-Code-Review 2026-05-31 Finding 7 (vorher
+/// `verify_manifest`, das fälschlich als „complete check" beschrieben
+/// war).
+/// Closes ChatGPT code review 2026-05-31 finding 7 (formerly
+/// `verify_manifest`, which was misleadingly described as a "complete
+/// check").
+pub fn verify_manifest_integrity<V: SignatureVerifier>(
     manifest: &UpdateManifest,
     verifier: &V,
     file_contents: &[(&str, &[u8])],
@@ -110,6 +134,179 @@ pub fn verify_manifest<V: SignatureVerifier>(
         verify_file_bytes(entry, content)?;
     }
     Ok(())
+}
+
+/// Policy-Kontext für die Manifest-Freigabe.
+///
+/// Trennt die kryptografische Integrität (siehe
+/// [`verify_manifest_integrity`]) von der Anwendbarkeit auf das
+/// konkrete Zielsystem: Plattform, Kanal, Versions-Reihenfolge und
+/// Zeitfenster. Der Aufrufer baut diesen Kontext aus seiner laufenden
+/// Konfiguration und der Systemuhr und reicht ihn an
+/// [`verify_update_policy`].
+///
+/// Policy context for releasing a manifest for installation.
+///
+/// Separates cryptographic integrity (see [`verify_manifest_integrity`])
+/// from applicability on the target system: platform, channel, version
+/// ordering and the time window. The caller builds this context from its
+/// running configuration and the system clock and passes it to
+/// [`verify_update_policy`].
+#[derive(Debug, Clone)]
+pub struct UpdatePolicyContext {
+    /// Aktuell installierte Version (dotted numeric, z. B. `1.0.0`).
+    /// Currently installed version (dotted numeric, e.g. `1.0.0`).
+    pub current_version: String,
+    /// Plattform der laufenden Installation.
+    /// Platform of the running installation.
+    pub current_platform: TargetPlatform,
+    /// Vom Aufrufer freigegebener Update-Kanal.
+    /// Update channel released by the caller.
+    pub allowed_channel: UpdateChannel,
+    /// Wenn `false`, werden Manifeste mit kleinerer oder gleicher Version
+    /// abgelehnt (kein Downgrade, kein Re-Install).
+    /// When `false`, manifests with a lower or equal version are rejected
+    /// (no downgrade, no re-install).
+    pub allow_downgrade: bool,
+    /// Referenzzeit für die `issued_at`-Prüfung — in Produktion
+    /// `Utc::now()`, in Tests deterministisch.
+    /// Reference time for the `issued_at` check — `Utc::now()` in
+    /// production, deterministic in tests.
+    pub now_utc: DateTime<Utc>,
+    /// Maximaler Abstand `now - issued_at`; ältere Manifeste werden
+    /// abgelehnt. Negativwerte sind unzulässig.
+    /// Maximum `now - issued_at` distance; older manifests are rejected.
+    /// Negative values are illegal.
+    pub max_age: Duration,
+    /// Maximaler Abstand `issued_at - now`; weiter in der Zukunft
+    /// liegende Manifeste werden abgelehnt (Clock-Skew-Toleranz).
+    /// Maximum `issued_at - now` distance; manifests issued further in
+    /// the future are rejected (clock-skew tolerance).
+    pub max_future_skew: Duration,
+}
+
+/// Prüft, ob ein integritätsgeprüftes Manifest für die laufende
+/// Installation überhaupt anwendbar ist.
+///
+/// Diese Funktion ersetzt nicht [`verify_manifest_integrity`] — beide
+/// müssen erfolgreich sein, bevor ein Update installiert werden darf.
+/// Sie validiert in dieser Reihenfolge:
+///
+/// 1. Plattform stimmt mit `current_platform` überein.
+/// 2. Manifest-Kanal stimmt mit `allowed_channel` überein.
+/// 3. `app_version` ist (numerisch dotted) höher als `current_version`,
+///    außer `allow_downgrade == true`.
+/// 4. `issued_at` ist ISO-8601-parsebar.
+/// 5. `issued_at` liegt nicht weiter als `max_future_skew` in der
+///    Zukunft.
+/// 6. `issued_at` liegt nicht weiter als `max_age` in der Vergangenheit.
+///
+/// Checks whether an integrity-verified manifest applies to the running
+/// installation. Does not replace [`verify_manifest_integrity`] — both
+/// must pass before an update is allowed. Validates, in order:
+///
+/// 1. Platform matches `current_platform`.
+/// 2. Manifest channel matches `allowed_channel`.
+/// 3. `app_version` is higher (numeric dotted) than `current_version`,
+///    unless `allow_downgrade == true`.
+/// 4. `issued_at` is ISO-8601 parsable.
+/// 5. `issued_at` is no further than `max_future_skew` in the future.
+/// 6. `issued_at` is no further than `max_age` in the past.
+pub fn verify_update_policy(
+    manifest: &UpdateManifest,
+    policy: &UpdatePolicyContext,
+) -> Result<(), CoreError> {
+    if manifest.platform != policy.current_platform {
+        return Err(CoreError::Validation(format!(
+            "manifest platform {:?} does not match current platform {:?}",
+            manifest.platform, policy.current_platform
+        )));
+    }
+    if manifest.channel != policy.allowed_channel {
+        return Err(CoreError::Validation(format!(
+            "manifest channel {:?} does not match allowed channel {:?}",
+            manifest.channel, policy.allowed_channel
+        )));
+    }
+    let ordering = compare_dotted_versions(&manifest.app_version, &policy.current_version)?;
+    if !policy.allow_downgrade && ordering != Ordering::Greater {
+        return Err(CoreError::Validation(format!(
+            "manifest app_version '{}' is not newer than current '{}' (downgrade not allowed)",
+            manifest.app_version, policy.current_version
+        )));
+    }
+    let issued_at = manifest.issued_at.parse::<DateTime<Utc>>().map_err(|e| {
+        CoreError::Validation(format!(
+            "manifest issued_at '{}' is not a valid ISO-8601 UTC timestamp: {e}",
+            manifest.issued_at
+        ))
+    })?;
+    if issued_at > policy.now_utc + policy.max_future_skew {
+        return Err(CoreError::Validation(format!(
+            "manifest issued_at '{}' is further than the allowed clock-skew tolerance ({}s) in the future",
+            manifest.issued_at,
+            policy.max_future_skew.num_seconds()
+        )));
+    }
+    if policy.now_utc - issued_at > policy.max_age {
+        return Err(CoreError::Validation(format!(
+            "manifest issued_at '{}' is older than max_age ({}s) — refusing as potentially stale or replayed",
+            manifest.issued_at,
+            policy.max_age.num_seconds()
+        )));
+    }
+    Ok(())
+}
+
+/// Vergleicht zwei punktgetrennte numerische Versionsstrings (z. B.
+/// `1.10.0` vs `1.9.5`). Pre-Release-Suffixe nach `-` werden für den
+/// Vergleich abgeschnitten, da das Projekt bisher nur reine
+/// `major.minor.patch`-Versionen ausliefert. Nicht-numerische Segmente
+/// führen zu einem Validierungsfehler — dann muss der Aufrufer explizit
+/// dafür sorgen, dass beide Seiten parsebar sind.
+///
+/// Compares two dotted-numeric version strings (e.g. `1.10.0` vs
+/// `1.9.5`). Pre-release suffixes after `-` are dropped for comparison
+/// because the project currently ships only plain
+/// `major.minor.patch` versions. Non-numeric segments produce a
+/// validation error — the caller must ensure both sides parse.
+fn compare_dotted_versions(a: &str, b: &str) -> Result<Ordering, CoreError> {
+    let trim_prerelease = |s: &str| {
+        s.split('-')
+            .next()
+            .unwrap_or(s)
+            .split('+')
+            .next()
+            .unwrap_or(s)
+            .to_owned()
+    };
+    let a_core = trim_prerelease(a);
+    let b_core = trim_prerelease(b);
+    let parse = |s: &str| -> Result<Vec<u64>, CoreError> {
+        s.split('.')
+            .map(|seg| {
+                seg.parse::<u64>().map_err(|e| {
+                    CoreError::Validation(format!(
+                        "version segment '{seg}' in '{s}' is not numeric: {e}"
+                    ))
+                })
+            })
+            .collect()
+    };
+    let a_parts = parse(&a_core)?;
+    let b_parts = parse(&b_core)?;
+    // Auf gleiche Länge mit 0 auffüllen — `1.0` und `1.0.0` sind gleich.
+    // Pad to the same length with 0 — `1.0` and `1.0.0` are equal.
+    let len = a_parts.len().max(b_parts.len());
+    for i in 0..len {
+        let av = a_parts.get(i).copied().unwrap_or(0);
+        let bv = b_parts.get(i).copied().unwrap_or(0);
+        match av.cmp(&bv) {
+            Ordering::Equal => continue,
+            other => return Ok(other),
+        }
+    }
+    Ok(Ordering::Equal)
 }
 
 #[cfg(test)]
@@ -206,7 +403,7 @@ mod tests {
     fn verify_manifest_full_flow_succeeds() {
         let content: &[u8] = b"hello world";
         let m = manifest_for("stars.exe", content);
-        verify_manifest(&m, &AcceptAnyVerifier, &[("stars.exe", content)]).unwrap();
+        verify_manifest_integrity(&m, &AcceptAnyVerifier, &[("stars.exe", content)]).unwrap();
     }
 
     #[test]
@@ -216,7 +413,8 @@ mod tests {
         m.signature = String::new();
         // Schema-Validierung greift bereits vor dem Signatur-Verifier.
         // Schema validation triggers before the signature verifier.
-        let err = verify_manifest(&m, &AcceptAnyVerifier, &[("stars.exe", content)]).unwrap_err();
+        let err = verify_manifest_integrity(&m, &AcceptAnyVerifier, &[("stars.exe", content)])
+            .unwrap_err();
         assert!(format!("{err}").contains("signature must not be empty"));
     }
 
@@ -224,7 +422,7 @@ mod tests {
     fn verify_manifest_rejects_when_file_content_missing() {
         let content: &[u8] = b"hello world";
         let m = manifest_for("stars.exe", content);
-        let err = verify_manifest(&m, &AcceptAnyVerifier, &[]).unwrap_err();
+        let err = verify_manifest_integrity(&m, &AcceptAnyVerifier, &[]).unwrap_err();
         assert!(format!("{err}").contains("not provided to verifier"));
     }
 
@@ -233,7 +431,8 @@ mod tests {
         let original: &[u8] = b"hello world";
         let tampered: &[u8] = b"hello WORLD";
         let m = manifest_for("stars.exe", original);
-        let err = verify_manifest(&m, &AcceptAnyVerifier, &[("stars.exe", tampered)]).unwrap_err();
+        let err = verify_manifest_integrity(&m, &AcceptAnyVerifier, &[("stars.exe", tampered)])
+            .unwrap_err();
         assert!(format!("{err}").contains("sha256 mismatch"));
     }
 
@@ -245,7 +444,167 @@ mod tests {
     fn default_verifier_rejects_even_well_formed_manifest() {
         let content: &[u8] = b"hello world";
         let m = manifest_for("stars.exe", content);
-        let err = verify_manifest(&m, &RejectAllVerifier, &[("stars.exe", content)]).unwrap_err();
+        let err = verify_manifest_integrity(&m, &RejectAllVerifier, &[("stars.exe", content)])
+            .unwrap_err();
         assert!(format!("{err}").contains("no signature verifier configured"));
+    }
+
+    // ----------------------------------------------------------------
+    // Finding 7 — verify_update_policy
+    // ----------------------------------------------------------------
+
+    fn fixed_now() -> DateTime<Utc> {
+        "2026-06-01T12:00:00Z".parse().unwrap()
+    }
+
+    fn base_policy() -> UpdatePolicyContext {
+        UpdatePolicyContext {
+            current_version: "1.0.0".into(),
+            current_platform: TargetPlatform::WindowsX86_64,
+            allowed_channel: UpdateChannel::Stable,
+            allow_downgrade: false,
+            now_utc: fixed_now(),
+            max_age: Duration::days(90),
+            max_future_skew: Duration::minutes(5),
+        }
+    }
+
+    fn policy_manifest(version: &str, issued_at: &str) -> UpdateManifest {
+        UpdateManifest {
+            manifest_version: 1,
+            app_version: version.into(),
+            channel: UpdateChannel::Stable,
+            platform: TargetPlatform::WindowsX86_64,
+            issued_at: issued_at.into(),
+            files: vec![ManifestFile {
+                path: "stars.exe".into(),
+                sha256: sha256_hex(b"x"),
+                size_bytes: 1,
+            }],
+            signature: "fake".into(),
+        }
+    }
+
+    #[test]
+    fn policy_accepts_newer_version_on_matching_platform_and_channel() {
+        let m = policy_manifest("1.1.0", "2026-06-01T11:00:00Z");
+        verify_update_policy(&m, &base_policy()).unwrap();
+    }
+
+    #[test]
+    fn policy_rejects_wrong_platform() {
+        let mut m = policy_manifest("1.1.0", "2026-06-01T11:00:00Z");
+        m.platform = TargetPlatform::WindowsAarch64;
+        let err = verify_update_policy(&m, &base_policy()).unwrap_err();
+        assert!(format!("{err}").contains("platform"));
+    }
+
+    #[test]
+    fn policy_rejects_wrong_channel() {
+        let mut m = policy_manifest("1.1.0", "2026-06-01T11:00:00Z");
+        m.channel = UpdateChannel::Preview;
+        let err = verify_update_policy(&m, &base_policy()).unwrap_err();
+        assert!(format!("{err}").contains("channel"));
+    }
+
+    #[test]
+    fn policy_rejects_downgrade_by_default() {
+        let m = policy_manifest("0.9.0", "2026-06-01T11:00:00Z");
+        let err = verify_update_policy(&m, &base_policy()).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("not newer") && msg.contains("downgrade not allowed"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn policy_rejects_equal_version() {
+        // Re-Install darf nicht durchrutschen — `current = manifest` ist kein
+        // Update.
+        // A re-install must not slip through — `current == manifest` is not
+        // an update.
+        let m = policy_manifest("1.0.0", "2026-06-01T11:00:00Z");
+        let err = verify_update_policy(&m, &base_policy()).unwrap_err();
+        assert!(format!("{err}").contains("not newer"));
+    }
+
+    #[test]
+    fn policy_accepts_downgrade_when_explicitly_allowed() {
+        let m = policy_manifest("0.9.0", "2026-06-01T11:00:00Z");
+        let mut policy = base_policy();
+        policy.allow_downgrade = true;
+        verify_update_policy(&m, &policy).unwrap();
+    }
+
+    #[test]
+    fn policy_rejects_issued_at_in_far_future() {
+        // Eine Stunde vor `now_utc` — weit über die fünfminütige Skew-
+        // Toleranz hinaus.
+        // One hour ahead of `now_utc` — well past the five-minute skew
+        // tolerance.
+        let m = policy_manifest("1.1.0", "2026-06-01T13:00:00Z");
+        let err = verify_update_policy(&m, &base_policy()).unwrap_err();
+        assert!(format!("{err}").contains("future"));
+    }
+
+    #[test]
+    fn policy_accepts_issued_at_within_skew_tolerance() {
+        // Zwei Minuten in der Zukunft — innerhalb der Default-Toleranz.
+        // Two minutes ahead — within the default tolerance.
+        let m = policy_manifest("1.1.0", "2026-06-01T12:02:00Z");
+        verify_update_policy(&m, &base_policy()).unwrap();
+    }
+
+    #[test]
+    fn policy_rejects_issued_at_too_old() {
+        // 120 Tage vor `now_utc` — weit über `max_age = 90 Tage`.
+        // 120 days before `now_utc` — well past `max_age = 90 days`.
+        let m = policy_manifest("1.1.0", "2026-02-01T11:00:00Z");
+        let err = verify_update_policy(&m, &base_policy()).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("older than max_age") || msg.contains("stale"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn policy_rejects_invalid_iso8601_issued_at() {
+        let m = policy_manifest("1.1.0", "yesterday");
+        let err = verify_update_policy(&m, &base_policy()).unwrap_err();
+        assert!(format!("{err}").contains("ISO-8601"));
+    }
+
+    #[test]
+    fn compare_dotted_versions_orders_numerically() {
+        assert_eq!(
+            compare_dotted_versions("1.10.0", "1.9.5").unwrap(),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_dotted_versions("1.2.3", "1.2.3").unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            compare_dotted_versions("1.2", "1.2.0").unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            compare_dotted_versions("0.9.0", "1.0.0").unwrap(),
+            Ordering::Less
+        );
+    }
+
+    #[test]
+    fn compare_dotted_versions_strips_prerelease_for_compare() {
+        // `1.1.0-rc1` und `1.1.0` werden als gleich verglichen — bewusste
+        // Vereinfachung, bis das Projekt echte SemVer-Pre-Releases ausliefert.
+        // `1.1.0-rc1` and `1.1.0` compare as equal — deliberate simplification
+        // until the project ships real SemVer pre-releases.
+        assert_eq!(
+            compare_dotted_versions("1.1.0-rc1", "1.1.0").unwrap(),
+            Ordering::Equal
+        );
     }
 }

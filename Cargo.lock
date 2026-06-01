@@ -4899,6 +4899,7 @@ name = "update_manager"
 version = "1.0.0"
 dependencies = [
  "adpa_core",
+ "chrono",
  "hex",
  "serde",
  "serde_json",
