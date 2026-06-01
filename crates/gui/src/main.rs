@@ -512,6 +512,13 @@ slint::slint! {
                                 wrap: word-wrap;
                             }
 
+                            Text {
+                                text: "Hinweis: jede Analyse wird automatisch in der Scan-Historie gespeichert und ist anschließend im Delta-Tab vergleichbar.";
+                                color: #6c7a89;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+
                             if root.a-rights-label != "": GroupBox {
                                 title: "Ergebnis";
                                 VerticalBox {
@@ -1350,7 +1357,12 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
     });
 }
 
-fn apply_analyze_result(ui: &MainWindow, result: Result<EffectivePermission, String>) {
+fn apply_analyze_result(
+    ui: &MainWindow,
+    result: Result<EffectivePermission, String>,
+    scan_run_id: Option<String>,
+    persistence_error: Option<String>,
+) {
     ui.set_a_is_running(false);
     match result {
         Ok(perm) => {
@@ -1366,8 +1378,25 @@ fn apply_analyze_result(ui: &MainWindow, result: Result<EffectivePermission, Str
                 .map(|s| slint::SharedString::from(s.as_str()))
                 .collect();
             ui.set_a_explanation(slint::ModelRc::new(slint::VecModel::from(steps)));
-            ui.set_a_status("Analyse abgeschlossen.".into());
-            ui.set_a_status_is_error(false);
+            // Status spiegelt jetzt auch wider, ob die Auswertung in die
+            // Scan-Historie geschrieben wurde — Voraussetzung dafür, dass
+            // sie im Delta-Tab vergleichbar ist.
+            // Status now also reflects whether the evaluation was written to
+            // the scan history — required for it to be comparable in the
+            // Delta tab.
+            let (status, is_error) = match (scan_run_id, persistence_error) {
+                (Some(_), _) => (
+                    "Analyse abgeschlossen — in der Scan-Historie gespeichert.".to_string(),
+                    false,
+                ),
+                (None, Some(reason)) => (
+                    format!("Analyse abgeschlossen, aber Persistenz fehlgeschlagen: {reason}"),
+                    true,
+                ),
+                (None, None) => ("Analyse abgeschlossen.".to_string(), false),
+            };
+            ui.set_a_status(status.into());
+            ui.set_a_status_is_error(is_error);
         }
         Err(e) => {
             ui.set_a_status(format!("Analyse fehlgeschlagen: {e}").into());
@@ -1967,7 +1996,11 @@ fn pump_worker_events(ui: &MainWindow) {
         let Some(rx) = borrow.as_ref() else { return };
         while let Ok(event) = rx.try_recv() {
             match event {
-                WorkerEvent::AnalyzeDone(result) => apply_analyze_result(ui, result),
+                WorkerEvent::AnalyzeDone {
+                    result,
+                    scan_run_id,
+                    persistence_error,
+                } => apply_analyze_result(ui, *result, scan_run_id, persistence_error),
                 WorkerEvent::ScanItem(row) => handle_scan_item(ui, row),
                 WorkerEvent::ScanError { path, message } => handle_scan_error(ui, path, message),
                 WorkerEvent::ScanDone {

@@ -183,7 +183,28 @@ pub struct ScanRow {
 /// Ergebnis vom Worker-Thread an die GUI.
 /// Result from the worker thread to the GUI.
 pub enum WorkerEvent {
-    AnalyzeDone(Result<adpa_core::model::EffectivePermission, String>),
+    AnalyzeDone {
+        /// Eigentliches Auswertungsergebnis (oder Engine-Fehler).
+        /// `Box`, weil `EffectivePermission` deutlich groesser ist als die
+        /// uebrigen Varianten — sonst zieht clippy::large_enum_variant.
+        /// Actual evaluation result (or engine error). Boxed because
+        /// `EffectivePermission` is significantly larger than the other
+        /// variants — otherwise clippy::large_enum_variant fires.
+        result: Box<Result<adpa_core::model::EffectivePermission, String>>,
+        /// UUID des gespeicherten Scan-Laufs. Analyze schreibt jetzt ebenfalls
+        /// in die SQLite-Historie, damit die Auswertung im Delta-Tab vergleichbar
+        /// bleibt — der bisherige „Analyze speichert nicht"-Bruch ist beseitigt.
+        /// `None`, wenn die Berechnung gar nicht stattfand (Engine-Fehler) oder
+        /// die DB nicht offen ist.
+        /// UUID of the stored scan run. Analyze now writes to the SQLite history
+        /// as well so the result is comparable in the Delta tab — the previous
+        /// "Analyze does not persist" gap is gone. `None` when the evaluation did
+        /// not happen (engine error) or when the DB is not open.
+        scan_run_id: Option<String>,
+        /// Grund, falls trotz erfolgreicher Auswertung die Persistenz fehlschlug.
+        /// Reason if persistence failed despite a successful evaluation.
+        persistence_error: Option<String>,
+    },
     ScanItem(ScanRow),
     ScanError {
         path: String,
@@ -334,7 +355,40 @@ pub fn spawn_worker(
                         smb_server.as_deref(),
                         share_name.as_deref(),
                     ));
-                    let _ = evt_tx.send(WorkerEvent::AnalyzeDone(result));
+                    // Analyze persistiert ab v1.1.x ebenfalls — eine einzelne
+                    // EffectivePermission landet als Scan-Lauf mit genau einer
+                    // Permission in der Historie. Das macht Analyze-Ergebnisse
+                    // im Delta-Tab vergleichbar (zuvor schrieb nur ScanTree in
+                    // die DB, was für Endnutzer als „Liste lädt meine
+                    // Auswertung nicht" wahrnehmbar war).
+                    // Analyze also persists from v1.1.x onward — a single
+                    // EffectivePermission becomes a scan run with exactly one
+                    // permission entry. This makes Analyze results comparable
+                    // in the Delta tab (previously only ScanTree wrote to the
+                    // DB, which surfaced to end users as "the list does not
+                    // show my analysis result").
+                    let (scan_run_id, persistence_error) = match (&result, &db) {
+                        (Ok(perm), Some(d)) => {
+                            match persist_scan(d, &path, std::slice::from_ref(perm), &[], false) {
+                                Ok(id) => (Some(id), None),
+                                Err(e) => (None, Some(e)),
+                            }
+                        }
+                        (Ok(_), None) => {
+                            (
+                                None,
+                                Some(db_open_error.clone().unwrap_or_else(|| {
+                                    "scan database is not available".to_string()
+                                })),
+                            )
+                        }
+                        (Err(_), _) => (None, None),
+                    };
+                    let _ = evt_tx.send(WorkerEvent::AnalyzeDone {
+                        result: Box::new(result),
+                        scan_run_id,
+                        persistence_error,
+                    });
                     notify();
                 }
                 WorkerRequest::Scan {
