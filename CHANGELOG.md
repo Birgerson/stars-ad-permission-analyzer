@@ -10,6 +10,14 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ## [Unreleased]
 
+_Keine offenen Änderungen._
+
+---
+
+## [1.1.0] — 2026-06-01
+
+**Audit-Beweiskraft und sicherheits­relevante Vorlauf­arbeiten am Update-Manager.** Schließt alle offenen Befunde aus dem ChatGPT-Code-Review 2026-05-31 (Findings 1, 2, 6, 7); Findings 3–5 wurden bereits in v1.0.0 adressiert.
+
 ### Hinzugefügt
 - `MembershipPath` als neues Datenmodell in `adpa_core`: trägt pro `GroupMembership` die konkrete SID-Kette vom Benutzer zur Zielgruppe, indexweise zugeordnete Anzeigenamen, eine Herkunfts­quelle (`PrimaryGroup`, `DomainGroup`, `LocalGroup`, `LdapMatchingRule`) und ein `complete`-Flag. Der LDAP-Resolver rekonstruiert die Ketten per BFS über die `memberOf`-Edges der schon geladenen Gruppen-Entries; ist die Rekonstruktion nicht möglich (z. B. wegen trunkiertem `memberOf` einer Zwischengruppe), bleibt der Pfad zwei SIDs lang und wird als `complete = false` markiert (ChatGPT-Code-Review Finding 1).
 - `validate_manifest_relative_path` als zentrale Windows-sichere Pfadprüfung im Update-Manifest. Lehnt Laufwerksbuchstaben (`C:\…`, `C:x`), UNC- und Long-Path-Präfixe (`\\…`, `\\?\…`), `.`/`..`-Segmente, leere Segmente, reservierte Geräte­namen (`NUL`, `CON`, `COM1`, …), ADS-Notation (`file.txt:ads`), verbotene Zeichen und Steuerzeichen ab. Schließt einen Sicherheits-Vorlauf für die spätere Installationslogik (ChatGPT-Code-Review Finding 6).
@@ -26,6 +34,14 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 - Vier neue Engine-Tests für das Membership-Pfad-Rendering: verschachtelte Kette in geordneter Reihenfolge (`User → A → B`), direkte Kante mit Quellen-Label, unvollständige transitive Kette mit explizitem Hinweis, Rückfall auf Legacy-Format bei `path = None` (Cache-Reads).
 - Vierzehn neue Tests für `validate_manifest_relative_path`: akzeptierte relative Pfade (auch mit `/`-Separator), Ablehnung von absoluten Drive-Pfaden, drive-relativen Pfaden (`C:foo`), `..`- und `.`-Segmenten, reservierten Geräte­namen, ADS-Notation, UNC- und Long-Path-Präfix, führenden Separatoren, leeren Segmenten, verbotenen Zeichen, Steuerzeichen und Null-Bytes.
 - Elf neue Tests für `verify_update_policy` und `compare_dotted_versions`: passende Plattform/Kanal/Version, falsche Plattform, falscher Kanal, Downgrade ohne Freigabe, gleiche Version (kein Re-Install), Downgrade mit Freigabe, `issued_at` weit in der Zukunft vs. innerhalb der Skew-Toleranz, abgelaufenes `issued_at`, nicht parsbares `issued_at`, dotted-numerische Ordnung (`1.10.0` vs `1.9.5`) und Strip von Pre-Release-Suffixen.
+
+### Dokumentation
+- ADR 0029 — Konkreter Mitgliedschafts-Pfad in der Erklärung.
+- ADR 0030 — Update-Manager: Pfadvalidierung und Policy-Schicht.
+- README ergänzt um den Mitgliedschafts-Pfad in der AD-Sektion (DE + EN).
+
+### Versionsbump
+- Workspace-Version: `1.0.0` → `1.1.0`.
 
 ---
 

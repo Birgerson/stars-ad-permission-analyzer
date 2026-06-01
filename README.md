@@ -60,6 +60,7 @@ Stars liest die Windows-Zugriffskontrolllisten (ACLs) direkt vom Dateisystem:
 Stars löst Benutzer und Gruppen über LDAP auf:
 
 - Direkte und transitive Gruppenmitgliedschaften
+- Konkreter, geordneter Mitgliedschafts­pfad pro Gruppe (`User → Group A → Group B`) im Erklärungstext, nicht nur „Member of B [transitive]"
 - Primärgruppe des Benutzers
 - Deaktivierte Konten
 - Verwaiste SIDs
@@ -399,6 +400,7 @@ Stars reads Windows access control lists (ACLs) directly from the file system:
 Stars resolves users and groups via LDAP:
 
 - Direct and transitive group memberships
+- Concrete ordered membership chain per group (`User → Group A → Group B`) in the explanation text, not just "Member of B [transitive]"
 - The user's primary group
 - Disabled accounts
 - Orphaned SIDs
