@@ -14,6 +14,23 @@ _Keine offenen Änderungen._
 
 ---
 
+## [1.1.2] — 2026-06-01
+
+**Patch-Release.** Behebt einen vertrauenskritischen Fehler im Verzeichnis-Walker, der Reparse Points (Junctions, Symlinks) bisher still übersprungen hat — Inhalt hinter einer Junction war im Scan-Ergebnis stumm fehlend, ohne dass die GUI das angezeigt hat. Tritt produktiv vor allem bei SYSVOL-Scans auf (`C:\Windows\SYSVOL\sysvol\<domain>` ist standardmäßig eine Junction auf `C:\Windows\SYSVOL\domain`).
+
+### Geändert
+- `fs_scanner::walker::walk_tree` verfolgt Reparse Points jetzt standardmäßig und entdeckt Schleifen über das kanonisierte Ziel. Ein `HashSet` der schon besuchten kanonischen Pfade wird beim Eintritt in jeden Reparse Point geprüft; bei Treffer wird die Rekursion gestoppt und ein sichtbarer `WalkError` mit erklärendem Text ins Ergebnis geschrieben. Die alte „still überspringen"-Logik fällt damit ersatzlos weg.
+- Schlägt die Auflösung des Reparse-Ziels fehl (z. B. defekter Link), wird ebenfalls ein sichtbarer `WalkError` ausgegeben statt im `debug!`-Log zu verschwinden.
+
+### Hinzugefügt
+- Walker-Test `walker_follows_directory_junction_into_target` — verifiziert mit einer per `mklink /J` erzeugten Junction, dass Objekte hinter dem Link tatsächlich enumeriert werden.
+- Walker-Test `walker_detects_junction_loop_and_emits_visible_error` — erzeugt eine zirkuläre Junction-Struktur (`a\b → root`) und stellt sicher, dass die Schleife sauber erkannt und als Fehler im Ergebnis sichtbar wird (kein Stack-Overflow, kein stilles Drop).
+
+### Versionsbump
+- Workspace-Version: `1.1.1` → `1.1.2`.
+
+---
+
 ## [1.1.1] — 2026-06-01
 
 **Patch-Release.** Beseitigt eine UX-Falle im Analyze-Tab: bisher wurden Analyse-Ergebnisse nicht persistiert und tauchten deshalb im Delta-Tab nie auf.

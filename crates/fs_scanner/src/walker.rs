@@ -1,8 +1,25 @@
 //! Rekursiver Verzeichnis-Walker mit Fehlertoleranz.
 //! Recursive directory walker with error tolerance.
 //!
-//! Reparse Points (Symlinks, Junctions) werden nicht rekursiert — kein Endlosschleifen-Risiko.
-//! Reparse points (symlinks, junctions) are not recursed — no infinite-loop risk.
+//! Reparse Points (Symlinks, Junctions) werden standardmäßig weiterverfolgt,
+//! mit Loop-Detection über das kanonisierte Ziel. Wo eine Schleife erkannt
+//! wird oder das Ziel nicht aufgelöst werden kann, schreibt der Walker einen
+//! sichtbaren `WalkError` in das Ergebnis — niemals stille Skips. Damit ist
+//! ein typischer SYSVOL-Junction-Pfad
+//! (`C:\Windows\SYSVOL\sysvol\<domain>` → `C:\Windows\SYSVOL\domain`)
+//! vollständig auswertbar, ohne dass der Bediener Insiderwissen über
+//! Junctions braucht.
+//!
+//! Reparse points (symlinks, junctions) are followed by default with
+//! loop detection via the canonicalized target. Whenever a cycle is
+//! detected or the target cannot be resolved, the walker writes a
+//! visible `WalkError` into the result — never silent skips. This way a
+//! typical SYSVOL junction
+//! (`C:\Windows\SYSVOL\sysvol\<domain>` → `C:\Windows\SYSVOL\domain`)
+//! is fully analyzable without the operator needing insider knowledge
+//! about junctions.
+
+use std::collections::HashSet;
 
 use adpa_core::{error::CoreError, model::FileSystemObject};
 use tracing::{debug, info, warn};
@@ -41,8 +58,12 @@ pub struct WalkResult {
 ///
 /// - Zugriff-verweigert-Fehler auf einzelne Pfade werden protokolliert; der Scan läuft weiter.
 /// - Access-denied errors on individual paths are recorded; the scan continues.
-/// - Reparse Points werden erkannt und nicht rekursiert.
-/// - Reparse points are detected and not recursed into.
+/// - Reparse Points werden standardmäßig verfolgt, mit Loop-Detection über
+///   kanonisierte Ziele. Schleifen oder nicht auflösbare Ziele führen zu einem
+///   sichtbaren Eintrag in `errors` — keine stillen Skips.
+/// - Reparse points are followed by default with loop detection via
+///   canonicalized targets. Cycles or unresolvable targets produce a visible
+///   entry in `errors` — never silent skips.
 pub fn walk_tree(root: &str, config: &WalkConfig, cancel: &CancellationToken) -> WalkResult {
     info!(
         root,
@@ -51,7 +72,25 @@ pub fn walk_tree(root: &str, config: &WalkConfig, cancel: &CancellationToken) ->
     );
     let mut objects = Vec::new();
     let mut errors = Vec::new();
-    walk_dir(root, 0, config, cancel, &mut objects, &mut errors);
+    let mut visited_canonical: HashSet<String> = HashSet::new();
+    // Root vorab kanonisieren — wird als erstes Element in das visited-Set
+    // gelegt, damit Reparse-Points, die auf den Scan-Wurzel zurückzeigen,
+    // direkt als Schleife erkannt werden.
+    // Canonicalize the root up front and seed the visited set with it so
+    // that reparse points pointing back to the scan root are detected as a
+    // cycle right away.
+    if let Some(canon) = canonicalize_path(root) {
+        visited_canonical.insert(canon);
+    }
+    walk_dir(
+        root,
+        0,
+        config,
+        cancel,
+        &mut objects,
+        &mut errors,
+        &mut visited_canonical,
+    );
     let cancelled = cancel.is_cancelled();
     info!(
         root,
@@ -67,6 +106,22 @@ pub fn walk_tree(root: &str, config: &WalkConfig, cancel: &CancellationToken) ->
     }
 }
 
+/// Kanonisiert einen Pfad zu seiner aufgelösten Ziel-Form (Long-Path-präfixiert
+/// auf Windows). Bei einem Reparse Point wird das *Ziel* zurückgegeben — genau
+/// das, was wir für die Loop-Detection brauchen. Liefert `None`, wenn die
+/// Auflösung fehlschlägt (z. B. defekter Link).
+///
+/// Canonicalizes a path to its resolved target form (long-path prefixed on
+/// Windows). For a reparse point this returns the *target* — exactly what we
+/// need for loop detection. Returns `None` if resolution fails (e.g. broken
+/// link).
+fn canonicalize_path(path: &str) -> Option<String> {
+    let api_path = validation::path::to_windows_api_path(path);
+    std::fs::canonicalize(&api_path)
+        .ok()
+        .map(|p| p.to_string_lossy().to_string().to_ascii_lowercase())
+}
+
 fn walk_dir(
     path: &str,
     current_depth: u32,
@@ -74,6 +129,7 @@ fn walk_dir(
     cancel: &CancellationToken,
     objects: &mut Vec<FileSystemObject>,
     errors: &mut Vec<WalkError>,
+    visited_canonical: &mut HashSet<String>,
 ) {
     // Kooperativer Abbruchpunkt vor jedem Pfad. / Cooperative cancellation point before each path.
     if cancel.is_cancelled() {
@@ -93,12 +149,52 @@ fn walk_dir(
             debug!(path, is_dir, is_reparse, depth = current_depth, "Read FSO");
             objects.push(fso);
 
+            // Bei einem Reparse Point versuchen wir, das kanonische Ziel zu
+            // bestimmen. Ist es schon Teil des aktuellen Walks, würde ein
+            // weiteres Hineinlaufen eine Schleife erzeugen — wir markieren
+            // das als sichtbaren Fehler und brechen die Rekursion an dieser
+            // Stelle ab. Misslingt die Kanonisierung komplett, geben wir
+            // dem Bediener ebenfalls eine erklärende Fehlermeldung.
+            // For a reparse point we try to determine the canonical target.
+            // If it is already part of the current walk, descending further
+            // would create a cycle — we surface that as a visible error and
+            // stop the recursion at this point. If canonicalization fails
+            // entirely, we also give the operator an explanatory error.
             if is_reparse {
-                debug!(path, "Skipping reparse point — not recursing");
+                match canonicalize_path(path) {
+                    None => {
+                        warn!(path, "Reparse point target could not be resolved");
+                        errors.push(WalkError {
+                            path: path.to_owned(),
+                            error: CoreError::AccessDenied(
+                                "Reparse point target could not be resolved — recursion stopped at this junction/link. The object itself is in the result with its DACL; objects behind the link were not enumerated."
+                                    .to_owned(),
+                            ),
+                        });
+                        return;
+                    }
+                    Some(target) => {
+                        if visited_canonical.contains(&target) {
+                            info!(
+                                path,
+                                target = %target,
+                                "Reparse point target already visited — recursion stopped to avoid loop"
+                            );
+                            errors.push(WalkError {
+                                path: path.to_owned(),
+                                error: CoreError::AccessDenied(format!(
+                                    "Reparse point target already visited in this scan — recursion stopped to avoid an infinite loop. Target: {target}. The object itself is in the result with its DACL; objects behind the link were not enumerated again."
+                                )),
+                            });
+                            return;
+                        }
+                        visited_canonical.insert(target);
+                    }
+                }
             }
 
             let depth_ok = config.max_depth.is_none_or(|max| current_depth < max);
-            if is_dir && !is_reparse && depth_ok {
+            if is_dir && depth_ok {
                 // Long-Path-Präfix vor `read_dir` ansetzen, damit
                 // Verzeichnisse mit Pfaden > MAX_PATH zuverlässig enumeriert
                 // werden können. Die `entry.path()`-Rückgaben tragen das
@@ -147,6 +243,7 @@ fn walk_dir(
                                         cancel,
                                         objects,
                                         errors,
+                                        visited_canonical,
                                     );
                                 }
                             }
@@ -349,5 +446,140 @@ mod tests {
                 obj.path.0
             );
         }
+    }
+
+    // ----------------------------------------------------------------
+    // Reparse-Point-Verhalten / reparse point behaviour
+    // ----------------------------------------------------------------
+
+    /// Legt unter TEMP eine kleine Struktur an, in der `link → target` eine
+    /// Verzeichnis-Junction ist. Der Walker muss `link` ENTERN und das
+    /// Kind unter `target` finden — das ist die SYSVOL-Situation.
+    /// Creates a small structure under TEMP where `link → target` is a
+    /// directory junction. The walker must follow `link` and find the
+    /// child under `target` — this is the SYSVOL situation.
+    #[test]
+    fn walker_follows_directory_junction_into_target() {
+        use std::path::PathBuf;
+
+        let stamp = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let root: PathBuf = std::env::temp_dir().join(format!("adpa-junction-{stamp}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let target = root.join("target");
+        let inside_target = target.join("inside");
+        let link = root.join("link");
+
+        std::fs::create_dir_all(&inside_target).expect("create target tree");
+        let status = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &link.to_string_lossy(),
+                &target.to_string_lossy(),
+            ])
+            .status()
+            .expect("spawn mklink");
+        if !status.success() {
+            // Junction-Erstellung kann auf manchen CI-Hosts scheitern (z. B.
+            // ohne Schreibrechte unter TEMP). In dem Fall überspringen wir den
+            // Test bewusst, damit er nicht falsch fehlschlägt.
+            // Junction creation may fail on some CI hosts (e.g. without write
+            // permission under TEMP). Skip the test deliberately in that case
+            // so it does not fail spuriously.
+            let _ = std::fs::remove_dir_all(&root);
+            eprintln!("mklink /J failed — skipping junction test");
+            return;
+        }
+
+        let root_str = root.to_string_lossy().into_owned();
+        let result = walk(&root_str, &unlimited());
+        let _ = std::fs::remove_dir_all(&root);
+
+        let paths: Vec<String> = result
+            .objects
+            .iter()
+            .map(|o| o.path.0.to_ascii_lowercase())
+            .collect();
+
+        let inside_via_link = link.join("inside").to_string_lossy().to_ascii_lowercase();
+        assert!(
+            paths.iter().any(|p| p == &inside_via_link),
+            "Walker muss durch die Junction laufen und 'link\\inside' finden — bekam: {paths:?}"
+        );
+    }
+
+    /// Legt eine zirkuläre Junction-Struktur an (`b → a`) und stellt sicher,
+    /// dass der Walker die Schleife erkennt und einen *sichtbaren* Fehler
+    /// im Ergebnis erzeugt — kein stilles Skippen, kein Stack-Overflow.
+    /// Creates a circular junction structure (`b → a`) and verifies that the
+    /// walker detects the cycle and surfaces a *visible* error in the result
+    /// — no silent skip, no stack overflow.
+    #[test]
+    fn walker_detects_junction_loop_and_emits_visible_error() {
+        use std::path::PathBuf;
+
+        let stamp = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let root: PathBuf = std::env::temp_dir().join(format!("adpa-junction-loop-{stamp}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let a = root.join("a");
+        let b = a.join("b");
+
+        std::fs::create_dir_all(&a).expect("create a");
+        // `b` ist eine Junction zurück auf `root` — sobald der Walker `b`
+        // betritt, würde er ohne Loop-Detection wieder von `root` aus
+        // starten.
+        // `b` is a junction back to `root` — once the walker enters `b`,
+        // without loop detection it would start over from `root`.
+        let status = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &b.to_string_lossy(),
+                &root.to_string_lossy(),
+            ])
+            .status()
+            .expect("spawn mklink");
+        if !status.success() {
+            let _ = std::fs::remove_dir_all(&root);
+            eprintln!("mklink /J failed — skipping junction-loop test");
+            return;
+        }
+
+        let result = walk(&root.to_string_lossy(), &unlimited());
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(
+            !result.errors.is_empty(),
+            "Schleifen-Junction muss einen Fehler im Ergebnis erzeugen, hatte 0"
+        );
+        let loop_msg = result.errors.iter().any(|e| {
+            let msg = format!("{}", e.error);
+            msg.contains("already visited") || msg.contains("loop")
+        });
+        assert!(
+            loop_msg,
+            "Mindestens ein Fehler muss die Schleifen-Erkennung erklären, hatte: {:?}",
+            result
+                .errors
+                .iter()
+                .map(|e| format!("{}", e.error))
+                .collect::<Vec<_>>()
+        );
     }
 }
