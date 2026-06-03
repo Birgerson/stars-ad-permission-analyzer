@@ -59,6 +59,16 @@ impl Database {
         self.scan_store().list_scan_runs()
     }
 
+    /// Löscht einen Scan-Lauf inklusive aller abhängigen Daten
+    /// (Berechtigungen und Scan-Fehler). Liefert die Anzahl entfernter
+    /// Scan-Lauf-Zeilen (0 wenn die ID nicht existierte, 1 bei Erfolg).
+    /// Deletes a scan run including all dependent data (permissions and
+    /// scan errors). Returns the number of removed scan-run rows (0 if
+    /// the ID did not exist, 1 on success).
+    pub fn delete_scan_run(&self, id: &Uuid) -> Result<usize, CoreError> {
+        self.scan_store().delete_scan_run(id)
+    }
+
     /// Vergleicht zwei Scan-Läufe und gibt alle Änderungen zurück.
     /// Compares two scan runs and returns all changes.
     pub fn compare_scans(

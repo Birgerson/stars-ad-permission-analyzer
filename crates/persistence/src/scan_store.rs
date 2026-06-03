@@ -51,6 +51,74 @@ impl<'a> ScanStore<'a> {
         Ok(())
     }
 
+    /// Löscht einen Scan-Lauf vollständig samt allen abhängigen Datensätzen
+    /// (Berechtigungen und Scan-Fehlern). Wird in einer Transaktion ausgeführt:
+    /// entweder verschwindet alles oder nichts. SQLite-Foreign-Keys sind in
+    /// dieser Codebasis nicht über `PRAGMA foreign_keys = ON` aktiviert, daher
+    /// löschen wir die abhängigen Zeilen explizit.
+    ///
+    /// Deletes a scan run completely along with all dependent records
+    /// (permissions and scan errors). Runs in a transaction: either
+    /// everything is gone or nothing. SQLite foreign keys are not enabled
+    /// via `PRAGMA foreign_keys = ON` in this codebase, so we explicitly
+    /// delete the dependent rows.
+    ///
+    /// Gibt die Anzahl entfernter Scan-Lauf-Zeilen zurück (0, wenn die ID
+    /// nicht existiert; 1 bei Erfolg).
+    /// Returns the number of removed scan-run rows (0 if the ID does not
+    /// exist; 1 on success).
+    pub fn delete_scan_run(&self, id: &Uuid) -> Result<usize, CoreError> {
+        let id_str = id.to_string();
+        // Manuelle Transaktion über die geliehene Connection — der mutable
+        // Borrow für `Connection::transaction()` würde unsere `&Connection`
+        // brechen. BEGIN/COMMIT sind hier semantisch äquivalent.
+        // Manual transaction over the borrowed connection — the mutable
+        // borrow required by `Connection::transaction()` would conflict with
+        // our `&Connection`. BEGIN/COMMIT are semantically equivalent here.
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| CoreError::Database(format!("delete_scan_run BEGIN failed: {e}")))?;
+
+        let run_step = (|| -> Result<usize, CoreError> {
+            self.conn
+                .execute(
+                    "DELETE FROM effective_permissions WHERE scan_run_id = ?1",
+                    params![id_str],
+                )
+                .map_err(|e| {
+                    CoreError::Database(format!("delete effective_permissions failed: {e}"))
+                })?;
+            self.conn
+                .execute(
+                    "DELETE FROM scan_errors WHERE scan_run_id = ?1",
+                    params![id_str],
+                )
+                .map_err(|e| CoreError::Database(format!("delete scan_errors failed: {e}")))?;
+            let removed = self
+                .conn
+                .execute("DELETE FROM scan_runs WHERE id = ?1", params![id_str])
+                .map_err(|e| CoreError::Database(format!("delete scan_runs failed: {e}")))?;
+            Ok(removed)
+        })();
+
+        match run_step {
+            Ok(removed) => {
+                self.conn.execute_batch("COMMIT").map_err(|e| {
+                    CoreError::Database(format!("delete_scan_run COMMIT failed: {e}"))
+                })?;
+                Ok(removed)
+            }
+            Err(e) => {
+                // Rollback explizit; Fehler hier bewusst schlucken, der
+                // ursprüngliche Grund ist wichtiger.
+                // Explicit rollback; swallow the secondary error here — the
+                // original cause matters more.
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
     /// Speichert eine effektive Berechtigung und upserted die zugehörige Identität.
     /// Stores an effective permission and upserts the associated identity.
     pub fn insert_permission(
@@ -461,6 +529,77 @@ mod tests {
         store.finish_scan_run(&run.id, finished).unwrap();
         let runs = store.list_scan_runs().unwrap();
         assert!(runs[0].finished_at.is_some());
+    }
+
+    #[test]
+    fn delete_scan_run_removes_run_and_dependents() {
+        let conn = setup();
+        let store = ScanStore::new(&conn);
+        let run = make_run(r"C:\to-delete");
+        store.insert_scan_run(&run).unwrap();
+        let perm = make_perm("S-1-5-21-1-2-3-1000", r"C:\to-delete\x", 1, None, 1);
+        store.insert_permission(&run.id, &perm).unwrap();
+        store
+            .insert_error(
+                &run.id,
+                &ScanError {
+                    path: Some(NormalizedPath(r"C:\to-delete\bad".to_owned())),
+                    message: "test error".to_owned(),
+                },
+            )
+            .unwrap();
+
+        // Sanity: alles ist drin.
+        // Sanity: everything is present.
+        assert_eq!(store.list_scan_runs().unwrap().len(), 1);
+        assert_eq!(store.get_permissions(&run.id).unwrap().len(), 1);
+        assert_eq!(store.list_errors_for(&run.id).unwrap().len(), 1);
+
+        let removed = store.delete_scan_run(&run.id).unwrap();
+        assert_eq!(removed, 1, "exactly one scan_run row must be removed");
+
+        // Lauf weg, abhängige Daten auch.
+        // Run gone, dependent data gone too.
+        assert!(store.list_scan_runs().unwrap().is_empty());
+        assert!(store.get_permissions(&run.id).unwrap().is_empty());
+        assert!(store.list_errors_for(&run.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_scan_run_unknown_id_returns_zero() {
+        let conn = setup();
+        let store = ScanStore::new(&conn);
+        let removed = store.delete_scan_run(&Uuid::new_v4()).unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn delete_scan_run_leaves_other_runs_untouched() {
+        let conn = setup();
+        let store = ScanStore::new(&conn);
+        let keep = make_run(r"C:\keep");
+        let drop = make_run(r"C:\drop");
+        store.insert_scan_run(&keep).unwrap();
+        store.insert_scan_run(&drop).unwrap();
+        store
+            .insert_permission(
+                &keep.id,
+                &make_perm("S-1-5-21-1-2-3-1000", r"C:\keep\x", 1, None, 1),
+            )
+            .unwrap();
+        store
+            .insert_permission(
+                &drop.id,
+                &make_perm("S-1-5-21-1-2-3-2000", r"C:\drop\x", 1, None, 1),
+            )
+            .unwrap();
+
+        store.delete_scan_run(&drop.id).unwrap();
+
+        let runs = store.list_scan_runs().unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, keep.id);
+        assert_eq!(store.get_permissions(&keep.id).unwrap().len(), 1);
     }
 
     #[test]

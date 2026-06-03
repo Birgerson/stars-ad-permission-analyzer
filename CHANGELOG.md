@@ -14,6 +14,27 @@ _Keine offenen Änderungen._
 
 ---
 
+## [1.2.0] — 2026-06-02
+
+**Minor-Release.** Drei vom Bediener konkret angesprochene GUI-Lücken geschlossen: pfadzentrierte Trustee-Sicht im Analyze-Tab, Löschen einzelner Scan-Läufe aus der Historie, sichtbarer Hinweis bei leerem Delta-Ergebnis. Reines Lese-Tool — keine Schreibvorgänge auf Zielsystemen, keine Berechtigungs­änderungen.
+
+### Hinzugefügt
+- **Trustee-Sicht im Analyze-Tab** („Wer hat Zugriff?"-Button). Listet alle ACEs eines Pfads pfadzentriert auf — eine Zeile pro ACE mit aufgelöstem `DOMAIN\Name`, Allow/Deny, normalisierten Rechten + Roh-Maske, explicit/inherited-Quelle, Windows-typischer „Applies to"-Bezeichnung und Schicht (NTFS / Share). Beantwortet die Audit-Frage „wer kann überhaupt auf X zugreifen?" als Komplement zur identitätsbasierten Effektiv-Analyse. SMB-Kontext optional — wenn aktiv, wird zusätzlich die Share-DACL mit angezeigt. NULL-DACL erscheint als sichtbare Auditor-Zeile statt einer leeren Tabelle.
+- **Worker-Request `AnalyzeTrustees`** + Event `TrusteesDone` + `TrusteeRow`-Struct. Auflösung der SIDs erfolgt batched per `ad_resolver::build_sid_name_map` — eine LSA-Runde pro eindeutiger SID.
+- **`Database::delete_scan_run(id)`** und **`ScanStore::delete_scan_run(id)`** in `persistence`. Löscht einen Scan-Lauf samt aller `effective_permissions`- und `scan_errors`-Zeilen in einer expliziten Transaktion (BEGIN IMMEDIATE / COMMIT / ROLLBACK). SQLite-Foreign-Keys sind im Schema nicht über `PRAGMA foreign_keys = ON` aktiv, deshalb explizite Kaskade. Liefert die Anzahl entfernter Scan-Lauf-Zeilen (0 bei unbekannter ID, 1 bei Erfolg).
+- **Mülleimer-Button pro Scan-Lauf im Delta-Tab** plus inline-Bestätigungsdialog. Ein versehentlicher Klick löscht nichts — die Aktion startet erst nach „Endgültig löschen". Nach Abschluss wird die Selektion bereinigt, ein eventuell sichtbares Delta-Ergebnis ausgeblendet und die Liste frisch aus der DB nachgeladen, damit GUI-State und DB nicht auseinanderlaufen.
+- **`WorkerRequest::DeleteScanRun`** + Event `ScanRunDeleted { run_id, result }`. Triggert auf Erfolg automatisch ein `ListScanRuns`, damit der Bediener nicht erneut auf „Scan-Historie laden" klicken muss.
+- **`REQ_TX`-Thread-Local** in der GUI für Folge­aktionen aus Event-Handlern (analog zum bestehenden `EVENT_RX`).
+- **Sichtbarer Hinweis im Delta-Tab bei leerem Ergebnis**: „Keine Unterschiede zwischen den beiden Scans gefunden. Beide Läufe enthalten dieselben Pfade mit identischen effektiven Berechtigungen." Vorher sah der Bediener nur die `0 / 0 / 0`-Zähler über einer leeren Tabelle und konnte nicht zwischen „Vergleich gelaufen, nichts gefunden" und „Aktion verloren gegangen" unterscheiden.
+
+### Tests
+- Drei neue `persistence`-Tests für `delete_scan_run`: vollständiges Cascade-Delete (Run + Permissions + Errors), unbekannte UUID liefert `0` und kein Fehler, andere Scan-Läufe bleiben unangetastet.
+
+### Versionsbump
+- Workspace-Version: `1.1.2` → `1.2.0`.
+
+---
+
 ## [1.1.2] — 2026-06-01
 
 **Patch-Release.** Behebt einen vertrauenskritischen Fehler im Verzeichnis-Walker, der Reparse Points (Junctions, Symlinks) bisher still übersprungen hat — Inhalt hinter einer Junction war im Scan-Ergebnis stumm fehlend, ohne dass die GUI das angezeigt hat. Tritt produktiv vor allem bei SYSVOL-Scans auf (`C:\Windows\SYSVOL\sysvol\<domain>` ist standardmäßig eine Junction auf `C:\Windows\SYSVOL\domain`).

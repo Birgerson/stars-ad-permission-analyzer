@@ -14,7 +14,7 @@ mod worker;
 
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -25,7 +25,7 @@ use permission_engine::NormalizedRights;
 
 use crate::worker::{
     spawn_worker, DeltaRow, IdentitySuggestion, LdapParams, NotifyFn, ScanRow, ScanRunSummary,
-    WorkerEvent, WorkerRequest,
+    TrusteeRow, WorkerEvent, WorkerRequest,
 };
 
 // Slint-UI inline. Definiert ViewModels für Scan-Zeilen, Scan-Fehler,
@@ -126,6 +126,20 @@ slint::slint! {
         selected_as_new: bool,
     }
 
+    // Eine Zeile in der Trustee-Sicht des Analyze-Tabs.
+    // One row in the trustee view of the Analyze tab.
+    export struct TrusteeRowVm {
+        display_name: string,
+        sid: string,
+        kind: string,
+        kind_color: color,
+        rights_label: string,
+        mask_hex: string,
+        source: string,
+        applies_to: string,
+        category: string,
+    }
+
     // Eine Delta-Zeile (Hinzugefügt / Entfernt / Geändert).
     // A delta row (Added / Removed / Changed).
     export struct DeltaRowVm {
@@ -202,8 +216,16 @@ slint::slint! {
         in property <string> a-mask-hex;
         in property <string> a-share-line;
         in property <[string]> a-explanation;
+        // Trustee-Sicht: pfadzentrierte Auflistung aller ACEs ohne
+        // vorgegebene Identität.
+        // Trustee view: path-centric listing of all ACEs without a fixed
+        // identity.
+        in property <[TrusteeRowVm]> a-trustees;
+        in property <bool>           a-has-trustees;
+        in property <bool>           a-trustees-running;
 
         callback analyze-clicked();
+        callback analyze-trustees-clicked();
         callback resolve-name-clicked();
         callback analyze-name-edited(string);
         callback pick-analyze-suggestion(string);
@@ -281,6 +303,20 @@ slint::slint! {
         callback delta-pick-old(string);
         callback delta-pick-new(string);
         callback delta-compare-clicked();
+        // Anfrage zum Löschen eines Scan-Laufs. Die GUI fragt erst über den
+        // d-pending-delete-Dialog nach, der Worker bekommt die Anfrage erst
+        // nach Bestätigung.
+        // Request to delete a scan run. The GUI prompts via the
+        // d-pending-delete dialog first; the worker only sees the request
+        // after confirmation.
+        callback delta-delete-confirmed(string);
+
+        // ID des Scan-Laufs, für den der Bestätigungsdialog gerade
+        // sichtbar sein soll. Leer = kein Dialog offen.
+        // ID of the scan run for which the confirmation dialog should be
+        // visible. Empty = no dialog open.
+        in-out property <string> d-pending-delete-id;
+        in-out property <string> d-pending-delete-label;
 
         VerticalBox {
             padding: 8px;
@@ -504,6 +540,17 @@ slint::slint! {
                                     enabled: !root.a-is-running;
                                     clicked => { root.analyze-clicked(); }
                                 }
+                                // Zweite Audit-Frage: pfadzentrierte
+                                // Trustee-Sicht. Benötigt keine Identität,
+                                // weil sie alle ACEs des Pfads zeigt.
+                                // Second audit question: path-centric
+                                // trustee view. Needs no identity because
+                                // it lists every ACE on the path.
+                                Button {
+                                    text: root.a-trustees-running ? "Läuft..." : "Wer hat Zugriff?";
+                                    enabled: !root.a-trustees-running;
+                                    clicked => { root.analyze-trustees-clicked(); }
+                                }
                             }
 
                             if root.a-status != "": Text {
@@ -542,6 +589,64 @@ slint::slint! {
                                     for step[i] in root.a-explanation: Text {
                                         text: (i + 1) + ". " + step;
                                         wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            // Trustee-Sicht: zeigt alle ACEs auf dem Pfad,
+                            // unabhängig vom Identitäts-Token. Komplement zur
+                            // identitätsbasierten Effektiv-Analyse oben.
+                            // Trustee view: shows every ACE on the path,
+                            // independent of any identity token. Complement
+                            // to the identity-based effective analysis above.
+                            if root.a-has-trustees: GroupBox {
+                                title: "Wer hat Zugriff (" + root.a-trustees.length + " ACE-Einträge)";
+                                VerticalBox {
+                                    spacing: 4px;
+                                    HorizontalBox {
+                                        spacing: 8px;
+                                        Text { text: "Trustee"; font-weight: 700; horizontal-stretch: 2; }
+                                        Text { text: "Art"; font-weight: 700; width: 70px; }
+                                        Text { text: "Rechte"; font-weight: 700; width: 220px; }
+                                        Text { text: "Quelle"; font-weight: 700; width: 80px; }
+                                        Text { text: "Anwendung"; font-weight: 700; width: 220px; }
+                                        Text { text: "Schicht"; font-weight: 700; width: 70px; }
+                                    }
+                                    for t[i] in root.a-trustees: HorizontalBox {
+                                        spacing: 8px;
+                                        Text {
+                                            text: t.display_name;
+                                            color: #2c3e50;
+                                            horizontal-stretch: 2;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: t.kind;
+                                            color: t.kind_color;
+                                            width: 70px;
+                                        }
+                                        Text {
+                                            text: t.rights_label;
+                                            color: #555;
+                                            width: 220px;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: t.source;
+                                            color: #555;
+                                            width: 80px;
+                                        }
+                                        Text {
+                                            text: t.applies_to;
+                                            color: #555;
+                                            width: 220px;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: t.category;
+                                            color: #555;
+                                            width: 70px;
+                                        }
                                     }
                                 }
                             }
@@ -1006,6 +1111,22 @@ slint::slint! {
                                             overflow: elide;
                                             wrap: no-wrap;
                                         }
+                                        // Mülleimer-Button — öffnet den
+                                        // Bestätigungsdialog, ohne sofort zu
+                                        // löschen. Die eigentliche Aktion
+                                        // läuft erst über die Bestätigung.
+                                        // Trash button — opens the
+                                        // confirmation dialog, no instant
+                                        // delete. The actual action runs
+                                        // only after confirmation.
+                                        Button {
+                                            text: "🗑";
+                                            width: 36px;
+                                            clicked => {
+                                                root.d-pending-delete-id = run.id;
+                                                root.d-pending-delete-label = run.label;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1016,6 +1137,59 @@ slint::slint! {
                                 Button {
                                     text: "⟳ Vergleichen";
                                     clicked => { root.delta-compare-clicked(); }
+                                }
+                            }
+
+                            // Bestätigungsdialog — keine separates Popup-Fenster
+                            // sondern eine sichtbare Inline-Box, damit ein
+                            // unbeabsichtigter Klick auf den Mülleimer nicht
+                            // bereits löscht.
+                            // Confirmation dialog — not a separate popup but an
+                            // inline visible box so a stray trash click does
+                            // not delete immediately.
+                            if root.d-pending-delete-id != "": Rectangle {
+                                background: #fff3cd;
+                                border-color: #c69210;
+                                border-width: 1px;
+                                border-radius: 4px;
+                                VerticalBox {
+                                    padding: 8px;
+                                    spacing: 6px;
+                                    Text {
+                                        text: "Scan-Lauf wirklich entfernen?";
+                                        font-weight: 700;
+                                        color: #5c4500;
+                                    }
+                                    Text {
+                                        text: root.d-pending-delete-label;
+                                        color: #5c4500;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "Diese Aktion kann nicht rückgängig gemacht werden. Alle in diesem Lauf gespeicherten Berechtigungen und Scan-Fehler werden mit gelöscht.";
+                                        color: #5c4500;
+                                        wrap: word-wrap;
+                                        font-size: 12px;
+                                    }
+                                    HorizontalBox {
+                                        spacing: 8px;
+                                        alignment: end;
+                                        Button {
+                                            text: "Abbrechen";
+                                            clicked => {
+                                                root.d-pending-delete-id = "";
+                                                root.d-pending-delete-label = "";
+                                            }
+                                        }
+                                        Button {
+                                            text: "Endgültig löschen";
+                                            clicked => {
+                                                root.delta-delete-confirmed(root.d-pending-delete-id);
+                                                root.d-pending-delete-id = "";
+                                                root.d-pending-delete-label = "";
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
@@ -1047,6 +1221,17 @@ slint::slint! {
                                             font-weight: 700;
                                             width: 180px;
                                         }
+                                    }
+                                    // Leeres Delta: ausdrücklich sagen, dass der Vergleich
+                                    // gelaufen ist und nichts gefunden hat — sonst sieht der
+                                    // Nutzer eine leere Tabelle und denkt, der Klick sei verloren.
+                                    // Empty delta: explicitly state that the comparison ran and
+                                    // found nothing — otherwise the user sees an empty table and
+                                    // thinks the click was lost.
+                                    if root.d-rows.length == 0: Text {
+                                        text: "Keine Unterschiede zwischen den beiden Scans gefunden. Beide Läufe enthalten dieselben Pfade mit identischen effektiven Berechtigungen.";
+                                        color: #2c3e50;
+                                        wrap: word-wrap;
                                     }
                                     for entry[i] in root.d-rows: HorizontalBox {
                                         spacing: 8px;
@@ -1191,6 +1376,13 @@ struct ScanRunSummaryUi {
 
 thread_local! {
     static EVENT_RX: RefCell<Option<Receiver<WorkerEvent>>> = const { RefCell::new(None) };
+    /// Worker-Sender für Folge-Aktionen aus Event-Handlern (z. B. nach einer
+    /// Löschung erneut die Scan-Historie laden). Wird in `run_ui` direkt nach
+    /// `spawn_worker` befüllt.
+    /// Worker sender for follow-up actions inside event handlers (e.g.
+    /// re-load the scan history after a deletion). Populated in `run_ui`
+    /// right after `spawn_worker`.
+    static REQ_TX: RefCell<Option<Sender<WorkerRequest>>> = const { RefCell::new(None) };
     static SCAN_STATE: RefCell<ScanUiState> = RefCell::new(ScanUiState::default());
     static DELTA_STATE: RefCell<DeltaUiState> = RefCell::new(DeltaUiState::default());
     /// Vorab geladene Identitäts­liste für die Live-Suche. Wird einmalig
@@ -1226,6 +1418,7 @@ fn run_ui(_log_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>>
 
     let (req_tx, evt_rx, cancel) = spawn_worker(notify);
     EVENT_RX.with(|cell| *cell.borrow_mut() = Some(evt_rx));
+    REQ_TX.with(|cell| *cell.borrow_mut() = Some(req_tx.clone()));
 
     wire_analyze_tab(&ui, req_tx.clone());
     wire_scan_tab(&ui, req_tx.clone(), cancel);
@@ -1301,8 +1494,10 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         });
     }
 
+    let analyze_tx = req_tx.clone();
     let weak = ui.as_weak();
     ui.on_analyze_clicked(move || {
+        let req_tx = &analyze_tx;
         let Some(ui) = weak.upgrade() else { return };
         let path = ui.get_a_path().to_string();
         let sid = ui.get_a_sid().to_string();
@@ -1355,6 +1550,82 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             ui.set_a_status_is_error(true);
         }
     });
+
+    // „Wer hat Zugriff?" — pfadzentrierte Trustee-Sicht. Braucht keine SID.
+    // "Wer hat Zugriff?" — path-centric trustee view. Needs no SID.
+    {
+        let weak = ui.as_weak();
+        let req_tx = req_tx.clone();
+        ui.on_analyze_trustees_clicked(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let path = ui.get_a_path().to_string();
+            if path.trim().is_empty() {
+                ui.set_a_status("Pfad muss angegeben werden.".into());
+                ui.set_a_status_is_error(true);
+                return;
+            }
+            let (smb_server, share_name) = if ui.get_a_smb_enabled() {
+                (
+                    Some(ui.get_a_smb_server().to_string()),
+                    Some(ui.get_a_smb_share().to_string()),
+                )
+            } else {
+                (None, None)
+            };
+            ui.set_a_trustees_running(true);
+            ui.set_a_has_trustees(false);
+            ui.set_a_status("Lese DACL...".into());
+            ui.set_a_status_is_error(false);
+            if let Err(e) = req_tx.send(WorkerRequest::AnalyzeTrustees {
+                path,
+                smb_server,
+                share_name,
+            }) {
+                ui.set_a_trustees_running(false);
+                ui.set_a_status(format!("Worker nicht erreichbar: {e}").into());
+                ui.set_a_status_is_error(true);
+            }
+        });
+    }
+}
+
+fn handle_trustees_done(ui: &MainWindow, result: Result<Vec<TrusteeRow>, String>) {
+    ui.set_a_trustees_running(false);
+    match result {
+        Ok(rows) => {
+            let vms: Vec<TrusteeRowVm> = rows
+                .into_iter()
+                .map(|r| {
+                    let kind_color = match r.kind.as_str() {
+                        "Allow" => slint::Color::from_rgb_u8(0x27, 0x8d, 0x4f),
+                        "Deny" => slint::Color::from_rgb_u8(0xc0, 0x39, 0x2b),
+                        _ => slint::Color::from_rgb_u8(0x6c, 0x7a, 0x89),
+                    };
+                    TrusteeRowVm {
+                        display_name: r.display_name.into(),
+                        sid: r.sid.into(),
+                        kind: r.kind.into(),
+                        kind_color,
+                        rights_label: r.rights_label.into(),
+                        mask_hex: r.mask_hex.into(),
+                        source: r.source.into(),
+                        applies_to: r.applies_to.into(),
+                        category: r.category.into(),
+                    }
+                })
+                .collect();
+            let len = vms.len();
+            ui.set_a_trustees(slint::ModelRc::new(slint::VecModel::from(vms)));
+            ui.set_a_has_trustees(true);
+            ui.set_a_status(format!("{} ACE-Einträge auf diesem Pfad gefunden.", len).into());
+            ui.set_a_status_is_error(false);
+        }
+        Err(e) => {
+            ui.set_a_has_trustees(false);
+            ui.set_a_status(format!("Trustee-Auswertung fehlgeschlagen: {e}").into());
+            ui.set_a_status_is_error(true);
+        }
+    }
 }
 
 fn apply_analyze_result(
@@ -1866,6 +2137,32 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
             }
         });
     }
+
+    // delta-delete-confirmed: vom Bestätigungsdialog ausgelöst, nachdem der
+    // Anwender „Endgültig löschen" geklickt hat. Schickt die Anfrage an den
+    // Worker — die Folge­aktionen (Selektion bereinigen, Liste neu laden)
+    // übernimmt der Event-Handler nach Empfang von WorkerEvent::ScanRunDeleted.
+    // delta-delete-confirmed: fired by the confirmation dialog after the
+    // user clicked "Endgültig löschen". Sends the request to the worker —
+    // follow-up actions (clearing selection, reloading the list) are
+    // handled by the event handler on WorkerEvent::ScanRunDeleted.
+    {
+        let weak = ui.as_weak();
+        let req_tx = req_tx.clone();
+        ui.on_delta_delete_confirmed(move |id| {
+            let Some(ui) = weak.upgrade() else { return };
+            let id_str = id.to_string();
+            if id_str.is_empty() {
+                return;
+            }
+            ui.set_d_status("Lösche Scan-Lauf...".into());
+            ui.set_d_status_is_error(false);
+            if let Err(e) = req_tx.send(WorkerRequest::DeleteScanRun { run_id: id_str }) {
+                ui.set_d_status(format!("Worker nicht erreichbar: {e}").into());
+                ui.set_d_status_is_error(true);
+            }
+        });
+    }
 }
 
 fn refresh_delta_runs(ui: &MainWindow) {
@@ -1932,6 +2229,53 @@ fn handle_scan_runs_loaded(ui: &MainWindow, result: Result<Vec<ScanRunSummary>, 
         }
         Err(e) => {
             ui.set_d_status(format!("Laden fehlgeschlagen: {e}").into());
+            ui.set_d_status_is_error(true);
+        }
+    }
+}
+
+/// Reagiert auf eine vom Worker abgeschlossene Scan-Lauf-Löschung. Aktualisiert
+/// die Statuszeile, räumt lokale Selektionen auf und triggert ein erneutes
+/// Laden der Historie — damit ist die Liste sofort frisch ohne Klick auf
+/// „Scan-Historie laden".
+/// Reacts to a worker-completed scan-run deletion. Updates the status line,
+/// clears local selection state and triggers a fresh history reload so the
+/// list is up-to-date without requiring another click on "Scan-Historie
+/// laden".
+fn handle_scan_run_deleted(ui: &MainWindow, run_id: &str, result: Result<(), String>) {
+    match result {
+        Ok(()) => {
+            DELTA_STATE.with(|s| {
+                let mut s = s.borrow_mut();
+                s.runs.retain(|r| r.id != run_id);
+                if s.selected_old.as_deref() == Some(run_id) {
+                    s.selected_old = None;
+                }
+                if s.selected_new.as_deref() == Some(run_id) {
+                    s.selected_new = None;
+                }
+            });
+            refresh_delta_runs(ui);
+            ui.set_d_status("Scan-Lauf entfernt.".into());
+            ui.set_d_status_is_error(false);
+            // Wenn das Delta-Ergebnis im Frame noch sichtbar war, kann es
+            // sich auf den eben gelöschten Lauf beziehen — vorsichtshalber
+            // ausblenden.
+            // If a delta result was still visible in the frame, it might
+            // refer to the just-deleted run — hide it to be safe.
+            ui.set_d_has_result(false);
+            // Liste frisch nachladen (Background), damit der GUI-State
+            // garantiert mit der DB übereinstimmt.
+            // Reload the list in background so the GUI state is guaranteed
+            // to match the DB.
+            REQ_TX.with(|cell| {
+                if let Some(tx) = cell.borrow().as_ref() {
+                    let _ = tx.send(WorkerRequest::ListScanRuns);
+                }
+            });
+        }
+        Err(e) => {
+            ui.set_d_status(format!("Löschen fehlgeschlagen: {e}").into());
             ui.set_d_status_is_error(true);
         }
     }
@@ -2014,7 +2358,11 @@ fn pump_worker_events(ui: &MainWindow) {
                 WorkerEvent::ExportDone(result) => handle_export_done(ui, result),
                 WorkerEvent::ScanRunsLoaded(result) => handle_scan_runs_loaded(ui, result),
                 WorkerEvent::DeltaComputed(result) => handle_delta_computed(ui, result),
+                WorkerEvent::ScanRunDeleted { run_id, result } => {
+                    handle_scan_run_deleted(ui, &run_id, result)
+                }
                 WorkerEvent::IdentitiesLoaded(result) => handle_identities_loaded(ui, result),
+                WorkerEvent::TrusteesDone(result) => handle_trustees_done(ui, result),
                 // SearchResults (Identitäts-Picker) bleibt für eine spätere
                 // Phase reserviert.
                 // SearchResults (identity picker) stays reserved for a

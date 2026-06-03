@@ -160,6 +160,23 @@ pub enum WorkerRequest {
         old_run_id: String,
         new_run_id: String,
     },
+    /// Entfernt einen einzelnen Scan-Lauf samt aller abhängigen Daten aus der
+    /// SQLite-Historie. Damit wächst die DB nicht mehr monoton.
+    /// Removes a single scan run including all dependent data from the
+    /// SQLite history. Keeps the DB from growing monotonically.
+    DeleteScanRun { run_id: String },
+    /// Listet alle Trustees mit ihren Rechten auf einem Pfad auf —
+    /// pfadzentrierte Audit-Sicht ohne vorgegebene Identität. Antwortet
+    /// die Frage „Wer hat überhaupt Zugriff auf X?" statt „Was darf
+    /// Benutzer Y auf X?".
+    /// Lists all trustees with their rights on a path — path-centric
+    /// audit view without a fixed identity. Answers the question "Who
+    /// has any access to X?" rather than "What can user Y do on X?".
+    AnalyzeTrustees {
+        path: String,
+        smb_server: Option<String>,
+        share_name: Option<String>,
+    },
 }
 
 /// Zeile im Scan-Ergebnis (für GUI-Tabelle).
@@ -241,6 +258,56 @@ pub enum WorkerEvent {
     /// Delta zwischen zwei Scan-Läufen, bereit für die Anzeige.
     /// Delta between two scan runs, ready for display.
     DeltaComputed(Result<Vec<DeltaRow>, String>),
+    /// Ergebnis einer Scan-Lauf-Löschung. Enthält die ID des entfernten
+    /// Laufs zusammen mit dem Erfolg/Fehler-Status, damit die GUI sowohl
+    /// einen Statustext setzen als auch die lokale Auswahl bereinigen kann.
+    /// Result of a scan-run deletion. Contains the ID of the removed run
+    /// alongside the success/error status so the GUI can both update its
+    /// status text and clear local selection.
+    ScanRunDeleted {
+        run_id: String,
+        result: Result<(), String>,
+    },
+    /// Ergebnis einer Trustee-Auflistung pro Pfad.
+    /// Result of a per-path trustee listing.
+    TrusteesDone(Result<Vec<TrusteeRow>, String>),
+}
+
+/// Eine Zeile in der Trustee-Sicht — eine ACE im DACL eines Pfads, plus
+/// aufgelöste Bezeichnungen für die GUI-Anzeige.
+/// One row in the trustee view — one ACE from a path's DACL plus
+/// resolved labels for GUI display.
+#[derive(Clone)]
+pub struct TrusteeRow {
+    /// Roh-SID des Trustees.
+    /// Raw SID of the trustee.
+    pub sid: String,
+    /// Lesbare Bezeichnung (`DOMAIN\Name`), Fallback ist die SID.
+    /// Readable label (`DOMAIN\Name`), falls back to the SID.
+    pub display_name: String,
+    /// `"Allow"` oder `"Deny"`.
+    /// `"Allow"` or `"Deny"`.
+    pub kind: String,
+    /// Normalisierte Rechte-Bezeichnung (z. B. `Modify (M)`).
+    /// Normalized rights label (e.g. `Modify (M)`).
+    pub rights_label: String,
+    /// Hex-Darstellung der Roh-Access-Mask für Forensik-Zwecke.
+    /// Hex form of the raw access mask for forensic purposes.
+    pub mask_hex: String,
+    /// `"explicit"` oder `"inherited"`.
+    /// `"explicit"` or `"inherited"`.
+    pub source: String,
+    /// Windows-typische „Applies to"-Bezeichnung (z. B. „This folder,
+    /// subfolders and files"), abgeleitet aus den Inheritance- und
+    /// Propagation-Flags.
+    /// Windows-style "Applies to" label (e.g. "This folder, subfolders
+    /// and files"), derived from inheritance and propagation flags.
+    pub applies_to: String,
+    /// `"NTFS"` oder `"Share"` — getrennt darstellen, damit der Auditor
+    /// die zwei Schichten unterscheidet.
+    /// `"NTFS"` or `"Share"` — surfaced separately so the auditor can
+    /// tell the two layers apart.
+    pub category: String,
 }
 
 /// Kompakte Zeile pro Scan-Lauf für die Anzeige im Delta-Tab.
@@ -485,6 +552,26 @@ pub fn spawn_worker(
                             .unwrap_or_else(|| "Datenbank nicht geöffnet".to_string())),
                     };
                     let _ = evt_tx.send(WorkerEvent::DeltaComputed(result));
+                    notify();
+                }
+                WorkerRequest::DeleteScanRun { run_id } => {
+                    let result = match &db {
+                        Some(d) => delete_scan_run(d, &run_id),
+                        None => Err(db_open_error
+                            .clone()
+                            .unwrap_or_else(|| "Datenbank nicht geöffnet".to_string())),
+                    };
+                    let _ = evt_tx.send(WorkerEvent::ScanRunDeleted { run_id, result });
+                    notify();
+                }
+                WorkerRequest::AnalyzeTrustees {
+                    path,
+                    smb_server,
+                    share_name,
+                } => {
+                    let result =
+                        analyze_trustees(&path, smb_server.as_deref(), share_name.as_deref());
+                    let _ = evt_tx.send(WorkerEvent::TrusteesDone(result));
                     notify();
                 }
             }
@@ -1053,6 +1140,234 @@ fn kind_to_icon(kind: &IdentityKind, domain: &str) -> &'static str {
 /// kompakte `DeltaRow`-Strukturen, die direkt in die Slint-UI fließen.
 /// Compares two scan runs and translates the persistence result into
 /// compact `DeltaRow` structs that map straight into the Slint UI.
+/// Entfernt einen Scan-Lauf samt aller abhängigen Daten aus der SQLite-
+/// Historie. Liefert `Ok(())` auch dann zurück, wenn die ID nicht existierte —
+/// die GUI muss den lokalen Zustand danach so oder so synchronisieren.
+/// Removes a scan run including all dependent data from the SQLite history.
+/// Returns `Ok(())` even if the ID did not exist — the GUI has to sync local
+/// state regardless.
+fn delete_scan_run(db: &Database, run_id: &str) -> Result<(), String> {
+    let id =
+        Uuid::parse_str(run_id).map_err(|e| format!("Ungültige Scan-Run-ID '{run_id}': {e}"))?;
+    db.delete_scan_run(&id)
+        .map_err(|e| format!("Löschen fehlgeschlagen: {e}"))?;
+    Ok(())
+}
+
+// Inheritance / propagation flags wie sie Windows in ACE_HEADER.AceFlags ablegt.
+// Die `fs_scanner`-Implementierung splittet sie in zwei Felder
+// (`inheritance_flags`, `propagation_flags`); für die „Applies to"-Anzeige
+// fügen wir sie wieder zusammen.
+// Inheritance / propagation flags as Windows stores them in
+// ACE_HEADER.AceFlags. The `fs_scanner` implementation splits them into two
+// fields (`inheritance_flags`, `propagation_flags`); we re-combine them for
+// the "Applies to" display.
+const OBJECT_INHERIT_ACE_FLAG: u32 = 0x01;
+const CONTAINER_INHERIT_ACE_FLAG: u32 = 0x02;
+const NO_PROPAGATE_INHERIT_ACE_FLAG: u32 = 0x04;
+const INHERIT_ONLY_ACE_FLAG: u32 = 0x08;
+
+/// Bildet die Windows-Inheritance-/Propagation-Flags auf die in der
+/// Sicherheits-GUI bekannte „Applies to"-Bezeichnung ab.
+/// Maps Windows inheritance / propagation flags to the "Applies to" label
+/// known from the security GUI.
+fn applies_to_label(inheritance_flags: u32, propagation_flags: u32) -> String {
+    let flags = inheritance_flags | propagation_flags;
+    let container = flags & CONTAINER_INHERIT_ACE_FLAG != 0;
+    let object = flags & OBJECT_INHERIT_ACE_FLAG != 0;
+    let inherit_only = flags & INHERIT_ONLY_ACE_FLAG != 0;
+    let no_propagate = flags & NO_PROPAGATE_INHERIT_ACE_FLAG != 0;
+    let base = match (container, object, inherit_only) {
+        (true, true, true) => "Subfolders and files only",
+        (true, true, false) => "This folder, subfolders and files",
+        (true, false, true) => "Subfolders only",
+        (true, false, false) => "This folder and subfolders",
+        (false, true, true) => "Files only",
+        (false, true, false) => "This folder and files",
+        (false, false, _) => "This folder only",
+    };
+    if no_propagate {
+        format!("{base} (no propagation)")
+    } else {
+        base.to_owned()
+    }
+}
+
+/// Liest die DACL eines Pfads (und optional die Share-DACL) und gibt eine
+/// trustee-zentrische Sicht zurück: pro ACE eine Zeile mit aufgelöstem
+/// Namen, normalisierten Rechten und Windows-typischer „Applies to"-
+/// Bezeichnung. Es findet keine Engine-Auswertung statt — die Maske ist
+/// die rohe ACE-Maske, nicht die effektive Berechnung.
+/// Reads a path's DACL (and optionally the share DACL) and returns a
+/// trustee-centric view: one row per ACE with a resolved name,
+/// normalized rights and Windows-style "Applies to" label. No engine
+/// evaluation happens — the mask is the raw ACE mask, not the computed
+/// effective result.
+fn analyze_trustees(
+    path: &str,
+    smb_server: Option<&str>,
+    share_name: Option<&str>,
+) -> Result<Vec<TrusteeRow>, String> {
+    info!(
+        path,
+        smb_server = ?smb_server,
+        share_name = ?share_name,
+        "AnalyzeTrustees request"
+    );
+    validate_path(path).map_err(|e| format!("Invalid path: {e}"))?;
+    if let Some(server) = smb_server {
+        validate_smb_server(server).map_err(|e| format!("Invalid SMB server: {e}"))?;
+    }
+    if let Some(name) = share_name {
+        validate_share_name(name).map_err(|e| format!("Invalid share name: {e}"))?;
+    }
+    let fso = read_fso(path).map_err(|e| format!("Failed to read path: {e}"))?;
+
+    let mut rows: Vec<TrusteeRow> = Vec::new();
+
+    // NTFS-DACL — pro ACE eine Zeile. NULL-DACL ergibt eine sichtbare
+    // Auditor-Zeile mit Everyone/Full statt einer leeren Tabelle.
+    // NTFS DACL — one row per ACE. NULL DACL surfaces as a visible auditor
+    // row stating Everyone / Full instead of an empty table.
+    if fso.null_dacl {
+        rows.push(TrusteeRow {
+            sid: "S-1-1-0".to_owned(),
+            display_name: "Everyone (NULL DACL — no access restriction)".to_owned(),
+            kind: "Allow".to_owned(),
+            rights_label: "Full Control (F)".to_owned(),
+            mask_hex: "0x001F01FF".to_owned(),
+            source: "explicit".to_owned(),
+            applies_to: "This folder, subfolders and files".to_owned(),
+            category: "NTFS".to_owned(),
+        });
+    } else {
+        for ace in &fso.dacl {
+            rows.push(ace_to_trustee_row(ace, "NTFS"));
+        }
+    }
+
+    // Share-DACL — nur wenn ein SMB-Kontext angefragt wurde.
+    // Share DACL — only when an SMB context was requested.
+    if let (Some(server), Some(name)) = (smb_server, share_name) {
+        match get_share_dacl(server, name) {
+            Ok(scan) => match scan.dacl {
+                share_scanner::ShareDacl::NullDacl => {
+                    rows.push(TrusteeRow {
+                        sid: "S-1-1-0".to_owned(),
+                        display_name: "Everyone (Share NULL DACL — no SMB restriction)".to_owned(),
+                        kind: "Allow".to_owned(),
+                        rights_label: "Full Control (F)".to_owned(),
+                        mask_hex: "0x001F01FF".to_owned(),
+                        source: "explicit".to_owned(),
+                        applies_to: "Share".to_owned(),
+                        category: "Share".to_owned(),
+                    });
+                }
+                share_scanner::ShareDacl::Acl(perms) => {
+                    for p in perms {
+                        rows.push(share_permission_to_trustee_row(&p));
+                    }
+                }
+            },
+            Err(e) => {
+                rows.push(TrusteeRow {
+                    sid: String::new(),
+                    display_name: format!("Share-DACL nicht lesbar: {e}"),
+                    kind: "Info".to_owned(),
+                    rights_label: String::new(),
+                    mask_hex: String::new(),
+                    source: String::new(),
+                    applies_to: String::new(),
+                    category: "Share".to_owned(),
+                });
+            }
+        }
+    }
+
+    // SIDs in lesbare Namen auflösen — eine Runde LSA pro eindeutiger SID.
+    // Memberships sind hier nicht vorhanden (Trustee-Sicht ist identitäts-
+    // frei), also leeres &[] und alle SIDs als Extras.
+    // Resolve SIDs to readable names — one LSA round per unique SID. There
+    // are no memberships here (the trustee view is identity-free), so pass
+    // an empty &[] and route every SID through the extras list.
+    #[cfg(windows)]
+    {
+        let sids: Vec<String> = rows
+            .iter()
+            .map(|r| r.sid.clone())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let map = ad_resolver::build_sid_name_map(&[], sids);
+        for row in &mut rows {
+            if let Some(name) = map.get(&row.sid) {
+                // Bei NULL-DACL / Fehler-Zeilen bewahren wir die schon
+                // gesetzte erklärende Bezeichnung.
+                // For NULL-DACL / error rows we keep the already-set
+                // explanatory label.
+                if !row.display_name.contains("NULL DACL")
+                    && !row.display_name.contains("nicht lesbar")
+                {
+                    row.display_name = name.clone();
+                }
+            }
+        }
+    }
+
+    Ok(rows)
+}
+
+fn ace_to_trustee_row(ace: &adpa_core::model::AceEntry, category: &str) -> TrusteeRow {
+    use adpa_core::model::AceKind;
+    use permission_engine::mask::expand_generic_rights;
+    let expanded = expand_generic_rights(ace.mask.0);
+    let rights = NormalizedRights::new(expanded);
+    TrusteeRow {
+        sid: ace.sid.0.clone(),
+        // Vorläufig die SID selbst — Namen werden in einem Folge-Pass
+        // aufgelöst, damit jede SID nur einmal gegen LSA gefragt wird.
+        // SID itself for now — names are resolved in a follow-up pass so
+        // each SID hits LSA only once.
+        display_name: ace.sid.0.clone(),
+        kind: match ace.kind {
+            AceKind::Allow => "Allow".to_owned(),
+            AceKind::Deny => "Deny".to_owned(),
+        },
+        rights_label: format!("{} ({})", rights.display_name(), rights.label()),
+        mask_hex: format!("0x{:08X}", ace.mask.0),
+        source: if ace.inherited {
+            "inherited".to_owned()
+        } else {
+            "explicit".to_owned()
+        },
+        applies_to: applies_to_label(ace.inheritance_flags, ace.propagation_flags),
+        category: category.to_owned(),
+    }
+}
+
+fn share_permission_to_trustee_row(perm: &adpa_core::model::SharePermission) -> TrusteeRow {
+    use adpa_core::model::AceKind;
+    use permission_engine::mask::expand_generic_rights;
+    let expanded = expand_generic_rights(perm.mask.0);
+    let rights = NormalizedRights::new(expanded);
+    TrusteeRow {
+        sid: perm.sid.0.clone(),
+        display_name: perm.sid.0.clone(),
+        kind: match perm.kind {
+            AceKind::Allow => "Allow".to_owned(),
+            AceKind::Deny => "Deny".to_owned(),
+        },
+        rights_label: format!("{} ({})", rights.display_name(), rights.label()),
+        mask_hex: format!("0x{:08X}", perm.mask.0),
+        // Share-ACEs haben kein Inheritance-Modell wie NTFS — sie wirken auf
+        // die ganze Freigabe.
+        // Share ACEs have no inheritance model like NTFS — they apply to
+        // the whole share.
+        source: "explicit".to_owned(),
+        applies_to: "Share".to_owned(),
+        category: "Share".to_owned(),
+    }
+}
+
 fn compute_delta(
     db: &Database,
     old_run_id: &str,
