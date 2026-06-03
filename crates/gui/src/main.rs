@@ -88,6 +88,24 @@ slint::slint! {
         }
     }
 
+    // Eine Zeile in der Trustee-Sicht — vor ScanRowVm deklariert, weil
+    // ScanRowVm das Modell als Feld trägt und der Slint-Parser
+    // Vorwärtsdeklarationen verlangt.
+    // One row in the trustee view — declared ahead of ScanRowVm because
+    // ScanRowVm carries the model as a field and Slint's parser requires
+    // forward declarations.
+    export struct TrusteeRowVm {
+        display_name: string,
+        sid: string,
+        kind: string,
+        kind_color: color,
+        rights_label: string,
+        mask_hex: string,
+        source: string,
+        applies_to: string,
+        category: string,
+    }
+
     // Eine Zeile im Scan-Ergebnis.
     // A row in the scan result.
     export struct ScanRowVm {
@@ -95,6 +113,12 @@ slint::slint! {
         rights_label: string,
         mask_hex: string,
         steps: [string],
+        // Pfadzentrierte Trustee-Liste (alle ACEs aufgelöst). Wird im
+        // aufgeklappten Zustand zusätzlich zum identitätsbasierten
+        // Berechtigungspfad angezeigt.
+        // Path-centric trustee list (every ACE resolved). Shown in the
+        // expanded state alongside the identity-based explanation path.
+        trustees: [TrusteeRowVm],
         expanded: bool,
         has_diagnostic: bool,
     }
@@ -124,20 +148,6 @@ slint::slint! {
         label: string,
         selected_as_old: bool,
         selected_as_new: bool,
-    }
-
-    // Eine Zeile in der Trustee-Sicht des Analyze-Tabs.
-    // One row in the trustee view of the Analyze tab.
-    export struct TrusteeRowVm {
-        display_name: string,
-        sid: string,
-        kind: string,
-        kind_color: color,
-        rights_label: string,
-        mask_hex: string,
-        source: string,
-        applies_to: string,
-        category: string,
     }
 
     // Eine Delta-Zeile (Hinzugefügt / Entfernt / Geändert).
@@ -938,11 +948,49 @@ slint::slint! {
                                         }
                                         if row.expanded: VerticalBox {
                                             padding-left: 24px;
-                                            spacing: 1px;
-                                            for step[j] in row.steps: Text {
-                                                text: (j + 1) + ". " + step;
-                                                color: #444;
-                                                wrap: word-wrap;
+                                            spacing: 6px;
+                                            VerticalBox {
+                                                spacing: 1px;
+                                                for step[j] in row.steps: Text {
+                                                    text: (j + 1) + ". " + step;
+                                                    color: #444;
+                                                    wrap: word-wrap;
+                                                }
+                                            }
+
+                                            // Pfadzentrierte Trustee-Tabelle —
+                                            // die zweite Audit-Frage „wer kann
+                                            // überhaupt auf diesen Pfad?"
+                                            // direkt in der Scan-Zeile.
+                                            // Path-centric trustee table —
+                                            // the second audit question "who
+                                            // can access this path at all?"
+                                            // directly in the scan row.
+                                            if row.trustees.length > 0: VerticalBox {
+                                                spacing: 1px;
+                                                Text {
+                                                    text: "Wer hat Zugriff (" + row.trustees.length + " ACE-Einträge):";
+                                                    color: #2c3e50;
+                                                    font-weight: 700;
+                                                }
+                                                HorizontalBox {
+                                                    spacing: 6px;
+                                                    Text { text: "Trustee"; font-weight: 700; horizontal-stretch: 2; color: #555; }
+                                                    Text { text: "Art"; font-weight: 700; width: 60px; color: #555; }
+                                                    Text { text: "Rechte"; font-weight: 700; width: 180px; color: #555; }
+                                                    Text { text: "Quelle"; font-weight: 700; width: 70px; color: #555; }
+                                                    Text { text: "Anwendung"; font-weight: 700; width: 200px; color: #555; }
+                                                    Text { text: "Schicht"; font-weight: 700; width: 60px; color: #555; }
+                                                }
+                                                for t[k] in row.trustees: HorizontalBox {
+                                                    spacing: 6px;
+                                                    Text { text: t.display_name; color: #444; horizontal-stretch: 2; overflow: elide; }
+                                                    Text { text: t.kind; color: t.kind_color; width: 60px; }
+                                                    Text { text: t.rights_label; color: #555; width: 180px; overflow: elide; }
+                                                    Text { text: t.source; color: #555; width: 70px; }
+                                                    Text { text: t.applies_to; color: #555; width: 200px; overflow: elide; }
+                                                    Text { text: t.category; color: #555; width: 60px; }
+                                                }
                                             }
                                         }
                                     }
@@ -1932,6 +1980,32 @@ fn refresh_rows(ui: &MainWindow) {
 
 fn handle_scan_item(ui: &MainWindow, row: ScanRow) {
     let mask_hex = format!("0x{:08X}", row.mask_raw);
+    // Trustee-Liste in das slint-Modell konvertieren — gleiche Farb-Logik
+    // wie im Analyze-Tab (Allow grün, Deny rot, sonstiges grau).
+    // Convert the trustee list to the slint model — same colour logic as the
+    // Analyze tab (Allow green, Deny red, anything else grey).
+    let trustee_vms: Vec<TrusteeRowVm> = row
+        .trustees
+        .into_iter()
+        .map(|t| {
+            let kind_color = match t.kind.as_str() {
+                "Allow" => slint::Color::from_rgb_u8(0x27, 0x8d, 0x4f),
+                "Deny" => slint::Color::from_rgb_u8(0xc0, 0x39, 0x2b),
+                _ => slint::Color::from_rgb_u8(0x6c, 0x7a, 0x89),
+            };
+            TrusteeRowVm {
+                display_name: t.display_name.into(),
+                sid: t.sid.into(),
+                kind: t.kind.into(),
+                kind_color,
+                rights_label: t.rights_label.into(),
+                mask_hex: t.mask_hex.into(),
+                source: t.source.into(),
+                applies_to: t.applies_to.into(),
+                category: t.category.into(),
+            }
+        })
+        .collect();
     let vm = ScanRowVm {
         path: row.path.clone().into(),
         rights_label: row.rights_label.clone().into(),
@@ -1942,6 +2016,7 @@ fn handle_scan_item(ui: &MainWindow, row: ScanRow) {
                 .map(|s| slint::SharedString::from(s.as_str()))
                 .collect::<Vec<_>>(),
         )),
+        trustees: slint::ModelRc::new(slint::VecModel::from(trustee_vms)),
         expanded: false,
         has_diagnostic: row.diagnostic_count > 0 || row.unsupported_ace_count > 0,
     };

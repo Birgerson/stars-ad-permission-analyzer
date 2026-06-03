@@ -195,6 +195,15 @@ pub struct ScanRow {
     /// Count of structured diagnostic markers (e.g. non-canonical DACL,
     /// follow-up finding 3). 0 = unremarkable.
     pub diagnostic_count: usize,
+    /// Pfadzentrierte Trustee-Sicht — alle ACEs der DACL aufgelöst, mit
+    /// „Applies to"-Bezeichnung und Allow/Deny. Leer wenn der Scan ohne
+    /// Trustee-Aufstellung läuft. Komplement zum identitäts­basierten
+    /// `steps`-Pfad oben.
+    /// Path-centric trustee view — every ACE in the DACL resolved, with
+    /// "Applies to" labels and Allow/Deny. Empty when the scan runs
+    /// without trustee collection. Complement to the identity-based
+    /// `steps` above.
+    pub trustees: Vec<TrusteeRow>,
 }
 
 /// Ergebnis vom Worker-Thread an die GUI.
@@ -405,6 +414,11 @@ pub fn spawn_worker(
             };
         let mut last_permissions: Vec<EffectivePermission> = Vec::new();
         let mut last_risk_findings: Vec<RiskFinding> = Vec::new();
+        // Pfadzentrische Trustee-Auflistung des letzten Scans — wird mit
+        // exportiert, damit der HTML-Bericht beide Audit-Sichten enthält.
+        // Path-centric trustee listing from the last scan — exported with
+        // the report so the HTML carries both audit views.
+        let mut last_path_trustees: Vec<adpa_core::model::PathTrustees> = Vec::new();
 
         while let Ok(req) = req_rx.recv() {
             match req {
@@ -513,6 +527,7 @@ pub fn spawn_worker(
                     });
 
                     last_permissions = scan_result.permissions;
+                    last_path_trustees = scan_result.path_trustees;
                     last_risk_findings = risks;
                     notify();
                 }
@@ -522,7 +537,12 @@ pub fn spawn_worker(
                     notify();
                 }
                 WorkerRequest::ExportHtml { output_path } => {
-                    let result = export_html(&last_permissions, &last_risk_findings, &output_path);
+                    let result = export_html(
+                        &last_permissions,
+                        &last_risk_findings,
+                        &last_path_trustees,
+                        &output_path,
+                    );
                     let _ = evt_tx.send(WorkerEvent::ExportDone(result));
                     notify();
                 }
@@ -588,6 +608,13 @@ pub fn spawn_worker(
 
 struct ScanSummary {
     permissions: Vec<EffectivePermission>,
+    /// Pfadzentrische Trustee-Auflistung (raw model — ohne Display-
+    /// Formatierung). Wird vom HTML-Exporter genutzt; die GUI bekommt
+    /// daneben formatiere `TrusteeRow`-Daten direkt im `ScanRow`.
+    /// Path-centric trustee listing (raw model — no display formatting).
+    /// Used by the HTML exporter; the GUI separately receives display-
+    /// formatted `TrusteeRow` data inside each `ScanRow`.
+    path_trustees: Vec<adpa_core::model::PathTrustees>,
     /// Strukturierte Walk-, Eval- und Validierungs-Fehler. Werden in
     /// `persist_scan` per `insert_error` in die Scan-Historie geschrieben,
     /// damit GUI-Scans denselben Audit-Pfad haben wie CLI-Scans.
@@ -740,6 +767,7 @@ async fn handle_scan(
         });
         ScanSummary {
             permissions: vec![],
+            path_trustees: vec![],
             errors: vec![ScanError {
                 path: Some(NormalizedPath(root.to_string())),
                 message,
@@ -873,8 +901,28 @@ async fn handle_scan(
     #[cfg(not(windows))]
     let scan_sid_names = std::collections::BTreeMap::new();
 
+    // Sammelt die rohen pfadzentrischen Trustee-Listen für den HTML-Export.
+    // Collects the raw path-centric trustee lists for the HTML exporter.
+    let mut path_trustees: Vec<adpa_core::model::PathTrustees> = Vec::new();
+
     for fso in walk.objects {
         let path = fso.path.0.clone();
+        // Trustees pro Pfad vor der engine-Auswertung bauen, weil
+        // PermissionEvaluationInput das FSO konsumiert. Build the trustee
+        // list per path before the engine consumes the FSO.
+        // Share-DACL hier bewusst NICHT pro Pfad neu lesen — der Share-Status
+        // ist eine Eigenschaft der Wurzel, nicht des Unterpfads; die NTFS-
+        // ACEs sind das, was der Auditor pro Pfad sehen will.
+        // Share DACL deliberately not re-read per path — share status is a
+        // property of the root, not of subpaths; NTFS ACEs are what the
+        // auditor wants to see per path.
+        let raw_trustees = build_path_trustees(&fso, None, None);
+        let trustees_for_row: Vec<TrusteeRow> =
+            raw_trustees.iter().map(trustee_row_for_display).collect();
+        path_trustees.push(adpa_core::model::PathTrustees {
+            path: fso.path.clone(),
+            trustees: raw_trustees,
+        });
         match engine.evaluate(PermissionEvaluationInput {
             identity: identity.clone(),
             group_memberships: memberships.clone(),
@@ -897,6 +945,7 @@ async fn handle_scan(
                     steps: perm.path_explanation.steps.clone(),
                     unsupported_ace_count: perm.unsupported_ace_count,
                     diagnostic_count: perm.diagnostics.len(),
+                    trustees: trustees_for_row,
                 }));
                 permissions.push(perm);
             }
@@ -916,6 +965,7 @@ async fn handle_scan(
 
     ScanSummary {
         permissions,
+        path_trustees,
         errors: summary_errors,
         total,
         cancelled,
@@ -1053,6 +1103,7 @@ fn persist_scan(
 fn export_html(
     permissions: &[EffectivePermission],
     risk_findings: &[RiskFinding],
+    path_trustees: &[adpa_core::model::PathTrustees],
     output_path: &str,
 ) -> Result<(), String> {
     let status =
@@ -1061,6 +1112,7 @@ fn export_html(
     let result = AnalysisResult {
         permissions: permissions.to_vec(),
         risk_findings: risk_findings.to_vec(),
+        path_trustees: path_trustees.to_vec(),
     };
     HtmlExporter
         .export(&result, ExportTarget::File(validated_path))
@@ -1222,150 +1274,190 @@ fn analyze_trustees(
         validate_share_name(name).map_err(|e| format!("Invalid share name: {e}"))?;
     }
     let fso = read_fso(path).map_err(|e| format!("Failed to read path: {e}"))?;
+    Ok(build_trustee_rows(&fso, smb_server, share_name))
+}
 
-    let mut rows: Vec<TrusteeRow> = Vec::new();
+/// Baut die rohe Trustee-Liste aus einem bereits gelesenen FSO. Liefert
+/// das Core-Modell (`PathTrustee`) ohne Display-Formatierung — wird sowohl
+/// vom HTML-Exporter als auch vom GUI-Renderer (über
+/// [`trustee_row_for_display`]) konsumiert.
+///
+/// Builds the raw trustee list from an already-loaded FSO. Returns the core
+/// model (`PathTrustee`) without display formatting — consumed by both the
+/// HTML exporter and the GUI renderer (via [`trustee_row_for_display`]).
+pub fn build_path_trustees(
+    fso: &adpa_core::model::FileSystemObject,
+    smb_server: Option<&str>,
+    share_name: Option<&str>,
+) -> Vec<adpa_core::model::PathTrustee> {
+    use adpa_core::model::{AccessMask, AceKind, PathTrustee, Sid, TrusteeCategory};
 
-    // NTFS-DACL — pro ACE eine Zeile. NULL-DACL ergibt eine sichtbare
-    // Auditor-Zeile mit Everyone/Full statt einer leeren Tabelle.
-    // NTFS DACL — one row per ACE. NULL DACL surfaces as a visible auditor
-    // row stating Everyone / Full instead of an empty table.
+    let mut out: Vec<PathTrustee> = Vec::new();
+
+    // NTFS-DACL
     if fso.null_dacl {
-        rows.push(TrusteeRow {
-            sid: "S-1-1-0".to_owned(),
-            display_name: "Everyone (NULL DACL — no access restriction)".to_owned(),
-            kind: "Allow".to_owned(),
-            rights_label: "Full Control (F)".to_owned(),
-            mask_hex: "0x001F01FF".to_owned(),
-            source: "explicit".to_owned(),
-            applies_to: "This folder, subfolders and files".to_owned(),
-            category: "NTFS".to_owned(),
+        out.push(PathTrustee {
+            sid: Sid("S-1-1-0".to_owned()),
+            display_name: Some("Everyone (NULL DACL — no access restriction)".to_owned()),
+            kind: AceKind::Allow,
+            mask: AccessMask(0x001F01FF),
+            inherited: false,
+            inheritance_flags: 0x03, // OI | CI
+            propagation_flags: 0,
+            category: TrusteeCategory::Ntfs,
         });
     } else {
         for ace in &fso.dacl {
-            rows.push(ace_to_trustee_row(ace, "NTFS"));
+            out.push(PathTrustee {
+                sid: ace.sid.clone(),
+                display_name: None,
+                kind: ace.kind.clone(),
+                mask: ace.mask,
+                inherited: ace.inherited,
+                inheritance_flags: ace.inheritance_flags,
+                propagation_flags: ace.propagation_flags,
+                category: TrusteeCategory::Ntfs,
+            });
         }
     }
 
-    // Share-DACL — nur wenn ein SMB-Kontext angefragt wurde.
-    // Share DACL — only when an SMB context was requested.
+    // Share-DACL — optional
     if let (Some(server), Some(name)) = (smb_server, share_name) {
         match get_share_dacl(server, name) {
             Ok(scan) => match scan.dacl {
                 share_scanner::ShareDacl::NullDacl => {
-                    rows.push(TrusteeRow {
-                        sid: "S-1-1-0".to_owned(),
-                        display_name: "Everyone (Share NULL DACL — no SMB restriction)".to_owned(),
-                        kind: "Allow".to_owned(),
-                        rights_label: "Full Control (F)".to_owned(),
-                        mask_hex: "0x001F01FF".to_owned(),
-                        source: "explicit".to_owned(),
-                        applies_to: "Share".to_owned(),
-                        category: "Share".to_owned(),
+                    out.push(PathTrustee {
+                        sid: Sid("S-1-1-0".to_owned()),
+                        display_name: Some(
+                            "Everyone (Share NULL DACL — no SMB restriction)".to_owned(),
+                        ),
+                        kind: AceKind::Allow,
+                        mask: AccessMask(0x001F01FF),
+                        inherited: false,
+                        inheritance_flags: 0,
+                        propagation_flags: 0,
+                        category: TrusteeCategory::Share,
                     });
                 }
                 share_scanner::ShareDacl::Acl(perms) => {
                     for p in perms {
-                        rows.push(share_permission_to_trustee_row(&p));
+                        out.push(PathTrustee {
+                            sid: p.sid.clone(),
+                            display_name: None,
+                            kind: p.kind.clone(),
+                            mask: p.mask,
+                            inherited: false,
+                            inheritance_flags: 0,
+                            propagation_flags: 0,
+                            category: TrusteeCategory::Share,
+                        });
                     }
                 }
             },
             Err(e) => {
-                rows.push(TrusteeRow {
-                    sid: String::new(),
-                    display_name: format!("Share-DACL nicht lesbar: {e}"),
-                    kind: "Info".to_owned(),
-                    rights_label: String::new(),
-                    mask_hex: String::new(),
-                    source: String::new(),
-                    applies_to: String::new(),
-                    category: "Share".to_owned(),
+                // Eine sichtbare „Lese-Fehler"-Pseudo-Zeile beibehalten —
+                // keine stillen Skips (siehe MEMORY: no silent skips).
+                // A visible "read failure" pseudo-row — no silent skips
+                // (see MEMORY: no silent skips).
+                out.push(PathTrustee {
+                    sid: Sid(String::new()),
+                    display_name: Some(format!("Share-DACL nicht lesbar: {e}")),
+                    kind: AceKind::Allow,
+                    mask: AccessMask(0),
+                    inherited: false,
+                    inheritance_flags: 0,
+                    propagation_flags: 0,
+                    category: TrusteeCategory::Share,
                 });
             }
         }
     }
 
     // SIDs in lesbare Namen auflösen — eine Runde LSA pro eindeutiger SID.
-    // Memberships sind hier nicht vorhanden (Trustee-Sicht ist identitäts-
-    // frei), also leeres &[] und alle SIDs als Extras.
-    // Resolve SIDs to readable names — one LSA round per unique SID. There
-    // are no memberships here (the trustee view is identity-free), so pass
-    // an empty &[] and route every SID through the extras list.
+    // Resolve SIDs to readable names — one LSA round per unique SID.
     #[cfg(windows)]
     {
-        let sids: Vec<String> = rows
+        let sids: Vec<String> = out
             .iter()
-            .map(|r| r.sid.clone())
+            .map(|r| r.sid.0.clone())
             .filter(|s| !s.is_empty())
             .collect();
         let map = ad_resolver::build_sid_name_map(&[], sids);
-        for row in &mut rows {
-            if let Some(name) = map.get(&row.sid) {
-                // Bei NULL-DACL / Fehler-Zeilen bewahren wir die schon
-                // gesetzte erklärende Bezeichnung.
-                // For NULL-DACL / error rows we keep the already-set
-                // explanatory label.
-                if !row.display_name.contains("NULL DACL")
-                    && !row.display_name.contains("nicht lesbar")
-                {
-                    row.display_name = name.clone();
-                }
+        for row in &mut out {
+            if row.display_name.is_some() {
+                // Erklärende Pseudo-Zeilen (NULL DACL, Lesefehler) nicht
+                // überschreiben.
+                // Keep explanatory pseudo-rows (NULL DACL, read error).
+                continue;
+            }
+            if let Some(name) = map.get(&row.sid.0) {
+                row.display_name = Some(name.clone());
             }
         }
     }
-
-    Ok(rows)
+    out
 }
 
-fn ace_to_trustee_row(ace: &adpa_core::model::AceEntry, category: &str) -> TrusteeRow {
-    use adpa_core::model::AceKind;
+/// Konvertiert einen rohen `PathTrustee` in die display-formatierte
+/// `TrusteeRow` für die Slint-UI. Macht „Applies to", Maske-Hex und das
+/// Allow/Deny-Label aus dem rohen Modell.
+/// Converts a raw `PathTrustee` to the display-formatted `TrusteeRow`
+/// consumed by the Slint UI. Derives "Applies to", mask hex and the
+/// Allow/Deny label from the raw model.
+pub fn trustee_row_for_display(t: &adpa_core::model::PathTrustee) -> TrusteeRow {
+    use adpa_core::model::{AceKind, TrusteeCategory};
     use permission_engine::mask::expand_generic_rights;
-    let expanded = expand_generic_rights(ace.mask.0);
+
+    let expanded = expand_generic_rights(t.mask.0);
     let rights = NormalizedRights::new(expanded);
+    let category = match t.category {
+        TrusteeCategory::Ntfs => "NTFS",
+        TrusteeCategory::Share => "Share",
+    };
+    let kind_label = match t.kind {
+        AceKind::Allow => "Allow",
+        AceKind::Deny => "Deny",
+    };
+    // Bei Share-Einträgen ohne Inheritance-Modell die statische
+    // „Share"-Anwendung beibehalten — sonst die Windows-typische
+    // „Applies to"-Bezeichnung aus den Flags.
+    // For share entries without an inheritance model keep the static
+    // "Share" label — otherwise derive the Windows-style "Applies to"
+    // text from the flags.
+    let applies_to = if matches!(t.category, TrusteeCategory::Share) {
+        "Share".to_owned()
+    } else {
+        applies_to_label(t.inheritance_flags, t.propagation_flags)
+    };
+    let source = if t.inherited { "inherited" } else { "explicit" };
+    let display_name = t.display_name.clone().unwrap_or_else(|| t.sid.0.clone());
     TrusteeRow {
-        sid: ace.sid.0.clone(),
-        // Vorläufig die SID selbst — Namen werden in einem Folge-Pass
-        // aufgelöst, damit jede SID nur einmal gegen LSA gefragt wird.
-        // SID itself for now — names are resolved in a follow-up pass so
-        // each SID hits LSA only once.
-        display_name: ace.sid.0.clone(),
-        kind: match ace.kind {
-            AceKind::Allow => "Allow".to_owned(),
-            AceKind::Deny => "Deny".to_owned(),
-        },
+        sid: t.sid.0.clone(),
+        display_name,
+        kind: kind_label.to_owned(),
         rights_label: format!("{} ({})", rights.display_name(), rights.label()),
-        mask_hex: format!("0x{:08X}", ace.mask.0),
-        source: if ace.inherited {
-            "inherited".to_owned()
-        } else {
-            "explicit".to_owned()
-        },
-        applies_to: applies_to_label(ace.inheritance_flags, ace.propagation_flags),
+        mask_hex: format!("0x{:08X}", t.mask.0),
+        source: source.to_owned(),
+        applies_to,
         category: category.to_owned(),
     }
 }
 
-fn share_permission_to_trustee_row(perm: &adpa_core::model::SharePermission) -> TrusteeRow {
-    use adpa_core::model::AceKind;
-    use permission_engine::mask::expand_generic_rights;
-    let expanded = expand_generic_rights(perm.mask.0);
-    let rights = NormalizedRights::new(expanded);
-    TrusteeRow {
-        sid: perm.sid.0.clone(),
-        display_name: perm.sid.0.clone(),
-        kind: match perm.kind {
-            AceKind::Allow => "Allow".to_owned(),
-            AceKind::Deny => "Deny".to_owned(),
-        },
-        rights_label: format!("{} ({})", rights.display_name(), rights.label()),
-        mask_hex: format!("0x{:08X}", perm.mask.0),
-        // Share-ACEs haben kein Inheritance-Modell wie NTFS — sie wirken auf
-        // die ganze Freigabe.
-        // Share ACEs have no inheritance model like NTFS — they apply to
-        // the whole share.
-        source: "explicit".to_owned(),
-        applies_to: "Share".to_owned(),
-        category: "Share".to_owned(),
-    }
+/// Legacy-Display-Variante: kombiniert `build_path_trustees` und
+/// `trustee_row_for_display` in einem Aufruf — wird vom Analyze-Tab und
+/// vom GUI-Renderer genutzt.
+/// Legacy display variant: combines `build_path_trustees` and
+/// `trustee_row_for_display` in one call — used by the Analyze tab and the
+/// GUI renderer.
+pub fn build_trustee_rows(
+    fso: &adpa_core::model::FileSystemObject,
+    smb_server: Option<&str>,
+    share_name: Option<&str>,
+) -> Vec<TrusteeRow> {
+    build_path_trustees(fso, smb_server, share_name)
+        .iter()
+        .map(trustee_row_for_display)
+        .collect()
 }
 
 fn compute_delta(

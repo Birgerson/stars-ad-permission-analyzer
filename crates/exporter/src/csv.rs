@@ -457,6 +457,7 @@ mod tests {
         let result = AnalysisResult {
             permissions: vec![perm],
             risk_findings: vec![],
+            ..Default::default()
         };
 
         CsvExporter
@@ -660,6 +661,7 @@ mod tests {
         let result = AnalysisResult {
             permissions: vec![],
             risk_findings: vec![],
+            ..Default::default()
         };
         let bad_path = std::path::PathBuf::from("Z:\\nonexistent\\adpa_test.csv");
         let err = CsvExporter

@@ -18,13 +18,13 @@ use std::os::windows::ffi::OsStrExt;
 
 use adpa_core::{
     error::CoreError,
-    model::{Identity, Sid},
+    model::{Identity, MembershipPath, MembershipPathSource, Sid},
 };
 use tracing::{debug, warn};
 use windows_sys::Win32::Foundation::{LocalFree, ERROR_ACCESS_DENIED, FALSE, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
-    NetApiBufferFree, NetUserGetLocalGroups, LG_INCLUDE_INDIRECT, LOCALGROUP_USERS_INFO_0,
-    MAX_PREFERRED_LENGTH,
+    NetApiBufferFree, NetLocalGroupGetMembers, NetUserGetLocalGroups, LG_INCLUDE_INDIRECT,
+    LOCALGROUP_MEMBERS_INFO_2, LOCALGROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH,
 };
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::LookupAccountNameW;
@@ -168,6 +168,366 @@ pub fn resolve_local_group_sids(
     }
 
     Ok(sids)
+}
+
+/// Eintrag in der `NetUserGetLocalGroups`-Antwort mit Name *und* SID. Die
+/// reine `resolve_local_group_sids`-Variante wirft den Namen weg; für die
+/// Ketten-Rekonstruktion brauchen wir aber beides, weil
+/// `NetLocalGroupGetMembers` den Namen erwartet.
+/// Entry in the `NetUserGetLocalGroups` response with both name and SID. The
+/// plain `resolve_local_group_sids` variant discards the name; for chain
+/// reconstruction we need both because `NetLocalGroupGetMembers` requires
+/// the name.
+#[derive(Debug, Clone)]
+pub struct LocalGroupInfo {
+    pub name: String,
+    pub sid: Sid,
+}
+
+/// Ein Mitglied einer lokalen Gruppe in der Antwort von
+/// `NetLocalGroupGetMembers` Level 2.
+/// A member of a local group from `NetLocalGroupGetMembers` level 2.
+#[derive(Debug, Clone)]
+pub struct LocalGroupMember {
+    /// SID des Mitglieds (None nur wenn die Konvertierung fehlschlug —
+    /// sollte praktisch nicht vorkommen).
+    /// Member SID (None only when conversion failed — should be vanishingly
+    /// rare).
+    pub sid: Option<Sid>,
+    /// `DOMAIN\Name`-Darstellung wie von Windows geliefert; bei lokalen
+    /// Konten ohne Domäne kann das einfach `Name` sein.
+    /// `DOMAIN\name` form as returned by Windows; for local accounts without
+    /// a domain it may just be `Name`.
+    pub display_name: Option<String>,
+}
+
+/// Variante von [`resolve_local_group_sids`], die zusätzlich den Gruppen-
+/// Namen mitliefert. Notwendig für die Ketten-Rekonstruktion.
+/// Variant of [`resolve_local_group_sids`] that also returns the group
+/// name. Required for chain reconstruction.
+pub fn resolve_local_groups(
+    server: Option<&str>,
+    account: &str,
+) -> Result<Vec<LocalGroupInfo>, CoreError> {
+    let server_w = server.map(to_wide_null);
+    let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+    let account_w = to_wide_null(account);
+
+    let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+    let mut entries_read: u32 = 0;
+    let mut total_entries: u32 = 0;
+
+    // SAFETY: identisch zu resolve_local_group_sids — Pointer sind gültig oder
+    // null, NetApi befüllt buf_ptr und wir geben ihn unten frei.
+    // SAFETY: same as resolve_local_group_sids — pointers are valid or null,
+    // NetApi populates buf_ptr and we free it below.
+    let status = unsafe {
+        NetUserGetLocalGroups(
+            server_ptr,
+            account_w.as_ptr(),
+            0,
+            LG_INCLUDE_INDIRECT,
+            &mut buf_ptr,
+            MAX_PREFERRED_LENGTH,
+            &mut entries_read,
+            &mut total_entries,
+        )
+    };
+
+    if status != NO_ERROR {
+        if !buf_ptr.is_null() {
+            unsafe { NetApiBufferFree(buf_ptr.cast()) };
+        }
+        return match status {
+            ERROR_ACCESS_DENIED => Err(CoreError::AccessDenied(format!(
+                "NetUserGetLocalGroups: access denied for '{account}' on {server:?}"
+            ))),
+            NERR_USER_NOT_FOUND => {
+                debug!(account, ?server, "user not found");
+                Ok(Vec::new())
+            }
+            _ => Err(CoreError::LdapQuery(format!(
+                "NetUserGetLocalGroups('{account}') failed with status {status}"
+            ))),
+        };
+    }
+
+    let mut result = Vec::with_capacity(entries_read as usize);
+    if !buf_ptr.is_null() && entries_read > 0 {
+        // SAFETY: see above
+        let entries = unsafe {
+            std::slice::from_raw_parts(
+                buf_ptr as *const LOCALGROUP_USERS_INFO_0,
+                entries_read as usize,
+            )
+        };
+        for entry in entries {
+            // SAFETY: lgrui0_name is a valid null-terminated wide string inside the buffer.
+            let name = unsafe { wide_ptr_to_string(entry.lgrui0_name) };
+            if name.is_empty() {
+                continue;
+            }
+            if let Some(sid_str) = lookup_account_sid(server, &name) {
+                result.push(LocalGroupInfo {
+                    name,
+                    sid: Sid(sid_str),
+                });
+            }
+        }
+    }
+
+    if !buf_ptr.is_null() {
+        unsafe { NetApiBufferFree(buf_ptr.cast()) };
+    }
+    Ok(result)
+}
+
+/// Listet die direkten Mitglieder einer lokalen Gruppe via
+/// `NetLocalGroupGetMembers` Level 2. Liefert pro Mitglied SID + Anzeige­name.
+/// Lists the direct members of a local group via `NetLocalGroupGetMembers`
+/// level 2. Returns SID + display name per member.
+pub fn get_local_group_members(
+    server: Option<&str>,
+    group_name: &str,
+) -> Result<Vec<LocalGroupMember>, CoreError> {
+    let server_w = server.map(to_wide_null);
+    let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+    let group_w = to_wide_null(group_name);
+
+    let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+    let mut entries_read: u32 = 0;
+    let mut total_entries: u32 = 0;
+    let mut resume: usize = 0;
+
+    // SAFETY: server_ptr ist null oder eine gültige PCWSTR; group_w ist eine
+    // gültige null-terminierte UTF-16-Sequenz; buf_ptr ist OUT-Pointer, den
+    // wir mit NetApiBufferFree wieder freigeben.
+    // SAFETY: server_ptr is null or a valid PCWSTR; group_w is a valid null-
+    // terminated UTF-16 sequence; buf_ptr is an OUT pointer freed below via
+    // NetApiBufferFree.
+    let status = unsafe {
+        NetLocalGroupGetMembers(
+            server_ptr,
+            group_w.as_ptr(),
+            2,
+            &mut buf_ptr,
+            MAX_PREFERRED_LENGTH,
+            &mut entries_read,
+            &mut total_entries,
+            &mut resume,
+        )
+    };
+
+    if status != NO_ERROR {
+        if !buf_ptr.is_null() {
+            unsafe { NetApiBufferFree(buf_ptr.cast()) };
+        }
+        return match status {
+            ERROR_ACCESS_DENIED => Err(CoreError::AccessDenied(format!(
+                "NetLocalGroupGetMembers: access denied for '{group_name}' on {server:?}"
+            ))),
+            _ => Err(CoreError::LdapQuery(format!(
+                "NetLocalGroupGetMembers('{group_name}') failed with status {status}"
+            ))),
+        };
+    }
+
+    let mut members = Vec::with_capacity(entries_read as usize);
+    if !buf_ptr.is_null() && entries_read > 0 {
+        // SAFETY: NetApi liefert genau entries_read konsekutive Strukturen.
+        // SAFETY: NetApi returns exactly entries_read consecutive structs.
+        let entries = unsafe {
+            std::slice::from_raw_parts(
+                buf_ptr as *const LOCALGROUP_MEMBERS_INFO_2,
+                entries_read as usize,
+            )
+        };
+        for e in entries {
+            // SID via ConvertSidToStringSidW.
+            let sid = if e.lgrmi2_sid.is_null() {
+                None
+            } else {
+                let mut sid_str_ptr: *mut u16 = std::ptr::null_mut();
+                // SAFETY: lgrmi2_sid ist eine gültige PSID aus dem NetApi-Buffer.
+                // SAFETY: lgrmi2_sid is a valid PSID from the NetApi buffer.
+                let ok = unsafe { ConvertSidToStringSidW(e.lgrmi2_sid, &mut sid_str_ptr) };
+                if ok == FALSE || sid_str_ptr.is_null() {
+                    None
+                } else {
+                    // SAFETY: sid_str_ptr ist eine null-terminierte UTF-16-Sequenz, von
+                    // LocalAlloc allokiert; wir geben sie unten mit LocalFree frei.
+                    // SAFETY: sid_str_ptr is a null-terminated UTF-16 sequence allocated
+                    // via LocalAlloc; freed below with LocalFree.
+                    let s = unsafe { wide_ptr_to_string(sid_str_ptr) };
+                    unsafe { LocalFree(sid_str_ptr.cast()) };
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(Sid(s))
+                    }
+                }
+            };
+            // SAFETY: lgrmi2_domainandname ist eine null-terminierte
+            // UTF-16-Sequenz im NetApi-Buffer (oder null).
+            // SAFETY: lgrmi2_domainandname is a null-terminated UTF-16
+            // sequence inside the NetApi buffer (or null).
+            let name = unsafe { wide_ptr_to_string(e.lgrmi2_domainandname) };
+            let display_name = if name.is_empty() { None } else { Some(name) };
+            members.push(LocalGroupMember { sid, display_name });
+        }
+    }
+
+    if !buf_ptr.is_null() {
+        unsafe { NetApiBufferFree(buf_ptr.cast()) };
+    }
+    Ok(members)
+}
+
+/// Rekonstruiert konkrete Mitgliedschafts-Ketten für jede lokale Gruppe,
+/// in der `user_sid` direkt oder transitiv enthalten ist.
+///
+/// Vorgehen pro lokaler Gruppe `L`:
+/// 1. Mitglieder von `L` via [`get_local_group_members`] holen.
+/// 2. Ist die eigene `user_sid` als Mitglied gelistet → Kette `[user → L]`,
+///    `complete = true`, Quelle `LocalGroup`.
+/// 3. Ist ein bekannter Token-SID (Eigen-SID oder eine vom Aufrufer
+///    gelieferte Domain-Gruppe) als Mitglied gelistet → Kette
+///    `[user → vermittler → L]`, `complete = true`.
+/// 4. Sonst Kette `[user, L]`, `complete = false` mit Quelle `LocalGroup`
+///    (es ist über eine weitere lokale Gruppe verschachtelt; das auflösen
+///    wir in einer späteren Ausbaustufe).
+///
+/// `known_member_sids_to_names` enthält die Domain-Gruppen, die der
+/// Aufrufer aus `NetUserGetGroups` bereits aufgelöst hat, in der Form
+/// `SID-String → Anzeigename`. Wird genutzt, um den Vermittler-Schritt 3
+/// mit menschenlesbarem Namen zu beschriften.
+///
+/// Reconstructs concrete membership chains for every local group in which
+/// `user_sid` is a direct or transitive member.
+///
+/// Per local group `L`:
+/// 1. Fetch members of `L` via [`get_local_group_members`].
+/// 2. If the user's own `user_sid` is listed → chain `[user → L]`,
+///    `complete = true`, source `LocalGroup`.
+/// 3. If a known token SID (own SID or a domain group supplied by the
+///    caller) is listed → chain `[user → mediator → L]`,
+///    `complete = true`.
+/// 4. Otherwise chain `[user, L]`, `complete = false` with source
+///    `LocalGroup` (nested via another local group — a later iteration
+///    can resolve those).
+///
+/// `known_member_sids_to_names` carries the domain groups the caller has
+/// already resolved via `NetUserGetGroups`, as `SID string → display name`.
+/// Used to label the mediator step in case 3 with a human-readable name.
+pub fn resolve_local_group_chains(
+    server: Option<&str>,
+    user_sid: &Sid,
+    user_name: Option<&str>,
+    known_member_sids_to_names: &std::collections::HashMap<String, String>,
+    account: &str,
+) -> Result<Vec<(Sid, Option<String>, MembershipPath)>, CoreError> {
+    let local_groups = resolve_local_groups(server, account)?;
+    let mut out: Vec<(Sid, Option<String>, MembershipPath)> = Vec::new();
+    for lg in local_groups {
+        let lg_display =
+            lookup_account_for_sid_display(&lg.sid.0).unwrap_or_else(|| lg.name.clone());
+        let members = match get_local_group_members(server, &lg.name) {
+            Ok(m) => m,
+            Err(e) => {
+                // Wenn wir die Member nicht lesen koennen, bleibt die
+                // Mitgliedschaft als bestaetigt (NetUserGetLocalGroups hat
+                // sie ja geliefert) aber ohne konkreten Pfad — eine
+                // sichtbare Annotation statt stillem Wegwerfen.
+                // If we cannot read the members, the membership stays
+                // confirmed (NetUserGetLocalGroups gave it to us) but
+                // without a concrete path — a visible annotation rather
+                // than a silent drop.
+                debug!(local_group = %lg.name, error = %e, "members unreadable");
+                out.push((
+                    lg.sid.clone(),
+                    Some(lg_display.clone()),
+                    MembershipPath {
+                        nodes: vec![user_sid.clone(), lg.sid.clone()],
+                        names: vec![user_name.map(str::to_owned), Some(lg_display.clone())],
+                        source: MembershipPathSource::LocalGroup,
+                        complete: false,
+                    },
+                ));
+                continue;
+            }
+        };
+
+        // Kandidaten-Member-SIDs nach Reihenfolge der Präferenz:
+        //   1. user_sid direkt → Kette mit 2 Knoten
+        //   2. eine bekannte Token-SID (Eigene oder Domain-Gruppe) →
+        //      Kette mit 3 Knoten (user → vermittler → L)
+        // Candidate member SIDs in order of preference:
+        //   1. user_sid directly → 2-node chain
+        //   2. a known token SID (own or a domain group) → 3-node chain
+        //      (user → mediator → L)
+        let mut chain_via_self = false;
+        let mut mediator: Option<(Sid, Option<String>)> = None;
+        for m in &members {
+            let Some(ref msid) = m.sid else { continue };
+            if msid.0 == user_sid.0 {
+                chain_via_self = true;
+                break;
+            }
+            if mediator.is_none() {
+                if let Some(name) = known_member_sids_to_names.get(&msid.0) {
+                    mediator = Some((msid.clone(), Some(name.clone())));
+                }
+            }
+        }
+
+        let path = if chain_via_self {
+            MembershipPath {
+                nodes: vec![user_sid.clone(), lg.sid.clone()],
+                names: vec![user_name.map(str::to_owned), Some(lg_display.clone())],
+                source: MembershipPathSource::LocalGroup,
+                complete: true,
+            }
+        } else if let Some((med_sid, med_name)) = mediator {
+            MembershipPath {
+                nodes: vec![user_sid.clone(), med_sid.clone(), lg.sid.clone()],
+                names: vec![
+                    user_name.map(str::to_owned),
+                    med_name,
+                    Some(lg_display.clone()),
+                ],
+                source: MembershipPathSource::LocalGroup,
+                complete: true,
+            }
+        } else {
+            // Vermutlich ueber eine andere lokale Gruppe verschachtelt —
+            // ehrlich als incomplete kennzeichnen.
+            // Likely nested via another local group — honestly flag as
+            // incomplete.
+            MembershipPath {
+                nodes: vec![user_sid.clone(), lg.sid.clone()],
+                names: vec![user_name.map(str::to_owned), Some(lg_display.clone())],
+                source: MembershipPathSource::LocalGroup,
+                complete: false,
+            }
+        };
+
+        out.push((lg.sid, Some(lg_display), path));
+    }
+    Ok(out)
+}
+
+/// Liefert die `DOMAIN\Name`-Darstellung einer SID per LookupAccountSidW —
+/// kleine Variante speziell für den Anzeige­namen der lokalen Gruppe.
+/// Returns the `DOMAIN\name` form of a SID via LookupAccountSidW — small
+/// variant just for the local group's display label.
+fn lookup_account_for_sid_display(sid_str: &str) -> Option<String> {
+    use crate::sam::lookup_account_for_sid;
+    let info = lookup_account_for_sid(sid_str).ok()?;
+    if info.domain.is_empty() {
+        Some(info.name)
+    } else {
+        Some(format!("{}\\{}", info.domain, info.name))
+    }
 }
 
 /// Konvertiert einen Rust-String in eine null-terminierte UTF-16-Sequenz.

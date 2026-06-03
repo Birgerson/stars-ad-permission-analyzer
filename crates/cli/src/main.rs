@@ -496,6 +496,7 @@ async fn run_analyze(
         let analysis = AnalysisResult {
             permissions: vec![result.clone()],
             risk_findings: risk_findings.clone(),
+            ..Default::default()
         };
         export_analysis(&status.path().0, &analysis)?;
         println!("Results exported to: {out_path}");
@@ -819,6 +820,7 @@ async fn run_scan(
         let analysis = AnalysisResult {
             permissions: all_permissions,
             risk_findings,
+            ..Default::default()
         };
         export_analysis(&status.path().0, &analysis)?;
         println!("  Results exported to: {out_path}");

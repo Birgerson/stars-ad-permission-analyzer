@@ -142,6 +142,7 @@ mod tests {
         let result = AnalysisResult {
             permissions: vec![sample_permission(false)],
             risk_findings: vec![sample_finding(false)],
+            ..Default::default()
         };
         let body = render(&result);
         let parsed: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
@@ -155,6 +156,7 @@ mod tests {
         let result = AnalysisResult {
             permissions: vec![sample_permission(true)],
             risk_findings: vec![sample_finding(true)],
+            ..Default::default()
         };
         let body = render(&result);
         // share_status muss als strukturiertes Feld auftauchen, nicht nur als Maske.
@@ -186,6 +188,7 @@ mod tests {
         let result = AnalysisResult {
             permissions: vec![],
             risk_findings: vec![],
+            ..Default::default()
         };
         let path = std::path::PathBuf::from(r"C:\definitely\not\an\existing\dir\report.json");
         let err = JsonExporter

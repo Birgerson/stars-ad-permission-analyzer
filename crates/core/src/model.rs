@@ -538,6 +538,55 @@ pub struct ScanError {
     pub message: String,
 }
 
+/// Schicht eines Trustee-Eintrags in der pfadzentrischen Sicht.
+/// Layer of a trustee entry in the path-centric view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrusteeCategory {
+    /// NTFS-DACL des Objekts.
+    /// NTFS DACL of the object.
+    Ntfs,
+    /// SMB-Freigaben-DACL des umgebenden Shares.
+    /// SMB share DACL of the surrounding share.
+    Share,
+}
+
+/// Ein pfadzentrierter ACE-Eintrag mit raw-Daten — keine Display-
+/// Formatierung. Render-Code (GUI / HTML / CSV) leitet daraus seine
+/// jeweilige Darstellung ab. Beantwortet die Audit-Frage „wer hat
+/// überhaupt Zugriff auf X?" identitätsfrei.
+///
+/// A path-centric ACE entry with raw data — no display formatting. Render
+/// code (GUI / HTML / CSV) derives its own representation from this.
+/// Answers the audit question "who can access X at all?" identity-free.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathTrustee {
+    /// Trustee-SID — primäre technische Identität (vgl. AGENTS.md).
+    /// Trustee SID — primary technical identity (cf. AGENTS.md).
+    pub sid: Sid,
+    /// Lesbarer Name (`DOMAIN\Name`) sofern aufgelöst. `None` heißt nicht
+    /// „nicht existent", sondern „nicht aufgelöst" — Exporter sollten in
+    /// dem Fall auf die SID-Anzeige zurückfallen.
+    /// Readable name (`DOMAIN\Name`) when resolved. `None` does not mean
+    /// "does not exist" — it means "not resolved". Exporters should fall
+    /// back to the SID display in that case.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    pub kind: AceKind,
+    pub mask: AccessMask,
+    pub inherited: bool,
+    pub inheritance_flags: u32,
+    pub propagation_flags: u32,
+    pub category: TrusteeCategory,
+}
+
+/// Trustee-Auflistung pro Pfad: Pfad → Liste seiner ACEs.
+/// Per-path trustee listing: path → list of its ACEs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathTrustees {
+    pub path: NormalizedPath,
+    pub trustees: Vec<PathTrustee>,
+}
+
 /// Risikobefund
 /// Risk finding
 #[derive(Debug, Clone, Serialize, Deserialize)]

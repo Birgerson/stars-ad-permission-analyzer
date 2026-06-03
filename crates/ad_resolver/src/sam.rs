@@ -59,7 +59,14 @@ use windows_sys::Win32::Security::{
     SidTypeGroup, SidTypeInvalid, SidTypeUnknown, SidTypeUser, SidTypeWellKnownGroup,
 };
 
-use crate::local_groups::resolve_local_group_sids;
+// resolve_local_group_sids bleibt in der Public-API für externe Aufrufer
+// (z. B. GUI-Worker). Der SAM-Resolver nutzt jetzt die reichere
+// resolve_local_group_chains-Variante; der reine SID-Fallback ist hier nicht
+// mehr nötig.
+// resolve_local_group_sids stays in the public API for external callers
+// (e.g. the GUI worker). The SAM resolver now uses the richer
+// resolve_local_group_chains variant; the pure-SID fallback is no longer
+// needed here.
 
 /// User-Not-Found-Statuscode aus lmerr.h / NERR_UserNotFound from lmerr.h.
 const NERR_USER_NOT_FOUND: u32 = 2221;
@@ -416,63 +423,50 @@ pub fn resolve_identity_via_sam(
             ),
         }
 
-        match resolve_local_group_sids(None, &account.name) {
-            Ok(local_sids) => {
-                for group_sid in local_sids {
-                    // Lokale Gruppen-SID rückwärts in `DOMAIN\Name` auflösen,
-                    // damit der Erklärungstext z. B. `BUILTIN\Administrators`
-                    // statt nur `S-1-5-32-544` zeigt. Schlägt der Lookup fehl
-                    // (sollte auf dem lokalen System nicht passieren), bleibt
-                    // group_name = None und die Engine fällt auf die SID-
-                    // Anzeige zurück.
-                    // Reverse-resolve the local group SID into `DOMAIN\Name`
-                    // so the explanation text shows e.g.
-                    // `BUILTIN\Administrators` instead of just
-                    // `S-1-5-32-544`. If the lookup fails (which should not
-                    // happen on the local system) group_name stays None and
-                    // the engine falls back to the SID display.
-                    let group_name = lookup_account_for_sid(&group_sid.0).ok().map(|info| {
-                        if info.domain.is_empty() {
-                            info.name
-                        } else {
-                            format!("{}\\{}", info.domain, info.name)
-                        }
-                    });
-                    let member_sid_val = Sid(sid_str.to_owned());
+        // Lokale Gruppen-Ketten via NetLocalGroupGetMembers rekonstruieren.
+        // Die schon aufgelösten Domain-Gruppen werden als Token-SIDs an
+        // resolve_local_group_chains übergeben — damit kann die Funktion
+        // den Vermittler-Schritt (z. B. „Domain Admins → BUILTIN\Administrators")
+        // konkret beschriften.
+        // Reconstruct local group chains via NetLocalGroupGetMembers. The
+        // already-resolved domain groups are passed as token SIDs so the
+        // function can label the mediator step (e.g. "Domain Admins →
+        // BUILTIN\Administrators") concretely.
+        let mut known_token_sids: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        known_token_sids.insert(sid_str.to_owned(), account.name.clone());
+        for m in &memberships {
+            if let Some(name) = m.group_name.as_deref() {
+                known_token_sids.insert(m.group_sid.0.clone(), name.to_owned());
+            }
+        }
+        match crate::local_groups::resolve_local_group_chains(
+            None,
+            &Sid(sid_str.to_owned()),
+            Some(&account.name),
+            &known_token_sids,
+            &account.name,
+        ) {
+            Ok(chains) => {
+                for (group_sid, group_name, path) in chains {
                     memberships.push(GroupMembership {
-                        member_sid: member_sid_val.clone(),
-                        group_sid: group_sid.clone(),
-                        direct: false, // lokale Mitgliedschaft ggf. transitiv / local membership may be transitive
-                        group_name: group_name.clone(),
-                        // NetUserGetLocalGroups liefert die Endmenge der
-                        // lokalen Gruppen, in denen der Benutzer enthalten
-                        // ist — direkt oder über verschachtelte lokale
-                        // Mitgliedschaften. Die konkrete Zwischenkette ist
-                        // über diese API nicht ohne weiteres beobachtbar,
-                        // daher markieren wir den Pfad als
-                        // LdapMatchingRule mit `complete = false`. Wer den
-                        // exakten Weg benötigt, kann später per
-                        // NetLocalGroupGetMembers nachladen.
-                        // NetUserGetLocalGroups returns the final set of
-                        // local groups the user belongs to — either
-                        // directly or via nested local memberships. The
-                        // intermediate chain is not readily observable
-                        // through this API, so we mark the path as
-                        // LdapMatchingRule with `complete = false`. The
-                        // exact route can be supplied later via
-                        // NetLocalGroupGetMembers.
-                        path: Some(MembershipPath {
-                            nodes: vec![member_sid_val, group_sid],
-                            names: vec![Some(account.name.clone()), group_name],
-                            source: MembershipPathSource::LocalGroup,
-                            complete: false,
-                        }),
+                        member_sid: Sid(sid_str.to_owned()),
+                        group_sid,
+                        // direct == path.nodes.len() == 2 → echte direkte
+                        // Mitgliedschaft auf der lokalen Gruppe; sonst
+                        // (Vermittler über Domain-Gruppe) transitiv.
+                        // direct == path.nodes.len() == 2 → real direct
+                        // membership on the local group; otherwise
+                        // (mediated via domain group) transitive.
+                        direct: path.nodes.len() == 2 && path.complete,
+                        group_name,
+                        path: Some(path),
                     });
                 }
             }
             Err(e) => warn!(
                 error = %e,
-                "SAM: NetUserGetLocalGroups failed; local group SIDs missing from token"
+                "SAM: resolve_local_group_chains failed; local group SIDs missing from token"
             ),
         }
     }

@@ -14,6 +14,31 @@ _Keine offenen Änderungen._
 
 ---
 
+## [1.3.0] — 2026-06-04
+
+**Minor-Release.** Schließt die drei wesentlichen Audit-Lücken aus der Selbstkritik in v1.2.0: rekursive Trustee-Sicht im Scan-Tree-Tab, Trustee-Tabelle im HTML-Bericht, konkrete lokale Gruppen-Ketten via `NetLocalGroupGetMembers`. Reines Lese-Tool — keine Schreibvorgänge auf Zielsystemen.
+
+### Hinzugefügt
+- **Rekursive Trustee-Sicht im Scan-Tree-Tab.** Jede gescannte Pfad-Zeile zeigt auf Klick nicht nur den identitätsbasierten Berechtigungspfad, sondern zusätzlich die komplette DACL-Trustee-Tabelle des Pfads (alle ACEs mit aufgelöstem `DOMAIN\Name`, Allow/Deny, normalisierten Rechten + Roh-Maske, „explicit/inherited"-Quelle, Windows-typischer „Applies to"-Bezeichnung und NTFS/Share-Schicht). Damit beantwortet jeder Scan zwei Audit-Fragen gleichzeitig: „was darf X auf Y" und „wer hat überhaupt Zugriff auf Y".
+- **Trustee-Tabelle im HTML-Bericht.** Neue Sektion „Wer hat Zugriff (Trustees pro Pfad)" als ausklappbare `<details>`-Liste je Pfad — gleiche Spaltenstruktur wie in der GUI, mit Hover-Tooltip für die SID.
+- **Lokale Gruppen-Ketten konkret rekonstruiert.** `NetLocalGroupGetMembers` wird pro lokaler Gruppe aufgerufen; die zurückgelieferten Member werden gegen die schon bekannten Token-SIDs (Eigene SID + Domain-Gruppen) abgeglichen. Resultierende Kette ist jetzt z. B. `max.mustermann → Domain Admins → BUILTIN\Administrators` statt nur `BUILTIN\Administrators [transitive, exact chain unknown]`. Nicht rekonstruierbare Pfade (verschachtelt über eine weitere lokale Gruppe) bleiben ehrlich als `complete = false` markiert.
+- **Neue `adpa_core`-Datentypen** `PathTrustee` (raw ACE-Eintrag mit aufgelöstem Namen) und `PathTrustees` (Pfad → Liste). `AnalysisResult` trägt jetzt ein zusätzliches `path_trustees`-Feld mit `Default`-Wert — alle bestehenden Konstruktions­sites bleiben kompatibel.
+- **Worker-Helper** `build_path_trustees` (raw model) und `trustee_row_for_display` (display) — Trennung zwischen Datenmodell und Anzeige. `build_trustee_rows` ist jetzt ein dünner Wrapper, der aus dem rohen Modell die Display-Form ableitet.
+- **`ad_resolver::local_groups`** bekommt drei neue öffentliche Funktionen: `resolve_local_groups` (Name + SID parallel statt nur SID), `get_local_group_members` (NetLocalGroupGetMembers Level 2, liefert PSID + DOMAIN\Name pro Mitglied), `resolve_local_group_chains` (rekonstruiert konkrete Ketten unter Nutzung der bekannten Token-SIDs).
+
+### Geändert
+- **SAM-Resolver** nutzt jetzt `resolve_local_group_chains` statt der flachen `resolve_local_group_sids`-Variante. Die alte Public-API bleibt für externe Aufrufer (z. B. GUI-Worker) erhalten.
+- **GUI Scan-Tree-Renderer**: aufgeklappte Zeile zeigt jetzt zwei Blöcke gestapelt — Berechtigungspfad oben, Trustee-Tabelle unten.
+- **HTML-Exporter** rendert `path_trustees` nur, wenn das Feld nicht leer ist; CLI-Aufrufe bleiben unverändert.
+
+### Tests
+- Alle bestehenden Tests laufen weiter grün (Workspace: 451 Tests). Neue Trustee-Pipeline ist über die schon vorhandene `analyze_trustees`-Logik abgedeckt; lokale Gruppen-Ketten brauchen für End-to-End-Verifikation eine echte DC-Umgebung und sind über die ignorierten Integrations­tests adressierbar.
+
+### Versionsbump
+- Workspace-Version: `1.2.0` → `1.3.0`.
+
+---
+
 ## [1.2.0] — 2026-06-02
 
 **Minor-Release.** Drei vom Bediener konkret angesprochene GUI-Lücken geschlossen: pfadzentrierte Trustee-Sicht im Analyze-Tab, Löschen einzelner Scan-Läufe aus der Historie, sichtbarer Hinweis bei leerem Delta-Ergebnis. Reines Lese-Tool — keine Schreibvorgänge auf Zielsystemen, keine Berechtigungs­änderungen.

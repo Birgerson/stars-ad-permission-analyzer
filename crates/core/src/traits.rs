@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use crate::error::CoreError;
 use crate::model::{
     AccessContext, EffectivePermission, FileSystemObject, GroupMembership, Identity,
-    LocalGroupEvalStatus, RiskFinding, ScanError, ShareMaskStatus, Sid,
+    LocalGroupEvalStatus, PathTrustees, RiskFinding, ScanError, ShareMaskStatus, Sid,
 };
 
 pub struct ScanRequest {
@@ -99,9 +99,20 @@ pub enum ExportTarget {
     File(std::path::PathBuf),
 }
 
+#[derive(Default)]
 pub struct AnalysisResult {
     pub permissions: Vec<EffectivePermission>,
     pub risk_findings: Vec<RiskFinding>,
+    /// Pfadzentrische Trustee-Auflistung (ACEs ohne Identitäts-Bezug).
+    /// Wird vom Exporter genutzt, um die zweite Audit-Frage „wer hat
+    /// überhaupt Zugriff?" pro Pfad mit zu rendern. Leer wenn der
+    /// Aufrufer das nicht braucht — bricht keine bestehenden
+    /// Konstruktionen.
+    /// Path-centric trustee listing (ACEs without an identity context).
+    /// Used by the exporter to render the second audit question "who has
+    /// any access?" per path. Empty when the caller does not need it —
+    /// does not break existing constructions.
+    pub path_trustees: Vec<PathTrustees>,
 }
 
 /// Liest und analysiert Dateisystem-Objekte oder Freigaben.
