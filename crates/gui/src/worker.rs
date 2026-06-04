@@ -18,9 +18,14 @@
 use std::sync::mpsc::{Receiver, Sender};
 
 use ad_resolver::sid_util::bytes_to_sid_str;
+#[cfg(not(windows))]
+use ad_resolver::NoLsaBackend;
+#[cfg(windows)]
+use ad_resolver::WindowsLsaBackend;
 use ad_resolver::{
-    format_account_for_local_groups, ldap_client, resolve_local_group_sids, LdapConfig,
-    LdapResolver, TlsMode,
+    format_account_for_local_groups, ldap_client, principal::PrincipalInput,
+    resolve_local_group_sids, LdapConfig, LdapIdentityBackend, LdapResolver, PrincipalResolution,
+    PrincipalResolver, TlsMode,
 };
 use adpa_core::{
     model::{
@@ -28,8 +33,8 @@ use adpa_core::{
         NormalizedPath, RiskFinding, ScanError, ScanRun, Sid,
     },
     traits::{
-        AnalysisResult, ExportTarget, Exporter, IdentityResolver, PermissionEvaluationInput,
-        PermissionEvaluator, RiskContext,
+        AnalysisResult, ExportTarget, Exporter, PermissionEvaluationInput, PermissionEvaluator,
+        RiskContext,
     },
 };
 use chrono::Utc;
@@ -632,26 +637,26 @@ struct ScanSummary {
 /// an NetAPI- oder LDAP-Aufrufe übergeben werden.
 /// Centrally validates optional SMB and LDAP connection inputs before they are
 /// passed to NetAPI or LDAP calls.
+/// Normalisierte Verbindungs-Eingaben im GUI-Worker (siehe
+/// CLI-Pendant). Aufrufer dürfen die Roh-Felder von `LdapParams` nicht
+/// mehr verwenden, sondern arbeiten ab der Validierung mit den
+/// getrimmten Werten. Schließt Review 2026-06-04 Runde 3 Finding 2.
+/// Normalized connection inputs in the GUI worker.
+pub struct NormalizedConnectionInputs {
+    pub smb_server: Option<String>,
+    pub share_name: Option<String>,
+    pub ldap: Option<LdapParams>,
+}
+
 fn validate_connection_inputs(
     smb_server: Option<&str>,
     share_name: Option<&str>,
     ldap: Option<&LdapParams>,
-) -> Result<(), String> {
+) -> Result<NormalizedConnectionInputs, String> {
     // Review 2026-06-04 Runde 2, Finding 2: smb_server und share_name
-    // sind nur als Paar sinnvoll. Wer einen lokalen Pfad mit nur
-    // `--smb-server` (ohne `--share-name`) startet, bekam sonst lokale
-    // Gruppen vom Remote-Server zugewiesen, während gleichzeitig kein
-    // Share-Kontext anwendbar war — Token-Verunreinigung ohne sichtbare
-    // Wirkung. Wir verlangen jetzt ausdrücklich Paarbildung — leerer
-    // String zählt dabei wie nicht gesetzt.
-    // Review 2026-06-04 round 2, finding 2: smb_server and share_name are
-    // only meaningful as a pair. Running a local path with only
-    // `--smb-server` (no `--share-name`) used to pull local groups from
-    // the remote server while no share context was actually applicable —
-    // token pollution with no visible effect. We now require explicit
-    // pairing — an empty string counts as not set.
-    let smb_server_set = smb_server.is_some_and(|s| !s.is_empty());
-    let share_name_set = share_name.is_some_and(|s| !s.is_empty());
+    // sind nur als Paar sinnvoll. Leerer String zählt wie nicht gesetzt.
+    let smb_server_set = smb_server.is_some_and(|s| !s.trim().is_empty());
+    let share_name_set = share_name.is_some_and(|s| !s.trim().is_empty());
     match (smb_server_set, share_name_set) {
         (true, false) => {
             return Err(
@@ -667,18 +672,48 @@ fn validate_connection_inputs(
         }
         _ => {}
     }
-    if let Some(s) = smb_server {
-        validate_smb_server(s).map_err(|e| format!("Invalid SMB server: {e}"))?;
-    }
-    if let Some(s) = share_name {
-        validate_share_name(s).map_err(|e| format!("Invalid share name: {e}"))?;
-    }
-    if let Some(p) = ldap {
-        validate_ldap_endpoint(&p.server).map_err(|e| format!("Invalid LDAP server: {e}"))?;
-        validate_dn(&p.base_dn).map_err(|e| format!("Invalid base DN: {e}"))?;
-        validate_dn(&p.bind_dn).map_err(|e| format!("Invalid bind DN: {e}"))?;
-    }
-    Ok(())
+    let smb_server = match smb_server {
+        Some(s) if !s.trim().is_empty() => Some(
+            validate_smb_server(s)
+                .map_err(|e| format!("Invalid SMB server: {e}"))?
+                .0,
+        ),
+        _ => None,
+    };
+    let share_name = match share_name {
+        Some(s) if !s.trim().is_empty() => Some(
+            validate_share_name(s)
+                .map_err(|e| format!("Invalid share name: {e}"))?
+                .0,
+        ),
+        _ => None,
+    };
+    let ldap = match ldap {
+        Some(p) => {
+            let server = validate_ldap_endpoint(&p.server)
+                .map_err(|e| format!("Invalid LDAP server: {e}"))?
+                .0;
+            let base_dn = validate_dn(&p.base_dn)
+                .map_err(|e| format!("Invalid base DN: {e}"))?
+                .0;
+            let bind_dn = validate_dn(&p.bind_dn)
+                .map_err(|e| format!("Invalid bind DN: {e}"))?
+                .0;
+            Some(LdapParams {
+                server,
+                base_dn,
+                bind_dn,
+                password: p.password.clone(),
+                insecure: p.insecure,
+            })
+        }
+        None => None,
+    };
+    Ok(NormalizedConnectionInputs {
+        smb_server,
+        share_name,
+        ldap,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -701,19 +736,22 @@ async fn handle_analyze(
         .map_err(|e| format!("Invalid path: {e}"))?
         .0;
     let path = normalized_path.as_str();
-    if sid.starts_with("S-1-") {
-        validate_sid(sid).map_err(|e| format!("Invalid SID: {e}"))?;
-    }
-    validate_connection_inputs(smb_server, share_name, ldap)?;
+    let sid_owned = if sid.starts_with("S-1-") {
+        validate_sid(sid)
+            .map_err(|e| format!("Invalid SID: {e}"))?
+            .0
+    } else {
+        sid.to_string()
+    };
+    let sid = sid_owned.as_str();
+    let normalized = validate_connection_inputs(smb_server, share_name, ldap)?;
+    let smb_server = normalized.smb_server.as_deref();
+    let share_name = normalized.share_name.as_deref();
+    let ldap = normalized.ldap.as_ref();
     let fso = read_fso(path).map_err(|e| format!("Failed to read path: {e}"))?;
     let res = resolve_identity_sids(sid, ldap).await?;
 
     // Lokale Server-Gruppen vor der Share-Maske bestimmen — siehe CLI-Pendant.
-    // Finding 2: explizit gesetzter SMB-Server wird durchgereicht, damit
-    // lokale Gruppen vom selben Server wie die Share-DACL kommen.
-    // Resolve local server groups before the share mask — see CLI counterpart.
-    // Finding 2: explicit SMB server is forwarded so local groups come from
-    // the same server as the share DACL.
     let (local_group_sids, local_group_status) =
         collect_local_group_sids_for_path(path, smb_server, &res.identity);
 
@@ -739,10 +777,13 @@ async fn handle_analyze(
     #[cfg(not(windows))]
     let sid_names = std::collections::BTreeMap::new();
 
+    let engine_flags = res.engine_flags();
+    let identity = res.identity;
+    let memberships = res.memberships;
     DefaultPermissionEngine
         .evaluate(PermissionEvaluationInput {
-            identity: res.identity,
-            group_memberships: res.memberships,
+            identity,
+            group_memberships: memberships,
             file_system_object: fso,
             share_status,
             local_group_sids,
@@ -750,9 +791,9 @@ async fn handle_analyze(
             access_context: AccessContext::for_path(path),
             unsupported_share_ace_count,
             sid_names,
-            group_resolution_via_sam_fallback: res.sam_fallback,
-            identity_not_in_configured_ldap_base: res.not_in_configured_ldap_base,
-            identity_disabled_status_unknown: res.disabled_status_unknown,
+            group_resolution_via_sam_fallback: engine_flags.group_resolution_via_sam_fallback,
+            identity_not_in_configured_ldap_base: engine_flags.identity_not_in_configured_ldap_base,
+            identity_disabled_status_unknown: engine_flags.identity_disabled_status_unknown,
         })
         .map_err(|e| format!("Permission engine error: {e}"))
 }
@@ -846,15 +887,23 @@ async fn handle_scan(
         Ok(d) => d.map(|s| s.0),
         Err(e) => return make_early_summary(format!("Invalid max_depth: {e}")),
     };
-    if sid.starts_with("S-1-") {
-        if let Err(e) = validate_sid(sid) {
-            return make_early_summary(format!("Invalid SID: {e}"));
+    let sid_owned = if sid.starts_with("S-1-") {
+        match validate_sid(sid) {
+            Ok(v) => v.0,
+            Err(e) => return make_early_summary(format!("Invalid SID: {e}")),
         }
-    }
+    } else {
+        sid.to_string()
+    };
+    let sid = sid_owned.as_str();
 
-    if let Err(e) = validate_connection_inputs(smb_server, share_name, ldap) {
-        return make_early_summary(e);
-    }
+    let normalized = match validate_connection_inputs(smb_server, share_name, ldap) {
+        Ok(n) => n,
+        Err(e) => return make_early_summary(e),
+    };
+    let smb_server = normalized.smb_server.as_deref();
+    let share_name = normalized.share_name.as_deref();
+    let ldap = normalized.ldap.as_ref();
 
     let res = match resolve_identity_sids(sid, ldap).await {
         Ok(r) => r,
@@ -862,11 +911,12 @@ async fn handle_scan(
             return make_early_summary(format!("Identity resolution failed: {e}"));
         }
     };
+    let engine_flags = res.engine_flags();
+    let sam_fallback = engine_flags.group_resolution_via_sam_fallback;
+    let identity_not_in_configured_ldap_base = engine_flags.identity_not_in_configured_ldap_base;
+    let identity_disabled_status_unknown = engine_flags.identity_disabled_status_unknown;
     let identity = res.identity;
     let memberships = res.memberships;
-    let sam_fallback = res.sam_fallback;
-    let identity_not_in_configured_ldap_base = res.not_in_configured_ldap_base;
-    let identity_disabled_status_unknown = res.disabled_status_unknown;
 
     // Strukturierte Fehlerliste, die später per persist_scan in `scan_errors`
     // landet. Sammelt Walk-, Eval- und Setup-Fehler analog zum CLI-Pfad.
@@ -967,18 +1017,30 @@ async fn handle_scan(
     // Collects the raw path-centric trustee lists for the HTML exporter.
     let mut path_trustees: Vec<adpa_core::model::PathTrustees> = Vec::new();
 
+    // Share-DACL einmal pro Share lesen und als Overlay an jeden Pfad
+    // anhängen — closes review 2026-06-04 round 3 finding 3. Vorher fehlten
+    // die Share-Trustees komplett in der Pfad-Tabelle, obwohl die UI als
+    // „who can access this path at all" beschriftet war.
+    // Read the share DACL once per share and apply it as an overlay to
+    // every path — closes round 3 finding 3.
+    let share_overlay: Option<ShareTrusteeOverlay> = {
+        use validation::path::{effective_smb_target, parse_unc_components};
+        let server = effective_smb_target(root, smb_server);
+        let share = share_name
+            .map(|s| s.to_string())
+            .or_else(|| parse_unc_components(root).map(|(_, s)| s));
+        match (server, share) {
+            (Some(s), Some(n)) => Some(read_share_overlay(&s, &n)),
+            _ => None,
+        }
+    };
+
     for fso in walk.objects {
         let path = fso.path.0.clone();
-        // Trustees pro Pfad vor der engine-Auswertung bauen, weil
-        // PermissionEvaluationInput das FSO konsumiert. Build the trustee
-        // list per path before the engine consumes the FSO.
-        // Share-DACL hier bewusst NICHT pro Pfad neu lesen — der Share-Status
-        // ist eine Eigenschaft der Wurzel, nicht des Unterpfads; die NTFS-
-        // ACEs sind das, was der Auditor pro Pfad sehen will.
-        // Share DACL deliberately not re-read per path — share status is a
-        // property of the root, not of subpaths; NTFS ACEs are what the
-        // auditor wants to see per path.
-        let raw_trustees = build_path_trustees(&fso, None, None);
+        // Trustees pro Pfad bauen — NTFS aus dem FSO, Share aus dem
+        // vorab gelesenen Overlay (Single Read pro Share).
+        // Per-path trustees — NTFS from FSO, share from the pre-read overlay.
+        let raw_trustees = build_path_trustees_with_share(&fso, share_overlay.as_ref());
         let trustees_for_row: Vec<TrusteeRow> =
             raw_trustees.iter().map(trustee_row_for_display).collect();
         path_trustees.push(adpa_core::model::PathTrustees {
@@ -1364,6 +1426,70 @@ fn analyze_trustees(
     Ok(build_trustee_rows(&fso, smb_server, share_name))
 }
 
+/// Vorgefertigte Share-Schicht für die Pfad-Trustee-Liste. Liefert
+/// `read_share_overlay`, verbraucht von [`build_path_trustees_with_share`].
+/// Wird im Scan-Pfad einmal pro Share gelesen und an jeden Pfad-Aufruf
+/// weitergegeben — closes review round 3 finding 3.
+/// Pre-built share layer for the path trustee list.
+#[derive(Debug, Clone)]
+pub struct ShareTrusteeOverlay {
+    pub trustees: Vec<adpa_core::model::PathTrustee>,
+}
+
+/// Liest die Share-DACL einmal und produziert die [`ShareTrusteeOverlay`].
+/// Reads the share DACL once and produces the [`ShareTrusteeOverlay`].
+pub fn read_share_overlay(server: &str, share_name: &str) -> ShareTrusteeOverlay {
+    use adpa_core::model::{AccessMask, AceKind, PathTrustee, Sid, TrusteeCategory};
+    let mut trustees: Vec<PathTrustee> = Vec::new();
+    match get_share_dacl(server, share_name) {
+        Ok(scan) => match scan.dacl {
+            share_scanner::ShareDacl::NullDacl => {
+                trustees.push(PathTrustee {
+                    sid: Sid("S-1-1-0".to_owned()),
+                    display_name: Some(
+                        "Everyone (Share NULL DACL — no SMB restriction)".to_owned(),
+                    ),
+                    kind: AceKind::Allow,
+                    mask: AccessMask(0x001F01FF),
+                    inherited: false,
+                    inheritance_flags: 0,
+                    propagation_flags: 0,
+                    category: TrusteeCategory::Share,
+                });
+            }
+            share_scanner::ShareDacl::Acl(perms) => {
+                for p in perms {
+                    trustees.push(PathTrustee {
+                        sid: p.sid.clone(),
+                        display_name: None,
+                        kind: p.kind.clone(),
+                        mask: p.mask,
+                        inherited: false,
+                        inheritance_flags: 0,
+                        propagation_flags: 0,
+                        category: TrusteeCategory::Share,
+                    });
+                }
+            }
+        },
+        Err(e) => {
+            // Sichtbare „Lese-Fehler"-Pseudo-Zeile — keine stillen Skips.
+            // Visible "read failure" pseudo-row — no silent skips.
+            trustees.push(PathTrustee {
+                sid: Sid(String::new()),
+                display_name: Some(format!("Share-DACL nicht lesbar: {e}")),
+                kind: AceKind::Allow,
+                mask: AccessMask(0),
+                inherited: false,
+                inheritance_flags: 0,
+                propagation_flags: 0,
+                category: TrusteeCategory::Share,
+            });
+        }
+    }
+    ShareTrusteeOverlay { trustees }
+}
+
 /// Baut die rohe Trustee-Liste aus einem bereits gelesenen FSO. Liefert
 /// das Core-Modell (`PathTrustee`) ohne Display-Formatierung — wird sowohl
 /// vom HTML-Exporter als auch vom GUI-Renderer (über
@@ -1376,6 +1502,29 @@ pub fn build_path_trustees(
     fso: &adpa_core::model::FileSystemObject,
     smb_server: Option<&str>,
     share_name: Option<&str>,
+) -> Vec<adpa_core::model::PathTrustee> {
+    // Schließt Review 2026-06-04 Runde 3 Finding 3: die Share-Trustees
+    // werden jetzt über einen wiederverwendbaren Helper hinzugefügt,
+    // damit der Scan-Pfad die Share-DACL **einmal pro Share** liest und
+    // an alle Pfade unter diesem Share hängt — statt sie pro Pfad neu
+    // anzufragen oder ganz wegzulassen.
+    // Closes review round 3 finding 3.
+    let share_overlay = match (smb_server, share_name) {
+        (Some(server), Some(name)) => Some(read_share_overlay(server, name)),
+        _ => None,
+    };
+    build_path_trustees_with_share(fso, share_overlay.as_ref())
+}
+
+/// Wie [`build_path_trustees`], aber mit bereits gelesenem
+/// Share-Overlay. Der Scan-Pfad ruft `read_share_overlay` einmal vor
+/// der Schleife auf und übergibt die Referenz an jeden Pfad-Aufruf;
+/// dadurch entfällt ein Re-Read pro Pfad und es können keine Share-
+/// Trustees mehr versehentlich weggelassen werden.
+/// Variant of [`build_path_trustees`] taking a pre-read share overlay.
+pub fn build_path_trustees_with_share(
+    fso: &adpa_core::model::FileSystemObject,
+    share_overlay: Option<&ShareTrusteeOverlay>,
 ) -> Vec<adpa_core::model::PathTrustee> {
     use adpa_core::model::{AccessMask, AceKind, PathTrustee, Sid, TrusteeCategory};
 
@@ -1408,56 +1557,9 @@ pub fn build_path_trustees(
         }
     }
 
-    // Share-DACL — optional
-    if let (Some(server), Some(name)) = (smb_server, share_name) {
-        match get_share_dacl(server, name) {
-            Ok(scan) => match scan.dacl {
-                share_scanner::ShareDacl::NullDacl => {
-                    out.push(PathTrustee {
-                        sid: Sid("S-1-1-0".to_owned()),
-                        display_name: Some(
-                            "Everyone (Share NULL DACL — no SMB restriction)".to_owned(),
-                        ),
-                        kind: AceKind::Allow,
-                        mask: AccessMask(0x001F01FF),
-                        inherited: false,
-                        inheritance_flags: 0,
-                        propagation_flags: 0,
-                        category: TrusteeCategory::Share,
-                    });
-                }
-                share_scanner::ShareDacl::Acl(perms) => {
-                    for p in perms {
-                        out.push(PathTrustee {
-                            sid: p.sid.clone(),
-                            display_name: None,
-                            kind: p.kind.clone(),
-                            mask: p.mask,
-                            inherited: false,
-                            inheritance_flags: 0,
-                            propagation_flags: 0,
-                            category: TrusteeCategory::Share,
-                        });
-                    }
-                }
-            },
-            Err(e) => {
-                // Eine sichtbare „Lese-Fehler"-Pseudo-Zeile beibehalten —
-                // keine stillen Skips (siehe MEMORY: no silent skips).
-                // A visible "read failure" pseudo-row — no silent skips
-                // (see MEMORY: no silent skips).
-                out.push(PathTrustee {
-                    sid: Sid(String::new()),
-                    display_name: Some(format!("Share-DACL nicht lesbar: {e}")),
-                    kind: AceKind::Allow,
-                    mask: AccessMask(0),
-                    inherited: false,
-                    inheritance_flags: 0,
-                    propagation_flags: 0,
-                    category: TrusteeCategory::Share,
-                });
-            }
-        }
+    // Share-DACL — optional, schon gelesen.
+    if let Some(overlay) = share_overlay {
+        out.extend(overlay.trustees.iter().cloned());
     }
 
     // SIDs in lesbare Namen auflösen — eine Runde LSA pro eindeutiger SID.
@@ -1620,7 +1722,7 @@ fn format_mask(mask: u32) -> String {
 async fn resolve_identity_sids(
     sid: &str,
     ldap: Option<&LdapParams>,
-) -> Result<IdentityResolution, String> {
+) -> Result<PrincipalResolution, String> {
     if let Some(params) = ldap {
         let mut config = LdapConfig::new(
             &params.server,
@@ -1632,29 +1734,20 @@ async fn resolve_identity_sids(
             config.tls_mode = TlsMode::Insecure;
             config.port = 389;
         }
-        let resolver = LdapResolver::new(config);
-        let sid_obj = Sid(sid.to_string());
-        let identity = resolver
-            .resolve_identity(&sid_obj)
+        let resolver = std::sync::Arc::new(LdapResolver::new(config));
+        let backend = LdapIdentityBackend::new(resolver);
+        // Zentrale Principal-Pipeline — schliesst Review 2026-06-04
+        // Runde 3 Finding 1, indem der GUI-SID-Pfad denselben
+        // LDAP-/LSA-Crosscheck bekommt wie der CLI-DOMAIN\user-Pfad.
+        // Central principal pipeline — closes review round 3 finding 1.
+        #[cfg(windows)]
+        let principal = PrincipalResolver::new(backend, Some(WindowsLsaBackend));
+        #[cfg(not(windows))]
+        let principal: PrincipalResolver<_, NoLsaBackend> = PrincipalResolver::new(backend, None);
+        return principal
+            .resolve(PrincipalInput::Sid(Sid(sid.to_string())))
             .await
-            .map_err(|e| format!("LDAP identity resolution failed: {e}"))?;
-        let memberships = resolver
-            .resolve_group_memberships(&sid_obj)
-            .await
-            .map_err(|e| format!("LDAP group resolution failed: {e}"))?;
-        // LDAP hat die SID aufgeloest — Orphaned heisst hier wirklich
-        // "AD kennt diese SID nicht (mehr)". `disabled` ist via
-        // userAccountControl bestimmt — also kein "unknown" Marker.
-        // LDAP resolved the SID — Orphaned here truly means "AD does not
-        // know that SID (any more)". `disabled` was determined via UAC —
-        // so no "unknown" marker either.
-        return Ok(IdentityResolution {
-            identity,
-            memberships,
-            sam_fallback: false,
-            not_in_configured_ldap_base: false,
-            disabled_status_unknown: false,
-        });
+            .map_err(|e| format!("LDAP identity resolution failed: {e}"));
     }
 
     // Ohne LDAP: auf Windows die lokale SAM/LSA als Default-Auflöser nutzen.
@@ -1678,34 +1771,34 @@ async fn resolve_identity_sids(
     // Schliesst Review 2026-06-04 Runde 2 Finding 5: `sam_resolve_fallback`
     // liest jetzt den `disabled`-Status via `NetUserGetInfo` und meldet,
     // ob das gelungen ist. Konnte der Status nicht bestimmt werden,
-    // setzen wir `disabled_status_unknown = true` — die Engine pusht
-    // den passenden Diagnose-Marker. Konnte er bestimmt werden, ist
-    // `Identity.disabled` jetzt verlaesslich.
-    // Closes review 2026-06-04 round 2 finding 5: `sam_resolve_fallback`
-    // now reads the `disabled` flag via `NetUserGetInfo` and reports
-    // whether it succeeded. On failure we set
-    // `disabled_status_unknown = true` and the engine emits the
-    // diagnostic; on success `Identity.disabled` is reliable.
+    // setzen wir `DisabledStatus::Unknown` — die Engine pusht den
+    // passenden Diagnose-Marker. Closes review round 2 finding 5.
     let (identity, memberships, disabled_known) = sam_resolve_fallback(sid)?;
-    Ok(IdentityResolution {
+    let disabled_status = if disabled_known {
+        ad_resolver::DisabledStatus::Known(identity.disabled)
+    } else {
+        ad_resolver::DisabledStatus::Unknown
+    };
+    let mut diagnostics: Vec<adpa_core::model::PermissionDiagnostic> = Vec::new();
+    if matches!(disabled_status, ad_resolver::DisabledStatus::Unknown) {
+        diagnostics.push(adpa_core::model::PermissionDiagnostic::IdentityDisabledStatusUnknown);
+    } else if identity.disabled {
+        diagnostics.push(adpa_core::model::PermissionDiagnostic::IdentityDisabled);
+    }
+    Ok(PrincipalResolution {
+        sid: identity.sid.clone(),
         identity,
         memberships,
-        sam_fallback: true,
-        not_in_configured_ldap_base: false,
-        disabled_status_unknown: !disabled_known,
+        // SAM-only auf einem DC = lokale Domain → Inside. Die flache
+        // Domain-Gruppen-Rekursion wird ueber GroupResolutionStatus
+        // sichtbar und treibt den passenden Engine-Marker.
+        // SAM-only on a DC = local domain → Inside; the flat recursion
+        // is signalled separately via SamFlat.
+        scope_status: ad_resolver::IdentityScopeStatus::InsideConfiguredLdapBase,
+        group_resolution_status: ad_resolver::GroupResolutionStatus::SamFlat,
+        disabled_status,
+        diagnostics,
     })
-}
-
-/// Auflösungsergebnis fuer [`resolve_identity_sids`] inklusive der
-/// drei Diagnose-Flags, die in den `PermissionEvaluationInput` fliessen.
-/// Resolution outcome for [`resolve_identity_sids`] including the three
-/// diagnostic flags that feed into `PermissionEvaluationInput`.
-struct IdentityResolution {
-    identity: Identity,
-    memberships: Vec<GroupMembership>,
-    sam_fallback: bool,
-    not_in_configured_ldap_base: bool,
-    disabled_status_unknown: bool,
 }
 
 /// Rückgabe: `(Identity, memberships, disabled_known)`. Der dritte Wert

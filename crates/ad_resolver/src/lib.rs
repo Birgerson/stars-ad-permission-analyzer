@@ -7,6 +7,7 @@ pub mod enumerate;
 pub mod ldap_client;
 #[cfg(windows)]
 pub mod local_groups;
+pub mod principal;
 pub mod resolver;
 #[cfg(windows)]
 pub mod sam;
@@ -17,6 +18,15 @@ pub use config::{LdapConfig, TlsMode};
 pub use enumerate::{enumerate_all, IdentitySnapshot};
 #[cfg(windows)]
 pub use local_groups::{format_account_for_local_groups, resolve_local_group_sids};
+#[cfg(not(windows))]
+pub use principal::NoLsaBackend;
+#[cfg(windows)]
+pub use principal::WindowsLsaBackend;
+pub use principal::{
+    DisabledStatus, EngineFlags, GroupResolutionStatus, IdentityBackend, IdentityScopeStatus,
+    LdapIdentityBackend, LsaAccountInfo, LsaBackend, PrincipalInput, PrincipalResolution,
+    PrincipalResolver,
+};
 pub use resolver::LdapResolver;
 #[cfg(windows)]
 pub use sam::{

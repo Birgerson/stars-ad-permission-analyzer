@@ -158,20 +158,32 @@ Funktionen sind dauerhaft kein Teil des Produkts:
 
 ### 2. Multi-Domain-Forest / Trusted Domains
 
-- **Wann:** Identity wird per `DOMAIN\user` oder UPN aufgelöst, das
-  konfigurierte LDAP-`base_dn` zeigt aber nur auf eine einzelne Domain
-  (typischer Fall: forest-weiter Trust).
-- **Was passiert:** LSA löst die SID korrekt auf; LDAP findet das
-  Objekt nicht — Stars fällt jetzt auf eine **LSA-only-Identity**
-  zurück (Name + Domain aus LSA, keine `userAccountControl`-Information).
-- **Folge:** Gruppenrekursion läuft nur in der konfigurierten
-  Domain — Cross-Domain-Mitgliedschaften des Trust-Partners können
-  fehlen. `disabled` ist nicht bekannt.
+- **Wann:** Identity gehört zu einer Domain, die das konfigurierte
+  LDAP-`base_dn` nicht überstreicht (typischer Fall: forest-weiter
+  Trust, oder GUI-Identity-Picker hat in einer Trust-Domain gesucht).
+- **Was passiert (seit v1.5.0):** **Alle** Eingabeformen — `DOMAIN\user`,
+  UPN (außer s. u.), direkte SID und GUI Name → SID — laufen durch
+  dieselbe zentrale Principal-Pipeline (`ad_resolver::principal`).
+  Bei LDAP-Miss + LSA-Hit baut Stars eine LSA-only-Identity mit
+  Name + Domain und kennzeichnet das Ergebnis als
+  `IdentityScopeStatus::OutsideConfiguredLdapBase`.
+- **Folge:** Gruppenrekursion läuft nur in der konfigurierten Domain —
+  Cross-Domain-Mitgliedschaften des Trust-Partners können fehlen.
+  `disabled` ist nicht bekannt.
 - **Wie sichtbar:** Marker `IdentityNotInConfiguredLdapBase` (medium,
-  `incomplete = true`) **und** `IdentityDisabledStatusUnknown` (info).
+  `incomplete = true`) **und** `IdentityDisabledStatusUnknown` (info)
+  an jedem Befund — egal über welche UI-/CLI-Eingabeform der User
+  reinkam.
+- **UPN ist Sonderfall:** UPN-Suche kennt keinen LSA-Crosscheck (LSA
+  kann UPN nicht reverse-lookupen). Wenn die UPN-Suche im
+  konfigurierten `base_dn` keinen Treffer findet, liefert Stars einen
+  **expliziten Fehler** mit dem Hinweis, gegen den Global Catalog zu
+  binden (`port 3268`) oder die Eingabeform `DOMAIN\user` / direkte SID
+  zu verwenden. Kein stiller Fallback. Siehe ADR 0036.
 - **Lösung (manuell):** Zweite Stars-Analyse mit dem `base_dn` der
   Partner-Domain laufen lassen, oder gegen den Global Catalog binden
-  (`gc://…:3268/…`). Siehe ADR 0034.
+  (`gc://…:3268/…`). Siehe ADR 0034 (initialer Fix, nur `DOMAIN\user`)
+  und ADR 0036 (Generalisierung auf alle Eingabeformen).
 
 ### 3. Zugriff verweigert während des Scans
 
@@ -336,6 +348,13 @@ Ein typischer EffectivePermission-Eintrag enthält:
 - ADR 0032 — Identity-Input-Dispatcher und LDAP-Timeouts.
 - ADR 0033 — Sichtbare Diagnostik für SAM-Fallback und deaktivierte
   Identitäten.
-- ADR 0034 — Multi-Domain-LSA-Fallback für Identitätsauflösung.
+- ADR 0034 — Multi-Domain-LSA-Fallback für Identitätsauflösung
+  (initialer Fix, nur `DOMAIN\user`).
 - ADR 0035 — SAM-Pfad bestätigt `disabled` per `NetUserGetInfo`.
+- ADR 0036 — Einheitliche Principal-Resolution-Pipeline (alle
+  Eingabeformen — `DOMAIN\user`, UPN, plain SAM, direkte SID, GUI
+  Name → SID — laufen seit v1.5.0 durch dieselbe Pipeline).
+- ADR 0037 — Validierte Wrapper konsequent propagieren.
+- ADR 0038 — Share-DACL-Trustees im Scan-Output (NTFS + Share in der
+  pfadzentrischen Trustee-Tabelle).
 - [Audit-Kriterien](audit-kriterien.md) — Was Stars fachlich abdeckt.

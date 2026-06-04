@@ -1,16 +1,21 @@
 mod output;
 
+#[cfg(not(windows))]
+use ad_resolver::NoLsaBackend;
+#[cfg(windows)]
+use ad_resolver::WindowsLsaBackend;
 use ad_resolver::{
-    format_account_for_local_groups, resolve_local_group_sids, LdapConfig, LdapResolver,
+    format_account_for_local_groups, principal::PrincipalInput, resolve_local_group_sids,
+    DisabledStatus, GroupResolutionStatus, IdentityScopeStatus, LdapConfig, LdapIdentityBackend,
+    LdapResolver, PrincipalResolution, PrincipalResolver,
 };
+#[cfg(not(windows))]
+use adpa_core::model::{Identity, IdentityKind};
 use adpa_core::{
-    model::{
-        AccessContext, EffectivePermission, GroupMembership, Identity, IdentityKind,
-        NormalizedPath, RiskFinding, ScanError, ScanRun, Sid,
-    },
+    model::{AccessContext, EffectivePermission, NormalizedPath, RiskFinding, ScanError, ScanRun},
     traits::{
-        AnalysisResult, ExportTarget, Exporter, IdentityResolver, PermissionEvaluationInput,
-        PermissionEvaluator, RiskContext,
+        AnalysisResult, ExportTarget, Exporter, PermissionEvaluationInput, PermissionEvaluator,
+        RiskContext,
     },
 };
 use chrono::Utc;
@@ -216,59 +221,77 @@ async fn main() -> anyhow::Result<()> {
 // Shared identity resolution
 // ---------------------------------------------------------------------------
 
+/// CLI-lokales Bündel aus [`PrincipalResolution`] und dem Flag
+/// `ad_connected` (LDAP-Pfad ja/nein). `ad_connected = false` heißt
+/// SAM-only und ist beibehalten, weil einige UI-/Output-Texte davon
+/// abhängen. Review 2026-06-04 Runde 3 Finding 1: die zentrale Logik
+/// liegt jetzt in `PrincipalResolution`, nicht mehr in einer
+/// zusammengeschusterten Tupel-Struktur.
+/// CLI-local bundle: [`PrincipalResolution`] + the `ad_connected`
+/// flag.
 struct ResolvedIdentity {
-    identity: Identity,
-    memberships: Vec<GroupMembership>,
+    resolution: PrincipalResolution,
     ad_connected: bool,
-    /// LSA hat einen User aufgeloest, dessen SID die konfigurierte
-    /// LDAP-`base_dn` aber nicht indexiert. Aufrufer reichen das an
-    /// `PermissionEvaluationInput::identity_not_in_configured_ldap_base`
-    /// durch — die Engine produziert dann einen entsprechenden
-    /// `PermissionDiagnostic`. Schliesst Review 2026-06-04 Runde 2
-    /// Finding 1 (Multi-Domain LSA-Fallback).
-    /// LSA resolved a user but the configured LDAP `base_dn` does not
-    /// index that SID. Forwarded into
-    /// `PermissionEvaluationInput::identity_not_in_configured_ldap_base`.
-    identity_not_in_configured_ldap_base: bool,
-    /// Der `disabled`-Status der Identity konnte nicht zuverlaessig
-    /// bestimmt werden (z. B. SAM-/LSA-Pfad ohne `NetUserGetInfo`).
-    /// Aufrufer reichen das an
-    /// `PermissionEvaluationInput::identity_disabled_status_unknown`
-    /// durch. Schliesst Review 2026-06-04 Runde 2 Finding 5.
-    /// The identity's `disabled` flag could not be reliably determined.
-    identity_disabled_status_unknown: bool,
 }
 
-/// Validiert optionale Verbindungs-Eingaben zentral, bevor sie an LDAP- oder
-/// NetAPI-Aufrufe übergeben werden.
-/// Centrally validates optional connection inputs before they are passed to
-/// LDAP or NetAPI calls.
+/// Normalisierte Verbindungs-Eingaben — getrimmte und validierte
+/// Werte, die direkt an LDAP- bzw. NetAPI-Aufrufe weitergegeben werden
+/// dürfen. Schließt Review 2026-06-04 Runde 3 Finding 2: vorher gaben
+/// CLI und GUI nach `validate_*`-Aufrufen weiterhin den (un-getrimmten)
+/// Rohstring weiter — die Validierung hatte nur Konsultations-, nicht
+/// Übergabe-Charakter.
+/// Normalized connection inputs — trimmed and validated, ready for
+/// LDAP / NetAPI consumption.
+struct NormalizedConnectionInputs {
+    server: Option<String>,
+    base_dn: Option<String>,
+    bind_dn: Option<String>,
+    smb_server: Option<String>,
+    share_name: Option<String>,
+}
+
+/// Validiert optionale Verbindungs-Eingaben und liefert die getrimmten
+/// Normalformen zurück. Aufrufer dürfen die ursprünglichen Rohstrings
+/// danach nicht mehr verwenden.
+/// Centrally validates optional connection inputs and returns trimmed
+/// normalized values.
 fn validate_connection_inputs(
     server: Option<&str>,
     base_dn: Option<&str>,
     bind_dn: Option<&str>,
     smb_server: Option<&str>,
     share_name: Option<&str>,
-) -> anyhow::Result<()> {
-    if let Some(s) = server {
-        validate_ldap_endpoint(s).map_err(|e| anyhow::anyhow!("Invalid LDAP server: {e}"))?;
-    }
-    if let Some(d) = base_dn {
-        validate_dn(d).map_err(|e| anyhow::anyhow!("Invalid base DN: {e}"))?;
-    }
-    if let Some(d) = bind_dn {
-        validate_dn(d).map_err(|e| anyhow::anyhow!("Invalid bind DN: {e}"))?;
-    }
+) -> anyhow::Result<NormalizedConnectionInputs> {
+    let server = match server {
+        Some(s) => Some(
+            validate_ldap_endpoint(s)
+                .map_err(|e| anyhow::anyhow!("Invalid LDAP server: {e}"))?
+                .0,
+        ),
+        None => None,
+    };
+    let base_dn = match base_dn {
+        Some(d) => Some(
+            validate_dn(d)
+                .map_err(|e| anyhow::anyhow!("Invalid base DN: {e}"))?
+                .0,
+        ),
+        None => None,
+    };
+    let bind_dn = match bind_dn {
+        Some(d) => Some(
+            validate_dn(d)
+                .map_err(|e| anyhow::anyhow!("Invalid bind DN: {e}"))?
+                .0,
+        ),
+        None => None,
+    };
     // Review 2026-06-04 Runde 2, Finding 2: --smb-server und --share-name
     // sind nur als Paar sinnvoll. Halb-Sets verunreinigten sonst die
     // lokale-Gruppen-Auflösung mit Token-SIDs vom Remote-Server, ohne
     // dass eine Share-Maske angewendet werden konnte.
-    // Review 2026-06-04 round 2, finding 2: --smb-server and --share-name
-    // are only meaningful as a pair. Half-sets used to pollute the local
-    // group resolution with remote-server token SIDs without any share
-    // mask being applied.
-    let smb_server_set = smb_server.is_some_and(|s| !s.is_empty());
-    let share_name_set = share_name.is_some_and(|s| !s.is_empty());
+    let smb_server_set = smb_server.is_some_and(|s| !s.trim().is_empty());
+    let share_name_set = share_name.is_some_and(|s| !s.trim().is_empty());
     match (smb_server_set, share_name_set) {
         (true, false) => {
             return Err(anyhow::anyhow!(
@@ -282,13 +305,29 @@ fn validate_connection_inputs(
         }
         _ => {}
     }
-    if let Some(s) = smb_server {
-        validate_smb_server(s).map_err(|e| anyhow::anyhow!("Invalid SMB server: {e}"))?;
-    }
-    if let Some(s) = share_name {
-        validate_share_name(s).map_err(|e| anyhow::anyhow!("Invalid share name: {e}"))?;
-    }
-    Ok(())
+    let smb_server = match smb_server {
+        Some(s) if !s.trim().is_empty() => Some(
+            validate_smb_server(s)
+                .map_err(|e| anyhow::anyhow!("Invalid SMB server: {e}"))?
+                .0,
+        ),
+        _ => None,
+    };
+    let share_name = match share_name {
+        Some(s) if !s.trim().is_empty() => Some(
+            validate_share_name(s)
+                .map_err(|e| anyhow::anyhow!("Invalid share name: {e}"))?
+                .0,
+        ),
+        _ => None,
+    };
+    Ok(NormalizedConnectionInputs {
+        server,
+        base_dn,
+        bind_dn,
+        smb_server,
+        share_name,
+    })
 }
 
 async fn resolve_identity(
@@ -338,64 +377,114 @@ async fn resolve_identity(
         } else {
             LdapConfig::new(&server, &base, &bind, &password)
         };
-        let resolver = LdapResolver::new(config);
+        let ldap_resolver = std::sync::Arc::new(LdapResolver::new(config));
+        let backend = LdapIdentityBackend::new(ldap_resolver);
 
-        let (sid, identity, not_in_base, disabled_unknown) = if user.starts_with("S-1-") {
-            let sid = Sid(user.to_owned());
-            let identity = resolver
-                .resolve_identity(&sid)
-                .await
-                .map_err(|e| anyhow::anyhow!("Identity resolution failed: {e}"))?;
-            (sid, identity, false, false)
-        } else {
-            let lookup = resolver
-                .lookup_by_samaccount(user)
-                .await
-                .map_err(|e| anyhow::anyhow!("sAMAccountName lookup failed: {e}"))?
-                .ok_or_else(|| anyhow::anyhow!("User '{}' not found in AD", user))?;
-            (
-                lookup.sid,
-                lookup.identity,
-                lookup.not_in_configured_ldap_base,
-                lookup.disabled_status_unknown,
-            )
-        };
+        // Zentrale Pipeline statt vier separater Lookup-Pfade — schliesst
+        // Review 2026-06-04 Runde 3 Finding 1.
+        // Central pipeline replacing four separate lookup paths.
+        #[cfg(windows)]
+        let principal_resolver = PrincipalResolver::new(backend, Some(WindowsLsaBackend));
+        #[cfg(not(windows))]
+        let principal_resolver: PrincipalResolver<_, NoLsaBackend> =
+            PrincipalResolver::new(backend, None);
 
-        let memberships = resolver
-            .resolve_group_memberships(&sid)
+        let resolution = principal_resolver
+            .resolve(PrincipalInput::Auto(user.to_owned()))
             .await
-            .map_err(|e| anyhow::anyhow!("Group resolution failed: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("Identity resolution failed: {e}"))?;
 
         Ok(ResolvedIdentity {
-            identity,
-            memberships,
+            resolution,
             ad_connected: true,
-            identity_not_in_configured_ldap_base: not_in_base,
-            identity_disabled_status_unknown: disabled_unknown,
         })
     } else {
-        if !user.starts_with("S-1-") {
-            return Err(anyhow::anyhow!(
-                "Without --server, --user must be a SID (S-1-5-...). \
-                 Use --server to resolve sAMAccountNames."
-            ));
+        let trimmed = user.trim();
+        // SAM-only-Pfad: weiterhin der Workhorse fuer das DC-Szenario
+        // ohne explizite LDAP-Bindung. Liefert jetzt aber eine
+        // `PrincipalResolution` mit korrekt klassifiziertem ScopeStatus
+        // und GroupResolutionStatus, statt einer Sondertupel-Struktur.
+        // SAM-only path: still the workhorse for DC-without-LDAP usage.
+        #[cfg(windows)]
+        {
+            let sid = if trimmed.starts_with("S-1-") {
+                adpa_core::model::Sid(trimmed.to_owned())
+            } else {
+                ad_resolver::lookup_sid_for_account(None, trimmed)
+                    .map_err(|e| anyhow::anyhow!("LSA name lookup failed: {e}"))?
+            };
+            let sam_res = ad_resolver::resolve_identity_via_sam(&sid.0)
+                .map_err(|e| anyhow::anyhow!("SAM resolution failed: {e}"))?;
+            let disabled_status = if sam_res.disabled_known {
+                DisabledStatus::Known(sam_res.identity.disabled)
+            } else {
+                DisabledStatus::Unknown
+            };
+            let mut diagnostics: Vec<adpa_core::model::PermissionDiagnostic> = Vec::new();
+            if matches!(disabled_status, DisabledStatus::Unknown) {
+                diagnostics
+                    .push(adpa_core::model::PermissionDiagnostic::IdentityDisabledStatusUnknown);
+            } else if sam_res.identity.disabled {
+                diagnostics.push(adpa_core::model::PermissionDiagnostic::IdentityDisabled);
+            }
+            let resolution = PrincipalResolution {
+                sid: sam_res.identity.sid.clone(),
+                identity: sam_res.identity,
+                memberships: sam_res.memberships,
+                // SAM-only auf einem DC = lokale Domain → "Inside" im
+                // Sinne des konfigurierten Scopes ist nicht definiert,
+                // da kein LDAP-Scope existiert. Wir verwenden Inside
+                // (keine zusaetzliche Cross-Domain-Warnung), da die
+                // SAM-Aufloesung domaenenkohaerent ist. Die
+                // Domain-Gruppen-Rekursion ist trotzdem nur flach —
+                // GroupResolutionStatus::SamFlat treibt den richtigen
+                // Marker durch die Engine.
+                // SAM-only on a DC = local domain → Inside; the
+                // flat-recursion incompleteness is signalled separately
+                // via SamFlat → DomainGroupRecursionIncomplete.
+                scope_status: IdentityScopeStatus::InsideConfiguredLdapBase,
+                group_resolution_status: GroupResolutionStatus::SamFlat,
+                disabled_status,
+                diagnostics,
+            };
+            Ok(ResolvedIdentity {
+                resolution,
+                ad_connected: false,
+            })
         }
-        let sid = Sid(user.to_owned());
-        let identity = Identity {
-            sid: sid.clone(),
-            name: Some(user.to_owned()),
-            domain: None,
-            kind: IdentityKind::Unknown,
-            disabled: false,
-            user_principal_name: None,
-        };
-        Ok(ResolvedIdentity {
-            identity,
-            memberships: vec![],
-            ad_connected: false,
-            identity_not_in_configured_ldap_base: false,
-            identity_disabled_status_unknown: true,
-        })
+        #[cfg(not(windows))]
+        {
+            if !trimmed.starts_with("S-1-") {
+                return Err(anyhow::anyhow!(
+                    "Without --server, --user must be a SID (S-1-5-...). \
+                     Use --server to resolve sAMAccountNames."
+                ));
+            }
+            let sid = adpa_core::model::Sid(trimmed.to_owned());
+            let identity = Identity {
+                sid: sid.clone(),
+                name: Some(trimmed.to_owned()),
+                domain: None,
+                kind: IdentityKind::Unknown,
+                disabled: false,
+                user_principal_name: None,
+            };
+            let resolution = PrincipalResolution {
+                sid,
+                identity,
+                memberships: vec![],
+                scope_status: IdentityScopeStatus::OrphanedSid,
+                group_resolution_status: GroupResolutionStatus::NotAttempted,
+                disabled_status: DisabledStatus::Unknown,
+                diagnostics: vec![
+                    adpa_core::model::PermissionDiagnostic::IdentityDisabledStatusUnknown,
+                ],
+            };
+            Ok(ResolvedIdentity {
+                resolution,
+                ad_connected: false,
+            })
+        }
     }
 }
 
@@ -440,21 +529,31 @@ async fn run_analyze(
     let path = validate_path(&path)
         .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
         .0;
-    if user.starts_with("S-1-") {
-        validate_sid(&user).map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?;
+    // Review 2026-06-04 Runde 3 Finding 2: getrimmte und validierte
+    // User-Eingabe weiterreichen, nicht den Rohwert.
+    let user = if user.starts_with("S-1-") {
+        validate_sid(&user)
+            .map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?
+            .0
     } else {
         // Konsistente Vorab-Validierung wie der GUI-Identitäts-Picker.
         // Consistent up-front validation like the GUI identity picker.
         validate_identity_query(&user)
-            .map_err(|e| anyhow::anyhow!("Invalid user / sAMAccountName: {e}"))?;
-    }
-    validate_connection_inputs(
+            .map_err(|e| anyhow::anyhow!("Invalid user / sAMAccountName: {e}"))?
+            .0
+    };
+    let conn = validate_connection_inputs(
         server.as_deref(),
         base_dn.as_deref(),
         bind_dn.as_deref(),
         smb_server.as_deref(),
         share_name.as_deref(),
     )?;
+    let server = conn.server;
+    let base_dn = conn.base_dn;
+    let bind_dn = conn.bind_dn;
+    let smb_server = conn.smb_server;
+    let share_name = conn.share_name;
 
     let fso = read_fso(&path).map_err(|e| anyhow::anyhow!("Cannot read path '{}': {}", path, e))?;
 
@@ -476,8 +575,11 @@ async fn run_analyze(
     // are needed by both the share mask computation and the NTFS evaluation.
     // Order matters: without local_group_sids the share mask would ignore ACEs
     // that target local server groups.
-    let (local_group_sids, local_group_status) =
-        collect_local_group_sids_for_path(&path, smb_server.as_deref(), &resolved.identity);
+    let (local_group_sids, local_group_status) = collect_local_group_sids_for_path(
+        &path,
+        smb_server.as_deref(),
+        &resolved.resolution.identity,
+    );
 
     if let adpa_core::model::LocalGroupEvalStatus::NotAvailable(ref msg) = local_group_status {
         println!(
@@ -515,24 +617,19 @@ async fn run_analyze(
     // `DOMAIN\Name`. The engine threads it through the permission path.
     #[cfg(windows)]
     let sid_names = ad_resolver::build_sid_name_map(
-        &resolved.memberships,
+        &resolved.resolution.memberships,
         fso.dacl.iter().map(|a| a.sid.0.clone()),
     );
     #[cfg(not(windows))]
     let sid_names = std::collections::BTreeMap::new();
 
-    // Finding 6: wenn LDAP nicht angefragt wurde (`ad_connected == false`),
-    // läuft die Gruppenauflösung über SAM/LSA — verschachtelte Domain-Gruppen
-    // werden nicht rekursiv aufgelöst, die Engine pusht entsprechend einen
-    // DomainGroupRecursionIncomplete-Marker.
-    // Finding 6: when LDAP was not requested (`ad_connected == false`), the
-    // group resolution runs through SAM/LSA — nested domain groups are not
-    // resolved recursively and the engine pushes a
-    // DomainGroupRecursionIncomplete marker.
-    let sam_fallback = !resolved.ad_connected;
+    // Engine-Flags werden zentral aus dem ScopeStatus/GroupResolutionStatus
+    // abgeleitet — Single Source of Truth (Review Runde 3 Finding 1).
+    // Engine flags are derived centrally from the resolution status.
+    let engine_flags = resolved.resolution.engine_flags();
     let input = PermissionEvaluationInput {
-        identity: resolved.identity,
-        group_memberships: resolved.memberships.clone(),
+        identity: resolved.resolution.identity.clone(),
+        group_memberships: resolved.resolution.memberships.clone(),
         file_system_object: fso.clone(),
         share_status,
         local_group_sids,
@@ -540,9 +637,9 @@ async fn run_analyze(
         access_context,
         unsupported_share_ace_count,
         sid_names,
-        group_resolution_via_sam_fallback: sam_fallback,
-        identity_not_in_configured_ldap_base: resolved.identity_not_in_configured_ldap_base,
-        identity_disabled_status_unknown: resolved.identity_disabled_status_unknown,
+        group_resolution_via_sam_fallback: engine_flags.group_resolution_via_sam_fallback,
+        identity_not_in_configured_ldap_base: engine_flags.identity_not_in_configured_ldap_base,
+        identity_disabled_status_unknown: engine_flags.identity_disabled_status_unknown,
     };
     let result = DefaultPermissionEngine
         .evaluate(input)
@@ -552,7 +649,7 @@ async fn run_analyze(
         &fso,
         &user,
         &result,
-        &resolved.memberships,
+        &resolved.resolution.memberships,
         resolved.ad_connected,
     );
 
@@ -625,21 +722,29 @@ async fn run_scan(
     let max_depth = validate_optional_scan_depth(max_depth)
         .map_err(|e| anyhow::anyhow!("Invalid --max-depth: {e}"))?
         .map(|d| d.0);
-    if user.starts_with("S-1-") {
-        validate_sid(&user).map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?;
+    let user = if user.starts_with("S-1-") {
+        validate_sid(&user)
+            .map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?
+            .0
     } else {
         // Konsistente Vorab-Validierung wie der GUI-Identitäts-Picker.
         // Consistent up-front validation like the GUI identity picker.
         validate_identity_query(&user)
-            .map_err(|e| anyhow::anyhow!("Invalid user / sAMAccountName: {e}"))?;
-    }
-    validate_connection_inputs(
+            .map_err(|e| anyhow::anyhow!("Invalid user / sAMAccountName: {e}"))?
+            .0
+    };
+    let conn = validate_connection_inputs(
         server.as_deref(),
         base_dn.as_deref(),
         bind_dn.as_deref(),
         smb_server.as_deref(),
         share_name.as_deref(),
     )?;
+    let server = conn.server;
+    let base_dn = conn.base_dn;
+    let bind_dn = conn.bind_dn;
+    let smb_server = conn.smb_server;
+    let share_name = conn.share_name;
     if let Some(ref db) = db_path {
         validate_db_path(db).map_err(|e| anyhow::anyhow!("Invalid database path: {e}"))?;
     }
@@ -681,8 +786,11 @@ async fn run_scan(
     //     lokalen Gruppen-SIDs im Token, das gegen die Share-DACL evaluiert wird.
     //     Resolve local server groups before the share mask — otherwise the local
     //     group SIDs are missing from the token evaluated against the share DACL.
-    let (scan_local_group_sids, scan_local_group_status) =
-        collect_local_group_sids_for_path(&path, smb_server.as_deref(), &resolved.identity);
+    let (scan_local_group_sids, scan_local_group_status) = collect_local_group_sids_for_path(
+        &path,
+        smb_server.as_deref(),
+        &resolved.resolution.identity,
+    );
 
     if let adpa_core::model::LocalGroupEvalStatus::NotAvailable(ref msg) = scan_local_group_status {
         println!(
@@ -788,16 +896,16 @@ async fn run_scan(
                 }
             })
             .collect();
-        ad_resolver::build_sid_name_map(&resolved.memberships, trustees)
+        ad_resolver::build_sid_name_map(&resolved.resolution.memberships, trustees)
     };
     #[cfg(not(windows))]
     let scan_sid_names = std::collections::BTreeMap::new();
 
-    let scan_sam_fallback = !resolved.ad_connected;
+    let scan_engine_flags = resolved.resolution.engine_flags();
     for fso in &walk.objects {
         let input = PermissionEvaluationInput {
-            identity: resolved.identity.clone(),
-            group_memberships: resolved.memberships.clone(),
+            identity: resolved.resolution.identity.clone(),
+            group_memberships: resolved.resolution.memberships.clone(),
             file_system_object: fso.clone(),
             share_status: scan_share_status.clone(),
             local_group_sids: scan_local_group_sids.clone(),
@@ -805,9 +913,10 @@ async fn run_scan(
             access_context: scan_access_context,
             unsupported_share_ace_count: scan_unsupported_share_ace_count,
             sid_names: scan_sid_names.clone(),
-            group_resolution_via_sam_fallback: scan_sam_fallback,
-            identity_not_in_configured_ldap_base: resolved.identity_not_in_configured_ldap_base,
-            identity_disabled_status_unknown: resolved.identity_disabled_status_unknown,
+            group_resolution_via_sam_fallback: scan_engine_flags.group_resolution_via_sam_fallback,
+            identity_not_in_configured_ldap_base: scan_engine_flags
+                .identity_not_in_configured_ldap_base,
+            identity_disabled_status_unknown: scan_engine_flags.identity_disabled_status_unknown,
         };
         let result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
             anyhow::anyhow!("Permission evaluation failed for '{}': {e}", fso.path.0)
@@ -981,8 +1090,8 @@ fn resolve_scan_share_status(
             // `Deny NETWORK` ACEs on the share are ignored (follow-up
             // review finding 1).
             let user_sids = build_token_sids_with_context(
-                &resolved.identity.sid.0,
-                &resolved.memberships,
+                &resolved.resolution.identity.sid.0,
+                &resolved.resolution.memberships,
                 local_group_sids,
                 access_context,
             );
@@ -1166,11 +1275,13 @@ fn print_scan_header(
     println!("  AD Permission Analyzer  \u{00B7}  Tree Scan");
     println!("{}", heavy());
     let user_name = resolved
+        .resolution
         .identity
         .name
         .as_deref()
-        .unwrap_or(&resolved.identity.sid.0);
+        .unwrap_or(&resolved.resolution.identity.sid.0);
     let domain = resolved
+        .resolution
         .identity
         .domain
         .as_ref()
@@ -1178,7 +1289,7 @@ fn print_scan_header(
         .unwrap_or_default();
     println!(
         "  Identity  : {domain}{user_name}  ({})",
-        resolved.identity.sid.0
+        resolved.resolution.identity.sid.0
     );
     println!("  Root      : {root}");
     println!(

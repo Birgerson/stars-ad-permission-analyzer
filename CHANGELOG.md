@@ -12,6 +12,81 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.0] — 2026-06-04
+
+**Minor-Release.** Schließt alle drei Findings aus der dritten Runde
+des ChatGPT-Code-Reviews 2026-06-04 — eines High, zwei Medium. Bricht
+keine öffentliche API; intern verschmelzen `LookupResult`,
+`SamResolution`, `ResolvedIdentity` und `IdentityResolution` zu einem
+gemeinsamen `PrincipalResolution`-Modell.
+
+### Behoben
+- **High — Multi-Domain-/Trust-Fallback griff nur für `DOMAIN\user`.**
+  Der in v1.4.1 eingeführte LSA-only-Fallback war eine Punktlösung im
+  `lookup_via_lsa`-Pfad. GUI Name → SID, CLI direkte SID und UPN
+  liefen weiterhin an der Logik vorbei: ein realer Trust-Principal
+  wurde je nach Eingabeform mal korrekt als
+  `IdentityNotInConfiguredLdapBase` markiert, mal still als
+  `IdentityKind::Orphaned` klassifiziert. Plus: ein
+  Cache-Vergiftungsbug in `resolve_identity_internal` cached
+  `Orphaned` schon bevor `lookup_via_lsa` eine LSA-only-Identity bauen
+  konnte. Beide Defekte sind jetzt geschlossen über eine **zentrale
+  Principal-Pipeline** im neuen `ad_resolver::principal`-Modul mit den
+  Backend-Traits `IdentityBackend` / `LsaBackend` und den
+  Status-Enums `IdentityScopeStatus` / `GroupResolutionStatus` /
+  `DisabledStatus`. CLI und GUI nutzen dieselbe Pipeline; alle vier
+  Eingabeformen führen durch denselben LDAP-/LSA-Crosscheck. UPN-Miss
+  liefert einen expliziten Fehler mit GC-Hinweis, statt einer stillen
+  Misklassifikation. ADR 0036 (ChatGPT-Code-Review 2026-06-04 Runde 3,
+  **Finding 1**).
+- **Medium — Validierte Wrapper wurden an mehreren API-Grenzen
+  verworfen.** `validate_sid`, `validate_ldap_endpoint`, `validate_dn`,
+  `validate_smb_server`, `validate_share_name` lieferten getrimmte
+  Werte; CLI/GUI prüften und verbrauchten aber teilweise weiter den
+  Rohstring. `validate_connection_inputs` liefert jetzt eine
+  `NormalizedConnectionInputs`-Struktur mit den getrimmten Feldern;
+  alle SID- und Identity-Eingaben in CLI/GUI verwenden ab der
+  Validierung den Wrapper-Wert. ADR 0037 (ChatGPT-Code-Review
+  2026-06-04 Runde 3, **Finding 2**).
+- **Medium — Scan-Trustee-Ansicht zeigte nur NTFS-Trustees.** Der
+  Scan-Pfad rief `build_path_trustees(&fso, None, None)` und liess die
+  Share-Trustees komplett weg, obwohl die HTML-Tabelle als
+  „who can access this path at all" beschriftet ist und eine eigene
+  Share-Spalte besitzt. Neuer `ShareTrusteeOverlay`-Helper liest die
+  Share-DACL einmal pro Share und hängt sie als Overlay an jeden Pfad
+  unter diesem Share an (`build_path_trustees_with_share`).
+  Lese-Fehler bleiben als sichtbare Pseudo-Zeile drin — keine stillen
+  Skips. ADR 0038 (ChatGPT-Code-Review 2026-06-04 Runde 3,
+  **Finding 3**).
+
+### Hinzugefügt
+- **`ad_resolver::principal`-Modul** mit `PrincipalResolver`,
+  `PrincipalInput`, `PrincipalResolution`, `IdentityScopeStatus`,
+  `GroupResolutionStatus`, `DisabledStatus`, `EngineFlags`,
+  Backend-Traits `IdentityBackend` / `LsaBackend`, Production-Adapter
+  `LdapIdentityBackend` / `WindowsLsaBackend` / `NoLsaBackend`.
+- **11-Fälle-Test-Matrix** im `principal`-Modul mit In-Memory-LDAP-
+  und LSA-Fakes (`FakeLdapBackend`, `FakeLsaBackend`). Deckt alle
+  sechs in der Review geforderten Eingabe/Output-Kombinationen ab
+  plus disabled-Account-, no-LSA-, LDAP-Error-, ambiguous-SAM- und
+  Auto-Dispatcher-Sonderfälle.
+- **ADR 0036** (Unified Principal-Resolution-Pipeline), **ADR 0037**
+  (Validated wrappers propagated), **ADR 0038** (Share-Trustees im
+  Scan-Output).
+- **docs/features-and-limitations.md** Abschnitt „Multi-Domain-Forest
+  / Trusted Domains" aktualisiert: gilt jetzt für **alle**
+  Eingabeformen, plus UPN-Sonderfall mit GC-Workaround-Hinweis.
+
+### Entfernt
+- `LookupResult`-Struct und die Public-Methode
+  `LdapResolver::lookup_by_samaccount` (intern durch `PrincipalResolver`
+  ersetzt; externe Konsumenten gibt es nicht).
+- Private Helfer `lookup_via_lsa`, `lookup_via_upn`,
+  `lookup_via_samaccount_strict`, `build_identity_from_lsa` —
+  konsolidiert im neuen `principal`-Modul.
+
+---
+
 ## [1.4.1] — 2026-06-04
 
 **Patch-Release.** Schließt sechs Follow-up-Findings aus der zweiten
