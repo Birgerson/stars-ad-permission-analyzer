@@ -1110,12 +1110,24 @@ async fn handle_search(
 ) -> Result<Vec<IdentitySearchResult>, String> {
     use adpa_core::model::IdentityKind;
 
-    validate_identity_query(query).map_err(|e| format!("Invalid search query: {e}"))?;
-    validate_ldap_endpoint(&ldap.server).map_err(|e| format!("Invalid LDAP server: {e}"))?;
-    validate_dn(&ldap.base_dn).map_err(|e| format!("Invalid base DN: {e}"))?;
-    validate_dn(&ldap.bind_dn).map_err(|e| format!("Invalid bind DN: {e}"))?;
+    // Review 2026-06-04 Runde 3 Finding 2: getrimmte Wrapperwerte
+    // konsequent durchreichen — nicht die Roh-`ldap`-Felder.
+    // Review round 3 finding 2: forward the trimmed wrapper values, not
+    // the raw `ldap` fields.
+    let query = validate_identity_query(query)
+        .map_err(|e| format!("Invalid search query: {e}"))?
+        .0;
+    let server = validate_ldap_endpoint(&ldap.server)
+        .map_err(|e| format!("Invalid LDAP server: {e}"))?
+        .0;
+    let base_dn = validate_dn(&ldap.base_dn)
+        .map_err(|e| format!("Invalid base DN: {e}"))?
+        .0;
+    let bind_dn = validate_dn(&ldap.bind_dn)
+        .map_err(|e| format!("Invalid bind DN: {e}"))?
+        .0;
 
-    let mut config = LdapConfig::new(&ldap.server, &ldap.base_dn, &ldap.bind_dn, &ldap.password);
+    let mut config = LdapConfig::new(&server, &base_dn, &bind_dn, &ldap.password);
     if ldap.insecure {
         config.tls_mode = TlsMode::Insecure;
         config.port = 389;
@@ -1139,7 +1151,7 @@ async fn handle_search(
         ldap_client::ldap_timeout(&config),
         async {
             let mut conn = ldap_client::connect(&config).await?;
-            let entries = ldap_client::search_by_query(&mut conn, &ldap.base_dn, query).await;
+            let entries = ldap_client::search_by_query(&mut conn, &base_dn, &query).await;
             ldap_client::disconnect(conn).await;
             entries
         },
@@ -1416,14 +1428,31 @@ fn analyze_trustees(
         .map_err(|e| format!("Invalid path: {e}"))?
         .0;
     let path = normalized_path.as_str();
-    if let Some(server) = smb_server {
-        validate_smb_server(server).map_err(|e| format!("Invalid SMB server: {e}"))?;
-    }
-    if let Some(name) = share_name {
-        validate_share_name(name).map_err(|e| format!("Invalid share name: {e}"))?;
-    }
+    // Review 2026-06-04 Runde 3 Finding 2: getrimmte Werte
+    // weiterreichen, nicht den Rohstring.
+    // Review round 3 finding 2: forward the trimmed wrapper values.
+    let smb_server = match smb_server {
+        Some(s) => Some(
+            validate_smb_server(s)
+                .map_err(|e| format!("Invalid SMB server: {e}"))?
+                .0,
+        ),
+        None => None,
+    };
+    let share_name = match share_name {
+        Some(n) => Some(
+            validate_share_name(n)
+                .map_err(|e| format!("Invalid share name: {e}"))?
+                .0,
+        ),
+        None => None,
+    };
     let fso = read_fso(path).map_err(|e| format!("Failed to read path: {e}"))?;
-    Ok(build_trustee_rows(&fso, smb_server, share_name))
+    Ok(build_trustee_rows(
+        &fso,
+        smb_server.as_deref(),
+        share_name.as_deref(),
+    ))
 }
 
 /// Vorgefertigte Share-Schicht für die Pfad-Trustee-Liste. Liefert
@@ -2036,6 +2065,101 @@ mod tests {
         assert!(
             persisted.is_empty(),
             "Ohne Walk-Fehler und ohne Abbruch dürfen keine Einträge in scan_errors stehen"
+        );
+    }
+
+    /// Review 2026-06-04 Runde 3 Finding 3: `build_path_trustees_with_share`
+    /// muss den vorab gelesenen Share-Overlay an die NTFS-Liste anhaengen
+    /// und beide Kategorien (`Ntfs`, `Share`) im Ergebnis ausweisen.
+    /// Verhindert den Regress, dass der Scan-Pfad Share-Trustees still
+    /// weglaesst.
+    /// Review round 3 finding 3: the precomputed share overlay must be
+    /// attached to the NTFS list and both categories must show up.
+    #[test]
+    fn build_path_trustees_with_share_includes_overlay() {
+        use adpa_core::model::{
+            AccessMask, AceEntry, AceKind, FileSystemObject, NormalizedPath, PathTrustee, Sid,
+            TrusteeCategory,
+        };
+        let fso = FileSystemObject {
+            path: NormalizedPath(r"C:\share\folder".to_owned()),
+            is_directory: true,
+            owner_sid: None,
+            dacl: vec![AceEntry {
+                sid: Sid("S-1-5-21-1-1-1-1001".to_owned()),
+                kind: AceKind::Allow,
+                mask: AccessMask(0x001F01FF),
+                inherited: false,
+                inheritance_flags: 0x03,
+                propagation_flags: 0,
+            }],
+            inheritance_disabled: false,
+            is_reparse_point: false,
+            unsupported_aces: vec![],
+            null_dacl: false,
+        };
+        let overlay = ShareTrusteeOverlay {
+            trustees: vec![PathTrustee {
+                sid: Sid("S-1-5-32-545".to_owned()),
+                display_name: Some("BUILTIN\\Users".to_owned()),
+                kind: AceKind::Allow,
+                mask: AccessMask(0x001200A9),
+                inherited: false,
+                inheritance_flags: 0,
+                propagation_flags: 0,
+                category: TrusteeCategory::Share,
+            }],
+        };
+
+        let combined = build_path_trustees_with_share(&fso, Some(&overlay));
+
+        let ntfs_count = combined
+            .iter()
+            .filter(|t| matches!(t.category, TrusteeCategory::Ntfs))
+            .count();
+        let share_count = combined
+            .iter()
+            .filter(|t| matches!(t.category, TrusteeCategory::Share))
+            .count();
+        assert_eq!(ntfs_count, 1, "must contain the NTFS trustee");
+        assert_eq!(
+            share_count, 1,
+            "must contain the share overlay trustee — closing review round 3 finding 3"
+        );
+    }
+
+    /// Ohne Overlay (kein SMB-Kontext) liefert die With-Share-Variante
+    /// nur NTFS-Trustees — identisches Verhalten wie vorher.
+    /// Without an overlay (no SMB context) the with-share variant
+    /// returns only NTFS trustees — same as before.
+    #[test]
+    fn build_path_trustees_with_share_falls_back_to_ntfs_only_without_overlay() {
+        use adpa_core::model::{
+            AccessMask, AceEntry, AceKind, FileSystemObject, NormalizedPath, Sid, TrusteeCategory,
+        };
+        let fso = FileSystemObject {
+            path: NormalizedPath(r"C:\local\folder".to_owned()),
+            is_directory: true,
+            owner_sid: None,
+            dacl: vec![AceEntry {
+                sid: Sid("S-1-5-21-1-1-1-1001".to_owned()),
+                kind: AceKind::Allow,
+                mask: AccessMask(0x001F01FF),
+                inherited: false,
+                inheritance_flags: 0x03,
+                propagation_flags: 0,
+            }],
+            inheritance_disabled: false,
+            is_reparse_point: false,
+            unsupported_aces: vec![],
+            null_dacl: false,
+        };
+        let combined = build_path_trustees_with_share(&fso, None);
+        assert!(
+            combined
+                .iter()
+                .all(|t| matches!(t.category, TrusteeCategory::Ntfs)),
+            "no overlay → only NTFS trustees"
         );
     }
 }

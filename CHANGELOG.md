@@ -12,6 +12,44 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.1] — 2026-06-04
+
+**Patch-Release.** Schließt zwei in v1.5.0 übersehene Wrapper-Stellen
+(Finding-2-Regress) und ergänzt die in den Test Gaps der Review
+geforderten Regressionstests, die v1.5.0 nur indirekt deckte.
+
+### Behoben
+- **`handle_search` (GUI-Identity-Picker) verwarf die getrimmten
+  Wrapper-Werte.** Die Validierungen liefen, aber `LdapConfig::new`
+  und `search_by_query` bekamen weiterhin die Rohwerte aus
+  `ldap.server` / `ldap.base_dn` / `ldap.bind_dn` / `query`. Whitespace
+  im Identity-Search-Feld der GUI hätte produktiv zu „User not found"
+  geführt, obwohl die Eingabe gültig war. Jetzt fließen konsistent die
+  getrimmten Werte in beide Aufrufe.
+- **`analyze_trustees` (GUI-Trustee-Ansicht) verwarf
+  `validate_smb_server` und `validate_share_name`.** Symmetrisch zum
+  obigen Befund: die Validierung lief, der Aufruf von
+  `build_trustee_rows` bekam aber den Rohstring. Jetzt durchgereicht.
+
+### Hinzugefügt
+- **Regressionstest `validate_connection_inputs_returns_trimmed_
+  normalized_values`** in der CLI: prüft explizit, dass alle fünf
+  Felder (server, base_dn, bind_dn, smb_server, share_name) getrimmt
+  und als Strings im Result auftauchen.
+- **`validate_connection_inputs_rejects_half_set_smb_pair`**: hält die
+  Paar-Pflicht aus Review Runde 2 Finding 2 als Regressionstest fest.
+- **`validate_connection_inputs_treats_empty_smb_strings_as_unset`**:
+  whitespace-only / leerer String für SMB-Felder zählt wie nicht
+  gesetzt — verhindert, dass leere UI-Felder durchschlagen.
+- **`build_path_trustees_with_share_includes_overlay`** im
+  `gui::worker`: sichert ab, dass der Scan-Pfad-Helper Share-ACEs
+  tatsächlich an die NTFS-ACEs anhängt und beide Kategorien sichtbar
+  bleiben. Direkter Regressionstest für Review Runde 3 Finding 3.
+- **`build_path_trustees_with_share_falls_back_to_ntfs_only_without_overlay`**:
+  hält das Verhalten ohne SMB-Kontext explizit fest.
+
+---
+
 ## [1.5.0] — 2026-06-04
 
 **Minor-Release.** Schließt alle drei Findings aus der dritten Runde

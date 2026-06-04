@@ -242,6 +242,7 @@ struct ResolvedIdentity {
 /// Übergabe-Charakter.
 /// Normalized connection inputs — trimmed and validated, ready for
 /// LDAP / NetAPI consumption.
+#[derive(Debug)]
 struct NormalizedConnectionInputs {
     server: Option<String>,
     base_dn: Option<String>,
@@ -1370,5 +1371,50 @@ mod tests {
     fn new_export_is_allowed_without_force() {
         let status = ExportPathStatus::New(validated());
         assert!(check_overwrite_policy(&status, false).is_ok());
+    }
+
+    /// Review 2026-06-04 Runde 3 Finding 2: `validate_connection_inputs`
+    /// muss die getrimmten Wrapperwerte zurueckgeben, nicht den Rohstring.
+    /// Vorher wurde der Rueckgabewert verworfen und CLI/GUI verarbeiteten
+    /// weiter die Roh-Strings — der Test deckt explizit das
+    /// Whitespace-Trimming an allen fuenf Eingabefeldern ab.
+    /// Review round 3 finding 2: connection-input validation must
+    /// propagate the trimmed wrapper values.
+    #[test]
+    fn validate_connection_inputs_returns_trimmed_normalized_values() {
+        let result = super::validate_connection_inputs(
+            Some("  dc.example  "),
+            Some("  DC=corp,DC=local  "),
+            Some("  CN=admin,DC=corp,DC=local  "),
+            Some("  fileserver.example  "),
+            Some("  data  "),
+        )
+        .expect("valid whitespace-padded inputs must pass");
+        assert_eq!(result.server.as_deref(), Some("dc.example"));
+        assert_eq!(result.base_dn.as_deref(), Some("DC=corp,DC=local"));
+        assert_eq!(result.bind_dn.as_deref(), Some("CN=admin,DC=corp,DC=local"));
+        assert_eq!(result.smb_server.as_deref(), Some("fileserver.example"));
+        assert_eq!(result.share_name.as_deref(), Some("data"));
+    }
+
+    /// Halbgesetzte SMB-Kombination muss fehlschlagen (Review Runde 2
+    /// Finding 2 regression).
+    /// Half-set SMB combination must error.
+    #[test]
+    fn validate_connection_inputs_rejects_half_set_smb_pair() {
+        let err =
+            super::validate_connection_inputs(None, None, None, Some("fileserver.example"), None)
+                .expect_err("--smb-server without --share-name must error");
+        assert!(err.to_string().contains("SMB context incomplete"));
+    }
+
+    /// Leere String-Eingaben fuer SMB-Felder zaehlen wie nicht gesetzt.
+    /// Empty strings for SMB count as unset.
+    #[test]
+    fn validate_connection_inputs_treats_empty_smb_strings_as_unset() {
+        let result = super::validate_connection_inputs(None, None, None, Some("   "), Some(""))
+            .expect("empty strings count as unset");
+        assert!(result.smb_server.is_none());
+        assert!(result.share_name.is_none());
     }
 }
