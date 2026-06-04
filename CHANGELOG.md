@@ -10,6 +10,14 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ## [Unreleased]
 
+_Keine offenen Änderungen._
+
+---
+
+## [1.4.0] — 2026-06-04
+
+**Minor-Release.** Schliesst alle sieben Findings aus dem ChatGPT-Code-Review 2026-06-04 — drei High, drei Medium, eins Low. Reines Lese-Tool — keine Schreibvorgänge auf Zielsystemen.
+
 ### Behoben
 - **CLI hielt lokale Pfade fälschlich für UNC-Pfade.** `unc_components` in `crates/cli/src/main.rs` prüfte das doppelte Präfix nicht und lieferte für `C:\Windows\SYSVOL` `Some(("C:", "Windows"))`. Folge: `collect_local_group_sids_for_path` fragte lokale Gruppen gegen den Server `C:` ab und `resolve_scan_share_status` startete einen Share-DACL-Lookup `NetShareGetInfo("C:", "Windows")` — beides ohne dass der Aufrufer SMB angefragt hatte. Auf einem Domain Controller ist genau `C:\Windows\SYSVOL` ein Kernpfad; das Ergebnis konnte fälschlich als unvollständig markiert werden und Token-SIDs konnten fehlen (ChatGPT-Code-Review 2026-06-04, **Finding 1**).
 - **Long-Path-UNC wurde in Server- und Share-Lookup falsch zerlegt.** Sowohl die CLI- als auch die GUI-Variante arbeiteten am unnormalisierten Pfad-String — `\\?\UNC\server\share\folder` wurde dadurch als Server=`?`, Share=`UNC` interpretiert. Betraf Share-DACL-Auflösung und lokale Gruppen des Zielservers auf grossen Fileservern mit langen Pfaden (ChatGPT-Code-Review 2026-06-04, **Finding 4**).
@@ -45,6 +53,9 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 - `resolve_identity_sids` in der GUI liefert jetzt zusätzlich ein `used_sam_fallback`-Flag (3-Tupel). CLI nutzt das schon vorhandene `ResolvedIdentity::ad_connected`. Beide leiten den Wert in `PermissionEvaluationInput.group_resolution_via_sam_fallback` weiter.
 - HTML-Bericht zeigt für `DomainGroupRecursionIncomplete` eine gelbe „⚠ SAM fallback — nested groups not resolved"-Badge mit Tooltip-Erklärung; für `IdentityDisabled` einen blauen „ℹ disabled account"-Hinweis.
 - CLI-Output (`output::print_report`) fügt zwei zusätzliche Diagnose-Blöcke aus: `[!] Group resolution ran through the SAM/LSA fallback…` und `[i] Identity is flagged as disabled in AD…`.
+
+### Versionsbump
+- Workspace-Version: `1.3.0` → `1.4.0`.
 
 ---
 
