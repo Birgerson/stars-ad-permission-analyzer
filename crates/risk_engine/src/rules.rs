@@ -61,12 +61,20 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
         // Review 2026-06-04 round 2 finding 1: identity from a foreign
         // domain — LDAP base does not index it, domain group recursion is
         // incomplete (semantically same as SAM fallback).
+        // Review 2026-06-04 Runde 4 Finding 1: technische LDAP-/Gruppen-
+        // Fehler in der Principal-Pipeline sind genauso Incompleteness wie
+        // Share-DACL-ReadFailed oder SAM-Fallback. Bevor diese Marker
+        // hinzukamen, konnte ein leerer Token "sauber" aussehen.
+        // Review 2026-06-04 round 4 finding 1: technical LDAP / group
+        // failures in the principal pipeline are incompleteness too.
         || p.diagnostics.iter().any(|d| {
             matches!(
                 d,
                 PermissionDiagnostic::UnsupportedShareAces { .. }
                     | PermissionDiagnostic::DomainGroupRecursionIncomplete
                     | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
+                    | PermissionDiagnostic::IdentityLookupFailed { .. }
+                    | PermissionDiagnostic::GroupResolutionFailed { .. }
             )
         })
 }
@@ -915,6 +923,46 @@ mod tests {
         assert!(
             !r[0].incomplete,
             "IdentityDisabledStatusUnknown alone is informational and must NOT mark incomplete (review 2026-06-04 round 2 finding 5)"
+        );
+    }
+
+    /// Review 2026-06-04 Runde 4 Finding 1: `IdentityLookupFailed`
+    /// (technischer LDAP-Fehler) muss als incomplete durchschlagen,
+    /// damit ein Befund mit leerem Token nicht "sauber" erscheint.
+    /// Round 4 finding 1: IdentityLookupFailed → incomplete.
+    #[test]
+    fn full_control_marks_finding_incomplete_on_identity_lookup_failed() {
+        use adpa_core::model::PermissionDiagnostic;
+        let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
+        p.diagnostics
+            .push(PermissionDiagnostic::IdentityLookupFailed {
+                reason: "LDAP bind failed".to_owned(),
+            });
+        let r = FullControlRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(
+            r[0].incomplete,
+            "IdentityLookupFailed -> finding must be flagged incomplete (review 2026-06-04 round 4 finding 1)"
+        );
+    }
+
+    /// Review 2026-06-04 Runde 4 Finding 1: `GroupResolutionFailed`
+    /// (Gruppenauflösung gescheitert oder bewusst übersprungen) muss
+    /// als incomplete durchschlagen.
+    /// Round 4 finding 1: GroupResolutionFailed → incomplete.
+    #[test]
+    fn full_control_marks_finding_incomplete_on_group_resolution_failed() {
+        use adpa_core::model::PermissionDiagnostic;
+        let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
+        p.diagnostics
+            .push(PermissionDiagnostic::GroupResolutionFailed {
+                reason: "LDAP group query timed out".to_owned(),
+            });
+        let r = FullControlRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(
+            r[0].incomplete,
+            "GroupResolutionFailed -> finding must be flagged incomplete (review 2026-06-04 round 4 finding 1)"
         );
     }
 

@@ -175,6 +175,24 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if input.identity_disabled_status_unknown {
             diagnostics.push(PermissionDiagnostic::IdentityDisabledStatusUnknown);
         }
+        // Review 2026-06-04 Runde 4 Finding 1: technischer LDAP-Fehler beim
+        // Identity-Lookup ist Incompleteness — der Bericht muss das
+        // sichtbar tragen, statt mit Platzhalter-Identity "sauber"
+        // auszusehen.
+        // Review 2026-06-04 round 4 finding 1: a technical LDAP identity
+        // lookup failure is incompleteness; the report must surface it
+        // instead of looking clean with a placeholder identity.
+        if let Some(reason) = input.identity_lookup_failure_reason {
+            diagnostics.push(PermissionDiagnostic::IdentityLookupFailed { reason });
+        }
+        // Review 2026-06-04 Runde 4 Finding 1: gescheiterte oder nicht
+        // ausgefuehrte Gruppenaufloesung muss als incomplete sichtbar
+        // sein — sonst koennen ACEs auf Domain-Gruppen still fehlen.
+        // Review 2026-06-04 round 4 finding 1: failed or skipped group
+        // resolution must be visible as incomplete.
+        if let Some(reason) = input.group_resolution_failure_reason {
+            diagnostics.push(PermissionDiagnostic::GroupResolutionFailed { reason });
+        }
 
         let result = EffectivePermission {
             identity: input.identity,
@@ -832,6 +850,8 @@ mod tests {
                 group_resolution_via_sam_fallback: false,
                 identity_not_in_configured_ldap_base: false,
                 identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
             })
             .unwrap()
     }
@@ -857,6 +877,8 @@ mod tests {
                 group_resolution_via_sam_fallback: false,
                 identity_not_in_configured_ldap_base: false,
                 identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
             })
             .unwrap()
     }
@@ -882,6 +904,8 @@ mod tests {
                 group_resolution_via_sam_fallback: false,
                 identity_not_in_configured_ldap_base: false,
                 identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
             })
             .unwrap()
     }
@@ -1330,6 +1354,8 @@ mod tests {
                 group_resolution_via_sam_fallback: false,
                 identity_not_in_configured_ldap_base: false,
                 identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
             })
             .unwrap();
         assert_eq!(
@@ -1359,6 +1385,8 @@ mod tests {
                 group_resolution_via_sam_fallback: false,
                 identity_not_in_configured_ldap_base: false,
                 identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
             })
             .unwrap();
         assert!(NormalizedRights::new(p.effective_mask.0).is_read());
@@ -1385,6 +1413,8 @@ mod tests {
                 group_resolution_via_sam_fallback: false,
                 identity_not_in_configured_ldap_base: false,
                 identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
             })
             .unwrap();
         assert_eq!(
@@ -1812,6 +1842,8 @@ mod tests {
                 group_resolution_via_sam_fallback: false,
                 identity_not_in_configured_ldap_base: false,
                 identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
             })
             .unwrap();
         assert!(
@@ -1840,6 +1872,8 @@ mod tests {
                 group_resolution_via_sam_fallback: false,
                 identity_not_in_configured_ldap_base: false,
                 identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
             })
             .unwrap();
         assert!(
@@ -1906,6 +1940,8 @@ mod tests {
                 group_resolution_via_sam_fallback: false,
                 identity_not_in_configured_ldap_base: false,
                 identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
             })
             .unwrap();
         let member_step = p
@@ -1945,6 +1981,8 @@ mod tests {
                 group_resolution_via_sam_fallback: false,
                 identity_not_in_configured_ldap_base: false,
                 identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
             })
             .unwrap();
         let ace_step = p
@@ -2467,6 +2505,8 @@ mod tests {
                 group_resolution_via_sam_fallback: false,
                 identity_not_in_configured_ldap_base: true,
                 identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
             })
             .unwrap();
         assert!(
@@ -2503,6 +2543,8 @@ mod tests {
                 group_resolution_via_sam_fallback: false,
                 identity_not_in_configured_ldap_base: false,
                 identity_disabled_status_unknown: true,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
             })
             .unwrap();
         assert!(
@@ -2511,6 +2553,88 @@ mod tests {
                 .contains(&PermissionDiagnostic::IdentityDisabledStatusUnknown),
             "engine must push IdentityDisabledStatusUnknown when the caller flag is set; got {:?}",
             result.diagnostics
+        );
+    }
+
+    /// Review 2026-06-04 Runde 4 Finding 1: ein technischer LDAP-Fehler
+    /// in der Identitätsauflösung muss als
+    /// `PermissionDiagnostic::IdentityLookupFailed { reason }` im
+    /// Diagnose-Vector erscheinen — sonst sieht ein leerer-Token-Befund
+    /// "sauber" aus.
+    /// Round 4 finding 1: an LDAP identity lookup error must surface.
+    #[test]
+    fn engine_pushes_identity_lookup_failed_diagnostic_with_reason() {
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![],
+                file_system_object: fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                access_context: AccessContext::Unspecified,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: Some(
+                    "LDAP bind failed: connection refused".to_owned(),
+                ),
+                group_resolution_failure_reason: None,
+            })
+            .unwrap();
+        let found = result
+            .diagnostics
+            .iter()
+            .find_map(|d| match d {
+                PermissionDiagnostic::IdentityLookupFailed { reason } => Some(reason.clone()),
+                _ => None,
+            })
+            .expect("engine must push IdentityLookupFailed when the caller flag is Some");
+        assert!(
+            found.contains("connection refused"),
+            "reason must carry the underlying message, got: {found}"
+        );
+    }
+
+    /// Review 2026-06-04 Runde 4 Finding 1: ein gescheiterter
+    /// Gruppen-Lookup nach erfolgreichem Identity-Hit produziert einen
+    /// `GroupResolutionFailed { reason }`-Marker.
+    /// Round 4 finding 1: failed group resolution after identity hit.
+    #[test]
+    fn engine_pushes_group_resolution_failed_diagnostic_with_reason() {
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![],
+                file_system_object: fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                access_context: AccessContext::Unspecified,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: Some(
+                    "LDAP group query timed out after 30s".to_owned(),
+                ),
+            })
+            .unwrap();
+        let found = result
+            .diagnostics
+            .iter()
+            .find_map(|d| match d {
+                PermissionDiagnostic::GroupResolutionFailed { reason } => Some(reason.clone()),
+                _ => None,
+            })
+            .expect("engine must push GroupResolutionFailed when the caller flag is Some");
+        assert!(
+            found.contains("timed out"),
+            "reason must carry the underlying message, got: {found}"
         );
     }
 }

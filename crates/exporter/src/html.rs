@@ -330,6 +330,27 @@ fn write_permissions_table(
                             .to_string(),
                     );
                 }
+                PermissionDiagnostic::IdentityLookupFailed { reason } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-high\" \
+                         title=\"LDAP identity lookup failed: {}. \
+                         The analysis ran with a placeholder identity \
+                         and an empty token; ACEs targeting domain \
+                         groups may be missing. Treat as incomplete.\">\
+                         ⚠ identity lookup failed</span>",
+                        escape_html(reason)
+                    ));
+                }
+                PermissionDiagnostic::GroupResolutionFailed { reason } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-high\" \
+                         title=\"Recursive group resolution failed or \
+                         was skipped: {}. ACEs on domain groups may be \
+                         missing from the computed effective right. \
+                         Treat as incomplete.\">⚠ group resolution failed</span>",
+                        escape_html(reason)
+                    ));
+                }
             }
         }
         let diagnostics = if diag_parts.is_empty() {

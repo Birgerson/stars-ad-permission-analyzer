@@ -104,6 +104,8 @@ eigener Beschreibung — eine Liste der Marker und ihre Bedeutung:
 | `IdentityDisabled` | info | nein | Konto ist in AD via `userAccountControl/UF_ACCOUNTDISABLE` deaktiviert. ACL-theoretische Rechte stimmen, aber das Konto kann sich normal nicht authentifizieren. |
 | `IdentityNotInConfiguredLdapBase` | medium | **ja** | LSA hat SID aufgelöst, aber das konfigurierte LDAP-`base_dn` indexiert sie nicht. Typisch in Multi-Domain-Forests / Trusts — Cross-Domain-Mitgliedschaften können fehlen. |
 | `IdentityDisabledStatusUnknown` | info | nein | `disabled`-Flag konnte nicht ermittelt werden (z. B. SAM-Pfad ohne `NetUserGetInfo`-Erfolg oder LDAP ohne User-Objekt). |
+| `IdentityLookupFailed { reason }` | high | **ja** | LDAP-Identity-Lookup ist mit einem technischen Fehler gescheitert (Bind, Timeout, DC unerreichbar, Query-Fehler). Analyse läuft mit Platzhalter-Identity und leerem Token weiter — ACEs auf Domain-Gruppen können fehlen. Der `reason`-Text trägt die ursprüngliche Fehlermeldung. |
+| `GroupResolutionFailed { reason }` | high | **ja** | Rekursive Gruppenauflösung ist gescheitert oder wurde übersprungen (z. B. Cross-Domain-Pfad ohne GC-Crawl). ACEs auf Domain-Gruppen können fehlen. Der `reason`-Text trägt die ursprüngliche Fehlermeldung. |
 
 Die Spalte „Risk-`incomplete`?" zeigt, ob `risk_engine::is_incomplete()`
 diesen Marker matched — `incomplete = true` heißt: das Risk-Finding ist
@@ -357,4 +359,6 @@ Ein typischer EffectivePermission-Eintrag enthält:
 - ADR 0037 — Validierte Wrapper konsequent propagieren.
 - ADR 0038 — Share-DACL-Trustees im Scan-Output (NTFS + Share in der
   pfadzentrischen Trustee-Tabelle).
+- ADR 0039 — Diagnostik für gescheiterte Identity- und Group-
+  Auflösung (`IdentityLookupFailed`, `GroupResolutionFailed`).
 - [Audit-Kriterien](audit-kriterien.md) — Was Stars fachlich abdeckt.

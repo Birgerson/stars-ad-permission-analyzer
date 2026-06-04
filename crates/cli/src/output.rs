@@ -220,6 +220,17 @@ pub fn print_report(
                     println!("      ACL-theoretically correct, but whether the account is");
                     println!("      enabled is unknown.");
                 }
+                PermissionDiagnostic::IdentityLookupFailed { reason } => {
+                    println!("  [!] LDAP identity lookup failed: {reason}.");
+                    println!("      The analysis ran with a placeholder identity and an empty");
+                    println!("      token; ACEs targeting domain groups may be missing. Treat");
+                    println!("      as incomplete.");
+                }
+                PermissionDiagnostic::GroupResolutionFailed { reason } => {
+                    println!("  [!] Recursive group resolution failed or was skipped: {reason}.");
+                    println!("      ACEs on domain groups may be missing from the computed");
+                    println!("      effective right. Treat as incomplete.");
+                }
             }
         }
     }

@@ -12,6 +12,63 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.2] — 2026-06-04
+
+**Patch-Release.** Schließt alle drei Findings aus ChatGPT-Code-Review
+2026-06-04 **Runde 4** — eines High, zwei Medium/Low. Plus den
+symmetrischen Whitespace-Bug, den ChatGPT nur im GUI-Pfad nannte, auch
+in der CLI.
+
+### Behoben
+- **High — `LookupFailed` und `GroupResolutionFailed` schlugen nicht
+  bis zur Diagnose durch.** Die in ADR 0036 eingeführten neuen
+  Status-Werte `IdentityScopeStatus::LookupFailed { reason }` und
+  `GroupResolutionStatus::Failed { reason }` hatten keine Diagnose-
+  Marker — wenn LDAP-Bind oder Gruppenrekursion crashte, lief die
+  Analyse mit leerem Token weiter, ohne dass der Befund als
+  `incomplete` markiert wurde. **Zwei neue strukturierte Marker:**
+  `PermissionDiagnostic::IdentityLookupFailed { reason }` und
+  `PermissionDiagnostic::GroupResolutionFailed { reason }`. Beide
+  tragen den ursprünglichen Fehlertext mit, sind
+  Incompleteness-Trigger, werden von CLI und HTML mit
+  Reason-Beschreibung gerendert. `EngineFlags` und
+  `PermissionEvaluationInput` wurden um die zwei `Option<String>`-
+  Felder erweitert. **Außerdem**: `OutsideConfiguredLdapBase +
+  NotAttempted` (Cross-Domain-Pfad ohne GC-Crawl) produziert jetzt
+  auch einen `group_resolution_failure_reason` — vorher rechnete
+  dieser Pfad still ohne Gruppen. ADR 0039 (ChatGPT-Code-Review
+  2026-06-04 Runde 4, **Finding 1**).
+- **Medium — Whitespace-umrahmte SID landete in CLI und GUI im
+  Name-Zweig.** `if sid.starts_with("S-1-")` lief auf dem **Rohwert**,
+  bevor `validate_sid` trimmen konnte. `"  S-1-5-21-...  "` wurde
+  deshalb nicht als SID erkannt und ging als Roh-Eingabe an den
+  Resolver — produktiv: `OrphanedSid` statt korrekter Auflösung. Fix
+  in beiden Pfaden: `let sid_trimmed = sid.trim();` vor der
+  Klassifikation, dann `validate_sid(sid_trimmed)`. CLI hatte denselben
+  symmetrischen Bug in `run_analyze` und `run_scan` — wird mitgefixt
+  (ChatGPT-Code-Review 2026-06-04 Runde 4, **Finding 2**).
+- **Low — `analyze_trustees` akzeptierte halben SMB-Kontext.** Die
+  Paar-Pflicht aus `validate_connection_inputs` (Runde 2 Finding 2)
+  war im Trustee-Pfad nicht aktiv — `Some(server), None` konnte
+  durchgehen und führte zu stillem NTFS-only-Output. Neuer
+  wiederverwendbarer Helper `normalize_smb_pair(smb_server, share_name)`
+  erzwingt die Paarbildung und wird jetzt von beiden Pfaden geteilt
+  (ChatGPT-Code-Review 2026-06-04 Runde 4, **Finding 3**).
+
+### Hinzugefügt
+- **ADR 0039** (Diagnostik für gescheiterte Identity- und Group-
+  Auflösung).
+- **Test-Erweiterungen**: 3 Principal-Tests
+  (`group_resolution_error_after_identity_hit_carries_reason`,
+  `outside_base_with_skipped_groups_yields_group_failure_reason`, plus
+  erweiterte `ldap_error_yields_lookup_failed_not_orphaned`-Assertion);
+  2 Engine-Tests; 2 Risk-Engine-Tests; je 1 Worker-Test für
+  Whitespace-SID-Klassifikation und `normalize_smb_pair`-Pair-Pflicht.
+- **CLI- und HTML-Renderer** für die zwei neuen Marker mit Reason-
+  Text (HTML-escaped).
+
+---
+
 ## [1.5.1] — 2026-06-04
 
 **Patch-Release.** Schließt zwei in v1.5.0 übersehene Wrapper-Stellen

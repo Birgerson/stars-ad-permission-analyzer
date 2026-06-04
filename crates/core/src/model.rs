@@ -607,6 +607,42 @@ pub enum PermissionDiagnostic {
     ///
     /// Closes ChatGPT code review 2026-06-04 round 2 finding 5.
     IdentityDisabledStatusUnknown,
+
+    /// Der LDAP-Identity-Lookup ist mit einem technischen Fehler
+    /// gescheitert (Bind-Fehler, Timeout, DC unerreichbar,
+    /// Query-Fehler). Stars liefert eine Platzhalter-Identity zurück
+    /// und rechnet die Berechtigung weiter — der Token-SID-Satz ist
+    /// dabei aber strukturell unvollständig. Der Marker ist ein
+    /// Incompleteness-Trigger; abgeleitete Risk-Findings werden als
+    /// `incomplete = true` ausgewiesen.
+    ///
+    /// Schließt ChatGPT-Code-Review 2026-06-04 Runde 4 Finding 1.
+    ///
+    /// The LDAP identity lookup failed with a technical error (bind,
+    /// timeout, DC unreachable, query error). Stars returns a
+    /// placeholder identity and continues the evaluation — but the
+    /// token SID set is structurally incomplete. This marker is an
+    /// incompleteness trigger; derived risk findings are flagged
+    /// `incomplete = true`.
+    ///
+    /// Closes ChatGPT code review 2026-06-04 round 4 finding 1.
+    IdentityLookupFailed { reason: String },
+
+    /// Die rekursive Gruppenauflösung ist gescheitert oder wurde
+    /// nicht ausgeführt (`GroupResolutionStatus::Failed` oder
+    /// `GroupResolutionStatus::NotAttempted` in einem Cross-Domain-
+    /// Szenario, in dem der LSA-Pfad keinen Gruppen-Crawl macht).
+    /// ACEs auf Domain-Gruppen können dadurch im Befund fehlen — der
+    /// Marker ist ein Incompleteness-Trigger.
+    ///
+    /// Schließt ChatGPT-Code-Review 2026-06-04 Runde 4 Finding 1.
+    ///
+    /// Recursive group resolution failed or was skipped. ACEs on
+    /// domain groups may be missed — this marker is an incompleteness
+    /// trigger.
+    ///
+    /// Closes ChatGPT code review 2026-06-04 round 4 finding 1.
+    GroupResolutionFailed { reason: String },
 }
 
 /// Erklärbarer Berechtigungspfad

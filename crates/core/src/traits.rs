@@ -124,6 +124,28 @@ pub struct PermissionEvaluationInput {
     /// reliably determined (e.g. SAM path without `NetUserGetInfo`).
     /// Default `false`. Closes review 2026-06-04 round 2 finding 5.
     pub identity_disabled_status_unknown: bool,
+    /// `Some(reason)`, wenn der LDAP-Identity-Lookup mit einem
+    /// technischen Fehler gescheitert ist (Bind, Timeout, DC nicht
+    /// erreichbar, Query-Fehler). Die Engine pusht dann einen
+    /// `PermissionDiagnostic::IdentityLookupFailed { reason }`. Die
+    /// Risk-Engine markiert abgeleitete Findings als
+    /// `incomplete = true`. Default `None`. Schliesst
+    /// Review-Befund 2026-06-04 Runde 4 Finding 1.
+    /// `Some(reason)` when the LDAP identity lookup failed with a
+    /// technical error. The engine pushes an `IdentityLookupFailed`
+    /// marker; risk findings are flagged incomplete. Default `None`.
+    pub identity_lookup_failure_reason: Option<String>,
+    /// `Some(reason)`, wenn die rekursive Gruppenauflösung gescheitert
+    /// ist oder bewusst nicht ausgeführt wurde, obwohl Gruppen für die
+    /// korrekte Berechtigungsauswertung relevant gewesen wären. Die
+    /// Engine pusht dann einen
+    /// `PermissionDiagnostic::GroupResolutionFailed { reason }`. Die
+    /// Risk-Engine markiert abgeleitete Findings als
+    /// `incomplete = true`. Default `None`.
+    /// `Some(reason)` when recursive group resolution failed or was
+    /// deliberately skipped while groups would have mattered. Marker +
+    /// risk-incomplete propagation.
+    pub group_resolution_failure_reason: Option<String>,
 }
 
 pub struct RiskContext {

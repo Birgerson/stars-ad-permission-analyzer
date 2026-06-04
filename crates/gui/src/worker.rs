@@ -648,13 +648,17 @@ pub struct NormalizedConnectionInputs {
     pub ldap: Option<LdapParams>,
 }
 
-fn validate_connection_inputs(
+/// Erzwingt die SMB-Paar-Pflicht (beide oder keines) und validiert die
+/// einzelnen Felder. Wiederverwendet in `validate_connection_inputs`
+/// und `analyze_trustees` — schließt Review 2026-06-04 Runde 4
+/// Finding 3 (vorher validierte `analyze_trustees` die Felder einzeln
+/// und akzeptierte `Some, None`).
+/// Enforces SMB pair requirement + validates each field. Used by both
+/// `validate_connection_inputs` and `analyze_trustees`.
+pub fn normalize_smb_pair(
     smb_server: Option<&str>,
     share_name: Option<&str>,
-    ldap: Option<&LdapParams>,
-) -> Result<NormalizedConnectionInputs, String> {
-    // Review 2026-06-04 Runde 2, Finding 2: smb_server und share_name
-    // sind nur als Paar sinnvoll. Leerer String zählt wie nicht gesetzt.
+) -> Result<(Option<String>, Option<String>), String> {
     let smb_server_set = smb_server.is_some_and(|s| !s.trim().is_empty());
     let share_name_set = share_name.is_some_and(|s| !s.trim().is_empty());
     match (smb_server_set, share_name_set) {
@@ -688,6 +692,15 @@ fn validate_connection_inputs(
         ),
         _ => None,
     };
+    Ok((smb_server, share_name))
+}
+
+fn validate_connection_inputs(
+    smb_server: Option<&str>,
+    share_name: Option<&str>,
+    ldap: Option<&LdapParams>,
+) -> Result<NormalizedConnectionInputs, String> {
+    let (smb_server, share_name) = normalize_smb_pair(smb_server, share_name)?;
     let ldap = match ldap {
         Some(p) => {
             let server = validate_ldap_endpoint(&p.server)
@@ -736,12 +749,17 @@ async fn handle_analyze(
         .map_err(|e| format!("Invalid path: {e}"))?
         .0;
     let path = normalized_path.as_str();
-    let sid_owned = if sid.starts_with("S-1-") {
-        validate_sid(sid)
+    // Review 2026-06-04 Runde 4 Finding 2: Klassifikation MUSS auf dem
+    // getrimmten Wert laufen — sonst landet "  S-1-5-21-...  " im
+    // else-Zweig und wird unvalidiert weitergereicht.
+    // Review round 4 finding 2: classify on the trimmed value.
+    let sid_trimmed = sid.trim();
+    let sid_owned = if sid_trimmed.starts_with("S-1-") {
+        validate_sid(sid_trimmed)
             .map_err(|e| format!("Invalid SID: {e}"))?
             .0
     } else {
-        sid.to_string()
+        sid_trimmed.to_string()
     };
     let sid = sid_owned.as_str();
     let normalized = validate_connection_inputs(smb_server, share_name, ldap)?;
@@ -794,6 +812,8 @@ async fn handle_analyze(
             group_resolution_via_sam_fallback: engine_flags.group_resolution_via_sam_fallback,
             identity_not_in_configured_ldap_base: engine_flags.identity_not_in_configured_ldap_base,
             identity_disabled_status_unknown: engine_flags.identity_disabled_status_unknown,
+            identity_lookup_failure_reason: engine_flags.identity_lookup_failure_reason,
+            group_resolution_failure_reason: engine_flags.group_resolution_failure_reason,
         })
         .map_err(|e| format!("Permission engine error: {e}"))
 }
@@ -887,13 +907,17 @@ async fn handle_scan(
         Ok(d) => d.map(|s| s.0),
         Err(e) => return make_early_summary(format!("Invalid max_depth: {e}")),
     };
-    let sid_owned = if sid.starts_with("S-1-") {
-        match validate_sid(sid) {
+    // Review 2026-06-04 Runde 4 Finding 2: Klassifikation auf getrimmtem
+    // Wert, sonst landet "  S-1-...  " unvalidiert im else-Zweig.
+    // Review round 4 finding 2: classify on the trimmed value.
+    let sid_trimmed = sid.trim();
+    let sid_owned = if sid_trimmed.starts_with("S-1-") {
+        match validate_sid(sid_trimmed) {
             Ok(v) => v.0,
             Err(e) => return make_early_summary(format!("Invalid SID: {e}")),
         }
     } else {
-        sid.to_string()
+        sid_trimmed.to_string()
     };
     let sid = sid_owned.as_str();
 
@@ -915,6 +939,8 @@ async fn handle_scan(
     let sam_fallback = engine_flags.group_resolution_via_sam_fallback;
     let identity_not_in_configured_ldap_base = engine_flags.identity_not_in_configured_ldap_base;
     let identity_disabled_status_unknown = engine_flags.identity_disabled_status_unknown;
+    let identity_lookup_failure_reason = engine_flags.identity_lookup_failure_reason;
+    let group_resolution_failure_reason = engine_flags.group_resolution_failure_reason;
     let identity = res.identity;
     let memberships = res.memberships;
 
@@ -1060,6 +1086,8 @@ async fn handle_scan(
             group_resolution_via_sam_fallback: sam_fallback,
             identity_not_in_configured_ldap_base,
             identity_disabled_status_unknown,
+            identity_lookup_failure_reason: identity_lookup_failure_reason.clone(),
+            group_resolution_failure_reason: group_resolution_failure_reason.clone(),
         }) {
             Ok(perm) => {
                 let label = NormalizedRights::new(perm.effective_mask.0)
@@ -1428,25 +1456,12 @@ fn analyze_trustees(
         .map_err(|e| format!("Invalid path: {e}"))?
         .0;
     let path = normalized_path.as_str();
-    // Review 2026-06-04 Runde 3 Finding 2: getrimmte Werte
-    // weiterreichen, nicht den Rohstring.
-    // Review round 3 finding 2: forward the trimmed wrapper values.
-    let smb_server = match smb_server {
-        Some(s) => Some(
-            validate_smb_server(s)
-                .map_err(|e| format!("Invalid SMB server: {e}"))?
-                .0,
-        ),
-        None => None,
-    };
-    let share_name = match share_name {
-        Some(n) => Some(
-            validate_share_name(n)
-                .map_err(|e| format!("Invalid share name: {e}"))?
-                .0,
-        ),
-        None => None,
-    };
+    // Review 2026-06-04 Runde 3 Finding 2 + Runde 4 Finding 3:
+    // getrimmte Werte weiterreichen UND Paar-Pflicht erzwingen,
+    // damit ein halber SMB-Kontext nicht still zu NTFS-only-
+    // Trustees fuehrt.
+    // Round 3 finding 2 + round 4 finding 3: trim + enforce pairing.
+    let (smb_server, share_name) = normalize_smb_pair(smb_server, share_name)?;
     let fso = read_fso(path).map_err(|e| format!("Failed to read path: {e}"))?;
     Ok(build_trustee_rows(
         &fso,
@@ -2160,6 +2175,61 @@ mod tests {
                 .iter()
                 .all(|t| matches!(t.category, TrusteeCategory::Ntfs)),
             "no overlay → only NTFS trustees"
+        );
+    }
+
+    /// Review 2026-06-04 Runde 4 Finding 2: Whitespace-umrahmte SID
+    /// muss vor der `starts_with("S-1-")`-Klassifikation getrimmt
+    /// werden — sonst landet sie unvalidiert im Name-Zweig und geht
+    /// roh in den Resolver. Der Test isoliert die Logik aus
+    /// `handle_analyze`/`handle_scan` (klassifizieren → validieren),
+    /// damit der Fix gegen Regressionen geschuetzt ist.
+    /// Review 2026-06-04 Runde 4 Finding 3: `normalize_smb_pair` (von
+    /// `analyze_trustees` und `validate_connection_inputs` geteilt)
+    /// muss halbe SMB-Kontexte ablehnen — sonst entsteht ein stiller
+    /// NTFS-only-Fallback.
+    /// Round 4 finding 3: half-set SMB context must error.
+    #[test]
+    fn normalize_smb_pair_rejects_half_set_combinations() {
+        assert!(
+            super::normalize_smb_pair(Some("fileserver"), None).is_err(),
+            "smb_server alone must error — closing round 4 finding 3"
+        );
+        assert!(
+            super::normalize_smb_pair(None, Some("data")).is_err(),
+            "share_name alone must error — closing round 4 finding 3"
+        );
+        // Beide gesetzt: erfolgreich, getrimmt.
+        // Both set: succeeds with trimmed values.
+        let (s, n) = super::normalize_smb_pair(Some("  fileserver  "), Some("  data  "))
+            .expect("matched pair must succeed");
+        assert_eq!(s.as_deref(), Some("fileserver"));
+        assert_eq!(n.as_deref(), Some("data"));
+        // Beide leer: kein SMB-Kontext, kein Fehler.
+        // Both empty: no SMB context, no error.
+        let (s, n) = super::normalize_smb_pair(None, None).expect("no SMB context must succeed");
+        assert!(s.is_none() && n.is_none());
+    }
+
+    /// Round 4 finding 2: whitespace-padded SID must classify as SID.
+    #[test]
+    fn whitespace_padded_sid_classifies_as_sid_after_trim() {
+        let raw = "  S-1-5-21-1-2-3-4567  ";
+        // 1) Klassifikation MUSS auf dem getrimmten Wert laufen.
+        let trimmed = raw.trim();
+        assert!(
+            trimmed.starts_with("S-1-"),
+            "trimmed value must classify as a SID — pre-condition of the fix"
+        );
+        // 2) Validierung liefert die getrimmte, syntaktisch geprüfte SID.
+        let validated = validate_sid(trimmed).expect("trimmed SID must validate");
+        assert_eq!(validated.0, "S-1-5-21-1-2-3-4567");
+
+        // 3) Negative Probe: wenn man wie vor dem Fix auf dem Rohwert
+        //    klassifiziert, geht die SID verloren.
+        assert!(
+            !raw.starts_with("S-1-"),
+            "regression guard: raw value must NOT classify as a SID — proves the fix is necessary"
         );
     }
 }

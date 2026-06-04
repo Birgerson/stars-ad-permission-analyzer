@@ -530,16 +530,17 @@ async fn run_analyze(
     let path = validate_path(&path)
         .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
         .0;
-    // Review 2026-06-04 Runde 3 Finding 2: getrimmte und validierte
-    // User-Eingabe weiterreichen, nicht den Rohwert.
-    let user = if user.starts_with("S-1-") {
-        validate_sid(&user)
+    // Review 2026-06-04 Runde 3 Finding 2 + Runde 4 Finding 2:
+    // Klassifikation auf dem getrimmten Wert. Vorher landete
+    // "  S-1-...  " im Name-Zweig — symmetrisch zum GUI-Bug.
+    // Round 3 finding 2 + round 4 finding 2: classify on the trimmed value.
+    let user_trimmed = user.trim();
+    let user = if user_trimmed.starts_with("S-1-") {
+        validate_sid(user_trimmed)
             .map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?
             .0
     } else {
-        // Konsistente Vorab-Validierung wie der GUI-Identitäts-Picker.
-        // Consistent up-front validation like the GUI identity picker.
-        validate_identity_query(&user)
+        validate_identity_query(user_trimmed)
             .map_err(|e| anyhow::anyhow!("Invalid user / sAMAccountName: {e}"))?
             .0
     };
@@ -641,6 +642,8 @@ async fn run_analyze(
         group_resolution_via_sam_fallback: engine_flags.group_resolution_via_sam_fallback,
         identity_not_in_configured_ldap_base: engine_flags.identity_not_in_configured_ldap_base,
         identity_disabled_status_unknown: engine_flags.identity_disabled_status_unknown,
+        identity_lookup_failure_reason: engine_flags.identity_lookup_failure_reason.clone(),
+        group_resolution_failure_reason: engine_flags.group_resolution_failure_reason.clone(),
     };
     let result = DefaultPermissionEngine
         .evaluate(input)
@@ -723,14 +726,15 @@ async fn run_scan(
     let max_depth = validate_optional_scan_depth(max_depth)
         .map_err(|e| anyhow::anyhow!("Invalid --max-depth: {e}"))?
         .map(|d| d.0);
-    let user = if user.starts_with("S-1-") {
-        validate_sid(&user)
+    // Review 2026-06-04 Runde 4 Finding 2: Klassifikation auf
+    // getrimmtem Wert.
+    let user_trimmed = user.trim();
+    let user = if user_trimmed.starts_with("S-1-") {
+        validate_sid(user_trimmed)
             .map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?
             .0
     } else {
-        // Konsistente Vorab-Validierung wie der GUI-Identitäts-Picker.
-        // Consistent up-front validation like the GUI identity picker.
-        validate_identity_query(&user)
+        validate_identity_query(user_trimmed)
             .map_err(|e| anyhow::anyhow!("Invalid user / sAMAccountName: {e}"))?
             .0
     };
@@ -918,6 +922,12 @@ async fn run_scan(
             identity_not_in_configured_ldap_base: scan_engine_flags
                 .identity_not_in_configured_ldap_base,
             identity_disabled_status_unknown: scan_engine_flags.identity_disabled_status_unknown,
+            identity_lookup_failure_reason: scan_engine_flags
+                .identity_lookup_failure_reason
+                .clone(),
+            group_resolution_failure_reason: scan_engine_flags
+                .group_resolution_failure_reason
+                .clone(),
         };
         let result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
             anyhow::anyhow!("Permission evaluation failed for '{}': {e}", fso.path.0)

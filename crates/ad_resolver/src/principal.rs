@@ -205,16 +205,44 @@ pub struct PrincipalResolution {
 }
 
 impl PrincipalResolution {
-    /// Ableitung der zwei Engine-Flags aus dem Resolution-Status —
-    /// einzige offizielle Quelle für
-    /// `PermissionEvaluationInput::identity_not_in_configured_ldap_base`
-    /// und `identity_disabled_status_unknown`. Aufrufer sollen die
-    /// Flags **immer** über diese Methode lesen, nicht selbst aus den
+    /// Ableitung der Engine-Flags aus dem Resolution-Status —
+    /// einzige offizielle Quelle für die entsprechenden
+    /// `PermissionEvaluationInput`-Felder. Aufrufer sollen die Flags
+    /// **immer** über diese Methode lesen, nicht selbst aus den
     /// Status-Feldern ableiten.
-    /// Derives the two engine flags from the resolution status — the
+    /// Derives the engine flags from the resolution status — the
     /// single official source for the corresponding
     /// `PermissionEvaluationInput` fields.
     pub fn engine_flags(&self) -> EngineFlags {
+        // Review 2026-06-04 Runde 4 Finding 1: LookupFailed,
+        // GroupResolutionStatus::Failed und NotAttempted (im
+        // Outside-Pfad) tragen jetzt einen Reason — die Engine pusht
+        // daraus IdentityLookupFailed / GroupResolutionFailed-Marker.
+        // Review round 4 finding 1.
+        let identity_lookup_failure_reason = match &self.scope_status {
+            IdentityScopeStatus::LookupFailed { reason } => Some(reason.clone()),
+            _ => None,
+        };
+        let group_resolution_failure_reason = match &self.group_resolution_status {
+            GroupResolutionStatus::Failed { reason } => Some(reason.clone()),
+            // NotAttempted im OutsideConfiguredLdapBase-Pfad ist
+            // strukturell unvollständig — der LDAP-base hat die SID
+            // nicht und wir haben keinen GC-Crawl gemacht. Auditoren
+            // muessen das sehen.
+            // NotAttempted in the Outside path is structurally incomplete.
+            GroupResolutionStatus::NotAttempted
+                if matches!(
+                    self.scope_status,
+                    IdentityScopeStatus::OutsideConfiguredLdapBase
+                ) =>
+            {
+                Some(
+                    "group resolution skipped: identity is outside the configured LDAP base"
+                        .to_owned(),
+                )
+            }
+            _ => None,
+        };
         EngineFlags {
             identity_not_in_configured_ldap_base: matches!(
                 self.scope_status,
@@ -228,17 +256,26 @@ impl PrincipalResolution {
                 self.group_resolution_status,
                 GroupResolutionStatus::SamFlat
             ),
+            identity_lookup_failure_reason,
+            group_resolution_failure_reason,
         }
     }
 }
 
-/// Drei Bool-Flags, die in `PermissionEvaluationInput` fließen.
-/// Three bool flags fed into `PermissionEvaluationInput`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Bool/Reason-Flags, die in `PermissionEvaluationInput` fließen.
+/// Flag bundle fed into `PermissionEvaluationInput`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineFlags {
     pub identity_not_in_configured_ldap_base: bool,
     pub identity_disabled_status_unknown: bool,
     pub group_resolution_via_sam_fallback: bool,
+    /// `Some(reason)` wenn `IdentityScopeStatus::LookupFailed` —
+    /// Engine pusht `PermissionDiagnostic::IdentityLookupFailed`,
+    /// Risk-Engine markiert incomplete. Default `None`.
+    pub identity_lookup_failure_reason: Option<String>,
+    /// `Some(reason)` wenn `GroupResolutionStatus::Failed` oder
+    /// strukturell unvollständige `NotAttempted`. Default `None`.
+    pub group_resolution_failure_reason: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1078,7 +1115,11 @@ mod tests {
 
     /// LDAP-Bind-/Verbindungsfehler: ScopeStatus = LookupFailed,
     /// keine LSA-Reklassifikation.
-    /// LDAP error: LookupFailed, no LSA reclassification.
+    /// LDAP error: LookupFailed, no LSA reclassification. Plus
+    /// Review 2026-06-04 Runde 4 Finding 1: engine_flags() muss den
+    /// Reason als `identity_lookup_failure_reason` durchreichen, damit
+    /// die Engine den IdentityLookupFailed-Marker pushen kann.
+    /// LDAP error → LookupFailed + engine_flags carry the reason.
     #[tokio::test]
     async fn ldap_error_yields_lookup_failed_not_orphaned() {
         let sid = Sid("S-1-5-21-1-1-1-1007".to_owned());
@@ -1099,6 +1140,127 @@ mod tests {
             }
             other => panic!("expected LookupFailed, got: {other:?}"),
         }
+        let flags = res.engine_flags();
+        assert!(
+            flags
+                .identity_lookup_failure_reason
+                .as_deref()
+                .map(|s| s.contains("simulated bind failure"))
+                .unwrap_or(false),
+            "engine_flags() must carry the LDAP lookup failure reason — closing review round 4 finding 1"
+        );
+    }
+
+    /// Review 2026-06-04 Runde 4 Finding 1: LDAP-Identity-Hit + Gruppen-
+    /// Resolution-Fehler -> `GroupResolutionStatus::Failed` und
+    /// `engine_flags().group_resolution_failure_reason` ist gesetzt.
+    /// Vorher konnte ein "saubere Identity, leere Gruppen"-Ergebnis still
+    /// rauskommen.
+    /// Identity hit + group resolution error → engine_flags carries the
+    /// group resolution failure reason.
+    #[tokio::test]
+    async fn group_resolution_error_after_identity_hit_carries_reason() {
+        let sid = Sid("S-1-5-21-1-1-1-1008".to_owned());
+        // Hilfs-Backend: Identity ok, Memberships werfen Fehler.
+        struct GroupFailingBackend {
+            sid: Sid,
+            identity: Identity,
+        }
+        #[async_trait]
+        impl IdentityBackend for GroupFailingBackend {
+            async fn lookup_identity_by_sid(
+                &self,
+                sid: &Sid,
+            ) -> Result<Option<Identity>, CoreError> {
+                if sid.0 == self.sid.0 {
+                    Ok(Some(self.identity.clone()))
+                } else {
+                    Ok(None)
+                }
+            }
+            async fn lookup_identity_by_upn(
+                &self,
+                _upn: &str,
+            ) -> Result<Option<(Sid, Identity)>, CoreError> {
+                Ok(None)
+            }
+            async fn lookup_identities_by_sam(
+                &self,
+                _sam: &str,
+            ) -> Result<Vec<(Sid, Identity)>, CoreError> {
+                Ok(Vec::new())
+            }
+            async fn resolve_memberships(
+                &self,
+                _sid: &Sid,
+            ) -> Result<Vec<GroupMembership>, CoreError> {
+                Err(CoreError::LdapQuery(
+                    "simulated group resolution timeout".to_owned(),
+                ))
+            }
+        }
+        let backend = GroupFailingBackend {
+            sid: sid.clone(),
+            identity: mk_identity(&sid.0, "alice", "EXAMPLE", IdentityKind::User),
+        };
+        let resolver = PrincipalResolver::new(backend, Some(FakeLsaBackend::new()));
+        let res = resolver
+            .resolve(PrincipalInput::Sid(sid))
+            .await
+            .expect("resolution must succeed");
+        // Identity-Lookup ist OK, deshalb Scope = Inside.
+        assert_eq!(
+            res.scope_status,
+            IdentityScopeStatus::InsideConfiguredLdapBase
+        );
+        // Group resolution muss aber als Failed markiert sein.
+        match &res.group_resolution_status {
+            GroupResolutionStatus::Failed { reason } => {
+                assert!(
+                    reason.contains("simulated group resolution timeout"),
+                    "reason must carry the underlying error, got: {reason}"
+                );
+            }
+            other => panic!("expected Failed, got: {other:?}"),
+        }
+        let flags = res.engine_flags();
+        assert!(
+            flags.group_resolution_failure_reason.is_some(),
+            "engine_flags() must carry the group resolution failure reason"
+        );
+        assert!(
+            flags.identity_lookup_failure_reason.is_none(),
+            "identity lookup did not fail — flag must remain None"
+        );
+    }
+
+    /// `IdentityScopeStatus::OutsideConfiguredLdapBase` mit
+    /// `GroupResolutionStatus::NotAttempted` muss ebenfalls einen
+    /// `group_resolution_failure_reason` produzieren — sonst wuerde der
+    /// Trust-/Multi-Domain-Pfad still mit leerem Token rechnen.
+    /// Outside + NotAttempted = also a group failure (silent skip
+    /// otherwise).
+    #[tokio::test]
+    async fn outside_base_with_skipped_groups_yields_group_failure_reason() {
+        let sid = Sid("S-1-5-21-9-9-9-1009".to_owned());
+        let ldap = FakeLdapBackend::new(); // leer
+        let mut lsa = FakeLsaBackend::new();
+        lsa.sid_to_account
+            .insert(sid.0.clone(), mk_lsa("bob", "TRUSTED", IdentityKind::User));
+        let resolver = PrincipalResolver::new(ldap, Some(lsa));
+        let res = resolver
+            .resolve(PrincipalInput::Sid(sid))
+            .await
+            .expect("resolution must succeed");
+        assert_eq!(
+            res.scope_status,
+            IdentityScopeStatus::OutsideConfiguredLdapBase
+        );
+        let flags = res.engine_flags();
+        assert!(
+            flags.group_resolution_failure_reason.is_some(),
+            "Outside-base + NotAttempted must produce a group resolution failure reason"
+        );
     }
 
     /// Ambiguous SAM ergibt einen klaren Eindeutigkeits-Fehler.
