@@ -5,9 +5,9 @@ use ad_resolver::NoLsaBackend;
 #[cfg(windows)]
 use ad_resolver::WindowsLsaBackend;
 use ad_resolver::{
-    format_account_for_local_groups, principal::PrincipalInput, resolve_local_group_sids,
-    DisabledStatus, GroupResolutionStatus, IdentityScopeStatus, LdapConfig, LdapIdentityBackend,
-    LdapResolver, PrincipalResolution, PrincipalResolver,
+    principal::PrincipalInput, resolve_local_group_sids_for_identity, DisabledStatus,
+    GroupResolutionStatus, IdentityScopeStatus, LdapConfig, LdapIdentityBackend, LdapResolver,
+    PrincipalResolution, PrincipalResolver,
 };
 #[cfg(not(windows))]
 use adpa_core::model::{Identity, IdentityKind};
@@ -1161,18 +1161,17 @@ fn collect_local_group_sids_for_path(
     // falls back to the UNC server otherwise.
     let server_owned = effective_smb_target(path, explicit_smb_server);
     let server = server_owned.as_deref();
-    let Some(account) = format_account_for_local_groups(identity) else {
-        // Ohne brauchbaren Accountnamen koennen wir NetUserGetLocalGroups
-        // nicht sinnvoll aufrufen; das ist keine Fehlersituation.
-        // Without a usable account name we cannot call NetUserGetLocalGroups
-        // meaningfully; this is not an error condition.
-        return (Vec::new(), LocalGroupEvalStatus::NotQueried);
-    };
-    match resolve_local_group_sids(server, &account) {
+    // Review 2026-06-04 Runde 5 Finding 1: Kandidatenliste durchprobieren
+    // (UPN, DOMAIN\name, name@DNS-Suffix, plain). Wenn keiner erkannt
+    // wird, liefert die Funktion einen Validation-Fehler, der hier als
+    // `NotAvailable(reason)` durchschlaegt — Risk-Engine markiert incomplete.
+    // Round 5 finding 1: iterate candidate name forms; if none works,
+    // surface as NotAvailable (incomplete).
+    match resolve_local_group_sids_for_identity(server, identity) {
         Ok(v) => {
             tracing::debug!(
                 ?server,
-                account,
+                sid = %identity.sid.0,
                 count = v.len(),
                 "Resolved local group SIDs for target server"
             );
@@ -1182,7 +1181,7 @@ fn collect_local_group_sids_for_path(
             let msg = e.to_string();
             tracing::warn!(
                 ?server,
-                account,
+                sid = %identity.sid.0,
                 error = %msg,
                 "Local group resolution failed; result will be marked incomplete"
             );

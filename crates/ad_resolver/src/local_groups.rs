@@ -32,41 +32,109 @@ use windows_sys::Win32::Security::LookupAccountNameW;
 /// User-Not-Found-Statuscode aus lmerr.h / NERR_UserNotFound from lmerr.h.
 const NERR_USER_NOT_FOUND: u32 = 2221;
 
-/// Formatiert den Accountnamen einer Identity für `NetUserGetLocalGroups`.
+/// Heuristik: tragt der Domain-String wie ein DNS-Suffix aussehende
+/// Bestandteile (mindestens ein `.`)? In Trust-/Multi-Domain-Szenarien
+/// liefert LSA üblicherweise den NetBIOS-Namen (`TRUSTED`), und das
+/// `name@TRUSTED`-Format ist KEINE gültige Accountreferenz für
+/// `NetUserGetLocalGroups`. Nur DNS-artige Suffixe (`corp.local`) sind
+/// als UPN-Suffix valide.
+/// Heuristic: does the domain string look like a DNS suffix (contains a
+/// dot)? In trust / multi-domain scenarios LSA usually returns the NetBIOS
+/// name (`TRUSTED`); `name@TRUSTED` is NOT a valid account reference for
+/// `NetUserGetLocalGroups` — only DNS-style suffixes (`corp.local`) work
+/// as UPN suffixes.
+fn looks_like_dns_domain(domain: &str) -> bool {
+    domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+}
+
+/// Liefert eine **Kandidatenliste** von Accountnamen für
+/// `NetUserGetLocalGroups`, in Präferenzreihenfolge. Der Aufrufer
+/// probiert die Liste durch, bis eine Form vom Zielserver erkannt
+/// wird (siehe [`resolve_local_group_sids_for_identity`]).
 ///
-/// Reihenfolge der Präferenz:
-/// 1. `userPrincipalName` (z. B. `max.mustermann@testdomain.local`) — robust,
-///    funktioniert für Domain-Benutzer ohne NetBIOS-Wissen.
-/// 2. `sAMAccountName @ DNS-Domain` als UPN-ähnliche Konstruktion (Fallback,
-///    wenn `userPrincipalName` nicht gesetzt ist; bei abweichendem UPN-Suffix
-///    kann das fehlschlagen).
-/// 3. Reiner `name` (lokale Konten ohne Domain).
+/// Schließt Review 2026-06-04 Runde 5 Finding 1: vorher baute Stars
+/// blind `name@domain`, was bei NetBIOS-Domains (`alice@TRUSTED` statt
+/// `TRUSTED\alice`) regelmäßig zu `NERR_USER_NOT_FOUND` führte — und
+/// dieser Fall wurde stillschweigend als „keine lokalen Gruppen"
+/// gewertet, nicht als Lücke.
 ///
-/// Liefert `None`, wenn keine sinnvolle Namensform abgeleitet werden kann.
+/// Reihenfolge:
+/// 1. `userPrincipalName` (echter UPN, wenn AD ihn gesetzt hat).
+/// 2. `DOMAIN\name` (funktioniert sowohl für NetBIOS- als auch
+///    DNS-Domains — der robusteste klassische NetAPI-Form).
+/// 3. `name@domain` — nur wenn `domain` wie ein DNS-Suffix aussieht
+///    (Punkt enthalten). Bei NetBIOS-Namen würde diese Form irreführend
+///    konstruiert.
+/// 4. `name` (rein) — lokale Konten ohne Domain.
 ///
-/// Formats an Identity's account name for `NetUserGetLocalGroups`.
+/// Returns a **candidate list** of account names for
+/// `NetUserGetLocalGroups`, in preference order. The caller iterates
+/// until one form is recognized by the target server.
 ///
-/// Preference order:
-/// 1. `userPrincipalName` (e.g. `max.mustermann@testdomain.local`) — robust,
-///    works for domain users without NetBIOS knowledge.
-/// 2. `sAMAccountName @ DNS domain` as a UPN-style construction (fallback if
-///    `userPrincipalName` is missing; may fail when the UPN suffix differs).
-/// 3. Plain `name` (local accounts without a domain).
-///
-/// Returns `None` if no usable name form can be derived.
-pub fn format_account_for_local_groups(identity: &Identity) -> Option<String> {
+/// Closes review 2026-06-04 round 5 finding 1.
+pub fn format_account_candidates_for_local_groups(identity: &Identity) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
     if let Some(upn) = identity
         .user_principal_name
         .as_deref()
         .filter(|s| !s.is_empty())
     {
-        return Some(upn.to_string());
+        candidates.push(upn.to_string());
     }
-    let name = identity.name.as_deref().filter(|s| !s.is_empty())?;
-    match identity.domain.as_deref().filter(|s| !s.is_empty()) {
-        Some(domain) => Some(format!("{name}@{domain}")),
-        None => Some(name.to_string()),
+    let name = match identity.name.as_deref().filter(|s| !s.is_empty()) {
+        Some(n) => n,
+        None => return candidates,
+    };
+    if let Some(domain) = identity.domain.as_deref().filter(|s| !s.is_empty()) {
+        let domain_backslash_name = format!("{domain}\\{name}");
+        if !candidates.contains(&domain_backslash_name) {
+            candidates.push(domain_backslash_name);
+        }
+        // Nur als UPN-Konstruktion wenn das Domain-Feld DNS-artig aussieht.
+        // Only as UPN construction when the domain looks DNS-style.
+        if looks_like_dns_domain(domain) {
+            let upn_form = format!("{name}@{domain}");
+            if !candidates.contains(&upn_form) {
+                candidates.push(upn_form);
+            }
+        }
     }
+    if !candidates.contains(&name.to_string()) {
+        candidates.push(name.to_string());
+    }
+    candidates
+}
+
+/// Convenience-Wrapper, der den **ersten** Kandidaten aus
+/// [`format_account_candidates_for_local_groups`] zurückgibt. Behält
+/// die alte API für Aufrufer, die nur einen Namen wollen. Neue
+/// Aufrufer sollten die Kandidatenliste verwenden, damit Trust-/
+/// NetBIOS-Identities nicht still durchfallen.
+/// Convenience wrapper returning the **first** candidate.
+pub fn format_account_for_local_groups(identity: &Identity) -> Option<String> {
+    format_account_candidates_for_local_groups(identity)
+        .into_iter()
+        .next()
+}
+
+/// Ergebnis eines `NetUserGetLocalGroups`-Aufrufs — trennt explizit
+/// **„User nicht gefunden"** von **„User gefunden, aber in keinen
+/// Gruppen"**. Der Unterschied ist für die Trust-/LSA-Pfade kritisch
+/// (Review Runde 5 Finding 1).
+/// `NetUserGetLocalGroups` outcome — separates **"user not found"**
+/// from **"user found but has no group memberships"**.
+#[derive(Debug, Clone)]
+pub enum LocalGroupLookupOutcome {
+    /// `NetUserGetLocalGroups` hat den Account gefunden und seine
+    /// (möglicherweise leere) Gruppenliste zurückgegeben.
+    /// Account was found; the returned vector is the actual group set.
+    WithGroups(Vec<Sid>),
+    /// `NetUserGetLocalGroups` hat den Account auf dem Zielserver nicht
+    /// gefunden (`NERR_USER_NOT_FOUND`). Aufrufer entscheidet, ob das
+    /// als Konfigurationsfehler (alle Kandidaten erschöpft) oder als
+    /// Hinweis (anderen Kandidaten probieren) gewertet wird.
+    /// Account was not known on the target server.
+    UserNotFoundOnServer,
 }
 
 /// Liefert die SIDs aller lokalen Gruppen auf `server`, in denen `account` direkt
@@ -84,6 +152,29 @@ pub fn resolve_local_group_sids(
     server: Option<&str>,
     account: &str,
 ) -> Result<Vec<Sid>, CoreError> {
+    // Backward-Compat-Wrapper über die strict-Variante: NERR_USER_NOT_FOUND
+    // wird hier weiterhin als leere Liste interpretiert. Neue Aufrufer
+    // sollten `resolve_local_group_sids_for_identity` verwenden, das die
+    // Kandidaten-Liste durchprobiert und einen echten Fehler liefert,
+    // wenn keiner erkannt wurde. Schließt Runde 5 Finding 1 in der
+    // Tiefe — bewahrt aber die alte API für externe Konsumenten.
+    // Backward-compatible wrapper around the strict variant.
+    match resolve_local_group_sids_strict(server, account)? {
+        LocalGroupLookupOutcome::WithGroups(v) => Ok(v),
+        LocalGroupLookupOutcome::UserNotFoundOnServer => Ok(Vec::new()),
+    }
+}
+
+/// Strict-Variante: trennt **„User nicht gefunden"** explizit von
+/// **„User gefunden, leere Gruppenliste"**. Aufrufer (z. B.
+/// [`resolve_local_group_sids_for_identity`]) brauchen diese
+/// Unterscheidung, um Kandidatenlisten durchzuprobieren ohne stille
+/// Skips.
+/// Strict variant — distinguishes "not found" from "found, no groups".
+pub fn resolve_local_group_sids_strict(
+    server: Option<&str>,
+    account: &str,
+) -> Result<LocalGroupLookupOutcome, CoreError> {
     let server_w = server.map(to_wide_null);
     let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let account_w = to_wide_null(account);
@@ -119,16 +210,12 @@ pub fn resolve_local_group_sids(
                 "NetUserGetLocalGroups: access denied for '{account}' on {server:?}"
             ))),
             NERR_USER_NOT_FOUND => {
-                // Benutzer ist auf dem Zielserver nicht bekannt — kein Fehler im
-                // fachlichen Sinn, aber wir koennen keine lokalen Gruppen liefern.
-                // Account is not known on the target server — not a domain-level
-                // error, but we cannot return any local groups.
                 debug!(
                     account,
                     ?server,
                     "NetUserGetLocalGroups: user not found on server"
                 );
-                Ok(Vec::new())
+                Ok(LocalGroupLookupOutcome::UserNotFoundOnServer)
             }
             _ => Err(CoreError::LdapQuery(format!(
                 "NetUserGetLocalGroups('{account}') failed with status {status}"
@@ -167,7 +254,71 @@ pub fn resolve_local_group_sids(
         unsafe { NetApiBufferFree(buf_ptr.cast()) };
     }
 
-    Ok(sids)
+    Ok(LocalGroupLookupOutcome::WithGroups(sids))
+}
+
+/// Versucht, lokale Gruppen für die `identity` auf dem `server` aufzulösen,
+/// und probiert dabei mehrere Account-Namensformen
+/// ([`format_account_candidates_for_local_groups`]) durch.
+///
+/// **Rückgabe:**
+/// - `Ok(Vec<Sid>)` bei mindestens einem erkannten Kandidaten — der erste
+///   `WithGroups`-Treffer gewinnt (auch wenn die Gruppenliste leer ist;
+///   das bedeutet dann ehrlich: Account ist auf dem Server bekannt, hat aber
+///   keine lokalen Gruppen).
+/// - `Err(CoreError::Validation(reason))`, wenn **kein** Kandidat erkannt
+///   wurde (alle `UserNotFoundOnServer`). Aufrufer setzen dann
+///   `LocalGroupEvalStatus::NotAvailable(reason)` — das treibt die
+///   `incomplete = true`-Logik in der Risk-Engine.
+/// - `Err(...)` bei anderen technischen Fehlern (Access Denied, NetAPI-
+///   Fehler) — sofort propagiert, kein Weiterprobieren.
+///
+/// Schließt Review 2026-06-04 Runde 5 Finding 1: vorher landete eine
+/// LSA-/Trust-Identity oft im NERR_USER_NOT_FOUND-Pfad und wurde still
+/// als `LocalGroupEvalStatus::Applied(0)` ausgewiesen — ACEs auf lokale
+/// Servergruppen blieben unsichtbar ohne Incomplete-Marker.
+///
+/// Tries to resolve local groups for `identity` on `server`, iterating
+/// over candidate account name forms.
+pub fn resolve_local_group_sids_for_identity(
+    server: Option<&str>,
+    identity: &Identity,
+) -> Result<Vec<Sid>, CoreError> {
+    let candidates = format_account_candidates_for_local_groups(identity);
+    if candidates.is_empty() {
+        return Err(CoreError::Validation(format!(
+            "Local groups: no usable account name form derivable from identity {}",
+            identity.sid.0
+        )));
+    }
+    let mut tried: Vec<String> = Vec::with_capacity(candidates.len());
+    for candidate in &candidates {
+        tried.push(candidate.clone());
+        match resolve_local_group_sids_strict(server, candidate)? {
+            LocalGroupLookupOutcome::WithGroups(sids) => {
+                debug!(
+                    ?server,
+                    account = %candidate,
+                    count = sids.len(),
+                    "Local groups resolved via candidate"
+                );
+                return Ok(sids);
+            }
+            LocalGroupLookupOutcome::UserNotFoundOnServer => {
+                debug!(
+                    ?server,
+                    account = %candidate,
+                    "Candidate not known on server, trying next"
+                );
+            }
+        }
+    }
+    Err(CoreError::Validation(format!(
+        "NetUserGetLocalGroups: account for identity {} not known on {server:?} \
+         (tried forms: {:?}). Local server group memberships are not available; \
+         the result is marked incomplete.",
+        identity.sid.0, tried
+    )))
 }
 
 /// Eintrag in der `NetUserGetLocalGroups`-Antwort mit Name *und* SID. Die
@@ -681,18 +832,53 @@ mod tests {
         );
     }
 
+    /// Review 2026-06-04 Runde 5 Finding 1: ohne UPN ist `DOMAIN\name`
+    /// die erste Wahl (statt `name@domain`). Für eine DNS-artige Domain
+    /// muss aber `name@dns` weiterhin als Fallback in der Kandidatenliste
+    /// auftauchen.
+    /// Round 5 finding 1: without UPN, prefer `DOMAIN\name`; DNS suffixes
+    /// still get a UPN-style fallback in the candidate list.
     #[test]
-    fn format_falls_back_to_sam_at_dns_domain() {
+    fn format_falls_back_to_domain_backslash_name_for_dns_domain() {
         let id = identity_with(Some("max.mustermann"), Some("testdomain.local"), None);
+        let candidates = format_account_candidates_for_local_groups(&id);
+        assert_eq!(candidates[0], "testdomain.local\\max.mustermann");
+        assert!(
+            candidates.contains(&"max.mustermann@testdomain.local".to_string()),
+            "DNS-style domain must also produce the UPN-form fallback; got {candidates:?}"
+        );
+        // Convenience-Wrapper liefert den ersten Kandidaten.
         assert_eq!(
             format_account_for_local_groups(&id).as_deref(),
-            Some("max.mustermann@testdomain.local")
+            Some("testdomain.local\\max.mustermann")
+        );
+    }
+
+    /// Review 2026-06-04 Runde 5 Finding 1: bei einem NetBIOS-Domainnamen
+    /// **darf** der `name@domain`-Fallback NICHT in der Kandidatenliste
+    /// auftauchen — `alice@TRUSTED` ist kein gültiger UPN und führte
+    /// produktiv zu stillen NERR_USER_NOT_FOUND.
+    /// Round 5 finding 1: NetBIOS domain must NOT produce a `name@domain`
+    /// candidate — that exact form was the production bug.
+    #[test]
+    fn format_netbios_domain_only_emits_domain_backslash_form() {
+        let id = identity_with(Some("alice"), Some("TRUSTED"), None);
+        let candidates = format_account_candidates_for_local_groups(&id);
+        assert!(
+            candidates.contains(&"TRUSTED\\alice".to_string()),
+            "NetBIOS domain must produce DOMAIN\\name candidate; got {candidates:?}"
+        );
+        assert!(
+            !candidates.contains(&"alice@TRUSTED".to_string()),
+            "NetBIOS domain must NOT produce the misleading UPN-style form 'alice@TRUSTED' — that was the round 5 finding 1 bug; got {candidates:?}"
         );
     }
 
     #[test]
     fn format_returns_plain_name_without_domain() {
         let id = identity_with(Some("Administrator"), None, None);
+        let candidates = format_account_candidates_for_local_groups(&id);
+        assert_eq!(candidates, vec!["Administrator".to_string()]);
         assert_eq!(
             format_account_for_local_groups(&id).as_deref(),
             Some("Administrator")
@@ -700,17 +886,47 @@ mod tests {
     }
 
     #[test]
-    fn format_returns_none_without_name() {
+    fn format_returns_empty_without_name() {
         let id = identity_with(None, Some("testdomain.local"), None);
+        assert!(format_account_candidates_for_local_groups(&id).is_empty());
         assert_eq!(format_account_for_local_groups(&id), None);
     }
 
     #[test]
     fn format_ignores_empty_upn() {
         let id = identity_with(Some("Administrator"), Some("testdomain.local"), Some(""));
+        // Empty UPN ist übersprungen, DOMAIN\name kommt zuerst (Round 5).
+        // Empty UPN is skipped; DOMAIN\name comes first.
         assert_eq!(
             format_account_for_local_groups(&id).as_deref(),
-            Some("Administrator@testdomain.local")
+            Some("testdomain.local\\Administrator")
         );
+    }
+
+    /// Heuristik: NetBIOS-Namen sind ohne Punkt, DNS-Suffixe haben Punkte.
+    /// Heuristic: NetBIOS names have no dot; DNS suffixes do.
+    #[test]
+    fn looks_like_dns_domain_distinguishes_netbios_and_dns() {
+        assert!(looks_like_dns_domain("corp.local"));
+        assert!(looks_like_dns_domain("ad.example.com"));
+        assert!(!looks_like_dns_domain("TRUSTED"));
+        assert!(!looks_like_dns_domain("CORP"));
+        assert!(!looks_like_dns_domain(".trailing"));
+        assert!(!looks_like_dns_domain("leading."));
+        assert!(!looks_like_dns_domain(""));
+    }
+
+    /// UPN-Eintrag hat absolute Priorität — auch wenn das Domain-Feld
+    /// auf NetBIOS oder DNS gesetzt ist.
+    /// UPN takes absolute priority.
+    #[test]
+    fn format_upn_wins_over_domain_form() {
+        let id = identity_with(
+            Some("alice"),
+            Some("TRUSTED"),
+            Some("alice@trusted.example"),
+        );
+        let candidates = format_account_candidates_for_local_groups(&id);
+        assert_eq!(candidates[0], "alice@trusted.example");
     }
 }

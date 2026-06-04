@@ -23,9 +23,8 @@ use ad_resolver::NoLsaBackend;
 #[cfg(windows)]
 use ad_resolver::WindowsLsaBackend;
 use ad_resolver::{
-    format_account_for_local_groups, ldap_client, principal::PrincipalInput,
-    resolve_local_group_sids, LdapConfig, LdapIdentityBackend, LdapResolver, PrincipalResolution,
-    PrincipalResolver, TlsMode,
+    ldap_client, principal::PrincipalInput, resolve_local_group_sids_for_identity, LdapConfig,
+    LdapIdentityBackend, LdapResolver, PrincipalResolution, PrincipalResolver, TlsMode,
 };
 use adpa_core::{
     model::{
@@ -837,14 +836,20 @@ fn collect_local_group_sids_for_path(
 
     let server_owned = effective_smb_target(path, explicit_smb_server);
     let server = server_owned.as_deref();
-    let Some(account) = format_account_for_local_groups(identity) else {
-        return (Vec::new(), LocalGroupEvalStatus::NotQueried);
-    };
-    match resolve_local_group_sids(server, &account) {
+    // Review 2026-06-04 Runde 5 Finding 1: Kandidaten-Loop statt
+    // single name@domain. Bei reinem NetBIOS-Trust faellt der alte Pfad
+    // sonst still durch NERR_USER_NOT_FOUND.
+    // Round 5 finding 1: candidate loop instead of single name@domain.
+    match resolve_local_group_sids_for_identity(server, identity) {
         Ok(v) => (v, LocalGroupEvalStatus::Applied),
         Err(e) => {
             let msg = e.to_string();
-            warn!(?server, account, error = %msg, "Local group resolution failed; result will be marked incomplete");
+            warn!(
+                ?server,
+                sid = %identity.sid.0,
+                error = %msg,
+                "Local group resolution failed; result will be marked incomplete"
+            );
             (Vec::new(), LocalGroupEvalStatus::NotAvailable(msg))
         }
     }

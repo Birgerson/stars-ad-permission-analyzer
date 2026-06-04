@@ -12,6 +12,68 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.3] — 2026-06-04
+
+**Patch-Release.** Schließt beide Findings aus ChatGPT-Code-Review
+2026-06-04 **Runde 5** — eines High, eines Medium. Eines davon ist der
+gefährlichste Bug-Typ, der bisher gefunden wurde: **stille
+Rechteunterbewertung** im lokalen Gruppen-Pfad bei Trust-/LSA-Identities.
+
+### Behoben
+- **High — Lokale Servergruppen konnten bei LSA-/Trust-Identitäten
+  still fehlen.** `format_account_for_local_groups()` baute den
+  Accountnamen blind als `name@domain`. Bei NetBIOS-Domains aus dem
+  LSA-/Trust-Pfad (`alice@TRUSTED` statt `TRUSTED\alice`) lieferte
+  `NetUserGetLocalGroups` regelmäßig `NERR_USER_NOT_FOUND` — und der
+  alte Code interpretierte das als `Ok(Vec::new())` →
+  `LocalGroupEvalStatus::Applied`. ACEs auf lokale Server-Gruppen
+  (z. B. `BUILTIN\Administrators`) blieben dadurch unsichtbar **ohne
+  `incomplete`-Signal**. Fix in drei Stufen:
+  - Neue Funktion `format_account_candidates_for_local_groups()` liefert
+    eine Kandidatenliste in Präferenzreihenfolge: UPN → `DOMAIN\name` →
+    `name@dns-domain` (nur wenn DNS-artig) → `name`. `looks_like_dns_domain()`
+    erkennt DNS-Suffixe heuristisch über das `.`-Vorkommen.
+  - Neue strict-Variante `resolve_local_group_sids_strict()` mit
+    explizitem `LocalGroupLookupOutcome { WithGroups(Vec<Sid>),
+    UserNotFoundOnServer }`-Typ — trennt "User gefunden, leere Liste"
+    von "User auf Server nicht bekannt".
+  - Neue Identity-Wrapper-Funktion
+    `resolve_local_group_sids_for_identity()` probiert die Kandidaten
+    durch; erster `WithGroups`-Treffer gewinnt; wenn **alle**
+    `UserNotFoundOnServer` liefern, gibt sie einen Validation-Fehler
+    mit `tried`-Liste zurück → Aufrufer setzen
+    `LocalGroupEvalStatus::NotAvailable(reason)` → Risk-Finding ist
+    `incomplete = true`.
+  - CLI- und GUI-`collect_local_group_sids_for_path` rufen jetzt
+    `resolve_local_group_sids_for_identity` direkt mit der `&Identity`
+    auf. Die alten Public-APIs bleiben backward-compatible erhalten.
+  - **5 neue Tests** plus zwei angepasste bestehende Tests:
+    `format_falls_back_to_domain_backslash_name_for_dns_domain`,
+    `format_netbios_domain_only_emits_domain_backslash_form`,
+    `format_returns_plain_name_without_domain`,
+    `looks_like_dns_domain_distinguishes_netbios_and_dns`,
+    `format_upn_wins_over_domain_form`.
+  - ADR 0040 (ChatGPT-Code-Review 2026-06-04 Runde 5, **Finding 1**).
+
+- **Medium — `docs/audit-kriterien.md` beschrieb `incomplete` noch mit
+  veralteter Vier-Ursachen-Liste.** Beide Sprachsektionen (DE und EN)
+  des `incomplete`-Abschnitts wurden auf die tatsächlichen Trigger
+  aus `risk_engine::is_incomplete()` aktualisiert: jetzt acht
+  durchnummerierte Ursachen plus separate Liste der **informationellen**
+  Marker, die explizit **nicht** als incomplete gelten
+  (`IdentityDisabled`, `IdentityDisabledStatusUnknown`,
+  `NonCanonicalDaclOrder`). Verweise auf ADR 0033, 0034, 0036, 0039.
+  Zusätzlich: **Doku-Konsistenz-Checkliste** als Blockquote am Ende,
+  die festhält, welche Dateien bei einem neuen
+  `PermissionDiagnostic`-Incomplete-Trigger gleichzeitig aktualisiert
+  werden müssen (ChatGPT-Code-Review 2026-06-04 Runde 5, **Finding 2**).
+
+### Hinzugefügt
+- **ADR 0040** (Kandidatenliste für lokale Gruppen-Auflösung) inkl.
+  Selbstkritik zu dem stillen NERR_USER_NOT_FOUND-Pfad seit v1.0.
+
+---
+
 ## [1.5.2] — 2026-06-04
 
 **Patch-Release.** Schließt alle drei Findings aus ChatGPT-Code-Review

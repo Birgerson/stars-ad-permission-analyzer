@@ -292,21 +292,51 @@ Stars klassifiziert jeden Befund in eine von fünf Stufen (`adpa_core::model::Ri
 
 Jeder `RiskFinding` trägt ein boolesches Feld `incomplete`. Es markiert Befunde, deren zugrundeliegende **Berechtigungsauswertung** Lücken hatte und die deshalb **vorsichtig** zu lesen sind.
 
-`incomplete = true` wird gesetzt, wenn mindestens eine der vier Ursachen vorliegt:
+`incomplete = true` wird gesetzt, wenn die zugrundeliegende Auswertung mindestens eine der folgenden Lücken hat. **Authoritative Quelle:** `crates/risk_engine/src/rules.rs::is_incomplete()` — die hier dokumentierte Liste muss mit dem Code synchron bleiben (zuletzt verifiziert für v1.5.3).
+
+**Direkte Auswertungs-Lücken:**
 
 1. **Share-DACL war nicht lesbar** (`ShareEvalStatus::ReadFailed(...)`).
    `effective_mask` ist dann nur eine **NTFS-Untergrenze** — der echte SMB-Zugriff könnte restriktiver sein.
 
-2. **DACL enthielt unsupported ACEs** (`unsupported_ace_count > 0`).
+2. **DACL enthielt unsupported NTFS-ACEs** (`unsupported_ace_count > 0`).
    Object-, Callback- oder Conditional-ACEs werden vom Parser übersprungen; ein versteckter Deny könnte das Ergebnis kippen.
 
 3. **Lokale Server-Gruppen konnten nicht aufgelöst werden** (`LocalGroupEvalStatus::NotAvailable(...)`).
-   ACEs auf z.B. eine lokale `Administrators`-Gruppe sind dann unsichtbar; die effektiven Rechte können **zu niedrig** sein.
+   ACEs auf z. B. eine lokale `Administrators`-Gruppe sind dann unsichtbar; die effektiven Rechte können **zu niedrig** sein. Seit v1.5.3 fällt darunter auch der Fall, dass `NetUserGetLocalGroups` für **alle** probierten Account-Namensformen `NERR_USER_NOT_FOUND` liefert (typisch bei Trust-/LSA-Identities mit NetBIOS-Domain) — siehe ADR 0040.
 
-4. **Share-DACL enthielt unsupported ACEs** (Diagnostik `UnsupportedShareAces`).
+**Strukturelle Identitäts-/Gruppen-Lücken** (variant-tagged `PermissionDiagnostic`-Marker in `EffectivePermission.diagnostics`):
+
+4. **Share-DACL enthielt unsupported ACEs** (`PermissionDiagnostic::UnsupportedShareAces`).
    Analog zu Punkt 2, aber auf der Share-Seite.
 
-Ein Befund mit `incomplete = true` heißt **nicht**, dass er falsch ist — er heißt, dass das zugrundeliegende Ergebnis nicht 100% vollständig sein könnte. Für ein Audit ist das die ehrliche Aussage; für eine automatisierte Eskalation darf man darauf nicht blind vertrauen.
+5. **Domain-Gruppen-Rekursion lief flach** (`PermissionDiagnostic::DomainGroupRecursionIncomplete`).
+   Gruppenauflösung über den SAM/LSA-Fallback (`NetUserGetGroups`) liefert nur direkte globale Gruppen — verschachtelte Domain-Gruppen sind nicht rekursiv aufgelöst. Siehe ADR 0033.
+
+6. **Identität liegt außerhalb der konfigurierten LDAP-Base** (`PermissionDiagnostic::IdentityNotInConfiguredLdapBase`).
+   LSA hat die SID aufgelöst, der konfigurierte `base_dn` indexiert sie aber nicht — typisch für Multi-Domain-Forests / Trusts. Cross-Domain-Mitgliedschaften können fehlen. Siehe ADR 0034 / 0036.
+
+7. **LDAP-Identity-Lookup ist mit technischem Fehler gescheitert** (`PermissionDiagnostic::IdentityLookupFailed { reason }`).
+   Bind, Timeout, DC nicht erreichbar. Die Analyse läuft mit Platzhalter-Identity und leerem Token weiter — der `reason`-Text trägt die ursprüngliche Fehlermeldung. Siehe ADR 0039.
+
+8. **Rekursive Gruppenauflösung ist gescheitert oder übersprungen** (`PermissionDiagnostic::GroupResolutionFailed { reason }`).
+   Tritt zusätzlich auf, wenn der `OutsideConfiguredLdapBase`-Pfad keine GC-Crawl-Logik hat und Memberships strukturell leer bleiben. Siehe ADR 0039.
+
+Marker, die **nicht** zur Incomplete-Klassifikation beitragen — informationell:
+
+- `PermissionDiagnostic::IdentityDisabled` (Konto in AD via `userAccountControl` deaktiviert; ACL-theoretische Rechte sind korrekt).
+- `PermissionDiagnostic::IdentityDisabledStatusUnknown` (`disabled`-Flag nicht zuverlässig ermittelbar; bezieht sich nicht auf die Permission-Berechnung).
+- `PermissionDiagnostic::NonCanonicalDaclOrder { at_index }` (DACL nicht in Windows-Canonical-Order; AccessCheck arbeitet trotzdem korrekt mit gespeicherter Reihenfolge).
+
+Ein Befund mit `incomplete = true` heißt **nicht**, dass er falsch ist — er heißt, dass das zugrundeliegende Ergebnis nicht 100 % vollständig sein könnte. Für ein Audit ist das die ehrliche Aussage; für eine automatisierte Eskalation darf man darauf nicht blind vertrauen.
+
+> **Doku-Konsistenz-Check (Beitragspolitik):** Wenn `PermissionDiagnostic` um eine Variante erweitert wird, die als Incomplete-Trigger gelten soll, müssen **gleichzeitig** aktualisiert werden:
+> - `crates/risk_engine/src/rules.rs::is_incomplete()` (Matching-Liste),
+> - dieser Abschnitt (audit-kriterien.md),
+> - die Marker-Tabelle in `docs/features-and-limitations.md`,
+> - die Marker-Tabelle in `docs/anwender-handbuch.md` und `docs/user-guide.md`.
+>
+> Dieser Konsistenz-Check ergänzt Review 2026-06-04 Runde 5 Finding 2.
 
 #### <a name="7-optimale-rechte-pro-rolle-und-pfad-klasse"></a>7. Optimale Rechte pro Rolle und Pfad-Klasse
 
@@ -854,21 +884,51 @@ Stars classifies every finding into one of five levels (`adpa_core::model::RiskS
 
 Every `RiskFinding` carries a boolean `incomplete` field. It marks findings whose underlying **permission evaluation** had gaps and which should therefore be read **cautiously**.
 
-`incomplete = true` is set when at least one of four causes applies:
+`incomplete = true` is set when the underlying evaluation has at least one of the gaps listed below. **Authoritative source:** `crates/risk_engine/src/rules.rs::is_incomplete()` — the list here must stay in sync with the code (last verified for v1.5.3).
+
+**Direct evaluation gaps:**
 
 1. **Share DACL was not readable** (`ShareEvalStatus::ReadFailed(...)`).
    `effective_mask` is then only an **NTFS lower bound** — actual SMB access could be more restrictive.
 
-2. **DACL contained unsupported ACEs** (`unsupported_ace_count > 0`).
+2. **DACL contained unsupported NTFS ACEs** (`unsupported_ace_count > 0`).
    Object, callback, or conditional ACEs are skipped by the parser; a hidden Deny could flip the result.
 
 3. **Local server groups could not be resolved** (`LocalGroupEvalStatus::NotAvailable(...)`).
-   ACEs targeting e.g. a local `Administrators` group are then invisible; effective rights may be **too low**.
+   ACEs targeting e.g. a local `Administrators` group are then invisible; effective rights may be **too low**. Since v1.5.3 this also covers the case where `NetUserGetLocalGroups` returns `NERR_USER_NOT_FOUND` for **all** tried account name forms (typical with trust / LSA identities backed by a NetBIOS domain) — see ADR 0040.
 
-4. **Share DACL contained unsupported ACEs** (diagnostic `UnsupportedShareAces`).
+**Structural identity / group gaps** (variant-tagged `PermissionDiagnostic` markers in `EffectivePermission.diagnostics`):
+
+4. **Share DACL contained unsupported ACEs** (`PermissionDiagnostic::UnsupportedShareAces`).
    Analogous to point 2 but on the share side.
 
-A finding with `incomplete = true` does **not** mean it is wrong — it means the underlying result might not be 100% complete. For an audit that is the honest statement; for an automated escalation you should not blindly trust it.
+5. **Domain group recursion was flat** (`PermissionDiagnostic::DomainGroupRecursionIncomplete`).
+   Group resolution via the SAM/LSA fallback (`NetUserGetGroups`) returns only direct global groups — nested domain groups are not recursively resolved. See ADR 0033.
+
+6. **Identity lives outside the configured LDAP base** (`PermissionDiagnostic::IdentityNotInConfiguredLdapBase`).
+   LSA resolved the SID, but the configured `base_dn` does not index it — typical in multi-domain forests / trusts. Cross-domain memberships may be missing. See ADR 0034 / 0036.
+
+7. **LDAP identity lookup failed with a technical error** (`PermissionDiagnostic::IdentityLookupFailed { reason }`).
+   Bind, timeout, DC unreachable. The analysis runs with a placeholder identity and an empty token — `reason` carries the underlying error. See ADR 0039.
+
+8. **Recursive group resolution failed or was skipped** (`PermissionDiagnostic::GroupResolutionFailed { reason }`).
+   Also fires when the `OutsideConfiguredLdapBase` path has no GC crawl logic and memberships remain structurally empty. See ADR 0039.
+
+Markers that do **not** contribute to incomplete — informational:
+
+- `PermissionDiagnostic::IdentityDisabled` (account flagged disabled in AD via `userAccountControl`; ACL-theoretical rights are correct).
+- `PermissionDiagnostic::IdentityDisabledStatusUnknown` (`disabled` flag not reliably determinable; orthogonal to permission computation).
+- `PermissionDiagnostic::NonCanonicalDaclOrder { at_index }` (DACL not in Windows canonical order; AccessCheck still works correctly on the stored order).
+
+A finding with `incomplete = true` does **not** mean it is wrong — it means the underlying result might not be 100 % complete. For an audit that is the honest statement; for an automated escalation you should not blindly trust it.
+
+> **Doc consistency check (contribution policy):** When `PermissionDiagnostic` is extended with a variant that should count as an incomplete trigger, the following must be updated **at the same time**:
+> - `crates/risk_engine/src/rules.rs::is_incomplete()` (the matching list),
+> - this section (audit-kriterien.md),
+> - the marker table in `docs/features-and-limitations.md`,
+> - the marker tables in `docs/anwender-handbuch.md` and `docs/user-guide.md`.
+>
+> This consistency check addresses review 2026-06-04 round 5 finding 2.
 
 #### <a name="7-optimal-rights"></a>7. Optimal rights per role and path class
 

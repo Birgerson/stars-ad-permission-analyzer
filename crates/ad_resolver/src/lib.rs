@@ -17,7 +17,11 @@ pub use config::{LdapConfig, TlsMode};
 #[cfg(windows)]
 pub use enumerate::{enumerate_all, IdentitySnapshot};
 #[cfg(windows)]
-pub use local_groups::{format_account_for_local_groups, resolve_local_group_sids};
+pub use local_groups::{
+    format_account_candidates_for_local_groups, format_account_for_local_groups,
+    resolve_local_group_sids, resolve_local_group_sids_for_identity,
+    resolve_local_group_sids_strict, LocalGroupLookupOutcome,
+};
 #[cfg(not(windows))]
 pub use principal::NoLsaBackend;
 #[cfg(windows)]
