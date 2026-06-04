@@ -67,40 +67,178 @@ impl LdapResolver {
         }
     }
 
-    /// Sucht einen Benutzer/Gruppe per sAMAccountName und gibt SID + Identity zurück.
-    /// Looks up a user/group by sAMAccountName and returns SID + Identity.
+    /// Löst eine Benutzer-Eingabe in (SID, Identity) auf. Unterstützt drei
+    /// formal verschiedene Eingabeformen mit jeweils passendem Pfad:
     ///
-    /// Unterstützt `DOMAIN\username` (Domäne wird ignoriert).
-    /// Supports `DOMAIN\username` format (domain part is stripped).
+    /// - **`DOMAIN\user`** wird via Windows-LSA (`LookupAccountNameW`)
+    ///   aufgelöst — domain-aware, eindeutig, kein LDAP-Sicherheits­vorlauf
+    ///   notwendig. Anschließend Identity-Details per LDAP-SID-Suche.
+    /// - **`user@domain.tld`** (UPN) sucht über `userPrincipalName` — UPN
+    ///   ist forestweit eindeutig.
+    /// - **`username`** (ohne Qualifier) sucht über `sAMAccountName`. Bei
+    ///   **mehreren** Treffern liefert die Funktion einen Eindeutigkeits­
+    ///   fehler statt stillschweigend den ersten Treffer zu nehmen.
+    ///
+    /// Schließt Review-Befund 3 (`DOMAIN\user` wurde bisher akzeptiert, der
+    /// Domainteil aber ignoriert, Mehrfachtreffer wurden stillschweigend
+    /// per `next()` aufgelöst).
+    ///
+    /// Resolves a user input to (SID, Identity). Supports three formally
+    /// distinct input forms each with its own routing:
+    ///
+    /// - **`DOMAIN\user`** resolves via Windows LSA
+    ///   (`LookupAccountNameW`) — domain-aware, unambiguous, no LDAP
+    ///   lookup needed up-front. Identity details are then loaded via
+    ///   LDAP SID search.
+    /// - **`user@domain.tld`** (UPN) searches via `userPrincipalName` —
+    ///   UPNs are unique forest-wide.
+    /// - **`username`** (unqualified) searches via `sAMAccountName`. If
+    ///   **multiple** matches exist this function returns a uniqueness
+    ///   error rather than silently taking the first one.
+    ///
+    /// Closes review finding 3 (`DOMAIN\user` was previously accepted,
+    /// the domain part discarded, multi-match silently resolved via
+    /// `next()`).
     pub async fn lookup_by_samaccount(
         &self,
         user_input: &str,
     ) -> Result<Option<(Sid, Identity)>, CoreError> {
-        let sam = match user_input.rfind('\\') {
-            Some(pos) => &user_input[pos + 1..],
-            None => user_input,
-        };
+        let trimmed = user_input.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Validation(
+                "Empty identity input — provide DOMAIN\\user, user@domain.tld or sAMAccountName"
+                    .to_owned(),
+            ));
+        }
 
-        let mut ldap = ldap_client::connect(&self.config).await?;
-        let result = ldap_client::search_by_samaccount(&mut ldap, &self.config.base_dn, sam).await;
-        ldap_client::disconnect(ldap).await;
+        // 1) DOMAIN\user — Windows-LSA-Pfad (domain-aware, kein LDAP-Risiko).
+        // 1) DOMAIN\user — Windows LSA path (domain-aware, no LDAP risk).
+        if trimmed.contains('\\') {
+            return self.lookup_via_lsa(trimmed).await;
+        }
 
-        match result? {
-            None => Ok(None),
-            Some(entry) => {
-                let sid = extract_sid_from_entry(&entry).ok_or_else(|| {
-                    CoreError::SidResolution(format!(
-                        "Kein objectSid für sAMAccountName / No objectSid for sAMAccountName: {sam}"
-                    ))
-                })?;
-                let identity = parse_identity_from_entry(&entry, &sid);
-                self.identity_cache
-                    .lock()
-                    .await
-                    .insert(sid.0.clone(), identity.clone());
+        // 2) UPN (user@domain.tld) — forestweit eindeutige LDAP-Suche.
+        // 2) UPN (user@domain.tld) — forest-wide unique LDAP search.
+        if trimmed.contains('@') {
+            return self.lookup_via_upn(trimmed).await;
+        }
+
+        // 3) Plain sAMAccountName — LDAP-Suche, Mehrfachtreffer = Fehler.
+        // 3) Plain sAMAccountName — LDAP search, multi-match = error.
+        self.lookup_via_samaccount_strict(trimmed).await
+    }
+
+    /// `DOMAIN\user` über Windows-LSA → SID → LDAP-Identity.
+    /// `DOMAIN\user` via Windows LSA → SID → LDAP identity.
+    #[cfg(windows)]
+    async fn lookup_via_lsa(
+        &self,
+        domain_qualified: &str,
+    ) -> Result<Option<(Sid, Identity)>, CoreError> {
+        // LSA-Aufruf läuft synchron auf dem Worker-Thread — kein
+        // tokio::time::timeout sinnvoll. Anschließende LDAP-Identity-Suche
+        // läuft über resolve_identity_internal, das das Timeout selbst trägt.
+        // LSA call runs synchronously on the worker thread — no
+        // tokio::time::timeout needed. The follow-up LDAP identity search
+        // runs through resolve_identity_internal, which carries the timeout.
+        match crate::sam::lookup_sid_for_account(None, domain_qualified) {
+            Ok(sid) => {
+                let identity = self.resolve_identity_internal(&sid).await?;
                 Ok(Some((sid, identity)))
             }
+            Err(CoreError::SidResolution(_)) => Ok(None),
+            Err(e) => Err(e),
         }
+    }
+
+    #[cfg(not(windows))]
+    async fn lookup_via_lsa(
+        &self,
+        _domain_qualified: &str,
+    ) -> Result<Option<(Sid, Identity)>, CoreError> {
+        Err(CoreError::Validation(
+            "DOMAIN\\user input requires Windows LSA — not available on this platform".to_owned(),
+        ))
+    }
+
+    /// `user@domain.tld` über LDAP `userPrincipalName`.
+    /// `user@domain.tld` via LDAP `userPrincipalName`.
+    async fn lookup_via_upn(&self, upn: &str) -> Result<Option<(Sid, Identity)>, CoreError> {
+        ldap_client::with_timeout(
+            "lookup_by_upn",
+            ldap_client::ldap_timeout(&self.config),
+            async {
+                let mut ldap = ldap_client::connect(&self.config).await?;
+                let result = ldap_client::search_by_upn(&mut ldap, &self.config.base_dn, upn).await;
+                ldap_client::disconnect(ldap).await;
+
+                match result? {
+                    None => Ok(None),
+                    Some(entry) => {
+                        let sid = extract_sid_from_entry(&entry).ok_or_else(|| {
+                            CoreError::SidResolution(format!(
+                                "Kein objectSid für UPN / No objectSid for UPN: {upn}"
+                            ))
+                        })?;
+                        let identity = parse_identity_from_entry(&entry, &sid);
+                        self.identity_cache
+                            .lock()
+                            .await
+                            .insert(sid.0.clone(), identity.clone());
+                        Ok(Some((sid, identity)))
+                    }
+                }
+            },
+        )
+        .await
+    }
+
+    /// `username` über `sAMAccountName` — Mehrfachtreffer = Eindeutigkeits­fehler.
+    /// `username` via `sAMAccountName` — multi-match = uniqueness error.
+    async fn lookup_via_samaccount_strict(
+        &self,
+        sam: &str,
+    ) -> Result<Option<(Sid, Identity)>, CoreError> {
+        ldap_client::with_timeout(
+            "lookup_by_samaccount_strict",
+            ldap_client::ldap_timeout(&self.config),
+            async {
+                let mut ldap = ldap_client::connect(&self.config).await?;
+                let result =
+                    ldap_client::search_all_by_samaccount(&mut ldap, &self.config.base_dn, sam)
+                        .await;
+                ldap_client::disconnect(ldap).await;
+
+                let entries = result?;
+                if entries.len() > 1 {
+                    // Eindeutigkeits-Fehler statt blind `next()` — der
+                    // Aufrufer soll bewusst DOMAIN\user oder UPN nutzen.
+                    // Uniqueness error instead of blind `next()` — the
+                    // caller must explicitly use DOMAIN\user or UPN.
+                    return Err(CoreError::Validation(format!(
+                        "Ambiguous sAMAccountName '{sam}' — {} matches found. Use 'DOMAIN\\user' or 'user@domain.tld' to disambiguate.",
+                        entries.len()
+                    )));
+                }
+                match entries.into_iter().next() {
+                    None => Ok(None),
+                    Some(entry) => {
+                        let sid = extract_sid_from_entry(&entry).ok_or_else(|| {
+                            CoreError::SidResolution(format!(
+                                "Kein objectSid für sAMAccountName / No objectSid for sAMAccountName: {sam}"
+                            ))
+                        })?;
+                        let identity = parse_identity_from_entry(&entry, &sid);
+                        self.identity_cache
+                            .lock()
+                            .await
+                            .insert(sid.0.clone(), identity.clone());
+                        Ok(Some((sid, identity)))
+                    }
+                }
+            },
+        )
+        .await
     }
 
     /// Gibt die Anzahl gecachter Identitäten zurück (für Tests und Diagnose).
@@ -122,26 +260,38 @@ impl LdapResolver {
             }
         }
 
-        let mut ldap = ldap_client::connect(&self.config).await?;
-        let result = ldap_client::search_by_sid(&mut ldap, &self.config.base_dn, &sid.0).await;
-        ldap_client::disconnect(ldap).await;
+        // Gesamtoperation gegen das konfigurierte Timeout absichern
+        // (Review-Befund 5).
+        // Bound the whole operation against the configured timeout
+        // (review finding 5).
+        let identity = ldap_client::with_timeout(
+            "resolve_identity",
+            ldap_client::ldap_timeout(&self.config),
+            async {
+                let mut ldap = ldap_client::connect(&self.config).await?;
+                let result =
+                    ldap_client::search_by_sid(&mut ldap, &self.config.base_dn, &sid.0).await;
+                ldap_client::disconnect(ldap).await;
 
-        let identity = match result? {
-            Some(entry) => parse_identity_from_entry(&entry, sid),
-            None => {
-                // Verwaiste SID — kein AD-Objekt gefunden
-                // Orphaned SID — no AD object found
-                warn!("Verwaiste SID / Orphaned SID: {}", sid.0);
-                Identity {
-                    sid: sid.clone(),
-                    name: None,
-                    domain: None,
-                    kind: IdentityKind::Orphaned,
-                    disabled: false,
-                    user_principal_name: None,
-                }
-            }
-        };
+                Ok(match result? {
+                    Some(entry) => parse_identity_from_entry(&entry, sid),
+                    None => {
+                        // Verwaiste SID — kein AD-Objekt gefunden
+                        // Orphaned SID — no AD object found
+                        warn!("Verwaiste SID / Orphaned SID: {}", sid.0);
+                        Identity {
+                            sid: sid.clone(),
+                            name: None,
+                            domain: None,
+                            kind: IdentityKind::Orphaned,
+                            disabled: false,
+                            user_principal_name: None,
+                        }
+                    }
+                })
+            },
+        )
+        .await?;
 
         // In Cache legen
         // Store in cache
@@ -181,6 +331,22 @@ impl LdapResolver {
     /// [`MembershipPathSource::LdapMatchingRule`] — transitive membership
     /// is certain, the concrete route is not.
     async fn resolve_memberships_internal(
+        &self,
+        sid: &Sid,
+    ) -> Result<Vec<GroupMembership>, CoreError> {
+        // Gesamte Mitgliedschafts-Auflösung gegen das konfigurierte Timeout
+        // absichern (Review-Befund 5).
+        // Bound the whole membership resolution against the configured
+        // timeout (review finding 5).
+        ldap_client::with_timeout(
+            "resolve_memberships",
+            ldap_client::ldap_timeout(&self.config),
+            self.resolve_memberships_inner(sid),
+        )
+        .await
+    }
+
+    async fn resolve_memberships_inner(
         &self,
         sid: &Sid,
     ) -> Result<Vec<GroupMembership>, CoreError> {

@@ -24,6 +24,16 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 ### Hinzugefügt
 - Neun Regressionstests in `validation::path`: `parse_unc_components` mit lokalen Pfaden (`C:\Windows\SYSVOL`, `D:\Daten`, `\singlebackslash\foo`), klassischem UNC, Long-Path-UNC mit Hostname und mit IP-Adresse, lokaler Long-Path-Form `\\?\C:\…` (muss als NICHT-UNC erkannt werden), unvollständigem UNC ohne Share, sowie `effective_smb_target`: expliziter Override auf lokalem und UNC-Pfad, Fallback auf UNC-Server, kein Override und kein UNC.
 - GUI-Smoke-Test `share_status_does_not_treat_local_path_as_unc`, der genau die Sentinel-Konstellation aus Befund 1 prüft: `C:\Windows\SYSVOL` ohne Override muss `NotApplicable` liefern, keinen Share-Lookup.
+- `ldap_client::with_timeout(operation, duration, future)` und `ldap_client::ldap_timeout(&config)` als zentrale Timeout-Wrapper für LDAP-Operationen. Schliesst **ChatGPT-Code-Review 2026-06-04 Finding 5** (`LdapConfig::timeout_secs` war konfiguriert, wurde aber nirgends angewendet — produktiv konnte ein unerreichbarer DC die Analyse beliebig lange blockieren). `LdapResolver::lookup_by_samaccount`, `resolve_identity_internal` und `resolve_memberships_internal` umklammern jetzt ihre vollständige LDAP-Logik mit dem konfigurierten Timeout; `connect()` selbst klammert TCP/TLS-Aufbau und Bind separat ein.
+- `ldap_client::search_all_by_samaccount` (liefert **alle** Treffer für eine spätere Eindeutigkeits-Prüfung) und `ldap_client::search_by_upn` (Suche über `userPrincipalName`).
+- `LdapResolver::lookup_via_lsa`, `lookup_via_upn` und `lookup_via_samaccount_strict` als interne Helfer für die jeweilige Eingabeform.
+
+### Geändert
+- **`LdapResolver::lookup_by_samaccount`** wurde komplett überarbeitet — Schliesst **ChatGPT-Code-Review 2026-06-04 Finding 3** (`DOMAIN\user` wurde akzeptiert, der Domainteil aber stillschweigend abgeschnitten; in Multi-Domain-Forests konnte das die SID des **falschen** Benutzers zurück­liefern). Der neue Dispatcher unterscheidet drei Eingabeformen:
+  - `DOMAIN\user` → Auflösung über die Windows-LSA (`LookupAccountNameW`); die LSA ist domain-aware und garantiert die richtige Domain.
+  - `user@domain.tld` (UPN) → LDAP-Suche über `userPrincipalName` (forestweit eindeutig).
+  - `username` (ohne Qualifier) → LDAP-Suche über `sAMAccountName`, **Mehrfachtreffer liefern jetzt einen Eindeutigkeitsfehler** statt stillschweigend den ersten Treffer zu nehmen.
+- Leere Eingabe (`""`) liefert jetzt einen `CoreError::Validation` statt eines stummen No-Op.
 
 ---
 

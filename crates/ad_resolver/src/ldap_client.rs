@@ -7,6 +7,9 @@
 //! Encapsulates all ldap3 calls. No domain logic — only connection,
 //! authentication, and raw search results.
 
+use std::future::Future;
+use std::time::Duration;
+
 use ldap3::adapters::{Adapter, EntriesOnly, PagedResults};
 use ldap3::{Ldap, LdapConnAsync, Scope, SearchEntry};
 use tracing::{debug, warn};
@@ -28,6 +31,35 @@ pub const LDAP_MATCHING_RULE_IN_CHAIN: &str = "1.2.840.113556.1.4.1941";
 use adpa_core::error::CoreError;
 
 use crate::config::LdapConfig;
+
+/// Wickelt eine LDAP-Operation in einen `tokio::time::timeout` ein. Schliesst
+/// Review-Befund 5: `LdapConfig::timeout_secs` war zwar konfigurierbar, wurde
+/// aber an keiner Stelle wirklich angewendet — produktiv konnte ein
+/// unerreichbarer DC die Analyse beliebig lange blockieren.
+///
+/// Wraps an LDAP operation in `tokio::time::timeout`. Closes review finding 5:
+/// `LdapConfig::timeout_secs` was configurable but never actually enforced —
+/// an unreachable DC could block the analysis indefinitely.
+pub async fn with_timeout<F, T>(operation: &str, timeout: Duration, fut: F) -> Result<T, CoreError>
+where
+    F: Future<Output = Result<T, CoreError>>,
+{
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(inner) => inner,
+        Err(_) => Err(CoreError::LdapQuery(format!(
+            "LDAP operation '{operation}' timed out after {}s",
+            timeout.as_secs()
+        ))),
+    }
+}
+
+/// Bequemer Konvertierer: aus den Sekunden in `LdapConfig` ein
+/// `Duration`-Objekt für die Timeout-Wrapper bauen.
+/// Convenience: build a `Duration` for the timeout wrappers from the
+/// seconds field on `LdapConfig`.
+pub fn ldap_timeout(config: &LdapConfig) -> Duration {
+    Duration::from_secs(config.timeout_secs)
+}
 use crate::sid_util::sid_str_to_ldap_filter;
 
 /// Attribute, die bei Identitäts-Suchen gelesen werden.
@@ -115,11 +147,19 @@ pub async fn connect(config: &LdapConfig) -> Result<Ldap, CoreError> {
     let url = config.url();
     debug!(url, tls_mode = ?config.tls_mode, "LDAP verbinden / connecting");
 
-    let (conn, mut ldap) = LdapConnAsync::new(&url).await.map_err(|e| {
-        CoreError::AdConnection(format!(
-            "LDAP-Verbindung fehlgeschlagen / connection failed ({url}): {e}"
-        ))
-    })?;
+    // TCP/TLS-Aufbau einklammern — sonst kann ein nicht erreichbarer DC
+    // hier beliebig lange hängen (Review-Befund 5).
+    // Wrap TCP/TLS setup — otherwise an unreachable DC can hang here
+    // indefinitely (review finding 5).
+    let url_owned = url.clone();
+    let (conn, mut ldap) = with_timeout("connect", ldap_timeout(config), async move {
+        LdapConnAsync::new(&url_owned).await.map_err(|e| {
+            CoreError::AdConnection(format!(
+                "LDAP-Verbindung fehlgeschlagen / connection failed: {e}"
+            ))
+        })
+    })
+    .await?;
 
     // Verbindungs-Task im Hintergrund treiben
     // Drive connection task in background
@@ -129,15 +169,23 @@ pub async fn connect(config: &LdapConfig) -> Result<Ldap, CoreError> {
         }
     });
 
-    ldap.simple_bind(&config.bind_dn, &config.bind_password)
-        .await
-        .map_err(|e| {
-            CoreError::AdConnection(format!("LDAP-Bind fehlgeschlagen / bind failed: {e}"))
-        })?
-        .success()
-        .map_err(|e| {
-            CoreError::AdConnection(format!("LDAP-Bind abgelehnt / bind rejected: {e}"))
-        })?;
+    // Bind ebenfalls einklammern — falsche Credentials hängen normalerweise
+    // nicht, aber ein Server mit langsamer LSA-Antwort schon.
+    // Wrap the bind as well — wrong credentials usually don't hang, but a
+    // server with a slow LSA reply can.
+    with_timeout("bind", ldap_timeout(config), async {
+        ldap.simple_bind(&config.bind_dn, &config.bind_password)
+            .await
+            .map_err(|e| {
+                CoreError::AdConnection(format!("LDAP-Bind fehlgeschlagen / bind failed: {e}"))
+            })?
+            .success()
+            .map_err(|e| {
+                CoreError::AdConnection(format!("LDAP-Bind abgelehnt / bind rejected: {e}"))
+            })?;
+        Ok(())
+    })
+    .await?;
 
     debug!("LDAP verbunden / connected as: {}", config.bind_dn);
     Ok(ldap)
@@ -197,13 +245,36 @@ pub async fn search_by_dn(
     Ok(rs.into_iter().next().map(RawEntry::from_search_entry))
 }
 
-/// Sucht Gruppenmitglieder anhand des sAMAccountName.
-/// Searches for group members by sAMAccountName.
+/// Sucht Gruppenmitglieder anhand des sAMAccountName. Liefert nur den ersten
+/// Treffer — historische API, durch `search_all_by_samaccount` für die
+/// Eindeutigkeits-Prüfung ergänzt (Review-Befund 3).
+/// Searches for group members by sAMAccountName. Returns only the first hit —
+/// historic API, complemented by `search_all_by_samaccount` for the
+/// uniqueness check (review finding 3).
 pub async fn search_by_samaccount(
     ldap: &mut Ldap,
     base_dn: &str,
     sam: &str,
 ) -> Result<Option<RawEntry>, CoreError> {
+    let all = search_all_by_samaccount(ldap, base_dn, sam).await?;
+    Ok(all.into_iter().next())
+}
+
+/// Sucht **alle** AD-Einträge mit einem gegebenen sAMAccountName und gibt sie
+/// als Vektor zurück. Aufrufer können auf Mehrfachtreffer prüfen und einen
+/// Eindeutigkeitsfehler ausgeben — schliesst Review-Befund 3 (`DOMAIN\user`
+/// wurde akzeptiert, der Domainteil aber ignoriert, Mehrfachtreffer wurden
+/// stillschweigend per `next()` aufgelöst).
+/// Searches for **all** AD entries with a given sAMAccountName and returns
+/// them as a vector. Callers can detect multi-match and surface a uniqueness
+/// error — closes review finding 3 (`DOMAIN\user` was accepted but the
+/// domain part was ignored, and multi-match was silently resolved via
+/// `next()`).
+pub async fn search_all_by_samaccount(
+    ldap: &mut Ldap,
+    base_dn: &str,
+    sam: &str,
+) -> Result<Vec<RawEntry>, CoreError> {
     let filter = format!("(sAMAccountName={})", escape_filter_value(sam));
 
     debug!("LDAP-Suche nach sAMAccountName / search by sAMAccountName: {sam}");
@@ -218,6 +289,39 @@ pub async fn search_by_samaccount(
         .map_err(|e| {
             CoreError::LdapQuery(format!(
                 "sAM-Suchergebnis-Fehler / sAM search result error: {e}"
+            ))
+        })?;
+
+    Ok(rs.into_iter().map(RawEntry::from_search_entry).collect())
+}
+
+/// Sucht ein AD-Objekt anhand seines `userPrincipalName` (UPN, Form
+/// `user@domain.tld`). UPNs sind forestweit eindeutig — verhindert die
+/// Ambiguität, die `sAMAccountName` in Multi-Domain-Forests hat
+/// (Review-Befund 3).
+/// Searches for an AD object by its `userPrincipalName` (UPN, form
+/// `user@domain.tld`). UPNs are unique forest-wide — prevents the
+/// ambiguity `sAMAccountName` exhibits in multi-domain forests (review
+/// finding 3).
+pub async fn search_by_upn(
+    ldap: &mut Ldap,
+    base_dn: &str,
+    upn: &str,
+) -> Result<Option<RawEntry>, CoreError> {
+    let filter = format!("(userPrincipalName={})", escape_filter_value(upn));
+
+    debug!("LDAP-Suche nach UPN / search by UPN: {upn}");
+
+    let (rs, _res) = ldap
+        .search(base_dn, Scope::Subtree, &filter, IDENTITY_ATTRS)
+        .await
+        .map_err(|e| {
+            CoreError::LdapQuery(format!("UPN-Suche fehlgeschlagen / UPN search failed: {e}"))
+        })?
+        .success()
+        .map_err(|e| {
+            CoreError::LdapQuery(format!(
+                "UPN-Suchergebnis-Fehler / UPN search result error: {e}"
             ))
         })?;
 
