@@ -417,7 +417,7 @@ async fn run_analyze(
     // Order matters: without local_group_sids the share mask would ignore ACEs
     // that target local server groups.
     let (local_group_sids, local_group_status) =
-        collect_local_group_sids_for_path(&path, &resolved.identity);
+        collect_local_group_sids_for_path(&path, smb_server.as_deref(), &resolved.identity);
 
     if let adpa_core::model::LocalGroupEvalStatus::NotAvailable(ref msg) = local_group_status {
         println!(
@@ -606,7 +606,7 @@ async fn run_scan(
     //     Resolve local server groups before the share mask — otherwise the local
     //     group SIDs are missing from the token evaluated against the share DACL.
     let (scan_local_group_sids, scan_local_group_status) =
-        collect_local_group_sids_for_path(&path, &resolved.identity);
+        collect_local_group_sids_for_path(&path, smb_server.as_deref(), &resolved.identity);
 
     if let adpa_core::model::LocalGroupEvalStatus::NotAvailable(ref msg) = scan_local_group_status {
         println!(
@@ -833,17 +833,13 @@ async fn run_scan(
 // Share-mask helpers
 // ---------------------------------------------------------------------------
 
-/// Extrahiert Server- und Share-Name aus einem UNC-Pfad.
-/// Extracts server and share name from a UNC path.
-///
-/// `\\server\share\...` oder `//server/share/...` → `Some(("server", "share"))`
-fn unc_components(path: &str) -> Option<(String, String)> {
-    let stripped = path.trim_start_matches('\\').trim_start_matches('/');
-    let mut parts = stripped.splitn(3, ['\\', '/']);
-    let server = parts.next().filter(|s| !s.is_empty())?.to_owned();
-    let share = parts.next().filter(|s| !s.is_empty())?.to_owned();
-    Some((server, share))
-}
+// UNC-Zerlegung lebt jetzt zentral in validation::path::parse_unc_components.
+// Die alte CLI-lokale Variante hat lokale Pfade fälschlich als UNC akzeptiert
+// (Review-Befund 1) und Long-Path-UNC falsch zerlegt (Review-Befund 4).
+// UNC parsing now lives centrally in validation::path::parse_unc_components.
+// The old CLI-local variant accepted local paths as UNC (review finding 1) and
+// mis-split long-path UNC (review finding 4).
+use validation::path::{effective_smb_target, parse_unc_components};
 
 /// Sammelt alle SIDs des Benutzers (eigene + Gruppen-SIDs).
 /// Collects all SIDs for the user (own + group SIDs).
@@ -863,14 +859,25 @@ fn resolve_scan_share_status(
     access_context: AccessContext,
 ) -> (adpa_core::model::ShareMaskStatus, usize) {
     use adpa_core::model::ShareMaskStatus;
-    let (server, share) = if let (Some(srv), Some(shr)) = (smb_server, share_name) {
-        (srv.to_owned(), shr.to_owned())
-    } else if let Some((srv, shr)) = unc_components(path) {
-        let server = smb_server.map(str::to_owned).unwrap_or(srv);
-        let share = share_name.map(str::to_owned).unwrap_or(shr);
-        (server, share)
-    } else {
-        return (ShareMaskStatus::NotApplicable, 0);
+    // Server-Wahl: expliziter `smb_server` schlägt UNC-Server (Finding 2).
+    // Share-Wahl: expliziter `share_name` schlägt UNC-Share. Ohne UNC und ohne
+    // expliziten Share landen wir bei NotApplicable — der Aufrufer wollte
+    // keinen SMB-Kontext.
+    // Server selection: explicit `smb_server` beats the UNC server (finding 2).
+    // Share selection: explicit `share_name` beats the UNC share. Without a UNC
+    // and without an explicit share we land in NotApplicable — the caller did
+    // not ask for an SMB context.
+    let path_components = parse_unc_components(path);
+    let server = match effective_smb_target(path, smb_server) {
+        Some(s) => s,
+        None => return (ShareMaskStatus::NotApplicable, 0),
+    };
+    let share = match share_name {
+        Some(s) => s.to_owned(),
+        None => match path_components {
+            Some((_, share_from_path)) => share_from_path,
+            None => return (ShareMaskStatus::NotApplicable, 0),
+        },
     };
 
     tracing::info!(server = %server, share = %share, "Resolving share mask");
@@ -938,6 +945,7 @@ fn resolve_scan_share_status(
 /// a failed call does not abort the analysis.
 fn collect_local_group_sids_for_path(
     path: &str,
+    explicit_smb_server: Option<&str>,
     identity: &adpa_core::model::Identity,
 ) -> (
     Vec<adpa_core::model::Sid>,
@@ -945,7 +953,13 @@ fn collect_local_group_sids_for_path(
 ) {
     use adpa_core::model::LocalGroupEvalStatus;
 
-    let server_owned = unc_components(path).map(|(s, _)| s);
+    // Finding 2: lokale Gruppen MÜSSEN vom selben Server kommen wie die
+    // Share-DACL. effective_smb_target priorisiert den expliziten
+    // `--smb-server` und fällt sonst auf den UNC-Server zurück.
+    // Finding 2: local groups MUST come from the same server as the share
+    // DACL. effective_smb_target prefers the explicit `--smb-server` and
+    // falls back to the UNC server otherwise.
+    let server_owned = effective_smb_target(path, explicit_smb_server);
     let server = server_owned.as_deref();
     let Some(account) = format_account_for_local_groups(identity) else {
         // Ohne brauchbaren Accountnamen koennen wir NetUserGetLocalGroups

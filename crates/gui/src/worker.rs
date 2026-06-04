@@ -672,8 +672,13 @@ async fn handle_analyze(
     let (identity, memberships) = resolve_identity_sids(sid, ldap).await?;
 
     // Lokale Server-Gruppen vor der Share-Maske bestimmen — siehe CLI-Pendant.
+    // Finding 2: explizit gesetzter SMB-Server wird durchgereicht, damit
+    // lokale Gruppen vom selben Server wie die Share-DACL kommen.
     // Resolve local server groups before the share mask — see CLI counterpart.
-    let (local_group_sids, local_group_status) = collect_local_group_sids_for_path(path, &identity);
+    // Finding 2: explicit SMB server is forwarded so local groups come from
+    // the same server as the share DACL.
+    let (local_group_sids, local_group_status) =
+        collect_local_group_sids_for_path(path, smb_server, &identity);
 
     let (share_status, unsupported_share_ace_count) = resolve_share_status(
         path,
@@ -713,17 +718,23 @@ async fn handle_analyze(
 }
 
 /// Sammelt lokale Gruppen-SIDs auf dem Zielserver der Analyse — siehe CLI-Pendant.
+/// Finding 2: priorisiert den explizit gesetzten `smb_server` vor dem aus dem
+/// Pfad abgeleiteten UNC-Server, damit der Token-Satz konsistent bleibt.
 /// Collects local group SIDs on the analysis target server — see CLI counterpart.
+/// Finding 2: prefers the explicit `smb_server` over the path-derived UNC server
+/// so the token SID set stays consistent.
 fn collect_local_group_sids_for_path(
     path: &str,
+    explicit_smb_server: Option<&str>,
     identity: &Identity,
 ) -> (
     Vec<adpa_core::model::Sid>,
     adpa_core::model::LocalGroupEvalStatus,
 ) {
     use adpa_core::model::LocalGroupEvalStatus;
+    use validation::path::effective_smb_target;
 
-    let server_owned = unc_components(path).map(|(s, _)| s);
+    let server_owned = effective_smb_target(path, explicit_smb_server);
     let server = server_owned.as_deref();
     let Some(account) = format_account_for_local_groups(identity) else {
         return (Vec::new(), LocalGroupEvalStatus::NotQueried);
@@ -817,7 +828,8 @@ async fn handle_scan(
     // damit Share-ACEs auf lokale Gruppen ebenfalls beruecksichtigt werden.
     // Resolve local server groups once per scan root — before the share mask, so
     // that share ACEs targeting local groups are also taken into account.
-    let (local_group_sids, local_group_status) = collect_local_group_sids_for_path(root, &identity);
+    let (local_group_sids, local_group_status) =
+        collect_local_group_sids_for_path(root, smb_server, &identity);
 
     if let adpa_core::model::LocalGroupEvalStatus::NotAvailable(ref msg) = local_group_status {
         let lg_message =
@@ -1618,10 +1630,20 @@ fn resolve_share_status(
     access_context: AccessContext,
 ) -> (adpa_core::model::ShareMaskStatus, usize) {
     use adpa_core::model::ShareMaskStatus;
-    let (server, share) = match (smb_server, share_name) {
-        (Some(s), Some(n)) => (s.to_string(), n.to_string()),
-        _ => match unc_components(path) {
-            Some(pair) => pair,
+    // Server-Wahl: expliziter `smb_server` schlägt UNC-Server (Finding 2).
+    // Share-Wahl: expliziter `share_name` schlägt UNC-Share.
+    // Server selection: explicit `smb_server` beats the UNC server (finding 2).
+    // Share selection: explicit `share_name` beats the UNC share.
+    use validation::path::{effective_smb_target, parse_unc_components};
+    let path_components = parse_unc_components(path);
+    let server = match effective_smb_target(path, smb_server) {
+        Some(s) => s,
+        None => return (ShareMaskStatus::NotApplicable, 0),
+    };
+    let share = match share_name {
+        Some(s) => s.to_string(),
+        None => match path_components {
+            Some((_, s)) => s,
             None => return (ShareMaskStatus::NotApplicable, 0),
         },
     };
@@ -1654,64 +1676,54 @@ fn resolve_share_status(
     }
 }
 
-/// Zerlegt einen UNC-Pfad in (Server, Share). Lokale Pfade (`C:\…`) liefern
-/// `None`, damit kein Share-Lookup auf einem Disk-Buchstaben gestartet wird —
-/// vorher landete `C:\Windows` als `NetShareGetInfo("C:", "Windows")` im
-/// share_scanner und wurde mit "Status 53" abgewiesen, obwohl der Aufrufer
-/// gar keinen Share-Kontext angefragt hatte.
-/// Splits a UNC path into (server, share). Local paths (`C:\…`) return
-/// `None` so no share lookup is started on a drive letter — previously
-/// `C:\Windows` was forwarded as `NetShareGetInfo("C:", "Windows")` to the
-/// share_scanner and rejected with "status 53", even though the caller had
-/// not asked for a share context at all.
-fn unc_components(path: &str) -> Option<(String, String)> {
-    let bytes = path.as_bytes();
-    let has_unc_prefix =
-        matches!(bytes.first(), Some(b'\\' | b'/')) && matches!(bytes.get(1), Some(b'\\' | b'/'));
-    if !has_unc_prefix {
-        return None;
-    }
-    let stripped = path.trim_start_matches(['\\', '/']);
-    let mut parts = stripped.splitn(3, ['\\', '/']);
-    let server = parts.next().filter(|s| !s.is_empty())?.to_owned();
-    let share = parts.next().filter(|s| !s.is_empty())?.to_owned();
-    Some((server, share))
-}
+// UNC-Zerlegung lebt jetzt zentral in validation::path::parse_unc_components.
+// Long-Path-UNC (\\?\UNC\…) wird dort korrekt behandelt — der Review-Befund 4
+// betraf nur die GUI-lokale Variante hier. Die alte Doku-Begründung steht in
+// validation::path::parse_unc_components.
+// UNC parsing now lives centrally in validation::path::parse_unc_components.
+// Long-path UNC (\\?\UNC\…) is handled correctly there — review finding 4
+// applied to the GUI-local variant that used to live here. The original
+// documentation rationale lives in validation::path::parse_unc_components.
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Regression: lokale Pfade dürfen `unc_components` nicht passieren —
-    /// sonst landet z. B. `C:\Windows` als `NetShareGetInfo("C:", "Windows")`
-    /// im share_scanner und der Aufrufer sieht einen erfundenen Share-Fehler,
-    /// obwohl SMB gar nicht angefragt war.
-    /// Regression: local paths must not pass `unc_components` — otherwise
-    /// e.g. `C:\Windows` ends up as `NetShareGetInfo("C:", "Windows")` in
-    /// the share_scanner and the caller sees a fabricated share error even
-    /// though SMB was not requested at all.
+    // Die UNC-Zerlegungs-Tests sind nach validation::path gewandert, wo der
+    // gemeinsame Helfer `parse_unc_components` lebt. Hier nur noch ein
+    // Round-Trip-Smoke-Test, dass der GUI-Worker den Helfer wirklich nutzt
+    // (Sentinel-Bug aus Review-Befund 1).
+    // The UNC parsing tests moved to validation::path where the shared
+    // helper `parse_unc_components` lives. Here only a smoke test that the
+    // GUI worker actually delegates to it (sentinel bug from review
+    // finding 1).
     #[test]
-    fn unc_components_rejects_local_paths() {
-        assert_eq!(unc_components(r"C:\Windows"), None);
-        assert_eq!(unc_components(r"D:\Daten\Abteilung"), None);
-        assert_eq!(unc_components(r"\singlebackslash\foo"), None);
-        assert_eq!(unc_components(""), None);
-    }
-
-    #[test]
-    fn unc_components_accepts_unc_paths() {
-        assert_eq!(
-            unc_components(r"\\server\share\sub"),
-            Some(("server".to_string(), "share".to_string()))
+    fn share_status_does_not_treat_local_path_as_unc() {
+        // Lokaler Pfad ohne SMB-Override → kein Share-Lookup, NotApplicable.
+        // Hätte vor dem Fix `NetShareGetInfo("C:", "Windows")` aufgerufen.
+        // Local path without an SMB override → no share lookup, NotApplicable.
+        // Before the fix this would have called `NetShareGetInfo("C:", "Windows")`.
+        let dummy_id = Identity {
+            sid: adpa_core::model::Sid("S-1-5-21-1-2-3-1000".to_owned()),
+            name: Some("test".into()),
+            domain: None,
+            kind: adpa_core::model::IdentityKind::User,
+            disabled: false,
+            user_principal_name: None,
+        };
+        let (status, _unsupported) = resolve_share_status(
+            r"C:\Windows\SYSVOL",
+            None,
+            None,
+            &dummy_id.sid.0,
+            &[],
+            &[],
+            AccessContext::LocalInteractive,
         );
-        assert_eq!(
-            unc_components("//server/share"),
-            Some(("server".to_string(), "share".to_string()))
-        );
-        assert_eq!(
-            unc_components(r"\\fileserver\Buchhaltung"),
-            Some(("fileserver".to_string(), "Buchhaltung".to_string()))
-        );
+        assert!(matches!(
+            status,
+            adpa_core::model::ShareMaskStatus::NotApplicable
+        ));
     }
 
     /// Finding 6: persist_scan muss strukturierte Walk-/Eval-Fehler in

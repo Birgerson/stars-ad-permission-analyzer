@@ -270,6 +270,83 @@ impl From<&ValidatedUncPath> for WindowsApiPath {
     }
 }
 
+/// Zerlegt einen UNC-Pfad in `(server, share)`. Lokale Pfade (`C:\…`),
+/// `\\?\C:\…`-Long-Paths und Pfade mit nur einem führenden Slash
+/// liefern `None` — damit kein Share-Lookup mit einem Laufwerks­buchstaben
+/// als Servername gestartet wird.
+///
+/// Akzeptierte Eingabeformen:
+/// - `\\server\share\…` (klassisches UNC)
+/// - `//server/share/…` (POSIX-Variante)
+/// - `\\?\UNC\server\share\…` (Long-Path-UNC)
+///
+/// Schließt **Review-Befund 1** (CLI hielt `C:\Windows\SYSVOL` für UNC) und
+/// **Review-Befund 4** (Long-Path-UNC wurde als Server=`?`, Share=`UNC`
+/// zerlegt). Die GUI hatte eine ähnliche Lokal-Pfad-Prüfung schon; CLI nicht.
+/// Diese Funktion ist die *eine* Quelle der Wahrheit für CLI **und** GUI.
+///
+/// Splits a UNC path into `(server, share)`. Local paths (`C:\…`),
+/// `\\?\C:\…` long paths and single-prefix paths return `None` — so no
+/// share lookup is started with a drive letter as the server name.
+///
+/// Accepted input forms:
+/// - `\\server\share\…` (classic UNC)
+/// - `//server/share/…` (POSIX variant)
+/// - `\\?\UNC\server\share\…` (long-path UNC)
+///
+/// Closes **review finding 1** (CLI mistook `C:\Windows\SYSVOL` for UNC)
+/// and **finding 4** (long-path UNC was split as Server=`?`, Share=`UNC`).
+/// The GUI had a similar local-path guard already; the CLI did not. This
+/// function is the *single* source of truth for both CLI and GUI.
+pub fn parse_unc_components(path: &str) -> Option<(String, String)> {
+    // Long-Path-UNC erst normalisieren — sonst sieht der Split `?` als
+    // Server. Lokale Long-Path-Form (`\\?\C:\…`) bleibt ausgeschlossen,
+    // weil sie nach dem Strip mit einem Laufwerks­buchstaben anfängt
+    // statt mit `\\`.
+    // Normalize long-path UNC first — otherwise the split would treat `?`
+    // as the server. Local long-path form (`\\?\C:\…`) is excluded by the
+    // strip because it starts with a drive letter, not `\\`.
+    let normalized = if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if path.starts_with(r"\\?\") || path.starts_with("//?/") {
+        // Lokaler Long-Path — niemals UNC.
+        // Local long-path — never UNC.
+        return None;
+    } else {
+        path.to_string()
+    };
+
+    let bytes = normalized.as_bytes();
+    let has_unc_prefix =
+        matches!(bytes.first(), Some(b'\\' | b'/')) && matches!(bytes.get(1), Some(b'\\' | b'/'));
+    if !has_unc_prefix {
+        return None;
+    }
+    let stripped = normalized.trim_start_matches(['\\', '/']);
+    let mut parts = stripped.splitn(3, ['\\', '/']);
+    let server = parts.next().filter(|s| !s.is_empty())?.to_owned();
+    let share = parts.next().filter(|s| !s.is_empty())?.to_owned();
+    Some((server, share))
+}
+
+/// Liefert den effektiven SMB-Zielserver für lokale-Gruppen- und
+/// Share-DACL-Abfragen. Ein explizit gesetzter `smb_server` hat
+/// Vorrang vor dem aus dem Pfad abgeleiteten UNC-Server — sonst werden
+/// lokale Gruppen vom Pfad-Server gelesen, während die Share-DACL vom
+/// Override-Server kommt (Review-Befund 2: Token-Mismatch).
+///
+/// Returns the effective SMB target server for local-group and share-DACL
+/// lookups. An explicit `smb_server` takes precedence over the server
+/// derived from the path's UNC components — otherwise local groups would
+/// be read from the path server while the share DACL comes from the
+/// override server (review finding 2: token mismatch).
+pub fn effective_smb_target(path: &str, explicit_smb_server: Option<&str>) -> Option<String> {
+    if let Some(server) = explicit_smb_server.filter(|s| !s.is_empty()) {
+        return Some(server.to_owned());
+    }
+    parse_unc_components(path).map(|(server, _share)| server)
+}
+
 /// Entfernt das Long-Path-Präfix (`\\?\` bzw. `\\?\UNC\`) und liefert die
 /// menschenlesbare Form als Eigentümer-String zurück. Inverse zu
 /// [`to_windows_api_path`]; wird genutzt, um `FileSystemObject.path`
@@ -663,6 +740,117 @@ mod tests {
         // The `\\?\` prefix is stripped; a `?` *inside a segment* after that
         // is still forbidden.
         assert!(validate_path(r"\\?\C:\bad?name").is_err());
+    }
+
+    // --- Review-Findings 1, 2, 4 — UNC-Zerlegung + SMB-Zielserver ---
+    // --- Review findings 1, 2, 4 — UNC parsing + SMB target server ---
+
+    #[test]
+    fn parse_unc_components_rejects_local_paths() {
+        // Finding 1: lokale Pfade dürfen nicht als UNC durchgehen, sonst
+        // landet `C:\Windows` als NetShareGetInfo("C:", "Windows") im
+        // share_scanner.
+        // Finding 1: local paths must not pass as UNC, otherwise
+        // `C:\Windows` ends up as NetShareGetInfo("C:", "Windows") in the
+        // share scanner.
+        assert_eq!(parse_unc_components(r"C:\Windows"), None);
+        assert_eq!(parse_unc_components(r"C:\Windows\SYSVOL"), None);
+        assert_eq!(parse_unc_components(r"D:\Daten\Abteilung"), None);
+        assert_eq!(parse_unc_components(r"\singlebackslash\foo"), None);
+        assert_eq!(parse_unc_components(""), None);
+    }
+
+    #[test]
+    fn parse_unc_components_accepts_classic_unc() {
+        assert_eq!(
+            parse_unc_components(r"\\server\share\sub"),
+            Some(("server".to_string(), "share".to_string()))
+        );
+        assert_eq!(
+            parse_unc_components("//server/share"),
+            Some(("server".to_string(), "share".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_unc_components_handles_long_path_unc() {
+        // Finding 4: \\?\UNC\server\share\folder darf nicht in Server=`?`,
+        // Share=`UNC` zerfallen — vorher genau dieser Bug.
+        // Finding 4: \\?\UNC\server\share\folder must not decompose into
+        // Server=`?`, Share=`UNC` — that was exactly the bug.
+        assert_eq!(
+            parse_unc_components(r"\\?\UNC\server\share\folder"),
+            Some(("server".to_string(), "share".to_string()))
+        );
+        assert_eq!(
+            parse_unc_components(r"\\?\UNC\192.168.11.100\Shared\sub"),
+            Some(("192.168.11.100".to_string(), "Shared".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_unc_components_rejects_local_long_path() {
+        // \\?\C:\… ist eine lokale Long-Path-Form, kein UNC.
+        // \\?\C:\… is a local long-path form, not a UNC.
+        assert_eq!(parse_unc_components(r"\\?\C:\Windows\System32"), None);
+        assert_eq!(parse_unc_components(r"\\?\D:\Data"), None);
+    }
+
+    #[test]
+    fn parse_unc_components_rejects_incomplete_unc() {
+        // \\server (ohne Share) ist kein vollständiger UNC.
+        // \\server (without a share) is not a complete UNC.
+        assert_eq!(parse_unc_components(r"\\server"), None);
+        assert_eq!(parse_unc_components(r"\\server\"), None);
+    }
+
+    #[test]
+    fn effective_smb_target_prefers_explicit_server_for_local_path() {
+        // Finding 2: lokaler Pfad mit explizit gesetztem SMB-Server →
+        // lokale Gruppen müssen vom Override-Server gelesen werden, nicht
+        // vom lokalen Rechner.
+        // Finding 2: local path with explicit SMB server → local groups
+        // must come from the override server, not from the local machine.
+        assert_eq!(
+            effective_smb_target(r"C:\Daten", Some("fileserver01")),
+            Some("fileserver01".to_string())
+        );
+    }
+
+    #[test]
+    fn effective_smb_target_prefers_explicit_server_for_unc() {
+        // Finding 2: UNC-Pfad PLUS expliziter Override → Override gewinnt,
+        // damit der User absichtlich gegen einen anderen Server testen kann.
+        // Finding 2: UNC path PLUS explicit override → override wins, so
+        // the user can deliberately test against a different server.
+        assert_eq!(
+            effective_smb_target(r"\\fs01\Daten", Some("fs02")),
+            Some("fs02".to_string())
+        );
+    }
+
+    #[test]
+    fn effective_smb_target_falls_back_to_unc_server() {
+        // Ohne expliziten Override aus dem UNC-Pfad ableiten.
+        // Without an explicit override, derive from the UNC path.
+        assert_eq!(
+            effective_smb_target(r"\\fs01\Daten\sub", None),
+            Some("fs01".to_string())
+        );
+        assert_eq!(
+            effective_smb_target(r"\\?\UNC\fs01\Daten\sub", None),
+            Some("fs01".to_string())
+        );
+    }
+
+    #[test]
+    fn effective_smb_target_returns_none_for_local_path_without_override() {
+        // Lokaler Pfad ohne Override → kein SMB-Ziel → kein Share-Lookup.
+        // Genau das verhindert den ursprünglichen `C:` als Server-Bug.
+        // Local path without override → no SMB target → no share lookup.
+        // This is exactly what prevents the original `C:` as server bug.
+        assert_eq!(effective_smb_target(r"C:\Windows\SYSVOL", None), None);
+        assert_eq!(effective_smb_target(r"C:\Windows\SYSVOL", Some("")), None);
     }
 
     #[test]

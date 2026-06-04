@@ -10,7 +10,20 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ## [Unreleased]
 
-_Keine offenen Änderungen._
+### Behoben
+- **CLI hielt lokale Pfade fälschlich für UNC-Pfade.** `unc_components` in `crates/cli/src/main.rs` prüfte das doppelte Präfix nicht und lieferte für `C:\Windows\SYSVOL` `Some(("C:", "Windows"))`. Folge: `collect_local_group_sids_for_path` fragte lokale Gruppen gegen den Server `C:` ab und `resolve_scan_share_status` startete einen Share-DACL-Lookup `NetShareGetInfo("C:", "Windows")` — beides ohne dass der Aufrufer SMB angefragt hatte. Auf einem Domain Controller ist genau `C:\Windows\SYSVOL` ein Kernpfad; das Ergebnis konnte fälschlich als unvollständig markiert werden und Token-SIDs konnten fehlen (ChatGPT-Code-Review 2026-06-04, **Finding 1**).
+- **Long-Path-UNC wurde in Server- und Share-Lookup falsch zerlegt.** Sowohl die CLI- als auch die GUI-Variante arbeiteten am unnormalisierten Pfad-String — `\\?\UNC\server\share\folder` wurde dadurch als Server=`?`, Share=`UNC` interpretiert. Betraf Share-DACL-Auflösung und lokale Gruppen des Zielservers auf grossen Fileservern mit langen Pfaden (ChatGPT-Code-Review 2026-06-04, **Finding 4**).
+- **Lokale Gruppen kamen vom Pfad-Server, nicht vom manuell gesetzten `--smb-server`.** Wenn der Anwender für einen lokalen NTFS-Pfad zusätzlich `--smb-server` / `--share-name` setzte, wurde die Share-DACL vom Override-Server gelesen, die lokalen Gruppen aber vom Pfad-Server (bei lokalem Pfad: lokaler Rechner). Token-SID-Satz für die Share-Auswertung konnte andere lokale Gruppen enthalten als der echte Zugriff auf den angegebenen Fileserver — kritisch bei ACEs auf `SERVER\Administrators`, `BUILTIN\Users` oder Fileserver-lokale Applikations­gruppen (ChatGPT-Code-Review 2026-06-04, **Finding 2**).
+
+### Geändert
+- Neue zentrale Helper `validation::path::parse_unc_components` und `validation::path::effective_smb_target` — **eine** Quelle der Wahrheit für CLI und GUI. Lokale Pfade, Long-Path-UNC und der `\\?\C:\…`-Sonderfall werden konsistent behandelt.
+- `effective_smb_target` priorisiert den explizit gesetzten `smb_server` vor dem aus dem Pfad abgeleiteten UNC-Server.
+- `collect_local_group_sids_for_path` (CLI + GUI) nimmt jetzt zusätzlich `explicit_smb_server` entgegen und nutzt `effective_smb_target` für die Server-Wahl.
+- `resolve_scan_share_status` (CLI) und `resolve_share_status` (GUI) leiten Server und Share über die zentralen Helper ab.
+
+### Hinzugefügt
+- Neun Regressionstests in `validation::path`: `parse_unc_components` mit lokalen Pfaden (`C:\Windows\SYSVOL`, `D:\Daten`, `\singlebackslash\foo`), klassischem UNC, Long-Path-UNC mit Hostname und mit IP-Adresse, lokaler Long-Path-Form `\\?\C:\…` (muss als NICHT-UNC erkannt werden), unvollständigem UNC ohne Share, sowie `effective_smb_target`: expliziter Override auf lokalem und UNC-Pfad, Fallback auf UNC-Server, kein Override und kein UNC.
+- GUI-Smoke-Test `share_status_does_not_treat_local_path_as_unc`, der genau die Sentinel-Konstellation aus Befund 1 prüft: `C:\Windows\SYSVOL` ohne Override muss `NotApplicable` liefern, keinen Share-Lookup.
 
 ---
 
