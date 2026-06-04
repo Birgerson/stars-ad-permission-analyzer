@@ -89,6 +89,23 @@ pub struct PermissionEvaluationInput {
     /// back to showing the raw SID. Defaulting to empty keeps existing
     /// callers compatible.
     pub sid_names: BTreeMap<String, String>,
+    /// `true`, wenn die Gruppen­auflösung über den SAM/LSA-Fallback
+    /// (`NetUserGetGroups`) statt LDAP läuft. In diesem Fall sind
+    /// **verschachtelte Domain-Gruppen nicht rekursiv aufgelöst** und der
+    /// Token-SID-Satz kann unvollständig sein. Die Engine pusht dann einen
+    /// `PermissionDiagnostic::DomainGroupRecursionIncomplete` ins Ergebnis,
+    /// damit Audit-Konsumenten den Befund explizit als unvollständig
+    /// behandeln. Default `false` (LDAP-Pfad) hält bestehende Aufrufer
+    /// kompatibel. Schliesst Review-Befund 6.
+    /// `true` when group resolution runs through the SAM/LSA fallback
+    /// (`NetUserGetGroups`) instead of LDAP. In that case **nested domain
+    /// groups are not recursively resolved** and the token SID set may be
+    /// incomplete. The engine then pushes a
+    /// `PermissionDiagnostic::DomainGroupRecursionIncomplete` into the
+    /// result so audit consumers treat the finding as incomplete.
+    /// Defaulting to `false` (LDAP path) keeps existing callers
+    /// compatible. Closes review finding 6.
+    pub group_resolution_via_sam_fallback: bool,
 }
 
 pub struct RiskContext {

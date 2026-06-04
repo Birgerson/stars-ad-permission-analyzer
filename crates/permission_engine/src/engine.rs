@@ -146,6 +146,21 @@ impl PermissionEvaluator for DefaultPermissionEngine {
                 count: input.unsupported_share_ace_count,
             });
         }
+        // Finding 6: SAM-Fallback ohne LDAP — verschachtelte Domain-Gruppen
+        // sind nicht rekursiv aufgelöst.
+        // Finding 6: SAM fallback without LDAP — nested domain groups are
+        // not recursively resolved.
+        if input.group_resolution_via_sam_fallback {
+            diagnostics.push(PermissionDiagnostic::DomainGroupRecursionIncomplete);
+        }
+        // Finding 7: deaktivierte Identität — ACL-theoretische Rechte sind
+        // berechnet, aber das Konto kann sich normalerweise nicht
+        // authentifizieren.
+        // Finding 7: disabled identity — ACL-theoretical rights computed,
+        // but the account normally cannot authenticate.
+        if input.identity.disabled {
+            diagnostics.push(PermissionDiagnostic::IdentityDisabled);
+        }
 
         let result = EffectivePermission {
             identity: input.identity,
@@ -800,6 +815,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
             })
             .unwrap()
     }
@@ -822,6 +838,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
             })
             .unwrap()
     }
@@ -844,6 +861,7 @@ mod tests {
                 access_context,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
             })
             .unwrap()
     }
@@ -1289,6 +1307,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
             })
             .unwrap();
         assert_eq!(
@@ -1315,6 +1334,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
             })
             .unwrap();
         assert!(NormalizedRights::new(p.effective_mask.0).is_read());
@@ -1338,6 +1358,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
             })
             .unwrap();
         assert_eq!(
@@ -1762,6 +1783,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 4,
                 sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
             })
             .unwrap();
         assert!(
@@ -1787,6 +1809,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
             })
             .unwrap();
         assert!(
@@ -1850,6 +1873,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
+                group_resolution_via_sam_fallback: false,
             })
             .unwrap();
         let member_step = p
@@ -1886,6 +1910,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
+                group_resolution_via_sam_fallback: false,
             })
             .unwrap();
         let ace_step = p

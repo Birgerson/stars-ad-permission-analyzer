@@ -461,6 +461,15 @@ async fn run_analyze(
     #[cfg(not(windows))]
     let sid_names = std::collections::BTreeMap::new();
 
+    // Finding 6: wenn LDAP nicht angefragt wurde (`ad_connected == false`),
+    // läuft die Gruppenauflösung über SAM/LSA — verschachtelte Domain-Gruppen
+    // werden nicht rekursiv aufgelöst, die Engine pusht entsprechend einen
+    // DomainGroupRecursionIncomplete-Marker.
+    // Finding 6: when LDAP was not requested (`ad_connected == false`), the
+    // group resolution runs through SAM/LSA — nested domain groups are not
+    // resolved recursively and the engine pushes a
+    // DomainGroupRecursionIncomplete marker.
+    let sam_fallback = !resolved.ad_connected;
     let input = PermissionEvaluationInput {
         identity: resolved.identity,
         group_memberships: resolved.memberships.clone(),
@@ -471,6 +480,7 @@ async fn run_analyze(
         access_context,
         unsupported_share_ace_count,
         sid_names,
+        group_resolution_via_sam_fallback: sam_fallback,
     };
     let result = DefaultPermissionEngine
         .evaluate(input)
@@ -717,6 +727,7 @@ async fn run_scan(
     #[cfg(not(windows))]
     let scan_sid_names = std::collections::BTreeMap::new();
 
+    let scan_sam_fallback = !resolved.ad_connected;
     for fso in &walk.objects {
         let input = PermissionEvaluationInput {
             identity: resolved.identity.clone(),
@@ -728,6 +739,7 @@ async fn run_scan(
             access_context: scan_access_context,
             unsupported_share_ace_count: scan_unsupported_share_ace_count,
             sid_names: scan_sid_names.clone(),
+            group_resolution_via_sam_fallback: scan_sam_fallback,
         };
         let result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
             anyhow::anyhow!("Permission evaluation failed for '{}': {e}", fso.path.0)

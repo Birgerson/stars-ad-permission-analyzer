@@ -35,6 +35,17 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
   - `username` (ohne Qualifier) → LDAP-Suche über `sAMAccountName`, **Mehrfachtreffer liefern jetzt einen Eindeutigkeitsfehler** statt stillschweigend den ersten Treffer zu nehmen.
 - Leere Eingabe (`""`) liefert jetzt einen `CoreError::Validation` statt eines stummen No-Op.
 
+### Hinzugefügt
+- Zwei neue `PermissionDiagnostic`-Varianten in `adpa_core::model`:
+  - **`DomainGroupRecursionIncomplete`** — wird gesetzt, sobald die Gruppen­auflösung über den SAM/LSA-Fallback statt LDAP läuft (`NetUserGetGroups` liefert nur direkte globale Gruppen, verschachtelte Domain-Gruppen werden ohne LDAP nicht rekursiv aufgelöst, der Token-SID-Satz kann unvollständig sein). Schliesst **ChatGPT-Code-Review 2026-06-04 Finding 6**.
+  - **`IdentityDisabled`** — wird gesetzt, sobald die analysierte Identität im AD als deaktiviert markiert ist (`userAccountControl` ACCOUNTDISABLE). Die berechneten Rechte sind ACL-theoretisch korrekt, aber das Konto kann sich normalerweise nicht authentifizieren / über SMB nicht zugreifen. Schliesst **ChatGPT-Code-Review 2026-06-04 Finding 7**.
+- `PermissionEvaluationInput.group_resolution_via_sam_fallback: bool` (Default `false`) — der Aufrufer setzt das Flag, wenn er den SAM-Pfad nutzt. Die Engine pusht dann automatisch den passenden Diagnostic-Marker in das Ergebnis.
+
+### Geändert
+- `resolve_identity_sids` in der GUI liefert jetzt zusätzlich ein `used_sam_fallback`-Flag (3-Tupel). CLI nutzt das schon vorhandene `ResolvedIdentity::ad_connected`. Beide leiten den Wert in `PermissionEvaluationInput.group_resolution_via_sam_fallback` weiter.
+- HTML-Bericht zeigt für `DomainGroupRecursionIncomplete` eine gelbe „⚠ SAM fallback — nested groups not resolved"-Badge mit Tooltip-Erklärung; für `IdentityDisabled` einen blauen „ℹ disabled account"-Hinweis.
+- CLI-Output (`output::print_report`) fügt zwei zusätzliche Diagnose-Blöcke aus: `[!] Group resolution ran through the SAM/LSA fallback…` und `[i] Identity is flagged as disabled in AD…`.
+
 ---
 
 ## [1.3.0] — 2026-06-04

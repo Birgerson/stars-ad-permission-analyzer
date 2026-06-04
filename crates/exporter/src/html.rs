@@ -282,6 +282,29 @@ fn write_permissions_table(
                          potentially incomplete.\">⚠ {count} unsupported share ACE(s)</span>"
                     ));
                 }
+                PermissionDiagnostic::DomainGroupRecursionIncomplete => {
+                    diag_parts.push(
+                        "<span class=\"badge badge-medium\" \
+                         title=\"Group resolution ran through the SAM/LSA \
+                         fallback (no LDAP). NetUserGetGroups returns only \
+                         direct global groups — nested domain groups are not \
+                         recursively resolved. ACEs targeting deeply nested \
+                         groups may be missed; treat the finding as \
+                         incomplete.\">⚠ SAM fallback — nested groups not resolved</span>"
+                            .to_string(),
+                    );
+                }
+                PermissionDiagnostic::IdentityDisabled => {
+                    diag_parts.push(
+                        "<span class=\"badge badge-info\" \
+                         title=\"The identity is flagged as disabled in AD \
+                         (userAccountControl ACCOUNTDISABLE). Computed \
+                         rights are ACL-theoretically correct, but the \
+                         account normally cannot authenticate / access \
+                         SMB.\">ℹ disabled account</span>"
+                            .to_string(),
+                    );
+                }
             }
         }
         let diagnostics = if diag_parts.is_empty() {

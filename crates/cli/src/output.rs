@@ -195,6 +195,17 @@ pub fn print_report(
                     println!("      Share mask is potentially incomplete; risk findings are");
                     println!("      flagged 'incomplete' for this path.");
                 }
+                PermissionDiagnostic::DomainGroupRecursionIncomplete => {
+                    println!("  [!] Group resolution ran through the SAM/LSA fallback (no LDAP).");
+                    println!("      NetUserGetGroups returns only direct global groups — nested");
+                    println!("      domain groups are not recursively resolved. ACEs targeting");
+                    println!("      deeply nested groups may be missed.");
+                }
+                PermissionDiagnostic::IdentityDisabled => {
+                    println!("  [i] Identity is flagged as disabled in AD (ACCOUNTDISABLE).");
+                    println!("      Computed rights are ACL-theoretically correct, but the");
+                    println!("      account normally cannot authenticate / access SMB.");
+                }
             }
         }
     }

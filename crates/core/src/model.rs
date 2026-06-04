@@ -510,6 +510,49 @@ pub enum PermissionDiagnostic {
     /// the mirror-image for the share side (follow-up finding 2 from
     /// the 2026-05-25 review).
     UnsupportedShareAces { count: usize },
+
+    /// Die Gruppen­auflösung läuft über den SAM/LSA-Fallback (ohne LDAP)
+    /// und damit über `NetUserGetGroups`. Diese API liefert **nur direkte**
+    /// globale Gruppen — verschachtelte Domain-Gruppen werden ohne LDAP
+    /// nicht rekursiv aufgelöst, lokale Gruppen werden zusätzlich nur
+    /// über bereits bekannte direkte Mitglieder als Vermittler verkettet.
+    /// Der Token-SID-Satz kann deshalb unvollständig sein und ACEs auf
+    /// tief verschachtelte Domain-Gruppen werden übersehen. Risk-Findings
+    /// für diese Berechtigung müssen `incomplete = true` tragen.
+    ///
+    /// Schliesst ChatGPT-Code-Review 2026-06-04 Finding 6.
+    ///
+    /// Group resolution runs through the SAM/LSA fallback (no LDAP) and
+    /// therefore through `NetUserGetGroups`. That API only returns
+    /// **direct** global groups — nested domain groups are not resolved
+    /// recursively without LDAP, and local groups are only mediated via
+    /// already-known direct members. The token SID set can be incomplete
+    /// and ACEs targeting deeply nested domain groups may be missed.
+    /// Risk findings for this permission must carry `incomplete = true`.
+    ///
+    /// Closes ChatGPT code review 2026-06-04 finding 6.
+    DomainGroupRecursionIncomplete,
+
+    /// Die analysierte Identität ist im AD als deaktiviert markiert
+    /// (`userAccountControl`-Bit `ACCOUNTDISABLE`, 0x0002). Die berechneten
+    /// Rechte sind **ACL-theoretisch korrekt** — `disabled` Konten können
+    /// sich aber normalerweise **nicht authentifizieren** und ueber SMB
+    /// nicht zugreifen. Damit ein Audit-Leser dieses theoretische vs.
+    /// reale Recht nicht verwechselt, taucht dieser Marker bei jedem
+    /// Ergebnis einer deaktivierten Identität auf.
+    ///
+    /// Schliesst ChatGPT-Code-Review 2026-06-04 Finding 7.
+    ///
+    /// The analyzed identity is flagged as disabled in AD
+    /// (`userAccountControl` bit `ACCOUNTDISABLE`, 0x0002). The computed
+    /// rights are **ACL-theoretically correct** — but `disabled`
+    /// accounts normally **cannot authenticate** and cannot access SMB.
+    /// To prevent an audit reader from confusing this theoretical right
+    /// with a real right, this marker appears on every result for a
+    /// disabled identity.
+    ///
+    /// Closes ChatGPT code review 2026-06-04 finding 7.
+    IdentityDisabled,
 }
 
 /// Erklärbarer Berechtigungspfad

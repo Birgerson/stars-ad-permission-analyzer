@@ -669,7 +669,7 @@ async fn handle_analyze(
     }
     validate_connection_inputs(smb_server, share_name, ldap)?;
     let fso = read_fso(path).map_err(|e| format!("Failed to read path: {e}"))?;
-    let (identity, memberships) = resolve_identity_sids(sid, ldap).await?;
+    let (identity, memberships, sam_fallback) = resolve_identity_sids(sid, ldap).await?;
 
     // Lokale Server-Gruppen vor der Share-Maske bestimmen — siehe CLI-Pendant.
     // Finding 2: explizit gesetzter SMB-Server wird durchgereicht, damit
@@ -713,6 +713,7 @@ async fn handle_analyze(
             access_context: AccessContext::for_path(path),
             unsupported_share_ace_count,
             sid_names,
+            group_resolution_via_sam_fallback: sam_fallback,
         })
         .map_err(|e| format!("Permission engine error: {e}"))
 }
@@ -811,8 +812,8 @@ async fn handle_scan(
         return make_early_summary(e);
     }
 
-    let (identity, memberships) = match resolve_identity_sids(sid, ldap).await {
-        Ok(pair) => pair,
+    let (identity, memberships, sam_fallback) = match resolve_identity_sids(sid, ldap).await {
+        Ok(triple) => triple,
         Err(e) => {
             return make_early_summary(format!("Identity resolution failed: {e}"));
         }
@@ -945,6 +946,7 @@ async fn handle_scan(
             access_context: scan_access_context,
             unsupported_share_ace_count: scan_unsupported_share_ace_count,
             sid_names: scan_sid_names.clone(),
+            group_resolution_via_sam_fallback: sam_fallback,
         }) {
             Ok(perm) => {
                 let label = NormalizedRights::new(perm.effective_mask.0)
@@ -1533,10 +1535,19 @@ fn format_mask(mask: u32) -> String {
 
 /// Erstellt eine minimale Identität (SID-only) oder löst via LDAP auf.
 /// Creates a minimal identity (SID-only) or resolves via LDAP.
+/// Liefert `(Identity, Memberships, used_sam_fallback)`. Das Flag ist `true`,
+/// wenn die Gruppen­auflösung über `NetUserGetGroups` (SAM/LSA) statt LDAP
+/// lief — in dem Fall ist die Domain-Gruppen-Rekursion nicht vollständig
+/// und der Aufrufer muss das ins Engine-Eingangsmodell durchreichen
+/// (Review-Befund 6).
+/// Returns `(Identity, Memberships, used_sam_fallback)`. The flag is `true`
+/// if group resolution used `NetUserGetGroups` (SAM/LSA) instead of LDAP —
+/// in that case the domain group recursion is incomplete and the caller
+/// must forward the fact into the engine input (review finding 6).
 async fn resolve_identity_sids(
     sid: &str,
     ldap: Option<&LdapParams>,
-) -> Result<(Identity, Vec<GroupMembership>), String> {
+) -> Result<(Identity, Vec<GroupMembership>, bool), String> {
     if let Some(params) = ldap {
         let mut config = LdapConfig::new(
             &params.server,
@@ -1558,7 +1569,7 @@ async fn resolve_identity_sids(
             .resolve_group_memberships(&sid_obj)
             .await
             .map_err(|e| format!("LDAP group resolution failed: {e}"))?;
-        return Ok((identity, memberships));
+        return Ok((identity, memberships, false));
     }
 
     // Ohne LDAP: auf Windows die lokale SAM/LSA als Default-Auflöser nutzen.
@@ -1574,7 +1585,13 @@ async fn resolve_identity_sids(
     // fails (or we are not on Windows) does the worker fall back to a bare
     // SID identity — then the effective rights are only what direct ACEs on
     // the SID grant.
-    sam_resolve_fallback(sid)
+    // Beide Pfade (SAM-Erfolg und nackter SID-Fallback) sind ohne LDAP →
+    // verschachtelte Domain-Gruppen sind nicht vollständig — daher
+    // `used_sam_fallback = true`.
+    // Both paths (SAM success and bare SID fallback) are LDAP-free → nested
+    // domain groups are not fully resolved, so `used_sam_fallback = true`.
+    let (identity, memberships) = sam_resolve_fallback(sid)?;
+    Ok((identity, memberships, true))
 }
 
 #[cfg(windows)]
