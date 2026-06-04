@@ -242,6 +242,29 @@ fn validate_connection_inputs(
     if let Some(d) = bind_dn {
         validate_dn(d).map_err(|e| anyhow::anyhow!("Invalid bind DN: {e}"))?;
     }
+    // Review 2026-06-04 Runde 2, Finding 2: --smb-server und --share-name
+    // sind nur als Paar sinnvoll. Halb-Sets verunreinigten sonst die
+    // lokale-Gruppen-Auflösung mit Token-SIDs vom Remote-Server, ohne
+    // dass eine Share-Maske angewendet werden konnte.
+    // Review 2026-06-04 round 2, finding 2: --smb-server and --share-name
+    // are only meaningful as a pair. Half-sets used to pollute the local
+    // group resolution with remote-server token SIDs without any share
+    // mask being applied.
+    let smb_server_set = smb_server.is_some_and(|s| !s.is_empty());
+    let share_name_set = share_name.is_some_and(|s| !s.is_empty());
+    match (smb_server_set, share_name_set) {
+        (true, false) => {
+            return Err(anyhow::anyhow!(
+                "SMB context incomplete: --smb-server set but --share-name missing. Provide both or neither."
+            ));
+        }
+        (false, true) => {
+            return Err(anyhow::anyhow!(
+                "SMB context incomplete: --share-name set but --smb-server missing. Provide both or neither."
+            ));
+        }
+        _ => {}
+    }
     if let Some(s) = smb_server {
         validate_smb_server(s).map_err(|e| anyhow::anyhow!("Invalid SMB server: {e}"))?;
     }
@@ -379,7 +402,17 @@ async fn run_analyze(
         force,
     } = opts;
 
-    validate_path(&path).map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?;
+    // Review 2026-06-04 Runde 2, Finding 6: ab hier die validierte
+    // Normalform durchreichen, nicht den rohen Eingabestring. Der Wrapper
+    // hat geleerte Pfade abgelehnt, Whitespace getrimmt und Long-Path-
+    // Formen kanonisiert — Downstream-Code muss genau diese Form sehen.
+    // Review 2026-06-04 round 2, finding 6: from here on we forward the
+    // validated canonical form, not the raw input string. The wrapper
+    // rejected empty paths, trimmed whitespace and canonicalised long-
+    // path forms — downstream code must see exactly that form.
+    let path = validate_path(&path)
+        .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
+        .0;
     if user.starts_with("S-1-") {
         validate_sid(&user).map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?;
     } else {
@@ -549,7 +582,11 @@ async fn run_scan(
         force,
     } = opts;
 
-    validate_path(&path).map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?;
+    // Review 2026-06-04 Runde 2, Finding 6: Normalform durchreichen.
+    // Review 2026-06-04 round 2, finding 6: propagate the normal form.
+    let path = validate_path(&path)
+        .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
+        .0;
     // AGENTS.md DoD 11: numerische Eingaben zentral validieren, bevor sie
     // an WalkConfig wandern — sonst kann ein --max-depth=4_000_000_000
     // den Walker bis zur RAM-Sättigung treiben.

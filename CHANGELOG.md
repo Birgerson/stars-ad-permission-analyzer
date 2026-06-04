@@ -10,7 +10,11 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ## [Unreleased]
 
-_Keine offenen Änderungen._
+### Behoben
+- **Risk-Engine `is_incomplete()` prüfte den `DomainGroupRecursionIncomplete`-Marker nicht.** ADR 0033 schrieb explizit fest, dass Risk-Findings für Berechtigungen mit SAM-Fallback-Diagnose als `incomplete = true` markiert werden müssen — der Code übernahm das aber nicht. Ein `FULL_CONTROL`- oder `WRITE_ACCESS`-Befund konnte dadurch als confirmed erscheinen, obwohl die Domain-Gruppen-Rekursion lückenhaft war. **Inkonsistenz zwischen ADR und Code** ist jetzt geschlossen, plus Regressionstest `full_control_marks_finding_incomplete_on_sam_fallback_diagnostic` (ChatGPT-Code-Review 2026-06-04 Runde 2, **Finding 4**).
+- **GUI-Identitätssuche umging den LDAP-Timeout.** `handle_search` baute selbst eine LDAP-Verbindung auf und rief `search_by_query` direkt — der `connect()`-interne Timeout-Wrapper war hier wirkungslos. Der interaktive Benutzer-Picker blockierte bei langsamen oder hängenden DCs länger als `LdapConfig::timeout_secs` versprach. Connect + Search + Disconnect sind jetzt gemeinsam in einen `with_timeout("identity_search", …)` gewickelt (ChatGPT-Code-Review 2026-06-04 Runde 2, **Finding 3**).
+- **Unvollständige SMB-Override-Kombinationen wurden stillschweigend akzeptiert.** Lokaler Pfad + nur `--smb-server` (ohne `--share-name`): lokale Gruppen wurden vom Remote-Server gelesen, gleichzeitig stand der Share-Status auf `NotApplicable` — Token-Verunreinigung mit fremden Server-SIDs ohne sichtbare Wirkung. `validate_connection_inputs` in CLI und GUI verlangt jetzt explizit `smb_server` und `share_name` als Paar; halb-gesetzte Eingaben liefern einen klaren Validierungsfehler (ChatGPT-Code-Review 2026-06-04 Runde 2, **Finding 2**).
+- **`validate_path`-Rückgabewert wurde an mehreren API-Grenzen verworfen.** Die Funktion lieferte eine `NormalizedPath` mit getrimmten Whitespaces und kanonisierter Long-Path-Form, CLI und GUI gaben aber weiterhin den Rohstring an `read_fso`, `walk_tree`, `AccessContext::for_path` und die Share-Helfer weiter. Die fünf betroffenen Stellen reichen jetzt konsequent die Normalform durch (ChatGPT-Code-Review 2026-06-04 Runde 2, **Finding 6**).
 
 ---
 

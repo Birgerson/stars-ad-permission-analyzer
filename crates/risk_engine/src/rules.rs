@@ -40,9 +40,28 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
         // Follow-up finding 2: unsupported share ACEs surface as a
         // structured marker in diagnostics — risk findings for this
         // permission must also be flagged incomplete.
-        || p.diagnostics
-            .iter()
-            .any(|d| matches!(d, PermissionDiagnostic::UnsupportedShareAces { .. }))
+        //
+        // Review 2026-06-04 Runde 2, Finding 4: SAM-Fallback ohne LDAP
+        // bedeutet keine rekursive Domain-Gruppen-Auflösung. ADR 0033
+        // verlangt, dass Risk-Findings für solche Berechtigungen als
+        // `incomplete = true` markiert werden — dieselbe Logik wie für
+        // die anderen Quellen unvollständiger Auswertung. Die Risk-Engine
+        // hatte den Marker bisher nicht beachtet; das war eine
+        // Diskrepanz zwischen ADR und Code.
+        //
+        // Review 2026-06-04 round 2, finding 4: SAM fallback without LDAP
+        // means no recursive domain group resolution. ADR 0033 requires
+        // risk findings for those permissions to carry
+        // `incomplete = true` — same logic as for the other incomplete-
+        // evaluation sources. The risk engine did not consider this
+        // marker before; that was a discrepancy between ADR and code.
+        || p.diagnostics.iter().any(|d| {
+            matches!(
+                d,
+                PermissionDiagnostic::UnsupportedShareAces { .. }
+                    | PermissionDiagnostic::DomainGroupRecursionIncomplete
+            )
+        })
 }
 use permission_engine::mask::{
     FILE_DELETE, FILE_DELETE_CHILD, FILE_WRITE_DAC, FILE_WRITE_OWNER, MASK_FULL_CONTROL,
@@ -813,6 +832,34 @@ mod tests {
                 )]))
                 .is_empty(),
             "BROAD_GROUP_WRITE must not fire when Everyone only contributed Read bits"
+        );
+    }
+
+    /// ChatGPT-Review 2026-06-04 Runde 2, Finding 4: Wenn die Engine
+    /// `PermissionDiagnostic::DomainGroupRecursionIncomplete` setzt
+    /// (SAM/LSA-Fallback ohne LDAP), müssen Risk-Findings für diese
+    /// Berechtigung `incomplete = true` tragen — sonst kann ein
+    /// FULL_CONTROL-Befund als confirmed erscheinen, obwohl die
+    /// Domain-Gruppen-Rekursion lückenhaft war. ADR 0033 verlangt das
+    /// explizit; vor diesem Test war Code und ADR inkonsistent.
+    /// ChatGPT review 2026-06-04 round 2, finding 4: when the engine
+    /// sets `PermissionDiagnostic::DomainGroupRecursionIncomplete`
+    /// (SAM/LSA fallback without LDAP), risk findings for that
+    /// permission must carry `incomplete = true` — otherwise a
+    /// FULL_CONTROL finding can appear as confirmed despite the
+    /// domain group recursion being incomplete. ADR 0033 requires
+    /// this; before this test code and ADR were inconsistent.
+    #[test]
+    fn full_control_marks_finding_incomplete_on_sam_fallback_diagnostic() {
+        use adpa_core::model::PermissionDiagnostic;
+        let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
+        p.diagnostics
+            .push(PermissionDiagnostic::DomainGroupRecursionIncomplete);
+        let r = FullControlRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(
+            r[0].incomplete,
+            "DomainGroupRecursionIncomplete -> finding must be flagged incomplete (review 2026-06-04 round 2 finding 4)"
         );
     }
 

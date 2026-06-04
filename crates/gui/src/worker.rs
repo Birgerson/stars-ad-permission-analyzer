@@ -637,6 +637,36 @@ fn validate_connection_inputs(
     share_name: Option<&str>,
     ldap: Option<&LdapParams>,
 ) -> Result<(), String> {
+    // Review 2026-06-04 Runde 2, Finding 2: smb_server und share_name
+    // sind nur als Paar sinnvoll. Wer einen lokalen Pfad mit nur
+    // `--smb-server` (ohne `--share-name`) startet, bekam sonst lokale
+    // Gruppen vom Remote-Server zugewiesen, während gleichzeitig kein
+    // Share-Kontext anwendbar war — Token-Verunreinigung ohne sichtbare
+    // Wirkung. Wir verlangen jetzt ausdrücklich Paarbildung — leerer
+    // String zählt dabei wie nicht gesetzt.
+    // Review 2026-06-04 round 2, finding 2: smb_server and share_name are
+    // only meaningful as a pair. Running a local path with only
+    // `--smb-server` (no `--share-name`) used to pull local groups from
+    // the remote server while no share context was actually applicable —
+    // token pollution with no visible effect. We now require explicit
+    // pairing — an empty string counts as not set.
+    let smb_server_set = smb_server.is_some_and(|s| !s.is_empty());
+    let share_name_set = share_name.is_some_and(|s| !s.is_empty());
+    match (smb_server_set, share_name_set) {
+        (true, false) => {
+            return Err(
+                "SMB context incomplete: --smb-server set but --share-name missing. Provide both or neither."
+                    .to_string(),
+            );
+        }
+        (false, true) => {
+            return Err(
+                "SMB context incomplete: --share-name set but --smb-server missing. Provide both or neither."
+                    .to_string(),
+            );
+        }
+        _ => {}
+    }
     if let Some(s) = smb_server {
         validate_smb_server(s).map_err(|e| format!("Invalid SMB server: {e}"))?;
     }
@@ -663,7 +693,14 @@ async fn handle_analyze(
     share_name: Option<&str>,
 ) -> Result<adpa_core::model::EffectivePermission, String> {
     info!(path, sid, "Analyze request");
-    validate_path(path).map_err(|e| format!("Invalid path: {e}"))?;
+    // Review 2026-06-04 Runde 2, Finding 6: ab hier die kanonisierte
+    // Normalform durchreichen, nicht den Roh-String.
+    // Review 2026-06-04 round 2, finding 6: forward the canonical form
+    // from here on, not the raw string.
+    let normalized_path = validate_path(path)
+        .map_err(|e| format!("Invalid path: {e}"))?
+        .0;
+    let path = normalized_path.as_str();
     if sid.starts_with("S-1-") {
         validate_sid(sid).map_err(|e| format!("Invalid SID: {e}"))?;
     }
@@ -789,9 +826,14 @@ async fn handle_scan(
         }
     };
 
-    if let Err(e) = validate_path(root) {
-        return make_early_summary(format!("Invalid path: {e}"));
-    }
+    // Review 2026-06-04 Runde 2, Finding 6: ab hier die kanonisierte
+    // Normalform durchreichen, nicht den Roh-String.
+    // Review 2026-06-04 round 2, finding 6: forward the canonical form.
+    let normalized_root = match validate_path(root) {
+        Ok(p) => p.0,
+        Err(e) => return make_early_summary(format!("Invalid path: {e}")),
+    };
+    let root = normalized_root.as_str();
     // AGENTS.md DoD 11: max_depth zentral validieren, bevor sie in
     // WalkConfig wandert — GUI-Widget begrenzt zwar visuell, schützt aber
     // nicht vor programmatischen Aufrufen oder zukünftigen UI-Refactorings.
@@ -1007,15 +1049,32 @@ async fn handle_search(
         config.tls_mode = TlsMode::Insecure;
         config.port = 389;
     }
-    let mut conn = ldap_client::connect(&config)
-        .await
-        .map_err(|e| format!("LDAP: {e}"))?;
 
-    let entries = ldap_client::search_by_query(&mut conn, &ldap.base_dn, query)
-        .await
-        .map_err(|e| format!("Suche fehlgeschlagen: {e}"))?;
-
-    ldap_client::disconnect(conn).await;
+    // Review 2026-06-04 Runde 2, Finding 3: GUI-Identitätssuche umging
+    // bisher den LDAP-Timeout. connect() ist intern abgesichert; die paged
+    // search_by_query lief aber ohne Wrapper — bei hängendem oder langsamem
+    // DC blockierte der Identitäts-Picker laenger als
+    // `LdapConfig::timeout_secs` versprach. Wir packen Connect + Search +
+    // Disconnect in einen einzigen Timeout, damit die ganze Operation
+    // beobachtbar ist.
+    // Review 2026-06-04 round 2, finding 3: the GUI identity search used to
+    // bypass the LDAP timeout. connect() is internally guarded; the paged
+    // search_by_query ran without a wrapper, so the picker could block
+    // longer than `LdapConfig::timeout_secs` promised. We wrap connect +
+    // search + disconnect in a single timeout so the whole operation is
+    // observable.
+    let entries = ldap_client::with_timeout(
+        "identity_search",
+        ldap_client::ldap_timeout(&config),
+        async {
+            let mut conn = ldap_client::connect(&config).await?;
+            let entries = ldap_client::search_by_query(&mut conn, &ldap.base_dn, query).await;
+            ldap_client::disconnect(conn).await;
+            entries
+        },
+    )
+    .await
+    .map_err(|e| format!("Suche fehlgeschlagen: {e}"))?;
 
     let mut results = Vec::new();
     for entry in entries {
@@ -1280,7 +1339,12 @@ fn analyze_trustees(
         share_name = ?share_name,
         "AnalyzeTrustees request"
     );
-    validate_path(path).map_err(|e| format!("Invalid path: {e}"))?;
+    // Review 2026-06-04 Runde 2, Finding 6: Normalform durchreichen.
+    // Review 2026-06-04 round 2, finding 6: propagate the normal form.
+    let normalized_path = validate_path(path)
+        .map_err(|e| format!("Invalid path: {e}"))?
+        .0;
+    let path = normalized_path.as_str();
     if let Some(server) = smb_server {
         validate_smb_server(server).map_err(|e| format!("Invalid SMB server: {e}"))?;
     }
