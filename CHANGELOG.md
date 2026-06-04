@@ -10,6 +10,18 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ## [Unreleased]
 
+---
+
+## [1.4.1] — 2026-06-04
+
+**Patch-Release.** Schließt sechs Follow-up-Findings aus der zweiten
+Runde des ChatGPT-Code-Reviews 2026-06-04 — vier in Block D (Risk-
+Engine-Konsistenz, GUI-Timeout, SMB-Override-Validierung,
+`NormalizedPath`-Propagation), zwei in Block E (Multi-Domain-LSA-
+Fallback, SAM disabled-Status). Plus umfangreiche User-Doku
+„Was geht / Was nicht geht" (`docs/features-and-limitations.md`).
+Reines Lese-Tool — keine Schreibvorgänge auf Zielsystemen.
+
 ### Behoben
 - **Risk-Engine `is_incomplete()` prüfte den `DomainGroupRecursionIncomplete`-Marker nicht.** ADR 0033 schrieb explizit fest, dass Risk-Findings für Berechtigungen mit SAM-Fallback-Diagnose als `incomplete = true` markiert werden müssen — der Code übernahm das aber nicht. Ein `FULL_CONTROL`- oder `WRITE_ACCESS`-Befund konnte dadurch als confirmed erscheinen, obwohl die Domain-Gruppen-Rekursion lückenhaft war. **Inkonsistenz zwischen ADR und Code** ist jetzt geschlossen, plus Regressionstest `full_control_marks_finding_incomplete_on_sam_fallback_diagnostic` (ChatGPT-Code-Review 2026-06-04 Runde 2, **Finding 4**).
 - **GUI-Identitätssuche umging den LDAP-Timeout.** `handle_search` baute selbst eine LDAP-Verbindung auf und rief `search_by_query` direkt — der `connect()`-interne Timeout-Wrapper war hier wirkungslos. Der interaktive Benutzer-Picker blockierte bei langsamen oder hängenden DCs länger als `LdapConfig::timeout_secs` versprach. Connect + Search + Disconnect sind jetzt gemeinsam in einen `with_timeout("identity_search", …)` gewickelt (ChatGPT-Code-Review 2026-06-04 Runde 2, **Finding 3**).
