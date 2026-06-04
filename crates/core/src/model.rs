@@ -553,6 +553,60 @@ pub enum PermissionDiagnostic {
     ///
     /// Closes ChatGPT code review 2026-06-04 finding 7.
     IdentityDisabled,
+
+    /// Die analysierte Identität wurde per LSA (`LookupAccountNameW` für
+    /// `DOMAIN\user`) eindeutig zu einer SID aufgelöst, **aber der
+    /// konfigurierte LDAP-`base_dn` indexiert diese SID nicht** —
+    /// typisch in Multi-Domain-Forests, bei Trust-Beziehungen oder
+    /// AD-Migrationen. Die Identität ist **real**, aber die Domain-
+    /// Gruppen-Rekursion läuft ohne LDAP — der Token-SID-Satz kann
+    /// unvollständig sein und ACEs auf tief verschachtelte Domain-
+    /// Gruppen werden übersehen. Risk-Findings für diese Berechtigung
+    /// müssen `incomplete = true` tragen.
+    ///
+    /// Vor diesem Marker hätte `IdentityKind::Orphaned` gestanden — ein
+    /// realer Benutzer aus einer Trusted Domain wäre damit fälschlich
+    /// als verwaiste SID erschienen. Schließt
+    /// ChatGPT-Code-Review 2026-06-04 Runde 2 Finding 1.
+    ///
+    /// The analyzed identity was unambiguously resolved to a SID via LSA
+    /// (`LookupAccountNameW` for `DOMAIN\user`), **but the configured
+    /// LDAP `base_dn` does not index that SID** — typical in
+    /// multi-domain forests, trust relationships or AD migrations. The
+    /// identity is **real**, but domain group recursion runs without
+    /// LDAP — the token SID set can be incomplete and ACEs targeting
+    /// deeply nested domain groups are missed. Risk findings for this
+    /// permission must carry `incomplete = true`.
+    ///
+    /// Before this marker `IdentityKind::Orphaned` would have been used
+    /// — a real user from a trusted domain would have been
+    /// mis-classified as a stale SID. Closes ChatGPT code review
+    /// 2026-06-04 round 2 finding 1.
+    IdentityNotInConfiguredLdapBase,
+
+    /// Die analysierte Identität wurde per LSA aufgelöst, die
+    /// `userAccountControl`-Information (ob das Konto deaktiviert ist)
+    /// konnte aber nicht ermittelt werden — typisch im SAM/LSA-Pfad
+    /// ohne LDAP, wenn `NetUserGetInfo` für Nicht-Lokal-Konten oder mit
+    /// `ERROR_ACCESS_DENIED` fehlschlägt. Die berechneten Rechte sind
+    /// ACL-theoretisch korrekt, aber Stars kann hier nicht entscheiden,
+    /// ob das Konto sich überhaupt authentifizieren kann. Der Marker ist
+    /// kein Incompleteness-Trigger — er signalisiert nur eine
+    /// Wissenslücke beim Account-Status.
+    ///
+    /// Schließt ChatGPT-Code-Review 2026-06-04 Runde 2 Finding 5.
+    ///
+    /// The analyzed identity was resolved via LSA, but its
+    /// `userAccountControl` (whether the account is disabled) could not
+    /// be determined — typical for the SAM/LSA path without LDAP when
+    /// `NetUserGetInfo` fails for non-local accounts or with
+    /// `ERROR_ACCESS_DENIED`. The computed rights are ACL-theoretically
+    /// correct, but Stars cannot decide whether the account can
+    /// authenticate at all. The marker is not an incompleteness trigger
+    /// — it only signals a knowledge gap about the account state.
+    ///
+    /// Closes ChatGPT code review 2026-06-04 round 2 finding 5.
+    IdentityDisabledStatusUnknown,
 }
 
 /// Erklärbarer Berechtigungspfad

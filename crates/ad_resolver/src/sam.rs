@@ -51,7 +51,8 @@ use adpa_core::model::{
 use tracing::{debug, warn};
 use windows_sys::Win32::Foundation::{LocalFree, ERROR_ACCESS_DENIED, FALSE, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
-    NetApiBufferFree, NetUserGetGroups, GROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH,
+    NetApiBufferFree, NetUserGetGroups, NetUserGetInfo, GROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH,
+    UF_ACCOUNTDISABLE, USER_INFO_1,
 };
 use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
 use windows_sys::Win32::Security::{
@@ -319,6 +320,105 @@ pub fn lookup_sid_for_account(system: Option<&str>, name: &str) -> Result<Sid, C
     Ok(Sid(s))
 }
 
+/// Liest den `disabled`-Status eines Benutzers über
+/// `NetUserGetInfo` Level 1 und prüft das `UF_ACCOUNTDISABLE`-Flag.
+///
+/// `Ok(Some(true))`  → Konto ist deaktiviert (`UF_ACCOUNTDISABLE` gesetzt).
+/// `Ok(Some(false))` → Konto ist aktiv.
+/// `Ok(None)`        → Status nicht zuverlässig bestimmbar (User nicht
+///                      gefunden, Access Denied oder anderer Fehler beim
+///                      NetAPI-Aufruf). Aufrufer setzen dann den Marker
+///                      `PermissionDiagnostic::IdentityDisabledStatusUnknown`.
+/// `Err`             → unerwarteter Bibliotheksfehler.
+///
+/// Schließt Review 2026-06-04 Runde 2 Finding 5 — vorher hat der
+/// SAM-Pfad `disabled` pauschal auf `false` gesetzt, was deaktivierte
+/// Konten silently als aktiv ausgewiesen hat.
+///
+/// Reads the `disabled` status of a user via `NetUserGetInfo` level 1 and
+/// checks the `UF_ACCOUNTDISABLE` flag.
+///
+/// `Ok(Some(true))`  → account is disabled.
+/// `Ok(Some(false))` → account is active.
+/// `Ok(None)`        → status could not be reliably determined (user not
+///                      found, access denied, or another NetAPI error).
+///                      Callers should then set the
+///                      `PermissionDiagnostic::IdentityDisabledStatusUnknown`
+///                      marker.
+/// `Err`             → unexpected library error.
+///
+/// Closes review 2026-06-04 round 2 finding 5 — the SAM path previously
+/// hard-coded `disabled = false`, silently showing disabled accounts as
+/// active.
+pub fn user_account_disabled(
+    server: Option<&str>,
+    username: &str,
+) -> Result<Option<bool>, CoreError> {
+    let server_w = server.map(to_wide_null);
+    let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+    let username_w = to_wide_null(username);
+
+    let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+    // SAFETY: server_ptr is null or a valid null-terminated wide string;
+    // username_w is null-terminated. buf_ptr is an OUT parameter NetApi
+    // allocates and we release below.
+    let status = unsafe {
+        NetUserGetInfo(
+            server_ptr,
+            username_w.as_ptr(),
+            1, // level 1 → USER_INFO_1
+            &mut buf_ptr,
+        )
+    };
+
+    if status != NO_ERROR {
+        if !buf_ptr.is_null() {
+            // SAFETY: buf_ptr was allocated by NetApi.
+            unsafe { NetApiBufferFree(buf_ptr.cast()) };
+        }
+        return match status {
+            ERROR_ACCESS_DENIED => {
+                debug!(
+                    username,
+                    ?server,
+                    "NetUserGetInfo: access denied — disabled status unknown"
+                );
+                Ok(None)
+            }
+            NERR_USER_NOT_FOUND => {
+                debug!(
+                    username,
+                    ?server,
+                    "NetUserGetInfo: user not found — disabled status unknown"
+                );
+                Ok(None)
+            }
+            _ => {
+                warn!(
+                    username,
+                    ?server,
+                    status,
+                    "NetUserGetInfo failed — disabled status unknown"
+                );
+                Ok(None)
+            }
+        };
+    }
+
+    if buf_ptr.is_null() {
+        return Ok(None);
+    }
+
+    // SAFETY: buf_ptr points to a USER_INFO_1 record allocated by NetApi.
+    let info = unsafe { &*(buf_ptr as *const USER_INFO_1) };
+    let disabled = (info.usri1_flags & UF_ACCOUNTDISABLE) != 0;
+
+    // SAFETY: buf_ptr was allocated by NetApi.
+    unsafe { NetApiBufferFree(buf_ptr.cast()) };
+
+    Ok(Some(disabled))
+}
+
 /// Convenience-Funktion, die `lookup_account_for_sid` +
 /// `user_global_group_names` + `resolve_local_group_sids` kombiniert und das
 /// Ergebnis in den fachlichen Typen `Identity` und `GroupMembership`
@@ -337,11 +437,40 @@ pub fn lookup_sid_for_account(system: Option<&str>, name: &str) -> Result<Sid, C
 /// itself would assemble when building an access token for the user —
 /// including `BUILTIN\Administrators` when the user is (directly or via a
 /// domain group) in that local group.
-pub fn resolve_identity_via_sam(
-    sid_str: &str,
-) -> Result<(Identity, Vec<GroupMembership>), CoreError> {
+pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreError> {
     let account = lookup_account_for_sid(sid_str)?;
     let account_kind = account.kind.clone();
+
+    // Schließt Review 2026-06-04 Runde 2 Finding 5: für User-Konten
+    // versuchen wir den `disabled`-Status über `NetUserGetInfo` Level 1
+    // zu lesen. Gelingt das nicht (z. B. Access Denied auf einem nicht-
+    // privilegierten Konto), markieren wir den Status explizit als
+    // unbekannt, statt ihn pauschal auf `false` zu setzen.
+    // Closes review 2026-06-04 round 2 finding 5: for user accounts we
+    // try to read the `disabled` flag via `NetUserGetInfo` level 1. If
+    // that fails (e.g. access denied for a non-privileged caller) we
+    // explicitly flag the status as unknown rather than defaulting to
+    // false.
+    let (disabled, disabled_known) = if matches!(account_kind, IdentityKind::User) {
+        match user_account_disabled(None, &account.name) {
+            Ok(Some(flag)) => (flag, true),
+            Ok(None) => (false, false),
+            Err(e) => {
+                warn!(
+                    sid = sid_str,
+                    error = %e,
+                    "SAM: NetUserGetInfo failed — disabled status unknown"
+                );
+                (false, false)
+            }
+        }
+    } else {
+        // Gruppen, Computer und Well-Known SIDs haben keinen
+        // `disabled`-Status — sie sind per Definition aktiv.
+        // Groups, computers, and well-known SIDs have no `disabled`
+        // flag — by definition they are active.
+        (false, true)
+    };
 
     let identity = Identity {
         sid: Sid(sid_str.to_owned()),
@@ -352,17 +481,7 @@ pub fn resolve_identity_via_sam(
             Some(account.domain.clone())
         },
         kind: account.kind,
-        // Deaktiviert-Status lässt sich nicht ohne weitere SAM-Calls
-        // (NetUserGetInfo Level 1+, mit UF_ACCOUNTDISABLE-Flag) ermitteln
-        // — solange das nicht gebraucht wird, bleibt das Default-false. Das
-        // ist konservativ, weil die Berechtigungsberechnung disabled-User
-        // ohnehin als „Identität existiert" behandelt.
-        // Disabled status cannot be derived without further SAM calls
-        // (NetUserGetInfo level 1+ with the UF_ACCOUNTDISABLE flag). Until
-        // we need it this stays at the default `false`, which is
-        // conservative because the permission engine treats disabled users
-        // as "identity exists" anyway.
-        disabled: false,
+        disabled,
         user_principal_name: None,
     };
 
@@ -471,7 +590,28 @@ pub fn resolve_identity_via_sam(
         }
     }
 
-    Ok((identity, memberships))
+    Ok(SamResolution {
+        identity,
+        memberships,
+        disabled_known,
+    })
+}
+
+/// Ergebnis von [`resolve_identity_via_sam`]. Der `disabled_known`-Flag
+/// erlaubt Aufrufern zu unterscheiden, ob `Identity.disabled` einen
+/// echten Wert trägt oder ein konservativer Default ist — und so den
+/// Diagnose-Marker `IdentityDisabledStatusUnknown` zu setzen, falls
+/// nötig. Closes review 2026-06-04 round 2 finding 5.
+///
+/// Result of [`resolve_identity_via_sam`]. The `disabled_known` flag
+/// lets callers distinguish a real value of `Identity.disabled` from a
+/// conservative default, so they can set the
+/// `IdentityDisabledStatusUnknown` diagnostic when needed.
+#[derive(Debug, Clone)]
+pub struct SamResolution {
+    pub identity: Identity,
+    pub memberships: Vec<GroupMembership>,
+    pub disabled_known: bool,
 }
 
 /// Baut eine SID → Name-Übersetzungstabelle für die in `memberships`
@@ -688,12 +828,18 @@ mod tests {
     fn resolve_local_administrator_yields_memberships() {
         let admin_sid = lookup_sid_for_account(None, "Administrator")
             .expect("local Administrator must resolve to a SID");
-        let (identity, memberships) = resolve_identity_via_sam(&admin_sid.0)
+        let res = resolve_identity_via_sam(&admin_sid.0)
             .expect("SAM resolution of local Administrator must succeed");
-        assert!(matches!(identity.kind, IdentityKind::User));
+        assert!(matches!(res.identity.kind, IdentityKind::User));
         assert!(
-            memberships.iter().any(|m| m.group_sid.0 == "S-1-5-32-544"),
+            res.memberships
+                .iter()
+                .any(|m| m.group_sid.0 == "S-1-5-32-544"),
             "Administrator must be in BUILTIN\\Administrators via SAM resolution"
+        );
+        assert!(
+            res.disabled_known,
+            "On a DC, NetUserGetInfo should be answerable for the built-in Administrator"
         );
     }
 }

@@ -206,6 +206,20 @@ pub fn print_report(
                     println!("      Computed rights are ACL-theoretically correct, but the");
                     println!("      account normally cannot authenticate / access SMB.");
                 }
+                PermissionDiagnostic::IdentityNotInConfiguredLdapBase => {
+                    println!("  [!] Identity was resolved via Windows LSA but the configured");
+                    println!("      LDAP base DN does not index that SID (typical for multi-");
+                    println!("      domain forests or trusted domains). Domain group recursion");
+                    println!("      ran only through the user's home domain — nested cross-");
+                    println!("      domain memberships may be missing. Treat as incomplete.");
+                }
+                PermissionDiagnostic::IdentityDisabledStatusUnknown => {
+                    println!("  [i] The 'disabled' flag for this identity could not be");
+                    println!("      determined (SAM/LSA fallback without NetUserGetInfo, or");
+                    println!("      LDAP did not return the user object). Computed rights are");
+                    println!("      ACL-theoretically correct, but whether the account is");
+                    println!("      enabled is unknown.");
+                }
             }
         }
     }

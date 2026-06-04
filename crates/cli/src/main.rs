@@ -220,6 +220,23 @@ struct ResolvedIdentity {
     identity: Identity,
     memberships: Vec<GroupMembership>,
     ad_connected: bool,
+    /// LSA hat einen User aufgeloest, dessen SID die konfigurierte
+    /// LDAP-`base_dn` aber nicht indexiert. Aufrufer reichen das an
+    /// `PermissionEvaluationInput::identity_not_in_configured_ldap_base`
+    /// durch — die Engine produziert dann einen entsprechenden
+    /// `PermissionDiagnostic`. Schliesst Review 2026-06-04 Runde 2
+    /// Finding 1 (Multi-Domain LSA-Fallback).
+    /// LSA resolved a user but the configured LDAP `base_dn` does not
+    /// index that SID. Forwarded into
+    /// `PermissionEvaluationInput::identity_not_in_configured_ldap_base`.
+    identity_not_in_configured_ldap_base: bool,
+    /// Der `disabled`-Status der Identity konnte nicht zuverlaessig
+    /// bestimmt werden (z. B. SAM-/LSA-Pfad ohne `NetUserGetInfo`).
+    /// Aufrufer reichen das an
+    /// `PermissionEvaluationInput::identity_disabled_status_unknown`
+    /// durch. Schliesst Review 2026-06-04 Runde 2 Finding 5.
+    /// The identity's `disabled` flag could not be reliably determined.
+    identity_disabled_status_unknown: bool,
 }
 
 /// Validiert optionale Verbindungs-Eingaben zentral, bevor sie an LDAP- oder
@@ -323,19 +340,25 @@ async fn resolve_identity(
         };
         let resolver = LdapResolver::new(config);
 
-        let (sid, identity) = if user.starts_with("S-1-") {
+        let (sid, identity, not_in_base, disabled_unknown) = if user.starts_with("S-1-") {
             let sid = Sid(user.to_owned());
             let identity = resolver
                 .resolve_identity(&sid)
                 .await
                 .map_err(|e| anyhow::anyhow!("Identity resolution failed: {e}"))?;
-            (sid, identity)
+            (sid, identity, false, false)
         } else {
-            resolver
+            let lookup = resolver
                 .lookup_by_samaccount(user)
                 .await
                 .map_err(|e| anyhow::anyhow!("sAMAccountName lookup failed: {e}"))?
-                .ok_or_else(|| anyhow::anyhow!("User '{}' not found in AD", user))?
+                .ok_or_else(|| anyhow::anyhow!("User '{}' not found in AD", user))?;
+            (
+                lookup.sid,
+                lookup.identity,
+                lookup.not_in_configured_ldap_base,
+                lookup.disabled_status_unknown,
+            )
         };
 
         let memberships = resolver
@@ -347,6 +370,8 @@ async fn resolve_identity(
             identity,
             memberships,
             ad_connected: true,
+            identity_not_in_configured_ldap_base: not_in_base,
+            identity_disabled_status_unknown: disabled_unknown,
         })
     } else {
         if !user.starts_with("S-1-") {
@@ -368,6 +393,8 @@ async fn resolve_identity(
             identity,
             memberships: vec![],
             ad_connected: false,
+            identity_not_in_configured_ldap_base: false,
+            identity_disabled_status_unknown: true,
         })
     }
 }
@@ -514,6 +541,8 @@ async fn run_analyze(
         unsupported_share_ace_count,
         sid_names,
         group_resolution_via_sam_fallback: sam_fallback,
+        identity_not_in_configured_ldap_base: resolved.identity_not_in_configured_ldap_base,
+        identity_disabled_status_unknown: resolved.identity_disabled_status_unknown,
     };
     let result = DefaultPermissionEngine
         .evaluate(input)
@@ -777,6 +806,8 @@ async fn run_scan(
             unsupported_share_ace_count: scan_unsupported_share_ace_count,
             sid_names: scan_sid_names.clone(),
             group_resolution_via_sam_fallback: scan_sam_fallback,
+            identity_not_in_configured_ldap_base: resolved.identity_not_in_configured_ldap_base,
+            identity_disabled_status_unknown: resolved.identity_disabled_status_unknown,
         };
         let result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
             anyhow::anyhow!("Permission evaluation failed for '{}': {e}", fso.path.0)

@@ -49,6 +49,29 @@ use crate::{
 /// AD userAccountControl bit for disabled accounts.
 const UAC_ACCOUNT_DISABLE: u32 = 0x0002;
 
+/// Ergebnis von [`LdapResolver::lookup_by_samaccount`]. Trägt zusätzlich
+/// zwei Diagnose-Flags, die der Aufrufer in die `PermissionEvaluationInput`
+/// durchreichen muss:
+///
+/// - `not_in_configured_ldap_base = true`: die LSA hat eine gültige SID
+///   geliefert (`DOMAIN\user`), die konfigurierte LDAP-`base_dn` indexiert
+///   die SID aber nicht — typisch für Multi-Domain-Forests oder
+///   Trust-Beziehungen. Domain-Gruppen-Rekursion ist dann unvollständig.
+/// - `disabled_status_unknown = true`: der `disabled`-Wert auf der
+///   Identity ist nicht zuverlässig — z. B. weil nur LSA befragt wurde
+///   und `NetUserGetInfo` (noch) nicht ausgewertet werden konnte.
+///
+/// Result of [`LdapResolver::lookup_by_samaccount`]. Carries two extra
+/// diagnostic flags the caller must forward into the
+/// `PermissionEvaluationInput`.
+#[derive(Debug, Clone)]
+pub struct LookupResult {
+    pub sid: Sid,
+    pub identity: Identity,
+    pub not_in_configured_ldap_base: bool,
+    pub disabled_status_unknown: bool,
+}
+
 /// Implementiert IdentityResolver über LDAP mit In-Memory-Cache.
 /// Implements IdentityResolver via LDAP with an in-memory cache.
 pub struct LdapResolver {
@@ -102,7 +125,7 @@ impl LdapResolver {
     pub async fn lookup_by_samaccount(
         &self,
         user_input: &str,
-    ) -> Result<Option<(Sid, Identity)>, CoreError> {
+    ) -> Result<Option<LookupResult>, CoreError> {
         let trimmed = user_input.trim();
         if trimmed.is_empty() {
             return Err(CoreError::Validation(
@@ -128,34 +151,81 @@ impl LdapResolver {
         self.lookup_via_samaccount_strict(trimmed).await
     }
 
-    /// `DOMAIN\user` über Windows-LSA → SID → LDAP-Identity.
-    /// `DOMAIN\user` via Windows LSA → SID → LDAP identity.
+    /// `DOMAIN\user` über Windows-LSA → SID → LDAP-Identity, oder bei
+    /// LDAP-Miss eine LSA-only-Identity (Review 2026-06-04 Runde 2,
+    /// Finding 1).
+    ///
+    /// Vorher: LDAP-Miss (z. B. weil der User in einer Trusted Domain
+    /// liegt, die `base_dn` nicht überstreicht) klassifizierte den User
+    /// fälschlich als `IdentityKind::Orphaned` — ein realer Benutzer
+    /// erschien wie eine verwaiste SID. Jetzt:
+    ///
+    /// 1. LSA liefert die SID (`LookupAccountNameW`, domain-aware).
+    /// 2. Wir versuchen, die Identity per LDAP-`search_by_sid` zu
+    ///    bereichern (für `disabled` und genauere Domain-Klassifikation).
+    /// 3. Findet die `base_dn` die SID nicht, bauen wir eine
+    ///    Identity aus dem LSA-Reverse-Lookup (`lookup_account_for_sid`)
+    ///    und setzen `not_in_configured_ldap_base = true`. Der
+    ///    `disabled`-Wert ist in diesem Pfad nicht zuverlässig
+    ///    bestimmbar — wir setzen zusätzlich
+    ///    `disabled_status_unknown = true`. Beide Flags landen in
+    ///    `PermissionEvaluationInput` und produzieren strukturierte
+    ///    Diagnose-Marker im Ergebnis.
+    ///
+    /// `DOMAIN\user` via Windows LSA → SID → LDAP identity, or LSA-only
+    /// identity on LDAP miss (review 2026-06-04 round 2 finding 1).
     #[cfg(windows)]
     async fn lookup_via_lsa(
         &self,
         domain_qualified: &str,
-    ) -> Result<Option<(Sid, Identity)>, CoreError> {
-        // LSA-Aufruf läuft synchron auf dem Worker-Thread — kein
-        // tokio::time::timeout sinnvoll. Anschließende LDAP-Identity-Suche
-        // läuft über resolve_identity_internal, das das Timeout selbst trägt.
-        // LSA call runs synchronously on the worker thread — no
-        // tokio::time::timeout needed. The follow-up LDAP identity search
-        // runs through resolve_identity_internal, which carries the timeout.
-        match crate::sam::lookup_sid_for_account(None, domain_qualified) {
-            Ok(sid) => {
-                let identity = self.resolve_identity_internal(&sid).await?;
-                Ok(Some((sid, identity)))
-            }
-            Err(CoreError::SidResolution(_)) => Ok(None),
-            Err(e) => Err(e),
+    ) -> Result<Option<LookupResult>, CoreError> {
+        let sid = match crate::sam::lookup_sid_for_account(None, domain_qualified) {
+            Ok(sid) => sid,
+            Err(CoreError::SidResolution(_)) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+
+        // LDAP-Bereicherung versuchen. Schlaegt sie fehl (Verbindung,
+        // Timeout, Fehler), propagieren wir den Fehler wie bisher.
+        // Try LDAP enrichment. If it fails (connection, timeout, error)
+        // we propagate as before.
+        let ldap_identity = self.resolve_identity_internal(&sid).await?;
+
+        if ldap_identity.kind == IdentityKind::Orphaned {
+            // LDAP-base indexiert die SID nicht — typisch fuer Trust-/
+            // Multi-Domain-Szenarien. Statt einer falschen Orphaned-
+            // Klassifikation bauen wir die Identity aus LSA und markieren
+            // beide Wissensluecken explizit.
+            // LDAP base does not index the SID — typical in trust /
+            // multi-domain scenarios. Instead of a wrong Orphaned
+            // classification we build the identity from LSA and flag both
+            // knowledge gaps explicitly.
+            warn!(
+                sid = %sid.0,
+                "LSA resolved DOMAIN\\user but LDAP base does not index the SID — building identity from LSA"
+            );
+            let identity = build_identity_from_lsa(&sid);
+            return Ok(Some(LookupResult {
+                sid,
+                identity,
+                not_in_configured_ldap_base: true,
+                disabled_status_unknown: true,
+            }));
         }
+
+        Ok(Some(LookupResult {
+            sid,
+            identity: ldap_identity,
+            not_in_configured_ldap_base: false,
+            disabled_status_unknown: false,
+        }))
     }
 
     #[cfg(not(windows))]
     async fn lookup_via_lsa(
         &self,
         _domain_qualified: &str,
-    ) -> Result<Option<(Sid, Identity)>, CoreError> {
+    ) -> Result<Option<LookupResult>, CoreError> {
         Err(CoreError::Validation(
             "DOMAIN\\user input requires Windows LSA — not available on this platform".to_owned(),
         ))
@@ -163,7 +233,7 @@ impl LdapResolver {
 
     /// `user@domain.tld` über LDAP `userPrincipalName`.
     /// `user@domain.tld` via LDAP `userPrincipalName`.
-    async fn lookup_via_upn(&self, upn: &str) -> Result<Option<(Sid, Identity)>, CoreError> {
+    async fn lookup_via_upn(&self, upn: &str) -> Result<Option<LookupResult>, CoreError> {
         ldap_client::with_timeout(
             "lookup_by_upn",
             ldap_client::ldap_timeout(&self.config),
@@ -185,7 +255,12 @@ impl LdapResolver {
                             .lock()
                             .await
                             .insert(sid.0.clone(), identity.clone());
-                        Ok(Some((sid, identity)))
+                        Ok(Some(LookupResult {
+                            sid,
+                            identity,
+                            not_in_configured_ldap_base: false,
+                            disabled_status_unknown: false,
+                        }))
                     }
                 }
             },
@@ -198,7 +273,7 @@ impl LdapResolver {
     async fn lookup_via_samaccount_strict(
         &self,
         sam: &str,
-    ) -> Result<Option<(Sid, Identity)>, CoreError> {
+    ) -> Result<Option<LookupResult>, CoreError> {
         ldap_client::with_timeout(
             "lookup_by_samaccount_strict",
             ldap_client::ldap_timeout(&self.config),
@@ -233,7 +308,12 @@ impl LdapResolver {
                             .lock()
                             .await
                             .insert(sid.0.clone(), identity.clone());
-                        Ok(Some((sid, identity)))
+                        Ok(Some(LookupResult {
+                            sid,
+                            identity,
+                            not_in_configured_ldap_base: false,
+                            disabled_status_unknown: false,
+                        }))
                     }
                 }
             },
@@ -729,6 +809,60 @@ fn classify_identity(object_classes: &[&str]) -> IdentityKind {
         IdentityKind::User
     } else {
         IdentityKind::Unknown
+    }
+}
+
+/// Baut eine [`Identity`] aus dem LSA-Reverse-Lookup zu einer SID, wenn
+/// der konfigurierte LDAP-`base_dn` die SID nicht indexiert (typisch in
+/// Multi-Domain-Forests / Trust-Szenarien). Anders als
+/// `parse_identity_from_entry` kennt dieser Pfad weder
+/// `userPrincipalName` noch den `userAccountControl`-Status — der
+/// Aufrufer setzt deshalb zusätzlich `disabled_status_unknown = true`
+/// im [`LookupResult`]. Bei LSA-Fehlern fällt der Helper auf eine
+/// `Orphaned`-Identity zurück, damit der Scan nicht abbricht.
+///
+/// Builds an [`Identity`] from a SID reverse-lookup via LSA when the
+/// configured LDAP `base_dn` does not index the SID (typical in
+/// multi-domain forests / trust scenarios). Unlike
+/// `parse_identity_from_entry` this path knows neither
+/// `userPrincipalName` nor `userAccountControl` — callers therefore also
+/// set `disabled_status_unknown = true` on the [`LookupResult`]. On LSA
+/// errors the helper falls back to an `Orphaned` identity to keep the
+/// scan running.
+#[cfg(windows)]
+fn build_identity_from_lsa(sid: &Sid) -> Identity {
+    match crate::sam::lookup_account_for_sid(&sid.0) {
+        Ok(info) => Identity {
+            sid: sid.clone(),
+            name: if info.name.is_empty() {
+                None
+            } else {
+                Some(info.name)
+            },
+            domain: if info.domain.is_empty() {
+                None
+            } else {
+                Some(info.domain)
+            },
+            kind: info.kind,
+            disabled: false,
+            user_principal_name: None,
+        },
+        Err(e) => {
+            warn!(
+                sid = %sid.0,
+                error = %e,
+                "build_identity_from_lsa: LSA reverse lookup failed — emitting Orphaned identity"
+            );
+            Identity {
+                sid: sid.clone(),
+                name: None,
+                domain: None,
+                kind: IdentityKind::Orphaned,
+                disabled: false,
+                user_principal_name: None,
+            }
+        }
     }
 }
 

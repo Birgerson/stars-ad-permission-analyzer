@@ -305,6 +305,31 @@ fn write_permissions_table(
                             .to_string(),
                     );
                 }
+                PermissionDiagnostic::IdentityNotInConfiguredLdapBase => {
+                    diag_parts.push(
+                        "<span class=\"badge badge-medium\" \
+                         title=\"The user was resolved via Windows LSA but \
+                         the configured LDAP base DN does not index that \
+                         SID (typical for multi-domain forests or trusted \
+                         domains). Domain group recursion ran only through \
+                         the user's home domain — nested cross-domain \
+                         memberships may be missing. Treat the finding as \
+                         incomplete.\">⚠ identity outside configured LDAP base</span>"
+                            .to_string(),
+                    );
+                }
+                PermissionDiagnostic::IdentityDisabledStatusUnknown => {
+                    diag_parts.push(
+                        "<span class=\"badge badge-info\" \
+                         title=\"The 'disabled' flag for this identity \
+                         could not be determined (e.g. SAM/LSA fallback \
+                         without NetUserGetInfo, or LDAP did not return \
+                         the user object). Computed rights are \
+                         ACL-theoretically correct, but whether the \
+                         account is enabled is unknown.\">ℹ disabled status unknown</span>"
+                            .to_string(),
+                    );
+                }
             }
         }
         let diagnostics = if diag_parts.is_empty() {

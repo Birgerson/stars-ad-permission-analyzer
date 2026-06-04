@@ -55,11 +55,18 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
         // `incomplete = true` — same logic as for the other incomplete-
         // evaluation sources. The risk engine did not consider this
         // marker before; that was a discrepancy between ADR and code.
+        // Review 2026-06-04 Runde 2 Finding 1: Identitaet aus fremder
+        // Domain — LDAP-base indexiert sie nicht, Domain-Gruppen-
+        // Rekursion ist damit luekenhaft (semantisch wie SAM-Fallback).
+        // Review 2026-06-04 round 2 finding 1: identity from a foreign
+        // domain — LDAP base does not index it, domain group recursion is
+        // incomplete (semantically same as SAM fallback).
         || p.diagnostics.iter().any(|d| {
             matches!(
                 d,
                 PermissionDiagnostic::UnsupportedShareAces { .. }
                     | PermissionDiagnostic::DomainGroupRecursionIncomplete
+                    | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
             )
         })
 }
@@ -860,6 +867,54 @@ mod tests {
         assert!(
             r[0].incomplete,
             "DomainGroupRecursionIncomplete -> finding must be flagged incomplete (review 2026-06-04 round 2 finding 4)"
+        );
+    }
+
+    /// Review 2026-06-04 Runde 2 Finding 1: `IdentityNotInConfiguredLdapBase`
+    /// bedeutet, dass LSA die SID aufgelöst hat, das LDAP-`base_dn` sie
+    /// aber nicht indexiert. Cross-Domain-Gruppenrekursion ist damit
+    /// lückenhaft — Risk-Findings müssen analog zum SAM-Fallback als
+    /// `incomplete` markiert sein.
+    /// Review 2026-06-04 round 2 finding 1: `IdentityNotInConfiguredLdapBase`
+    /// means LSA resolved the SID but the LDAP `base_dn` does not index
+    /// it. Cross-domain group recursion is incomplete — risk findings
+    /// must be marked `incomplete` just like for the SAM fallback.
+    #[test]
+    fn full_control_marks_finding_incomplete_on_identity_not_in_ldap_base() {
+        use adpa_core::model::PermissionDiagnostic;
+        let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
+        p.diagnostics
+            .push(PermissionDiagnostic::IdentityNotInConfiguredLdapBase);
+        let r = FullControlRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(
+            r[0].incomplete,
+            "IdentityNotInConfiguredLdapBase -> finding must be flagged incomplete (review 2026-06-04 round 2 finding 1)"
+        );
+    }
+
+    /// Review 2026-06-04 Runde 2 Finding 5:
+    /// `IdentityDisabledStatusUnknown` ist nur informationell — er
+    /// signalisiert „`disabled` nicht ermittelbar", aber die ACL-
+    /// Auswertung selbst ist vollständig. Risk-Findings dürfen
+    /// **nicht** allein wegen dieses Markers `incomplete = true`
+    /// tragen.
+    /// Review 2026-06-04 round 2 finding 5: `IdentityDisabledStatusUnknown`
+    /// is informational only — it signals "`disabled` could not be
+    /// determined" but the ACL evaluation is complete. Risk findings
+    /// must **not** be marked `incomplete = true` because of this
+    /// marker alone.
+    #[test]
+    fn full_control_does_not_mark_incomplete_on_disabled_status_unknown_alone() {
+        use adpa_core::model::PermissionDiagnostic;
+        let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
+        p.diagnostics
+            .push(PermissionDiagnostic::IdentityDisabledStatusUnknown);
+        let r = FullControlRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(
+            !r[0].incomplete,
+            "IdentityDisabledStatusUnknown alone is informational and must NOT mark incomplete (review 2026-06-04 round 2 finding 5)"
         );
     }
 

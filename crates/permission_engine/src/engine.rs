@@ -161,6 +161,20 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if input.identity.disabled {
             diagnostics.push(PermissionDiagnostic::IdentityDisabled);
         }
+        // Review 2026-06-04 Runde 2 Finding 1: Identitaet per LSA aufgeloest,
+        // aber LDAP-base indexiert sie nicht (Multi-Domain).
+        // Review 2026-06-04 round 2 finding 1: identity resolved via LSA but
+        // LDAP base does not index it (multi-domain).
+        if input.identity_not_in_configured_ldap_base {
+            diagnostics.push(PermissionDiagnostic::IdentityNotInConfiguredLdapBase);
+        }
+        // Review 2026-06-04 Runde 2 Finding 5: disabled-Status nicht
+        // ermittelbar.
+        // Review 2026-06-04 round 2 finding 5: disabled status could not be
+        // determined.
+        if input.identity_disabled_status_unknown {
+            diagnostics.push(PermissionDiagnostic::IdentityDisabledStatusUnknown);
+        }
 
         let result = EffectivePermission {
             identity: input.identity,
@@ -816,6 +830,8 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
             })
             .unwrap()
     }
@@ -839,6 +855,8 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
             })
             .unwrap()
     }
@@ -862,6 +880,8 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
             })
             .unwrap()
     }
@@ -1308,6 +1328,8 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
             })
             .unwrap();
         assert_eq!(
@@ -1335,6 +1357,8 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
             })
             .unwrap();
         assert!(NormalizedRights::new(p.effective_mask.0).is_read());
@@ -1359,6 +1383,8 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
             })
             .unwrap();
         assert_eq!(
@@ -1784,6 +1810,8 @@ mod tests {
                 unsupported_share_ace_count: 4,
                 sid_names: std::collections::BTreeMap::new(),
                 group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
             })
             .unwrap();
         assert!(
@@ -1810,6 +1838,8 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
             })
             .unwrap();
         assert!(
@@ -1874,6 +1904,8 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names,
                 group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
             })
             .unwrap();
         let member_step = p
@@ -1911,6 +1943,8 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names,
                 group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
             })
             .unwrap();
         let ace_step = p
@@ -2406,6 +2440,77 @@ mod tests {
         assert!(
             !step.contains("source:"),
             "legacy format must NOT contain the new source label, got: {step}"
+        );
+    }
+
+    /// Wenn `identity_not_in_configured_ldap_base = true` in den
+    /// Engine-Input fließt, muss `IdentityNotInConfiguredLdapBase` im
+    /// `diagnostics`-Vector landen. Schließt Review 2026-06-04 Runde 2
+    /// Finding 1 auf der Engine-Seite ab.
+    /// When `identity_not_in_configured_ldap_base = true` flows into the
+    /// engine input, `IdentityNotInConfiguredLdapBase` must appear in
+    /// the `diagnostics` vector. Closes review 2026-06-04 round 2
+    /// finding 1 on the engine side.
+    #[test]
+    fn engine_pushes_identity_not_in_configured_ldap_base_diagnostic() {
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![],
+                file_system_object: fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                access_context: AccessContext::Unspecified,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: true,
+                identity_disabled_status_unknown: false,
+            })
+            .unwrap();
+        assert!(
+            result
+                .diagnostics
+                .contains(&PermissionDiagnostic::IdentityNotInConfiguredLdapBase),
+            "engine must push IdentityNotInConfiguredLdapBase when the caller flag is set; got {:?}",
+            result.diagnostics
+        );
+    }
+
+    /// Wenn `identity_disabled_status_unknown = true` in den Engine-Input
+    /// fließt, muss `IdentityDisabledStatusUnknown` im `diagnostics`-Vector
+    /// landen — z. B. wenn der SAM-Pfad `NetUserGetInfo` nicht aufgelöst hat.
+    /// Schließt Review 2026-06-04 Runde 2 Finding 5 auf der Engine-Seite ab.
+    /// When `identity_disabled_status_unknown = true` flows into the
+    /// engine input, `IdentityDisabledStatusUnknown` must appear in the
+    /// `diagnostics` vector — e.g. when the SAM path could not run
+    /// `NetUserGetInfo`. Closes review 2026-06-04 round 2 finding 5 on
+    /// the engine side.
+    #[test]
+    fn engine_pushes_identity_disabled_status_unknown_diagnostic() {
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![],
+                file_system_object: fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                access_context: AccessContext::Unspecified,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: true,
+            })
+            .unwrap();
+        assert!(
+            result
+                .diagnostics
+                .contains(&PermissionDiagnostic::IdentityDisabledStatusUnknown),
+            "engine must push IdentityDisabledStatusUnknown when the caller flag is set; got {:?}",
+            result.diagnostics
         );
     }
 }

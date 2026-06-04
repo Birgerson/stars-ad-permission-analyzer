@@ -21,5 +21,5 @@ pub use resolver::LdapResolver;
 #[cfg(windows)]
 pub use sam::{
     build_sid_name_map, lookup_account_for_sid, lookup_sid_for_account, resolve_identity_via_sam,
-    user_global_group_names, AccountInfo,
+    user_account_disabled, user_global_group_names, AccountInfo, SamResolution,
 };

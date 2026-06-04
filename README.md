@@ -310,6 +310,7 @@ Beide überleben damit eine Neuinstallation — die Audit-Historie ist Beweismit
 
 ### Dokumentation
 
+- **[Features, Grenzen und Lesart der Ergebnisse](docs/features-and-limitations.md)** — was Stars zuverlässig kann, was bewusst nicht implementiert ist, und wie die Diagnose-Marker (`DomainGroupRecursionIncomplete`, `IdentityNotInConfiguredLdapBase`, …) zu lesen sind. **Start hier, wenn ein Befund unerwartet ist.**
 - **[Audit-Kriterien und Bewertungsprinzipien](docs/audit-kriterien.md)** — vollständige Lektüre darüber, nach welchen Regeln Stars Berechtigungen bewertet, welche Risikoregeln implementiert sind, welche Severities sie tragen und welche Rechte für welche Rolle als optimal gelten.
 - **[Architektur-Entscheidungen (ADRs)](docs/adr/)** — historische Begründungen einzelner Technologie- und Modell­entscheidungen.
 - **[Security Policy](SECURITY.md)** — wie Sicherheitslücken gemeldet werden.
@@ -650,6 +651,7 @@ Both therefore survive a reinstall — the audit history is evidence and should 
 
 ### Documentation
 
+- **[Features, limits and how to read the results](docs/features-and-limitations.md)** — what Stars reliably covers, what is deliberately out of scope, and how the diagnostic markers (`DomainGroupRecursionIncomplete`, `IdentityNotInConfiguredLdapBase`, …) should be read. **Start here when a finding is unexpected.** (Document is currently in German only.)
 - **[Audit Criteria and Evaluation Principles](docs/audit-kriterien.md)** — a complete write-up of which rules Stars uses to evaluate permissions, which risk rules are implemented, what severities they carry, and which permissions are considered optimal for which role.
 - **[Architecture Decision Records (ADRs)](docs/adr/)** — historical justifications for individual technology and model decisions.
 - **[Security Policy](SECURITY.md)** — how to report security vulnerabilities.

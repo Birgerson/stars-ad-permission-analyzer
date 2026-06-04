@@ -106,6 +106,24 @@ pub struct PermissionEvaluationInput {
     /// Defaulting to `false` (LDAP path) keeps existing callers
     /// compatible. Closes review finding 6.
     pub group_resolution_via_sam_fallback: bool,
+    /// `true`, wenn die Identitaet zwar per LSA aufgeloest werden konnte,
+    /// der konfigurierte LDAP-`base_dn` die SID aber nicht indexiert (typisch
+    /// in Multi-Domain-Forests). Die Engine pusht dann einen
+    /// `PermissionDiagnostic::IdentityNotInConfiguredLdapBase`. Default
+    /// `false`. Schliesst Review-Befund 2026-06-04 Runde 2 Finding 1.
+    /// `true` when the identity was resolved via LSA but the configured
+    /// LDAP `base_dn` does not index that SID (typical in multi-domain
+    /// forests). The engine then pushes a
+    /// `PermissionDiagnostic::IdentityNotInConfiguredLdapBase`. Default
+    /// `false`. Closes review 2026-06-04 round 2 finding 1.
+    pub identity_not_in_configured_ldap_base: bool,
+    /// `true`, wenn `disabled` auf der Identitaet nicht zuverlaessig
+    /// bestimmt werden konnte (z. B. SAM-Pfad ohne `NetUserGetInfo`).
+    /// Default `false`. Schliesst Review-Befund 2026-06-04 Runde 2 Finding 5.
+    /// `true` when the `disabled` flag on the identity could not be
+    /// reliably determined (e.g. SAM path without `NetUserGetInfo`).
+    /// Default `false`. Closes review 2026-06-04 round 2 finding 5.
+    pub identity_disabled_status_unknown: bool,
 }
 
 pub struct RiskContext {

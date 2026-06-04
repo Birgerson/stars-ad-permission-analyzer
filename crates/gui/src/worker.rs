@@ -706,7 +706,7 @@ async fn handle_analyze(
     }
     validate_connection_inputs(smb_server, share_name, ldap)?;
     let fso = read_fso(path).map_err(|e| format!("Failed to read path: {e}"))?;
-    let (identity, memberships, sam_fallback) = resolve_identity_sids(sid, ldap).await?;
+    let res = resolve_identity_sids(sid, ldap).await?;
 
     // Lokale Server-Gruppen vor der Share-Maske bestimmen — siehe CLI-Pendant.
     // Finding 2: explizit gesetzter SMB-Server wird durchgereicht, damit
@@ -715,14 +715,14 @@ async fn handle_analyze(
     // Finding 2: explicit SMB server is forwarded so local groups come from
     // the same server as the share DACL.
     let (local_group_sids, local_group_status) =
-        collect_local_group_sids_for_path(path, smb_server, &identity);
+        collect_local_group_sids_for_path(path, smb_server, &res.identity);
 
     let (share_status, unsupported_share_ace_count) = resolve_share_status(
         path,
         smb_server,
         share_name,
         sid,
-        &memberships,
+        &res.memberships,
         &local_group_sids,
         AccessContext::for_path(path),
     );
@@ -735,14 +735,14 @@ async fn handle_analyze(
     // name in addition to the SID.
     #[cfg(windows)]
     let sid_names =
-        ad_resolver::build_sid_name_map(&memberships, fso.dacl.iter().map(|a| a.sid.0.clone()));
+        ad_resolver::build_sid_name_map(&res.memberships, fso.dacl.iter().map(|a| a.sid.0.clone()));
     #[cfg(not(windows))]
     let sid_names = std::collections::BTreeMap::new();
 
     DefaultPermissionEngine
         .evaluate(PermissionEvaluationInput {
-            identity,
-            group_memberships: memberships,
+            identity: res.identity,
+            group_memberships: res.memberships,
             file_system_object: fso,
             share_status,
             local_group_sids,
@@ -750,7 +750,9 @@ async fn handle_analyze(
             access_context: AccessContext::for_path(path),
             unsupported_share_ace_count,
             sid_names,
-            group_resolution_via_sam_fallback: sam_fallback,
+            group_resolution_via_sam_fallback: res.sam_fallback,
+            identity_not_in_configured_ldap_base: res.not_in_configured_ldap_base,
+            identity_disabled_status_unknown: res.disabled_status_unknown,
         })
         .map_err(|e| format!("Permission engine error: {e}"))
 }
@@ -854,12 +856,17 @@ async fn handle_scan(
         return make_early_summary(e);
     }
 
-    let (identity, memberships, sam_fallback) = match resolve_identity_sids(sid, ldap).await {
-        Ok(triple) => triple,
+    let res = match resolve_identity_sids(sid, ldap).await {
+        Ok(r) => r,
         Err(e) => {
             return make_early_summary(format!("Identity resolution failed: {e}"));
         }
     };
+    let identity = res.identity;
+    let memberships = res.memberships;
+    let sam_fallback = res.sam_fallback;
+    let identity_not_in_configured_ldap_base = res.not_in_configured_ldap_base;
+    let identity_disabled_status_unknown = res.disabled_status_unknown;
 
     // Strukturierte Fehlerliste, die später per persist_scan in `scan_errors`
     // landet. Sammelt Walk-, Eval- und Setup-Fehler analog zum CLI-Pfad.
@@ -989,6 +996,8 @@ async fn handle_scan(
             unsupported_share_ace_count: scan_unsupported_share_ace_count,
             sid_names: scan_sid_names.clone(),
             group_resolution_via_sam_fallback: sam_fallback,
+            identity_not_in_configured_ldap_base,
+            identity_disabled_status_unknown,
         }) {
             Ok(perm) => {
                 let label = NormalizedRights::new(perm.effective_mask.0)
@@ -1611,7 +1620,7 @@ fn format_mask(mask: u32) -> String {
 async fn resolve_identity_sids(
     sid: &str,
     ldap: Option<&LdapParams>,
-) -> Result<(Identity, Vec<GroupMembership>, bool), String> {
+) -> Result<IdentityResolution, String> {
     if let Some(params) = ldap {
         let mut config = LdapConfig::new(
             &params.server,
@@ -1633,7 +1642,19 @@ async fn resolve_identity_sids(
             .resolve_group_memberships(&sid_obj)
             .await
             .map_err(|e| format!("LDAP group resolution failed: {e}"))?;
-        return Ok((identity, memberships, false));
+        // LDAP hat die SID aufgeloest — Orphaned heisst hier wirklich
+        // "AD kennt diese SID nicht (mehr)". `disabled` ist via
+        // userAccountControl bestimmt — also kein "unknown" Marker.
+        // LDAP resolved the SID — Orphaned here truly means "AD does not
+        // know that SID (any more)". `disabled` was determined via UAC —
+        // so no "unknown" marker either.
+        return Ok(IdentityResolution {
+            identity,
+            memberships,
+            sam_fallback: false,
+            not_in_configured_ldap_base: false,
+            disabled_status_unknown: false,
+        });
     }
 
     // Ohne LDAP: auf Windows die lokale SAM/LSA als Default-Auflöser nutzen.
@@ -1654,34 +1675,76 @@ async fn resolve_identity_sids(
     // `used_sam_fallback = true`.
     // Both paths (SAM success and bare SID fallback) are LDAP-free → nested
     // domain groups are not fully resolved, so `used_sam_fallback = true`.
-    let (identity, memberships) = sam_resolve_fallback(sid)?;
-    Ok((identity, memberships, true))
+    // Schliesst Review 2026-06-04 Runde 2 Finding 5: `sam_resolve_fallback`
+    // liest jetzt den `disabled`-Status via `NetUserGetInfo` und meldet,
+    // ob das gelungen ist. Konnte der Status nicht bestimmt werden,
+    // setzen wir `disabled_status_unknown = true` — die Engine pusht
+    // den passenden Diagnose-Marker. Konnte er bestimmt werden, ist
+    // `Identity.disabled` jetzt verlaesslich.
+    // Closes review 2026-06-04 round 2 finding 5: `sam_resolve_fallback`
+    // now reads the `disabled` flag via `NetUserGetInfo` and reports
+    // whether it succeeded. On failure we set
+    // `disabled_status_unknown = true` and the engine emits the
+    // diagnostic; on success `Identity.disabled` is reliable.
+    let (identity, memberships, disabled_known) = sam_resolve_fallback(sid)?;
+    Ok(IdentityResolution {
+        identity,
+        memberships,
+        sam_fallback: true,
+        not_in_configured_ldap_base: false,
+        disabled_status_unknown: !disabled_known,
+    })
 }
 
+/// Auflösungsergebnis fuer [`resolve_identity_sids`] inklusive der
+/// drei Diagnose-Flags, die in den `PermissionEvaluationInput` fliessen.
+/// Resolution outcome for [`resolve_identity_sids`] including the three
+/// diagnostic flags that feed into `PermissionEvaluationInput`.
+struct IdentityResolution {
+    identity: Identity,
+    memberships: Vec<GroupMembership>,
+    sam_fallback: bool,
+    not_in_configured_ldap_base: bool,
+    disabled_status_unknown: bool,
+}
+
+/// Rückgabe: `(Identity, memberships, disabled_known)`. Der dritte Wert
+/// markiert, ob `Identity.disabled` durch `NetUserGetInfo` bestätigt
+/// werden konnte. Bei `false` setzt der Aufrufer
+/// `IdentityResolution::disabled_status_unknown = true`.
+/// Returns `(Identity, memberships, disabled_known)`. The third value
+/// flags whether `Identity.disabled` was confirmed via
+/// `NetUserGetInfo`. When `false` the caller sets
+/// `IdentityResolution::disabled_status_unknown = true`.
 #[cfg(windows)]
-fn sam_resolve_fallback(sid: &str) -> Result<(Identity, Vec<GroupMembership>), String> {
+fn sam_resolve_fallback(sid: &str) -> Result<(Identity, Vec<GroupMembership>, bool), String> {
     match ad_resolver::resolve_identity_via_sam(sid) {
-        Ok(pair) => {
+        Ok(res) => {
             info!(
                 sid,
-                name = ?pair.0.name,
-                domain = ?pair.0.domain,
-                kind = ?pair.0.kind,
-                group_count = pair.1.len(),
+                name = ?res.identity.name,
+                domain = ?res.identity.domain,
+                kind = ?res.identity.kind,
+                group_count = res.memberships.len(),
+                disabled_known = res.disabled_known,
                 "SAM resolution succeeded (no LDAP requested)"
             );
-            Ok(pair)
+            Ok((res.identity, res.memberships, res.disabled_known))
         }
         Err(e) => {
             warn!(sid, error = %e, "SAM resolution failed — falling back to bare SID identity");
-            Ok(bare_sid_identity(sid))
+            let (identity, memberships) = bare_sid_identity(sid);
+            // Bare SID = wir wissen schlicht nichts ueber den User.
+            // Bare SID = we know essentially nothing about the user.
+            Ok((identity, memberships, false))
         }
     }
 }
 
 #[cfg(not(windows))]
-fn sam_resolve_fallback(sid: &str) -> Result<(Identity, Vec<GroupMembership>), String> {
-    Ok(bare_sid_identity(sid))
+fn sam_resolve_fallback(sid: &str) -> Result<(Identity, Vec<GroupMembership>, bool), String> {
+    let (identity, memberships) = bare_sid_identity(sid);
+    Ok((identity, memberships, false))
 }
 
 fn bare_sid_identity(sid: &str) -> (Identity, Vec<GroupMembership>) {
