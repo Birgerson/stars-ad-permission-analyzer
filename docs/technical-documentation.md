@@ -1,6 +1,6 @@
 # Stars — Technical Documentation
 
-**Version:** v1.5.10 (2026-06-05)
+**Version:** v1.5.11 (2026-06-05)
 **Audience:** Developers, code reviewers, and security engineers who
 want to understand *how* Stars works internally — not *how to use* it
 (that's the [User Guide](user-guide.md)).
@@ -468,6 +468,57 @@ they do not reconstruct the flags from the status fields themselves.
 [ADR 0036](adr/0036-unified-principal-resolution-pipeline.md)).
 Otherwise a first LDAP miss would have prevented a later LSA
 re-classification.
+
+### 5.7 GUI identity suggestion list — deliberately no live LDAP lookup
+
+The suggestion list under the GUI's "User / Group" field is filled by
+the worker through [`collect_identity_suggestions`](../crates/gui/src/worker.rs).
+This function enumerates **local identities only**:
+
+- local users and local groups via the LSA
+  (`LsaEnumerateAccountsWithUserRight`, `NetUserEnum`,
+  `NetLocalGroupEnum`)
+- statically known well-knowns (Builtin container)
+
+**Domain accounts and domain groups are intentionally not searched
+live** from LDAP while you type. The `[L]` tag next to each row in
+the GUI consistently marks the list as *Local*.
+
+**Design rationale:**
+
+1. **Per-keystroke latency.** A single LDAP search round-trip costs
+   roughly 20–200 ms depending on the DC, the network, and filter
+   selectivity. In a suggester that fires on every keystroke this
+   quickly becomes a perceptible input delay — especially when LDAP is
+   already loaded by a concurrent scan.
+2. **DC load under bulk typing.** In a forest with 100,000 identities,
+   every partial query (`m`, `ma`, `mar`, …) produces its own LDAP
+   `(objectClass=user)` substring search. That is an N+1 amplification
+   per keystroke and directly contradicts ADR 0036, which caps LDAP
+   queries per identity at one per run.
+3. **Stars is read-only and audit-focused, not identity-picker
+   focused.** The primary use case is "auditor already knows the target
+   identity" — be it as `DOMAIN\name`, UPN, or SID. An LDAP-driven
+   auto-suggestion is comfort, not audit value.
+4. **Separation of suggestion and resolution.** The GUI flow is
+   intentionally two-step: type (local suggester list, cheap), then
+   click `Resolve SID` (one-shot LDAP lookup, expensive but explicitly
+   requested). The split makes the expensive path visible.
+
+**Workaround for the end user** (see also
+[`user-guide.md`](user-guide.md#gui-identity-picker--what-the-suggestion-list-contains-what-it-does-not)):
+
+| Input form | Behavior |
+|---|---|
+| `DOMAIN\user`, UPN, SID | Type directly → click `Resolve SID` → one-shot LDAP lookup |
+| Plain `sAMAccountName` | Also works as long as an AD server is configured |
+
+**Follow-up consequence for the docs.** The end-user docs
+([`anwender-handbuch.md`](anwender-handbuch.md) /
+[`user-guide.md`](user-guide.md)) explain this effect for end users.
+Developers extending the GUI worker should implement any "LDAP search
+on demand" feature as an **explicit button with a spinner**, not as a
+keystroke trigger.
 
 ---
 

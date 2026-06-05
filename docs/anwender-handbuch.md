@@ -1,6 +1,6 @@
 # Stars — Anwender-Handbuch
 
-**Version:** v1.5.10 (2026-06-05)
+**Version:** v1.5.11 (2026-06-05)
 **Zielgruppe:** Windows-/AD-Administrator:innen, die NTFS- und
 SMB-Berechtigungen auditieren wollen, ohne dabei etwas zu verändern.
 
@@ -92,7 +92,7 @@ Eine ausführliche Liste steht in
 
 Setup-Datei vom GitHub-Release herunterladen:
 [releases](https://github.com/Birgerson/stars-ad-permission-analyzer/releases).
-Aktuell empfohlen: `Stars-v1.5.10-Setup.exe`.
+Aktuell empfohlen: `Stars-v1.5.11-Setup.exe`.
 
 ### Installation
 
@@ -235,6 +235,41 @@ still den ersten Treffer zu wählen.
 **UPN außerhalb der konfigurierten LDAP-Base** ergibt einen klaren
 Fehler mit Hinweis, gegen den Global Catalog (Port 3268) zu binden
 oder `DOMAIN\user` zu nutzen.
+
+### Vorschlagsliste im GUI-Identitätspicker — was zeigt sie, was nicht?
+
+Wenn Sie im GUI-Feld „Benutzer/Gruppe" Zeichen tippen, erscheint eine
+Vorschlagsliste mit Treffern. **Diese Liste enthält ausschließlich
+lokale Identitäten** (die Markierung `[L]` links steht für *Local*):
+
+- lokale Benutzer (`Administrator`, `Guest`, …) und lokale Gruppen
+  (`BUILTIN\Administrators`, `BUILTIN\Users`, `BUILTIN\Remote Desktop
+  Users`, …)
+- Well-Knowns aus der LSA des aktuellen Rechners
+
+**Domain-Konten und Domain-Gruppen werden bewusst nicht live aus LDAP
+nachgeschlagen**, während Sie tippen. Wenn Sie zum Beispiel `m` für
+`max.mustermann001` eintippen, sehen Sie keine Vorschläge aus AD —
+das ist **kein Fehler**, sondern Absicht (siehe Begründung weiter unten
+und in der technischen Dokumentation).
+
+**So geben Sie einen Domain-Benutzer ein, der nicht in der Vorschlagsliste
+auftaucht:**
+
+| Vorgehen | Beispiel |
+|---|---|
+| Tippen Sie den vollständigen `DOMAIN\Benutzer` direkt | `CORP\mustermann001` |
+| Oder den UPN | `mustermann001@corp.local` |
+| Oder die rohe SID, wenn bekannt | `S-1-5-21-…-1128` |
+| Danach **„SID auflösen"** klicken | Stars führt einen einmaligen LDAP-Lookup aus und füllt das SID-Feld |
+
+**Warum kein Live-Lookup beim Tippen?** Vor jedem Tastenanschlag eine
+LDAP-Suche gegen den DC auszuführen, würde bei großen Verzeichnissen
+(z. B. 10 000 Benutzer-Konten) jede Eingabe-Verzögerung in zehntel
+Sekunden in eine spürbare Wartezeit verwandeln und nebenbei den DC mit
+Such-Anfragen fluten. Die ausdrückliche Trennung — Vorschlagsliste lokal,
+LDAP-Lookup nur auf Klick — hält die GUI auch in einer Umgebung mit
+hunderttausenden Konten flüssig.
 
 ---
 

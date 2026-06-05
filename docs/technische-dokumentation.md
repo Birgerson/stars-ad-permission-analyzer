@@ -1,6 +1,6 @@
 # Stars — Technische Dokumentation
 
-**Version:** v1.5.10 (2026-06-05)
+**Version:** v1.5.11 (2026-06-05)
 **Zielgruppe:** Entwickler, Code-Reviewer, Security-Engineers, die
 verstehen wollen, *wie* Stars intern funktioniert — nicht *wie es zu
 bedienen* ist (das deckt das [Anwender-Handbuch](anwender-handbuch.md)
@@ -470,6 +470,59 @@ aber explizit keine `Orphaned`-Identities**
 [ADR 0036](adr/0036-unified-principal-resolution-pipeline.md)).
 Sonst hätte ein erster LDAP-Miss eine spätere LSA-Reklassifikation
 unmöglich gemacht.
+
+### 5.7 Identitäts-Vorschlagsliste in der GUI — bewusst kein LDAP-Live-Lookup
+
+Die Vorschlagsliste unter dem GUI-Feld „Benutzer/Gruppe" füllt der
+Worker über die Funktion
+[`collect_identity_suggestions`](../crates/gui/src/worker.rs).
+Diese Funktion enumeriert **ausschließlich lokale Identitäten**:
+
+- lokale Benutzer und lokale Gruppen via LSA (`LsaEnumerateAccountsWithUserRight`,
+  `NetUserEnum`, `NetLocalGroupEnum`)
+- statisch bekannte Well-Knowns (Builtin-Container)
+
+**Domain-Konten und Domain-Gruppen werden bewusst nicht** während
+des Tippens aus LDAP gesucht. Der `[L]`-Tag links neben jeder Zeile
+in der GUI markiert die Liste konsequent als *Local*.
+
+**Begründung der Entwurfsentscheidung:**
+
+1. **Latenz pro Tastenanschlag.** Ein LDAP-Search-Roundtrip kostet je
+   nach DC, Netzwerk und Filter-Selektivität typisch 20–200 ms. In
+   einem Suggester, der nach jedem Tastenanschlag triggert, wird
+   das schnell zur spürbaren Eingabe-Verzögerung — besonders, wenn
+   während eines parallelen Scans LDAP ohnehin belastet ist.
+2. **DC-Last bei Massen-Eingabe.** In einem Forest mit 100 000
+   Identitäten erzeugt jeder unvollständige Suchbegriff (`m`, `ma`,
+   `mar`, …) eine eigene LDAP-`(objectClass=user)`-Substring-Suche.
+   Das ist eine N+1-Multiplikation pro Tastenanschlag und steht im
+   direkten Widerspruch zu ADR 0036, das LDAP-Suchen pro Identität auf
+   einmal pro Lauf begrenzt.
+3. **Stars ist read-only und audit-fokussiert, nicht
+   Identity-Picker-fokussiert.** Der Hauptanwendungsfall ist
+   „Auditor weiß die Zielidentität bereits" — entweder als
+   `DOMAIN\name`, UPN oder SID. Eine LDAP-getriebene Auto-Suggestion
+   ist Komfort, kein Audit-Wert.
+4. **Trennung Suggestion ↔ Resolution.** Der GUI-Workflow ist bewusst
+   zweistufig: tippen (lokale Suggester-Liste, billig), dann
+   `Resolve SID` klicken (einmaliger LDAP-Lookup, teuer, aber
+   bewusst angefordert). Die Trennung macht den teuren Pfad sichtbar.
+
+**Workaround für den Anwender** (siehe auch
+[`anwender-handbuch.md`](anwender-handbuch.md#vorschlagsliste-im-gui-identitätspicker--was-zeigt-sie-was-nicht)):
+
+| Eingabeform | Verhalten |
+|---|---|
+| `DOMAIN\user`, UPN, SID | Direkt eintippen → `Resolve SID`-Button → einmaliger LDAP-Lookup |
+| Reiner `sAMAccountName` | Funktioniert ebenfalls, sofern AD-Server konfiguriert |
+
+**Folgekonsequenz für die Doku.** Die User-Doku
+([`anwender-handbuch.md`](anwender-handbuch.md) /
+[`user-guide.md`](user-guide.md)) erklärt diesen Effekt für
+Endanwender. Wer als Entwickler den GUI-Worker erweitert, sollte ein
+neues Feature wie „LDAP-Suchen on demand" als **eigenen Button mit
+Spinner** umsetzen, nicht als Keystroke-Trigger.
 
 ---
 

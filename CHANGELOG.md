@@ -12,6 +12,56 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.11] — 2026-06-05
+
+**UX-Release.** Behebt eine konkrete Erstkontakt-Hürde aus dem
+manuellen Lab-Test:
+
+Wenn ein neuer Anwender im GUI-Feld „Benutzer/Gruppe" zu suchen
+anfängt, schlägt Stars **bewusst nur lokale Konten** vor (die mit dem
+`[L]`-Tag markierten BUILTIN-Gruppen etc.). Domain-User werden nicht
+live aus LDAP gesucht, weil das pro Tastenanschlag den DC mit
+Substring-Suchen fluten würde (siehe Begründung in der technischen
+Dokumentation, Sektion 5.7). Bisher war dieses Verhalten jedoch nicht
+selbsterklärend — ein User tippte `m`, sah nur BUILTIN-Gruppen und
+fragte sich, wo die Domain-User sind.
+
+Die GUI sagt das jetzt von sich aus:
+
+- **Placeholder im User-Feld** zeigt explizit die akzeptierten
+  Formate: `DOMAIN\user`, `user@domain.lab`, `S-1-5-21-...`.
+- **Hinweis-Zeile direkt unter dem User-Feld**: „Vorschlagsliste zeigt
+  nur lokale Konten der Maschine. Fuer Domain-User: DOMAIN\\user oder
+  UPN tippen, dann 'SID aufloesen' klicken."
+- **Picker-Header**: „[L] = lokale Identität dieser Maschine" — die
+  Bedeutung des `[L]`-Tags ist sofort sichtbar.
+- **Bessere Fehlermeldung** bei leerem Feld nennt jetzt explizit die
+  akzeptierten Formate, statt nur „Bitte einen Benutzer- oder
+  Gruppennamen eingeben.".
+
+Beide Tabs (Analyze + Scan Tree) sind identisch behandelt.
+
+### GUI
+
+- `crates/gui/src/main.rs` — Slint-Layout in beiden User-Feld-Stellen
+  ergänzt um Hinweis-Row und Picker-Header. Placeholder mit
+  konkreten Format-Beispielen.
+- `resolve_name_to_sid::on_error("Bitte einen Benutzer- oder
+  Gruppennamen eingeben.")` ergänzt um eine Format-Liste.
+
+### Doku
+
+- `docs/anwender-handbuch.md` und `docs/user-guide.md` haben eine neue
+  Unter-Sektion „Vorschlagsliste im GUI-Identitätspicker — was zeigt
+  sie, was nicht?" mit Tabelle der akzeptierten Eingabeformen.
+- `docs/technische-dokumentation.md` und `docs/technical-documentation.md`
+  haben Sektion 5.7 ergänzt mit der Architektur-Begründung
+  (Latenz pro Tastenanschlag, DC-Last bei Massen-Eingabe, ADR-0036-Pflicht).
+
+Versionshinweise in den User-Dokus auf `v1.5.11`.
+
+---
+
 ## [1.5.10] — 2026-06-05
 
 **Lizenz-Konsistenz-Release.** Bereinigt die letzten zwei Findings der

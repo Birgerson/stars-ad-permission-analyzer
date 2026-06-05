@@ -1,6 +1,6 @@
 # Stars — User Guide
 
-**Version:** v1.5.10 (2026-06-05)
+**Version:** v1.5.11 (2026-06-05)
 **Audience:** Windows / AD administrators who want to audit NTFS and
 SMB permissions **without changing anything**.
 
@@ -92,7 +92,7 @@ only — content overlaps with this English guide).
 
 Get the installer from the GitHub release page:
 [releases](https://github.com/Birgerson/stars-ad-permission-analyzer/releases).
-Currently recommended: `Stars-v1.5.10-Setup.exe`.
+Currently recommended: `Stars-v1.5.11-Setup.exe`.
 
 ### Installation
 
@@ -231,6 +231,41 @@ first match.
 **UPN outside the configured LDAP base** returns a clear error
 pointing at the Global Catalog binding workaround (port 3268) or
 `DOMAIN\user`.
+
+### GUI identity picker — what the suggestion list contains, what it does not
+
+When you type into the GUI "User / Group" field, a suggestion list
+appears. **This list contains local identities only** (the `[L]` tag
+on the left stands for *Local*):
+
+- local users (`Administrator`, `Guest`, …) and local groups
+  (`BUILTIN\Administrators`, `BUILTIN\Users`, `BUILTIN\Remote Desktop
+  Users`, …)
+- well-knowns from the local LSA
+
+**Domain accounts and domain groups are intentionally not looked up live
+from LDAP** while you type. For example, typing `m` for
+`max.mustermann001` will not surface any AD suggestions — this is **not
+a bug**, it is by design (rationale below and in the technical
+documentation).
+
+**How to enter a domain user that does not appear in the suggestion
+list:**
+
+| Action | Example |
+|---|---|
+| Type the full `DOMAIN\user` directly | `CORP\mustermann001` |
+| Or the UPN | `mustermann001@corp.local` |
+| Or the raw SID if known | `S-1-5-21-…-1128` |
+| Then click **"Resolve SID"** | Stars performs a one-shot LDAP lookup and fills the SID field |
+
+**Why no live lookup on every keystroke?** Issuing an LDAP search to the
+DC for every typed character would turn each keystroke delay into a
+perceptible wait in directories with thousands of accounts (e. g.
+10 000 users), and would flood the DC with throwaway queries. The
+deliberate split — suggestion list local only, LDAP lookup on click —
+keeps the GUI responsive even in forests with hundreds of thousands of
+identities.
 
 ---
 

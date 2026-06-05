@@ -685,10 +685,19 @@ slint::slint! {
                                         Row {
                                             Text { text: "Benutzer/Gruppe:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "ad  →  Administrator, Domain Admins, BUILTIN\\Administrators, …";
+                                                placeholder-text: "DOMAIN\\user  oder  user@domain.lab  oder  S-1-5-21-...  (Domain-User vollstaendig eintippen)";
                                                 text <=> root.a-name;
                                                 edited(s) => { root.analyze-name-edited(s); }
                                                 accepted(s) => { root.resolve-name-clicked(); }
+                                            }
+                                        }
+                                        Row {
+                                            Text { text: ""; }
+                                            Text {
+                                                text: "Vorschlagsliste zeigt nur lokale Konten der Maschine. Fuer Domain-User: DOMAIN\\user oder UPN tippen, dann 'SID aufloesen' klicken.";
+                                                color: Theme.text-muted;
+                                                font-size: 11px;
+                                                wrap: word-wrap;
                                             }
                                         }
                                         Row {
@@ -713,6 +722,11 @@ slint::slint! {
                                                 VerticalLayout {
                                                     padding: 4px;
                                                     spacing: 0px;
+                                                    Text {
+                                                        text: "[L] = lokale Identität dieser Maschine";
+                                                        color: Theme.text-muted;
+                                                        font-size: 11px;
+                                                    }
                                                     for sug[i] in root.a-suggestions: TouchArea {
                                                         height: 24px;
                                                         clicked => { root.pick-analyze-suggestion(sug.name); }
@@ -1010,10 +1024,19 @@ slint::slint! {
                                         Row {
                                             Text { text: "Benutzer/Gruppe:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "ad  →  Administrator, Domain Admins, BUILTIN\\Administrators, …";
+                                                placeholder-text: "DOMAIN\\user  oder  user@domain.lab  oder  S-1-5-21-...  (Domain-User vollstaendig eintippen)";
                                                 text <=> root.s-name;
                                                 edited(s) => { root.scan-name-edited(s); }
                                                 accepted(s) => { root.resolve-scan-name-clicked(); }
+                                            }
+                                        }
+                                        Row {
+                                            Text { text: ""; }
+                                            Text {
+                                                text: "Vorschlagsliste zeigt nur lokale Konten der Maschine. Fuer Domain-User: DOMAIN\\user oder UPN tippen, dann 'SID aufloesen' klicken.";
+                                                color: Theme.text-muted;
+                                                font-size: 11px;
+                                                wrap: word-wrap;
                                             }
                                         }
                                         Row {
@@ -1038,6 +1061,11 @@ slint::slint! {
                                                 VerticalLayout {
                                                     padding: 4px;
                                                     spacing: 0px;
+                                                    Text {
+                                                        text: "[L] = lokale Identität dieser Maschine";
+                                                        color: Theme.text-muted;
+                                                        font-size: 11px;
+                                                    }
                                                     for sug[i] in root.s-suggestions: TouchArea {
                                                         height: 24px;
                                                         clicked => { root.pick-scan-suggestion(sug.name); }
@@ -2920,7 +2948,12 @@ fn resolve_name_to_sid(
 ) {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        on_error("Bitte einen Benutzer- oder Gruppennamen eingeben.".to_string());
+        on_error(
+            "Bitte einen Benutzer- oder Gruppennamen eingeben. \
+             Akzeptierte Formate: DOMAIN\\user, user@domain.lab, \
+             reiner sAMAccountName (mit LDAP-Server), oder rohe SID (S-1-5-21-…)."
+                .to_string(),
+        );
         return;
     }
     match ad_resolver::lookup_sid_for_account(None, trimmed) {
