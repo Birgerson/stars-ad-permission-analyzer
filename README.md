@@ -311,6 +311,7 @@ Beide überleben damit eine Neuinstallation — die Audit-Historie ist Beweismit
 ### Dokumentation
 
 - **[Anwender-Handbuch](docs/anwender-handbuch.md)** — Schritt-für-Schritt-Anleitung für die GUI und CLI, alle Tabs erklärt, Identitätseingabe, AD-Anbindung, Marker-Lesart, FAQ. **Start hier, wenn Sie Stars zum ersten Mal benutzen.**
+- **[Technische Dokumentation](docs/technische-dokumentation.md)** — wie Stars intern funktioniert: Architektur, Crate-Layering, Principal-Pipeline, Permission-Engine-Algorithmus, Diagnose-Marker-System, Threading-Modell. **Start hier, wenn Sie Code lesen oder beitragen wollen.**
 - **[Features, Grenzen und Lesart der Ergebnisse](docs/features-and-limitations.md)** — was Stars zuverlässig kann, was bewusst nicht implementiert ist, und wie die Diagnose-Marker (`DomainGroupRecursionIncomplete`, `IdentityNotInConfiguredLdapBase`, …) zu lesen sind. **Start hier, wenn ein Befund unerwartet ist.**
 - **[Bekannte Grenzen und Roadmap (v1.6+)](docs/known-limitations.md)** — strukturelle Lücken (FSP, GC-Bind, SID-History, Cross-Forest), die Stars markiert, aber nicht löst. Roadmap-Tracking für künftige Releases.
 - **[Audit-Kriterien und Bewertungsprinzipien](docs/audit-kriterien.md)** — vollständige Lektüre darüber, nach welchen Regeln Stars Berechtigungen bewertet, welche Risikoregeln implementiert sind, welche Severities sie tragen und welche Rechte für welche Rolle als optimal gelten.
@@ -654,6 +655,7 @@ Both therefore survive a reinstall — the audit history is evidence and should 
 ### Documentation
 
 - **[User Guide](docs/user-guide.md)** — step-by-step walkthrough of the GUI and CLI, every tab explained, identity input, AD binding, marker reading, FAQ. **Start here when using Stars for the first time.**
+- **[Technical Documentation](docs/technical-documentation.md)** — how Stars works internally: architecture, crate layering, Principal pipeline, permission engine algorithm, diagnostic marker system, threading model. **Start here when reading or contributing code.**
 - **[Features, limits and how to read the results](docs/features-and-limitations.md)** — what Stars reliably covers, what is deliberately out of scope, and how the diagnostic markers (`DomainGroupRecursionIncomplete`, `IdentityNotInConfiguredLdapBase`, …) should be read. **Start here when a finding is unexpected.** (Document is currently in German only.)
 - **[Known limitations and roadmap (v1.6+)](docs/known-limitations.md)** — structural gaps (FSP, GC bind, SID history, cross-forest) that Stars flags but does not resolve. Roadmap tracking for future releases. (German only.)
 - **[Audit Criteria and Evaluation Principles](docs/audit-kriterien.md)** — a complete write-up of which rules Stars uses to evaluate permissions, which risk rules are implemented, what severities they carry, and which permissions are considered optimal for which role.
