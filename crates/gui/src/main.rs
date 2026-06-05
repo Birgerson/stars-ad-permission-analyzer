@@ -477,7 +477,7 @@ slint::slint! {
         // muss, was sie als Versionsstring zeigt.
         // Version / branding text for the HeaderBar — set by main.rs at
         // setup so the UI does not need to decide what to render.
-        in property <string> app-version: "v1.5.4";
+        in property <string> app-version: "v1.5.5";
 
         // ============================================================
         // Analyze-Tab Properties / Analyze tab properties

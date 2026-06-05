@@ -12,6 +12,42 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.5] — 2026-06-05
+
+**Doku-Release.** Erweitert den Haftungs-Abschnitt um die explizite
+**Backup-Pflicht vor jeder produktiven Nutzung**, auch wenn Stars
+architektonisch ausschließlich lesend arbeitet. Plus die schon
+vorhandene Prompt-Engineer-/KI-Implementations-Klarstellung wurde
+zusätzlich oben im Disclaimer-Quote sichtbar gemacht.
+
+Hintergrund: Auch read-only-Software kann durch Inkompatibilitäten,
+Treiberbugs, Antivirus-Eingriffe, Sperrkonflikte oder unbedachte
+Last auf Zielsystemen zu Betriebsstörungen führen. Eine getestete
+Backup-Wiederherstellung schützt vor unerwarteten Nebeneffekten —
+unabhängig von der Architekturzusicherung des Tools selbst.
+
+Keine Funktions- oder Code-Änderungen am Audit-Tool. Setup.exe für
+v1.5.5 wird vom CI-Workflow erstellt, damit Nutzer der Setup-Datei
+denselben rechtlichen Stand erhalten wie der main-Branch.
+
+### Hinzugefügt
+- **Disclaimer-Sektion „Pflicht zur Datensicherung vor Nutzung"** (DE
+  + EN) — vollständiger Unterabschnitt mit:
+  - Klarstellung, dass Stars per Architektur read-only ist, aber
+    Nebenwirkungen nicht ausgeschlossen sind,
+  - Pflicht zu vollständigem, getestetem Backup aller betroffenen
+    Systeme (DC, Fileserver, NTFS-Volumes, SMB-Shares) vor
+    produktiver Nutzung,
+  - explizite Haftungsausschluss-Klausel für fehlende oder
+    untestete Backups,
+  - drei verpflichtende Vorab-Verifikationen: isolierte Test-
+    Restore, Pilot-Evaluation, Stakeholder-Information.
+- **Top-Warnung** im einleitenden Haftungs-Quote (DE + EN, jeweils
+  am Anfang des README): Backup-Pflicht ist sofort sichtbar, nicht
+  erst am Ende des Dokuments.
+
+---
+
 ## [1.5.4] — 2026-06-05
 
 **Patch-Release.** Reine UI-Politur. Keine Funktionsänderungen am
