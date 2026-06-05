@@ -2656,7 +2656,10 @@ mod tests {
         let mut sid_names = std::collections::BTreeMap::new();
         sid_names.insert(USER.to_owned(), "EXAMPLE\\alice".to_owned());
         sid_names.insert(GROUP_A.to_owned(), "EXAMPLE\\Domain Admins".to_owned());
-        sid_names.insert(BUILTIN_ADMINS.to_owned(), "BUILTIN\\Administrators".to_owned());
+        sid_names.insert(
+            BUILTIN_ADMINS.to_owned(),
+            "BUILTIN\\Administrators".to_owned(),
+        );
 
         let local_membership = GroupMembership {
             member_sid: Sid(USER.to_owned()),
@@ -2682,14 +2685,8 @@ mod tests {
         let result = DefaultPermissionEngine
             .evaluate(PermissionEvaluationInput {
                 identity: user(USER),
-                group_memberships: vec![
-                    membership(USER, GROUP_A),
-                    local_membership,
-                ],
-                file_system_object: fso(
-                    None,
-                    vec![allow_ace(BUILTIN_ADMINS, MASK_MODIFY, false)],
-                ),
+                group_memberships: vec![membership(USER, GROUP_A), local_membership],
+                file_system_object: fso(None, vec![allow_ace(BUILTIN_ADMINS, MASK_MODIFY, false)]),
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![Sid(BUILTIN_ADMINS.to_owned())],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
@@ -2755,10 +2752,7 @@ mod tests {
             .evaluate(PermissionEvaluationInput {
                 identity: user(USER),
                 group_memberships: vec![local_membership],
-                file_system_object: fso(
-                    None,
-                    vec![allow_ace(BUILTIN_ADMINS, MASK_READ, false)],
-                ),
+                file_system_object: fso(None, vec![allow_ace(BUILTIN_ADMINS, MASK_READ, false)]),
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![Sid(BUILTIN_ADMINS.to_owned())],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,

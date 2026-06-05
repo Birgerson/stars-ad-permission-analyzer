@@ -5,9 +5,8 @@ use ad_resolver::NoLsaBackend;
 #[cfg(windows)]
 use ad_resolver::WindowsLsaBackend;
 use ad_resolver::{
-    principal::PrincipalInput, DisabledStatus,
-    GroupResolutionStatus, IdentityScopeStatus, LdapConfig, LdapIdentityBackend, LdapResolver,
-    PrincipalResolution, PrincipalResolver,
+    principal::PrincipalInput, DisabledStatus, GroupResolutionStatus, IdentityScopeStatus,
+    LdapConfig, LdapIdentityBackend, LdapResolver, PrincipalResolution, PrincipalResolver,
 };
 #[cfg(not(windows))]
 use adpa_core::model::{Identity, IdentityKind};

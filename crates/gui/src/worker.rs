@@ -23,8 +23,8 @@ use ad_resolver::NoLsaBackend;
 #[cfg(windows)]
 use ad_resolver::WindowsLsaBackend;
 use ad_resolver::{
-    ldap_client, principal::PrincipalInput, LdapConfig,
-    LdapIdentityBackend, LdapResolver, PrincipalResolution, PrincipalResolver, TlsMode,
+    ldap_client, principal::PrincipalInput, LdapConfig, LdapIdentityBackend, LdapResolver,
+    PrincipalResolution, PrincipalResolver, TlsMode,
 };
 use adpa_core::{
     model::{
