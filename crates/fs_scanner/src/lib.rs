@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! fs_scanner — Dateisystem-Enumeration und NTFS-ACL-Auswertung
 //! fs_scanner — file system enumeration and NTFS ACL evaluation
 

@@ -16,10 +16,10 @@ members = [
 ]
 
 [workspace.package]
-version = "1.5.9"
+version = "1.5.10"
 edition = "2021"
 authors = ["Birger Labinsch — Fachinformatiker AE / Prompt Engineer <birger@labinsch.de>"]
-license = "proprietary"
+license = "AGPL-3.0-or-later"
 
 [workspace.dependencies]
 # Fehlerbehandlung / Error handling

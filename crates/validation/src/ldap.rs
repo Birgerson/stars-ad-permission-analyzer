@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 use adpa_core::error::CoreError;
 
 /// Validierter LDAP-Filter — verhindert Injection durch ungeprüfte Nutzereingaben

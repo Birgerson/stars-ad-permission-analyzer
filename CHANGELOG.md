@@ -12,6 +12,54 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.10] — 2026-06-05
+
+**Lizenz-Konsistenz-Release.** Bereinigt die letzten zwei Findings der
+ChatGPT-Review für v1.5.9 (Runde 8).
+
+### Lizenz (Finding 1, High — Public-Release-Blocker)
+
+Vor v1.5.10 widersprachen sich `Cargo.toml` (`license = "proprietary"`),
+`LICENSE` (MIT) und README (verwies auf MIT). Nach Klärung mit dem
+Maintainer ist die endgültige Wahl **GNU Affero General Public License v3.0
+or later (AGPL-3.0-or-later)**. Konsistenz konsequent durchgezogen:
+
+- `LICENSE` ersetzt mit dem offiziellen AGPL-3.0-Volltext der FSF
+  (`https://www.gnu.org/licenses/agpl-3.0.txt`), plus deutschem
+  Haftungs-Annex und Copyright-Hinweis.
+- `Cargo.toml` Workspace-Metadaten: `license = "AGPL-3.0-or-later"`
+  (SPDX-konform).
+- README-Lizenzabschnitt in beiden Sprachen mit Erklärung des
+  AGPL-Network-Use-Clause für Nicht-Juristen.
+- **SPDX-License-Identifier Header** in allen 53 Rust-Source-Files:
+
+  ```rust
+  // SPDX-License-Identifier: AGPL-3.0-or-later
+  // Copyright (c) 2026 Birger Labinsch
+  ```
+
+Damit ist die Lizenz aus jedem Source-File, aus Cargo, aus GitHub und
+aus der README eindeutig erkennbar. Forks und Beiträge haben jetzt eine
+klare Rechtsgrundlage.
+
+### GUI (Finding 2, Low)
+
+`crates/gui/src/main.rs::main_window` hatte den Slint-Property-Default
+`in property <string> app-version: "v1.5.5";` — ein veralteter
+Default-Wert, der zwar zur Laufzeit über `env!("CARGO_PKG_VERSION")`
+überschrieben wird, aber bei frühen Render-Zuständen oder zukünftigen
+Refactorings sichtbar werden könnte. Default auf leerer String gesetzt;
+die Runtime-Setzung bleibt maßgeblich.
+
+### Doku
+
+- Versions­hinweise in `README.md`, `docs/anwender-handbuch.md`,
+  `docs/user-guide.md`, `docs/technische-dokumentation.md`,
+  `docs/technical-documentation.md` und `docs/known-limitations.md` auf
+  `v1.5.10` aktualisiert.
+
+---
+
 ## [1.5.9] — 2026-06-05
 
 **Bugfix-Release.** Schließt drei Findings aus der ChatGPT-Review für

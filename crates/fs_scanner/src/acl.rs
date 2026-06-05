@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! Windows-DACL- und ACE-Lese-Logik über native Windows-APIs.
 //! Windows DACL and ACE reading logic via native Windows APIs.
 //!

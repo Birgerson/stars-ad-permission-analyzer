@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! Einheitliche Principal-Auflösung — die zentrale Pipeline für alle
 //! Eingabeformen (`DOMAIN\user`, UPN, plain `sAMAccountName`, direkte
 //! SID, GUI Name → SID-Workflow).

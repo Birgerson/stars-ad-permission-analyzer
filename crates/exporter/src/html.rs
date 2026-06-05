@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! HTML-Berichtsexport — selbst enthaltene Datei mit eingebettetem CSS.
 //! HTML report export — single self-contained file with embedded CSS.
 

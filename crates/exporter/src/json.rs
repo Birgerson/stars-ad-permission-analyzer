@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! JSON-Berichtsexport — stabil strukturiertes, maschinenlesbares Ausgabeformat.
 //! JSON report export — stable, structured, machine-readable output format.
 //!

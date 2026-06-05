@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! adpa-gui — Grafische Oberfläche für den AD Permission Analyzer (Slint).
 //! adpa-gui — Graphical interface for the AD Permission Analyzer (Slint).
 //!
@@ -477,7 +480,7 @@ slint::slint! {
         // muss, was sie als Versionsstring zeigt.
         // Version / branding text for the HeaderBar — set by main.rs at
         // setup so the UI does not need to decide what to render.
-        in property <string> app-version: "v1.5.5";
+        in property <string> app-version: "";
 
         // ============================================================
         // Analyze-Tab Properties / Analyze tab properties

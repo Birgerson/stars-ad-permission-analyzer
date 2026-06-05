@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 // Windows erfordert ein asInvoker-Manifest für Binärdateien mit UAC-Schlüsselwörtern im Namen.
 // Windows requires an asInvoker manifest for binaries with UAC keywords in their name.
 fn main() {

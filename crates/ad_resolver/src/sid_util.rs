@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! SID-Konvertierungslogik zwischen Windows-SID-String und binärem LDAP-Format.
 //! SID conversion logic between Windows SID string and binary LDAP format.
 //!

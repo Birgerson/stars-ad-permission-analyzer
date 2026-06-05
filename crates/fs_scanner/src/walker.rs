@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! Rekursiver Verzeichnis-Walker mit Fehlertoleranz.
 //! Recursive directory walker with error tolerance.
 //!

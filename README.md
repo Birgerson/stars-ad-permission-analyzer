@@ -116,7 +116,7 @@ Benutzer max.muster → Mitglied von "Buchhaltung" → Mitglied von "FileServer_
 
 ### Wie wird Stars gestartet?
 
-Stars wird über den **signierten Setup-Installer** auf der [Release-Seite](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) bereitgestellt — aktuell `Stars-v1.5.9-Setup.exe`. Der Installer legt die Anwendung nach `C:\Program Files\Stars\` ab, erstellt einen Start-Menü-Eintrag „Stars" und richtet keine Hintergrunddienste oder Auto-Start-Komponenten ein.
+Stars wird über den **signierten Setup-Installer** auf der [Release-Seite](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) bereitgestellt — aktuell `Stars-v1.5.10-Setup.exe`. Der Installer legt die Anwendung nach `C:\Program Files\Stars\` ab, erstellt einen Start-Menü-Eintrag „Stars" und richtet keine Hintergrunddienste oder Auto-Start-Komponenten ein.
 
 Für Entwickler und CI-Builds können die `.exe`-Dateien aus `target/release/` (`adpa.exe`, `adpa-gui.exe`) nach `cargo build --release` auch ohne Installer direkt gestartet werden — der produktive Auslieferungsweg bleibt der Installer.
 
@@ -393,7 +393,9 @@ Verifizieren Sie zusätzlich:
 
 ### Lizenz
 
-MIT License — siehe [LICENSE](LICENSE).
+**GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)** — siehe [LICENSE](LICENSE).
+
+Konkret: Stars darf frei genutzt, studiert, geändert und weitergegeben werden. Wer Stars (oder einen abgeleiteten Fork) als Netzwerkdienst anbietet, muss den vollständigen Quellcode dieser veränderten Variante öffentlich verfügbar machen. Reine private oder interne Nutzung ist nicht betroffen.
 
 ---
 
@@ -506,7 +508,7 @@ User max.muster → member of "Accounting" → member of "FileServer_Read"
 
 ### How is Stars started?
 
-Stars is distributed as a **signed setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.5.9-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and configures no background services or auto-start components.
+Stars is distributed as a **signed setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.5.10-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and configures no background services or auto-start components.
 
 Developers and CI builds may also run the `.exe` files from `target/release/` (`adpa.exe`, `adpa-gui.exe`) directly after `cargo build --release` — the production delivery path remains the installer.
 
@@ -783,4 +785,6 @@ Additionally verify:
 
 ### License
 
-MIT License — see [LICENSE](LICENSE).
+**GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)** — see [LICENSE](LICENSE).
+
+In short: Stars may be used, studied, modified, and redistributed freely. Anyone who offers Stars (or a derived fork) as a network service must make the complete source code of that modified variant publicly available. Purely private or internal use is not affected.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! Speicherung und Abfrage von Scan-Läufen, Berechtigungen und Scan-Fehlern.
 //! Storage and retrieval of scan runs, permissions, and scan errors.
 

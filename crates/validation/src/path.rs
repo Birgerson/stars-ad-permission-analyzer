@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 use adpa_core::{error::CoreError, model::NormalizedPath};
 
 use crate::net::{validate_share_name, validate_smb_server};

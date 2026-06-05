@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! ad_resolver — Active-Directory-Zugriff, SID-Auflösung und Gruppenauflösung via LDAP.
 //! ad_resolver — Active Directory access, SID resolution, and group resolution via LDAP.
 

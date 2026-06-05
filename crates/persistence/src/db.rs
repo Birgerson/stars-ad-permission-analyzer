@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! Haupt-Datenbankzugang — öffnet die SQLite-Verbindung und führt Migrationen aus.
 //! Main database entry point — opens the SQLite connection and runs migrations.
 

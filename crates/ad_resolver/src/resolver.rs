@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! LdapResolver — implementiert IdentityResolver über LDAP gegen Active Directory.
 //! LdapResolver — implements IdentityResolver via LDAP against Active Directory.
 //!

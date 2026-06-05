@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! Hintergrund-Worker für Analysen, Scans und Delta-Vergleiche.
 //! Background worker for analyses, scans and delta comparisons.
 //!

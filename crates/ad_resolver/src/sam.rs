@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! Identitäts- und Gruppenauflösung über die lokalen Windows-LSA/SAM-APIs.
 //! Identity and group resolution via the local Windows LSA/SAM APIs.
 //!

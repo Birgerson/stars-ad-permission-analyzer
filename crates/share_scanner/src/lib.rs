@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! share_scanner — SMB-Freigaben-Enumeration und Berechtigungsauswertung
 //! share_scanner — SMB share enumeration and permission reading
 

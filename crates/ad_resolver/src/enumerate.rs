@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! Inventarisierung sichtbarer Identitäten für die UX-Suchhilfe.
 //! Inventory of visible identities for the UX search helper.
 //!

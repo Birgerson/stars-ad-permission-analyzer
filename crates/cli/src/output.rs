@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! Formatierte Konsolenausgabe für den Analyze-Befehl.
 //! Formatted console output for the analyze command.
 

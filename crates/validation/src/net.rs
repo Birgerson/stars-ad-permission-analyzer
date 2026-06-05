@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! Validierung von Netzwerk- und Verzeichnis-Eingaben (SMB, LDAP, DN).
 //! Validation of network and directory inputs (SMB, LDAP, DN).
 //!

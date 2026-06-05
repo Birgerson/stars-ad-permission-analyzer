@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! Risikoregeln für NTFS- und Share-Berechtigungsanalyse.
 //! Risk rules for NTFS and share permission analysis.
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
 //! persistence — SQLite, Caching und Scan-Historie
 //! persistence — SQLite, caching, and scan history
 
