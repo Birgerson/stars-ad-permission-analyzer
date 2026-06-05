@@ -12,6 +12,72 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.6] — 2026-06-05
+
+**Bugfix-Release.** Lokale Server-Gruppen erscheinen jetzt **vollständig
+im Erklärungspfad**, nicht mehr nur als unsichtbarer Token-Eintrag.
+
+Bisher konnte Stars zwar das richtige effektive Recht ausrechnen,
+wenn die Berechtigung über eine lokale Server-Gruppe wie
+`BUILTIN\Administrators` kam — die Erklärung blieb aber stumm. Der
+Auditor sah „Modify" und einen ACE, aber keinen Mediator-Schritt,
+der erklärt, *warum* der User Mitglied dieser lokalen Gruppe ist.
+
+Mit v1.5.6 baut `ad_resolver` für jeden Account-Kandidaten echte
+`GroupMembership`-Einträge mit `MembershipPathSource::LocalGroup`,
+CLI und GUI mergen sie in die Gruppen-Liste, und die Engine rendert
+daraus die Mediator-Kette samt `[via … → …, source: LocalGroup]`-Step.
+Unvollständige Member-Lookups erscheinen als
+`[exact chain unknown, source: LocalGroup]` statt stillschweigend zu
+fehlen.
+
+Außerdem: ein bewusst komplexes 3-Forest-Test-Lab (`docs/lab/`) ist
+neu im Repo dokumentiert — inklusive Reproduktionsskripten und
+Stars-Smoke-Test-Ergebnis, die das neue Verhalten live an einem
+echten Cross-Forest-Setup beweisen (`tier0.lab ↔ tier1.lab ↔ tier2.lab`,
+bidirektionale Forest-Trusts).
+
+Installer-Versionshinweise in `README.md`, `docs/anwender-handbuch.md`,
+`docs/user-guide.md`, `docs/technische-dokumentation.md`,
+`docs/technical-documentation.md` und `docs/known-limitations.md` auf
+`v1.5.6` aktualisiert (Review Runde 6 Finding 2).
+
+### Engine
+
+- Lokale Gruppen-SIDs fließen jetzt nicht mehr nur in das ACE-Match-Token,
+  sondern auch in `group_memberships`. Die Erklärungspfad-Schritte für
+  diese Mitgliedschaften tragen `source: LocalGroup` und — sofern
+  bekannt — die vollständige Mediator-Kette.
+- Bei `complete: false`-Member-Lookups erscheint der Step explizit als
+  `[exact chain unknown, source: LocalGroup]`, damit die Lücke sichtbar
+  bleibt.
+- Zwei neue Engine-Tests (`local_group_membership_renders_in_explanation_path`,
+  `local_group_membership_with_incomplete_path_renders_unknown_chain`)
+  decken beide Pfade ab.
+
+### Resolver
+
+- Neue Funktion `ad_resolver::resolve_local_group_chains_for_identity`,
+  die zusätzlich zur SID-Liste die Member-Chain als `Vec<GroupMembership>`
+  liefert. Wiederverwendet `format_account_candidates_for_local_groups`
+  aus ADR 0040.
+
+### CLI / GUI
+
+- `collect_local_group_sids_for_path` nimmt jetzt die AD-Memberships
+  entgegen und gibt zusätzlich zur SID-Liste die LocalGroup-Memberships
+  zurück. Beide Call-Sites (`analyze` und `scan`) mergen sie in den
+  Engine-Input.
+
+### Dokumentation
+
+- ADR 0041 — Lokale-Gruppen-Mitgliedschaften im Erklärungspfad.
+- `docs/lab/README.md`, `forest-topology.md`, `setup-procedure.md`,
+  `verification.md` plus acht Bash-Skripte (`docs/lab/scripts/01..08`)
+  für die Reproduktion.
+
+---
+
 ## [1.5.5] — 2026-06-05
 
 **Doku-Release.** Erweitert den Haftungs-Abschnitt um die explizite
