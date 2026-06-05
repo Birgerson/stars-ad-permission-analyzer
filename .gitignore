@@ -6,6 +6,7 @@ CLAUDE.md
 AGENTS.md
 .claude/
 review.md
+compare.md
 
 # Rust build artifacts
 /target/
