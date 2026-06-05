@@ -2637,4 +2637,155 @@ mod tests {
             "reason must carry the underlying message, got: {found}"
         );
     }
+
+    /// Review 2026-06-05 Runde 6 Finding 1: ein GroupMembership mit
+    /// `MembershipPathSource::LocalGroup` muss im Erklaerungspfad als
+    /// `Member of …`-Step mit Mediator-Kette erscheinen. Vorher landete
+    /// die SID nur im Token, die Erklaerung blieb stumm.
+    /// Round 6 finding 1: a LocalGroup-sourced GroupMembership must
+    /// render as a Member-of step with mediator chain in the
+    /// explanation path.
+    #[test]
+    fn local_group_membership_renders_in_explanation_path() {
+        use adpa_core::model::{MembershipPath, MembershipPathSource};
+
+        // Konstruiere Domain-Gruppen-Mediator: User → Domain Admins →
+        // BUILTIN\Administrators.
+        // Build mediator chain: User → Domain Admins → BUILTIN\Administrators.
+        const BUILTIN_ADMINS: &str = "S-1-5-32-544";
+        let mut sid_names = std::collections::BTreeMap::new();
+        sid_names.insert(USER.to_owned(), "EXAMPLE\\alice".to_owned());
+        sid_names.insert(GROUP_A.to_owned(), "EXAMPLE\\Domain Admins".to_owned());
+        sid_names.insert(BUILTIN_ADMINS.to_owned(), "BUILTIN\\Administrators".to_owned());
+
+        let local_membership = GroupMembership {
+            member_sid: Sid(USER.to_owned()),
+            group_sid: Sid(BUILTIN_ADMINS.to_owned()),
+            direct: false,
+            group_name: Some("BUILTIN\\Administrators".to_owned()),
+            path: Some(MembershipPath {
+                nodes: vec![
+                    Sid(USER.to_owned()),
+                    Sid(GROUP_A.to_owned()),
+                    Sid(BUILTIN_ADMINS.to_owned()),
+                ],
+                names: vec![
+                    Some("EXAMPLE\\alice".to_owned()),
+                    Some("EXAMPLE\\Domain Admins".to_owned()),
+                    Some("BUILTIN\\Administrators".to_owned()),
+                ],
+                source: MembershipPathSource::LocalGroup,
+                complete: true,
+            }),
+        };
+
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![
+                    membership(USER, GROUP_A),
+                    local_membership,
+                ],
+                file_system_object: fso(
+                    None,
+                    vec![allow_ace(BUILTIN_ADMINS, MASK_MODIFY, false)],
+                ),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![Sid(BUILTIN_ADMINS.to_owned())],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
+                access_context: AccessContext::Unspecified,
+                unsupported_share_ace_count: 0,
+                sid_names,
+                group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
+            })
+            .unwrap();
+
+        // Token muss BUILTIN\Administrators enthalten und ACE auf den
+        // Pfad muss matchen → effective_mask = MASK_MODIFY.
+        assert_eq!(result.effective_mask.0, MASK_MODIFY);
+
+        // Erklaerungspfad muss einen LocalGroup-Step mit Mediator-
+        // Kette enthalten.
+        let local_step = result
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("BUILTIN\\Administrators") && s.contains("LocalGroup"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "explanation must contain a LocalGroup-sourced Member step for BUILTIN\\\\Administrators; got: {:?}",
+                    result.path_explanation.steps
+                )
+            });
+        assert!(
+            local_step.contains("Domain Admins"),
+            "mediator (Domain Admins) must appear in the LocalGroup chain step; got: {local_step}"
+        );
+    }
+
+    /// Round 6 finding 1: ein `complete: false`-Pfad (Member-Liste der
+    /// lokalen Gruppe nicht lesbar) muss explizit als
+    /// "exact chain unknown" gerendert werden, damit der Auditor die
+    /// Unvollstaendigkeit sieht.
+    /// Round 6 finding 1: `complete: false` paths must render as
+    /// "exact chain unknown" so the auditor sees the incompleteness.
+    #[test]
+    fn local_group_membership_with_incomplete_path_renders_unknown_chain() {
+        use adpa_core::model::{MembershipPath, MembershipPathSource};
+
+        const BUILTIN_ADMINS: &str = "S-1-5-32-544";
+        let local_membership = GroupMembership {
+            member_sid: Sid(USER.to_owned()),
+            group_sid: Sid(BUILTIN_ADMINS.to_owned()),
+            direct: false,
+            group_name: Some("BUILTIN\\Administrators".to_owned()),
+            path: Some(MembershipPath {
+                nodes: vec![Sid(USER.to_owned()), Sid(BUILTIN_ADMINS.to_owned())],
+                names: vec![None, Some("BUILTIN\\Administrators".to_owned())],
+                source: MembershipPathSource::LocalGroup,
+                complete: false,
+            }),
+        };
+
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![local_membership],
+                file_system_object: fso(
+                    None,
+                    vec![allow_ace(BUILTIN_ADMINS, MASK_READ, false)],
+                ),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![Sid(BUILTIN_ADMINS.to_owned())],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
+                access_context: AccessContext::Unspecified,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
+            })
+            .unwrap();
+
+        let step = result
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("BUILTIN\\Administrators"))
+            .expect("must find a Member step for BUILTIN\\Administrators");
+        assert!(
+            step.contains("exact chain unknown"),
+            "incomplete local-group path must render as 'exact chain unknown'; got: {step}"
+        );
+        assert!(
+            step.contains("LocalGroup"),
+            "source must still be labelled LocalGroup; got: {step}"
+        );
+    }
 }

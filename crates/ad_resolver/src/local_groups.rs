@@ -18,7 +18,7 @@ use std::os::windows::ffi::OsStrExt;
 
 use adpa_core::{
     error::CoreError,
-    model::{Identity, MembershipPath, MembershipPathSource, Sid},
+    model::{GroupMembership, Identity, MembershipPath, MembershipPathSource, Sid},
 };
 use tracing::{debug, warn};
 use windows_sys::Win32::Foundation::{LocalFree, ERROR_ACCESS_DENIED, FALSE, NO_ERROR};
@@ -665,6 +665,112 @@ pub fn resolve_local_group_chains(
         out.push((lg.sid, Some(lg_display), path));
     }
     Ok(out)
+}
+
+/// Identity-Variante von [`resolve_local_group_chains`] mit
+/// Kandidaten-Loop analog zu [`resolve_local_group_sids_for_identity`].
+/// Liefert `Vec<GroupMembership>` mit `MembershipPathSource::LocalGroup`,
+/// damit der Berechtigungspfad jede lokale Servergruppe als Schritt
+/// `Member of BUILTIN\\Administrators [source: LocalGroup]` ausweisen
+/// kann.
+///
+/// Schließt Review 2026-06-05 Runde 6 Finding 1: die alte
+/// `_sids_for_identity`-Variante lieferte nur SIDs für den Token-Bau —
+/// damit war die Berechtigungsberechnung korrekt, aber der
+/// Erklärungspfad lückenhaft. Aufrufer sehen jetzt zusätzlich die
+/// Pfade.
+///
+/// Identity-aware variant of [`resolve_local_group_chains`] using the
+/// same candidate-list loop as [`resolve_local_group_sids_for_identity`].
+/// Returns `Vec<GroupMembership>` with
+/// `MembershipPathSource::LocalGroup` so the explanation path renders
+/// each local server group as a `Member of …` step.
+pub fn resolve_local_group_chains_for_identity(
+    server: Option<&str>,
+    identity: &Identity,
+    known_member_sids_to_names: &std::collections::HashMap<String, String>,
+) -> Result<Vec<GroupMembership>, CoreError> {
+    let candidates = format_account_candidates_for_local_groups(identity);
+    if candidates.is_empty() {
+        return Err(CoreError::Validation(format!(
+            "Local group chains: no usable account name form derivable from identity {}",
+            identity.sid.0
+        )));
+    }
+    let user_name = identity.name.as_deref();
+    let mut tried: Vec<String> = Vec::with_capacity(candidates.len());
+    let mut last_err: Option<CoreError> = None;
+    for candidate in &candidates {
+        tried.push(candidate.clone());
+        // Erst kurz pruefen ob der Account ueberhaupt auf dem Server
+        // bekannt ist — wir nutzen die strict-Variante, die NERR_USER_
+        // NOT_FOUND klar von "gefunden, keine Gruppen" trennt.
+        // Probe via the strict variant first to separate
+        // UserNotFoundOnServer from "found, no groups".
+        match resolve_local_group_sids_strict(server, candidate) {
+            Ok(LocalGroupLookupOutcome::UserNotFoundOnServer) => continue,
+            Ok(LocalGroupLookupOutcome::WithGroups(_)) => {
+                // Account bekannt — jetzt die Ketten mit demselben Namen
+                // bauen, damit Mitgliederrekonstruktion ueber denselben
+                // Account-Bezug laeuft.
+                // Account known — reconstruct chains with the same name.
+                match resolve_local_group_chains(
+                    server,
+                    &identity.sid,
+                    user_name,
+                    known_member_sids_to_names,
+                    candidate,
+                ) {
+                    Ok(chains) => {
+                        let memberships: Vec<GroupMembership> = chains
+                            .into_iter()
+                            .map(|(group_sid, group_name, path)| GroupMembership {
+                                member_sid: identity.sid.clone(),
+                                group_sid,
+                                // direct = path über 2 Knoten + complete:
+                                // direkte Mitgliedschaft auf der lokalen
+                                // Gruppe; bei Mediator-Pfad (3 Knoten) ist
+                                // sie transitiv.
+                                // direct = 2-node complete path; mediator
+                                // chain (3 nodes) is transitive.
+                                direct: path.nodes.len() == 2 && path.complete,
+                                group_name,
+                                path: Some(path),
+                            })
+                            .collect();
+                        return Ok(memberships);
+                    }
+                    Err(e) => {
+                        last_err = Some(e);
+                        // resolve_local_group_chains hat fuer diesen
+                        // Kandidaten technisch gescheitert (z. B.
+                        // NetLocalGroupGetMembers-Fehler). Wir versuchen
+                        // den naechsten Kandidaten — vielleicht wird der
+                        // Account dort mit anderem Namen gefunden.
+                        // chains call failed for this candidate (e.g.
+                        // NetLocalGroupGetMembers error); try next.
+                        continue;
+                    }
+                }
+            }
+            Err(e) => {
+                last_err = Some(e);
+                continue;
+            }
+        }
+    }
+    // Kein Kandidat erkannt — wenn wir unterwegs einen technischen
+    // Fehler hatten, geben wir den weiter; sonst Validation.
+    // No candidate matched — propagate technical error if any.
+    if let Some(e) = last_err {
+        return Err(e);
+    }
+    Err(CoreError::Validation(format!(
+        "Local group chains: no account form for identity {} known on {server:?} \
+         (tried: {:?}). Local server group memberships are not available; the result \
+         is marked incomplete.",
+        identity.sid.0, tried
+    )))
 }
 
 /// Liefert die `DOMAIN\Name`-Darstellung einer SID per LookupAccountSidW —

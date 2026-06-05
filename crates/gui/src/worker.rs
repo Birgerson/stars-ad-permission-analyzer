@@ -23,7 +23,7 @@ use ad_resolver::NoLsaBackend;
 #[cfg(windows)]
 use ad_resolver::WindowsLsaBackend;
 use ad_resolver::{
-    ldap_client, principal::PrincipalInput, resolve_local_group_sids_for_identity, LdapConfig,
+    ldap_client, principal::PrincipalInput, LdapConfig,
     LdapIdentityBackend, LdapResolver, PrincipalResolution, PrincipalResolver, TlsMode,
 };
 use adpa_core::{
@@ -769,8 +769,8 @@ async fn handle_analyze(
     let res = resolve_identity_sids(sid, ldap).await?;
 
     // Lokale Server-Gruppen vor der Share-Maske bestimmen — siehe CLI-Pendant.
-    let (local_group_sids, local_group_status) =
-        collect_local_group_sids_for_path(path, smb_server, &res.identity);
+    let (local_group_sids, local_group_memberships, local_group_status) =
+        collect_local_group_sids_for_path(path, smb_server, &res.identity, &res.memberships);
 
     let (share_status, unsupported_share_ace_count) = resolve_share_status(
         path,
@@ -796,7 +796,13 @@ async fn handle_analyze(
 
     let engine_flags = res.engine_flags();
     let identity = res.identity;
-    let memberships = res.memberships;
+    let mut memberships = res.memberships;
+    // Round 6 finding 1: lokale Servergruppen-Memberships mit AD-
+    // Memberships kombinieren, damit der Erklaerungspfad jeden
+    // Token-Schritt rendert (siehe CLI-Pendant).
+    // Round 6 finding 1: merge local group memberships into the
+    // engine input so the explanation path renders all token steps.
+    memberships.extend(local_group_memberships.iter().cloned());
     DefaultPermissionEngine
         .evaluate(PermissionEvaluationInput {
             identity,
@@ -827,8 +833,10 @@ fn collect_local_group_sids_for_path(
     path: &str,
     explicit_smb_server: Option<&str>,
     identity: &Identity,
+    domain_memberships: &[GroupMembership],
 ) -> (
     Vec<adpa_core::model::Sid>,
+    Vec<GroupMembership>,
     adpa_core::model::LocalGroupEvalStatus,
 ) {
     use adpa_core::model::LocalGroupEvalStatus;
@@ -836,12 +844,28 @@ fn collect_local_group_sids_for_path(
 
     let server_owned = effective_smb_target(path, explicit_smb_server);
     let server = server_owned.as_deref();
-    // Review 2026-06-04 Runde 5 Finding 1: Kandidaten-Loop statt
-    // single name@domain. Bei reinem NetBIOS-Trust faellt der alte Pfad
-    // sonst still durch NERR_USER_NOT_FOUND.
-    // Round 5 finding 1: candidate loop instead of single name@domain.
-    match resolve_local_group_sids_for_identity(server, identity) {
-        Ok(v) => (v, LocalGroupEvalStatus::Applied),
+    // Round 6 finding 1: chains instead of bare SIDs, so the engine's
+    // explanation path renders every `Member of …` mediator step.
+    let mut known_member_sids_to_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    if let Some(ref n) = identity.name {
+        known_member_sids_to_names.insert(identity.sid.0.clone(), n.clone());
+    }
+    for gm in domain_memberships {
+        if let Some(ref n) = gm.group_name {
+            known_member_sids_to_names.insert(gm.group_sid.0.clone(), n.clone());
+        }
+    }
+    match ad_resolver::resolve_local_group_chains_for_identity(
+        server,
+        identity,
+        &known_member_sids_to_names,
+    ) {
+        Ok(memberships) => {
+            let sids: Vec<adpa_core::model::Sid> =
+                memberships.iter().map(|m| m.group_sid.clone()).collect();
+            (sids, memberships, LocalGroupEvalStatus::Applied)
+        }
         Err(e) => {
             let msg = e.to_string();
             warn!(
@@ -850,7 +874,11 @@ fn collect_local_group_sids_for_path(
                 error = %msg,
                 "Local group resolution failed; result will be marked incomplete"
             );
-            (Vec::new(), LocalGroupEvalStatus::NotAvailable(msg))
+            (
+                Vec::new(),
+                Vec::new(),
+                LocalGroupEvalStatus::NotAvailable(msg),
+            )
         }
     }
 }
@@ -959,8 +987,16 @@ async fn handle_scan(
     // damit Share-ACEs auf lokale Gruppen ebenfalls beruecksichtigt werden.
     // Resolve local server groups once per scan root — before the share mask, so
     // that share ACEs targeting local groups are also taken into account.
-    let (local_group_sids, local_group_status) =
-        collect_local_group_sids_for_path(root, smb_server, &identity);
+    let (local_group_sids, local_group_memberships, local_group_status) =
+        collect_local_group_sids_for_path(root, smb_server, &identity, &memberships);
+    // Round 6 finding 1: lokale Servergruppen-Memberships mit AD-
+    // Memberships kombinieren — werden pro Pfad an die Engine gegeben.
+    // Round 6 finding 1: combine AD + local memberships per path.
+    let combined_memberships: Vec<GroupMembership> = {
+        let mut v = memberships.clone();
+        v.extend(local_group_memberships.iter().cloned());
+        v
+    };
 
     if let adpa_core::model::LocalGroupEvalStatus::NotAvailable(ref msg) = local_group_status {
         let lg_message =
@@ -1080,7 +1116,7 @@ async fn handle_scan(
         });
         match engine.evaluate(PermissionEvaluationInput {
             identity: identity.clone(),
-            group_memberships: memberships.clone(),
+            group_memberships: combined_memberships.clone(),
             file_system_object: fso,
             share_status: share_status.clone(),
             local_group_sids: local_group_sids.clone(),

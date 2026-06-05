@@ -5,7 +5,7 @@ use ad_resolver::NoLsaBackend;
 #[cfg(windows)]
 use ad_resolver::WindowsLsaBackend;
 use ad_resolver::{
-    principal::PrincipalInput, resolve_local_group_sids_for_identity, DisabledStatus,
+    principal::PrincipalInput, DisabledStatus,
     GroupResolutionStatus, IdentityScopeStatus, LdapConfig, LdapIdentityBackend, LdapResolver,
     PrincipalResolution, PrincipalResolver,
 };
@@ -577,11 +577,13 @@ async fn run_analyze(
     // are needed by both the share mask computation and the NTFS evaluation.
     // Order matters: without local_group_sids the share mask would ignore ACEs
     // that target local server groups.
-    let (local_group_sids, local_group_status) = collect_local_group_sids_for_path(
-        &path,
-        smb_server.as_deref(),
-        &resolved.resolution.identity,
-    );
+    let (local_group_sids, local_group_memberships, local_group_status) =
+        collect_local_group_sids_for_path(
+            &path,
+            smb_server.as_deref(),
+            &resolved.resolution.identity,
+            &resolved.resolution.memberships,
+        );
 
     if let adpa_core::model::LocalGroupEvalStatus::NotAvailable(ref msg) = local_group_status {
         println!(
@@ -628,10 +630,19 @@ async fn run_analyze(
     // Engine-Flags werden zentral aus dem ScopeStatus/GroupResolutionStatus
     // abgeleitet — Single Source of Truth (Review Runde 3 Finding 1).
     // Engine flags are derived centrally from the resolution status.
+    // Review 2026-06-05 Runde 6 Finding 1: AD-Memberships +
+    // lokale-Servergruppen-Memberships zusammen an die Engine, damit
+    // der Erklaerungspfad jeden Token-Schritt sichtbar macht.
+    // Round 6 finding 1: feed AD memberships + local server group
+    // memberships together so the explanation path renders every
+    // mediator step.
+    let mut all_memberships = resolved.resolution.memberships.clone();
+    all_memberships.extend(local_group_memberships.iter().cloned());
+
     let engine_flags = resolved.resolution.engine_flags();
     let input = PermissionEvaluationInput {
         identity: resolved.resolution.identity.clone(),
-        group_memberships: resolved.resolution.memberships.clone(),
+        group_memberships: all_memberships,
         file_system_object: fso.clone(),
         share_status,
         local_group_sids,
@@ -791,11 +802,19 @@ async fn run_scan(
     //     lokalen Gruppen-SIDs im Token, das gegen die Share-DACL evaluiert wird.
     //     Resolve local server groups before the share mask — otherwise the local
     //     group SIDs are missing from the token evaluated against the share DACL.
-    let (scan_local_group_sids, scan_local_group_status) = collect_local_group_sids_for_path(
-        &path,
-        smb_server.as_deref(),
-        &resolved.resolution.identity,
-    );
+    let (scan_local_group_sids, scan_local_group_memberships, scan_local_group_status) =
+        collect_local_group_sids_for_path(
+            &path,
+            smb_server.as_deref(),
+            &resolved.resolution.identity,
+            &resolved.resolution.memberships,
+        );
+
+    // Round 6 finding 1: AD + lokale Memberships zusammen an die
+    // Engine (siehe Analyze-Pfad).
+    // Combine AD + local memberships for the engine (see Analyze).
+    let mut scan_all_memberships = resolved.resolution.memberships.clone();
+    scan_all_memberships.extend(scan_local_group_memberships.iter().cloned());
 
     if let adpa_core::model::LocalGroupEvalStatus::NotAvailable(ref msg) = scan_local_group_status {
         println!(
@@ -910,7 +929,7 @@ async fn run_scan(
     for fso in &walk.objects {
         let input = PermissionEvaluationInput {
             identity: resolved.resolution.identity.clone(),
-            group_memberships: resolved.resolution.memberships.clone(),
+            group_memberships: scan_all_memberships.clone(),
             file_system_object: fso.clone(),
             share_status: scan_share_status.clone(),
             local_group_sids: scan_local_group_sids.clone(),
@@ -1147,8 +1166,10 @@ fn collect_local_group_sids_for_path(
     path: &str,
     explicit_smb_server: Option<&str>,
     identity: &adpa_core::model::Identity,
+    domain_memberships: &[adpa_core::model::GroupMembership],
 ) -> (
     Vec<adpa_core::model::Sid>,
+    Vec<adpa_core::model::GroupMembership>,
     adpa_core::model::LocalGroupEvalStatus,
 ) {
     use adpa_core::model::LocalGroupEvalStatus;
@@ -1156,26 +1177,43 @@ fn collect_local_group_sids_for_path(
     // Finding 2: lokale Gruppen MÜSSEN vom selben Server kommen wie die
     // Share-DACL. effective_smb_target priorisiert den expliziten
     // `--smb-server` und fällt sonst auf den UNC-Server zurück.
-    // Finding 2: local groups MUST come from the same server as the share
-    // DACL. effective_smb_target prefers the explicit `--smb-server` and
-    // falls back to the UNC server otherwise.
     let server_owned = effective_smb_target(path, explicit_smb_server);
     let server = server_owned.as_deref();
-    // Review 2026-06-04 Runde 5 Finding 1: Kandidatenliste durchprobieren
-    // (UPN, DOMAIN\name, name@DNS-Suffix, plain). Wenn keiner erkannt
-    // wird, liefert die Funktion einen Validation-Fehler, der hier als
-    // `NotAvailable(reason)` durchschlaegt — Risk-Engine markiert incomplete.
-    // Round 5 finding 1: iterate candidate name forms; if none works,
-    // surface as NotAvailable (incomplete).
-    match resolve_local_group_sids_for_identity(server, identity) {
-        Ok(v) => {
+    // Review 2026-06-05 Runde 6 Finding 1: lokale Servergruppen werden
+    // jetzt als `GroupMembership` mit
+    // `MembershipPathSource::LocalGroup` aufgeloest, damit der
+    // Erklaerungspfad jeden Token-Schritt nachvollziehbar darstellt.
+    // SIDs werden aus den Memberships extrahiert; bekannte Domain-
+    // Gruppen werden als Mediator-Namen mitgegeben.
+    // Round 6 finding 1: resolve local server groups as
+    // GroupMembership instances so the explanation path renders each
+    // mediator step explicitly. SIDs come from the memberships;
+    // known domain groups are passed in as mediator labels.
+    let mut known_member_sids_to_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    if let Some(ref n) = identity.name {
+        known_member_sids_to_names.insert(identity.sid.0.clone(), n.clone());
+    }
+    for gm in domain_memberships {
+        if let Some(ref n) = gm.group_name {
+            known_member_sids_to_names.insert(gm.group_sid.0.clone(), n.clone());
+        }
+    }
+    match ad_resolver::resolve_local_group_chains_for_identity(
+        server,
+        identity,
+        &known_member_sids_to_names,
+    ) {
+        Ok(memberships) => {
+            let sids: Vec<adpa_core::model::Sid> =
+                memberships.iter().map(|m| m.group_sid.clone()).collect();
             tracing::debug!(
                 ?server,
                 sid = %identity.sid.0,
-                count = v.len(),
-                "Resolved local group SIDs for target server"
+                count = sids.len(),
+                "Resolved local group chains for target server"
             );
-            (v, LocalGroupEvalStatus::Applied)
+            (sids, memberships, LocalGroupEvalStatus::Applied)
         }
         Err(e) => {
             let msg = e.to_string();
@@ -1185,7 +1223,11 @@ fn collect_local_group_sids_for_path(
                 error = %msg,
                 "Local group resolution failed; result will be marked incomplete"
             );
-            (Vec::new(), LocalGroupEvalStatus::NotAvailable(msg))
+            (
+                Vec::new(),
+                Vec::new(),
+                LocalGroupEvalStatus::NotAvailable(msg),
+            )
         }
     }
 }
