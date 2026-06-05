@@ -87,7 +87,9 @@ Benutzer max.muster → Mitglied von "Buchhaltung" → Mitglied von "FileServer_
 
 ### Wie wird Stars gestartet?
 
-Stars erfordert keine Installation. Die `.exe`-Dateien können direkt gestartet werden.
+Stars wird über den **signierten Setup-Installer** auf der [Release-Seite](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) bereitgestellt — aktuell `Stars-v1.5.3-Setup.exe`. Der Installer legt die Anwendung nach `C:\Program Files\Stars\` ab, erstellt einen Start-Menü-Eintrag „Stars" und richtet keine Hintergrunddienste oder Auto-Start-Komponenten ein.
+
+Für Entwickler und CI-Builds können die `.exe`-Dateien aus `target/release/` (`adpa.exe`, `adpa-gui.exe`) nach `cargo build --release` auch ohne Installer direkt gestartet werden — der produktive Auslieferungsweg bleibt der Installer.
 
 **Systemvoraussetzungen:**
 - Windows 10 / Windows 11 / Windows Server
@@ -105,20 +107,24 @@ Stars erfordert keine Installation. Die `.exe`-Dateien können direkt gestartet 
 
 > Der Vermerk „getestet" bedeutet, dass die Audit-Funktionen auf dieser Plattform durchlaufen wurden — er ist **keine Garantie** auf Korrektheit, Vollständigkeit oder Eignung für einen bestimmten Zweck. Vollständiger Haftungsausschluss am Ende des Dokuments.
 
-**GUI starten:**
-```
-adpa-gui.exe
-```
+**GUI starten:** Start-Menü → „Stars" (nach Installer), oder direkt `C:\Program Files\Stars\adpa-gui.exe`.
+
+**CLI:** Die Setup-Installation legt `adpa.exe` im selben Verzeichnis ab. Für komfortable PATH-Nutzung kann das Verzeichnis manuell in die `PATH`-Umgebungsvariable aufgenommen werden.
 
 **CLI — einzelnen Pfad analysieren:**
 ```
-adpa.exe scan --path "C:\Daten\Abteilung" --user S-1-5-21-...
+adpa.exe analyze --path "C:\Daten\Abteilung" --user S-1-5-21-...
+```
+
+**CLI — rekursiver Scan eines Verzeichnisbaums:**
+```
+adpa.exe scan --path "C:\Daten" --user S-1-5-21-... --max-depth 8
 ```
 
 **CLI — mit LDAP für vollständige Gruppenauflösung:**
 ```
 set ADPA_BIND_PASSWORD=GeheimesPasswort
-adpa.exe scan --path "\\server\share\Daten" --user S-1-5-21-... ^
+adpa.exe analyze --path "\\server\share\Daten" --user S-1-5-21-... ^
   --server dc.domain.local --base-dn "DC=domain,DC=local" ^
   --bind-dn "CN=SvcScan,CN=Users,DC=domain,DC=local"
 ```
@@ -129,7 +135,7 @@ adpa.exe scan --path "\\server\share\Daten" --user S-1-5-21-... ^
 
 **CLI — UNC-Pfad mit automatischer Share-Erkennung:**
 ```
-adpa.exe scan --path "\\fileserver\Buchhaltung\Bilanzen" --user S-1-5-21-...
+adpa.exe analyze --path "\\fileserver\Buchhaltung\Bilanzen" --user S-1-5-21-...
 ```
 Stars erkennt den UNC-Pfad automatisch und bezieht die Share-Berechtigung in die Berechnung ein.
 
@@ -431,7 +437,9 @@ User max.muster → member of "Accounting" → member of "FileServer_Read"
 
 ### How is Stars started?
 
-Stars requires no installation. The `.exe` files can be launched directly.
+Stars is distributed as a **signed setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.5.3-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and configures no background services or auto-start components.
+
+Developers and CI builds may also run the `.exe` files from `target/release/` (`adpa.exe`, `adpa-gui.exe`) directly after `cargo build --release` — the production delivery path remains the installer.
 
 **System requirements:**
 - Windows 10 / Windows 11 / Windows Server
@@ -449,20 +457,24 @@ Stars requires no installation. The `.exe` files can be launched directly.
 
 > "Tested" means the audit functions were exercised on that platform — it is **not a guarantee** of correctness, completeness, or fitness for any particular purpose. The full disclaimer is at the end of the document.
 
-**Start the GUI:**
-```
-adpa-gui.exe
-```
+**Start the GUI:** Start menu → "Stars" (after installer), or run `C:\Program Files\Stars\adpa-gui.exe` directly.
+
+**CLI:** The installer places `adpa.exe` in the same directory. For convenient PATH usage you can add the directory to the `PATH` environment variable manually.
 
 **CLI — analyze a single path:**
 ```
-adpa.exe scan --path "C:\Data\Department" --user S-1-5-21-...
+adpa.exe analyze --path "C:\Data\Department" --user S-1-5-21-...
+```
+
+**CLI — recursive scan of a directory tree:**
+```
+adpa.exe scan --path "C:\Data" --user S-1-5-21-... --max-depth 8
 ```
 
 **CLI — with LDAP for full group resolution:**
 ```
 set ADPA_BIND_PASSWORD=YourSecretPassword
-adpa.exe scan --path "\\server\share\Data" --user S-1-5-21-... ^
+adpa.exe analyze --path "\\server\share\Data" --user S-1-5-21-... ^
   --server dc.domain.local --base-dn "DC=domain,DC=local" ^
   --bind-dn "CN=SvcScan,CN=Users,DC=domain,DC=local"
 ```
@@ -473,7 +485,7 @@ adpa.exe scan --path "\\server\share\Data" --user S-1-5-21-... ^
 
 **CLI — UNC path with automatic share detection:**
 ```
-adpa.exe scan --path "\\fileserver\Accounting\Reports" --user S-1-5-21-...
+adpa.exe analyze --path "\\fileserver\Accounting\Reports" --user S-1-5-21-...
 ```
 Stars detects the UNC path automatically and factors the share permission into the calculation.
 

@@ -40,6 +40,261 @@ slint::slint! {
         LineEdit, Button, CheckBox, ScrollView, SpinBox, ComboBox,
     } from "std-widgets.slint";
 
+    // ============================================================
+    // Theme — globale Designsprache mit Light/Dark-Umschaltung.
+    // Theme — global design language with light/dark toggle.
+    // ============================================================
+    // Alle Farben, Abstaende und Schriftgroessen werden hier zentral
+    // gepflegt. Komponenten referenzieren `Theme.bg-app`, `Theme.accent`,
+    // `Theme.spacing-md` usw. statt Hardcoded-Hex-Werten.
+    // All colors, spacings and font sizes live here. Components
+    // reference `Theme.bg-app`, `Theme.accent`, `Theme.spacing-md`, …
+    // instead of hardcoded hex values.
+    export global Theme {
+        // Toggle: false = Light (Default), true = Dark.
+        in-out property <bool> dark: false;
+
+        // --- Backgrounds ---
+        // Neutraler, sehr leicht abgesetzter App-Hintergrund, damit
+        // Slint-Standard-Widgets (GroupBox-Titel, LineEdit-Text) mit
+        // ihren systemnahen Default-Farben gut lesbar bleiben.
+        // Vorherige Versuche mit kraeftigerem Hintergrund liessen die
+        // blassen System-Texte verschwinden — siehe ChatGPT-Feedback.
+        // Neutral, only slightly off-white app background so Slint
+        // default widgets stay legible with their system-default text.
+        out property <color> bg-app:    dark ? #1a1a24 : #eef0f5;
+        out property <color> bg-card:   dark ? #25252f : #ffffff;
+        out property <color> bg-header: dark ? #1f1f29 : #ffffff;
+        out property <color> bg-input:  dark ? #1a1a26 : #ffffff;
+        out property <color> bg-hover:  dark ? #2f2f3c : #e4e8f0;
+        out property <color> bg-active: dark ? #34344a : #d4d9e4;
+
+        // --- Text ---
+        out property <color> text-primary:   dark ? #e8e8ec : #1f2937;
+        out property <color> text-secondary: dark ? #a5a5b5 : #4b5563;
+        out property <color> text-muted:     dark ? #707080 : #6b7280;
+        out property <color> text-inverse:   #ffffff;
+
+        // --- Borders ---
+        // Etwas dunklere Standard-Border, damit Karten und
+        // Eingabefelder sich vom hellen Hintergrund klar abheben.
+        // Slightly darker default border so cards and inputs stand out
+        // clearly against the light background.
+        out property <color> border:        dark ? #3a3a4a : #a8b1c2;
+        out property <color> border-strong: dark ? #4a4a5c : #7a8499;
+
+        // --- Accent (Stars-Blau) ---
+        // Hex-Werte vermeiden bewusst das Muster „Ziffer(n) direkt vor
+        // e/E", weil der Rust-Tokenizer das als Float-Exponent
+        // interpretiert (`#2563EB` bricht ab — `2563E` erwartet
+        // Exponent-Digits). Stattdessen werden Hex-Werte gewählt, bei
+        // denen nach einer Ziffer ein Buchstabe ≠ e/E kommt.
+        // Hex values deliberately avoid "digit(s) directly followed by
+        // e/E", which Rust's tokenizer parses as a float exponent.
+        out property <color> accent:         #3B82F6;
+        out property <color> accent-hover:   #1D4ED8;
+        out property <color> accent-soft:    dark ? #3A4C8F : #DBEAFE;
+        out property <color> accent-text:    #ffffff;
+
+        // --- Semantic ---
+        out property <color> error:    #dc2626;
+        out property <color> warning:  #d97706;
+        out property <color> success:  #16a34a;
+        out property <color> info:     #0891b2;
+
+        // --- Spacing (6er-Skala) ---
+        out property <length> spacing-xs: 4px;
+        out property <length> spacing-sm: 6px;
+        out property <length> spacing-md: 10px;
+        out property <length> spacing-lg: 14px;
+        out property <length> spacing-xl: 20px;
+
+        // --- Radius ---
+        out property <length> radius-sm: 4px;
+        out property <length> radius-md: 6px;
+        out property <length> radius-lg: 10px;
+
+        // --- Fonts ---
+        out property <length> font-xs:  11px;
+        out property <length> font-sm:  12px;
+        out property <length> font-md:  13px;
+        out property <length> font-lg:  14px;
+        out property <length> font-xl:  16px;
+        out property <length> font-xxl: 20px;
+    }
+
+    // PrimaryButton — Akzent-Hintergrund, weisser Text. Fuer
+    // Haupt-Aktionen wie Analyze, Scan starten, Vergleichen.
+    // PrimaryButton — accent background, white text. For main actions.
+    component PrimaryButton inherits Rectangle {
+        in property <string> text;
+        in property <bool> enabled: true;
+        callback clicked;
+
+        background: !enabled
+            ? Theme.border
+            : (ta.has-hover ? Theme.accent-hover : Theme.accent);
+        border-radius: Theme.radius-sm;
+        min-height: 28px;
+        min-width: 88px;
+
+        animate background { duration: 80ms; }
+
+        HorizontalLayout {
+            padding-left: Theme.spacing-md;
+            padding-right: Theme.spacing-md;
+            Text {
+                text: root.text;
+                color: Theme.text-inverse;
+                font-size: Theme.font-md;
+                font-weight: 600;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+
+        ta := TouchArea {
+            enabled: root.enabled;
+            mouse-cursor: enabled ? pointer : default;
+            clicked => { root.clicked(); }
+        }
+    }
+
+    // DangerButton — destruktive Aktionen wie Cancel/Delete.
+    // DangerButton — destructive actions like Cancel/Delete.
+    component DangerButton inherits Rectangle {
+        in property <string> text;
+        in property <bool> enabled: true;
+        callback clicked;
+
+        background: !enabled
+            ? Theme.border
+            : (ta.has-hover ? #b91c1c : Theme.error);
+        border-radius: Theme.radius-sm;
+        min-height: 28px;
+        min-width: 88px;
+
+        animate background { duration: 80ms; }
+
+        HorizontalLayout {
+            padding-left: Theme.spacing-md;
+            padding-right: Theme.spacing-md;
+            Text {
+                text: root.text;
+                color: Theme.text-inverse;
+                font-size: Theme.font-md;
+                font-weight: 600;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+
+        ta := TouchArea {
+            enabled: root.enabled;
+            mouse-cursor: enabled ? pointer : default;
+            clicked => { root.clicked(); }
+        }
+    }
+
+    // ThemeToggle — Sun/Mond-Umschalter fuer Light/Dark.
+    // ThemeToggle — sun/moon switcher for light/dark.
+    component ThemeToggle inherits Rectangle {
+        width: 32px;
+        height: 32px;
+        border-radius: Theme.radius-sm;
+        background: ta.has-hover ? Theme.bg-hover : transparent;
+
+        animate background { duration: 80ms; }
+
+        Text {
+            text: Theme.dark ? "☀" : "☾";
+            font-size: 18px;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { Theme.dark = !Theme.dark; }
+        }
+    }
+
+    // HeaderBar — Brand-Block links, Status-/Theme-Controls rechts.
+    // HeaderBar — brand block left, status/theme controls right.
+    component HeaderBar inherits Rectangle {
+        in property <string> app-title: "Stars";
+        in property <string> app-subtitle: "AD Permission Analyzer";
+        in property <string> version-text;
+        height: 48px;
+        background: Theme.bg-header;
+        // Dezente untere Trennlinie
+        // Subtle bottom separator
+        Rectangle {
+            x: 0;
+            y: parent.height - 1px;
+            width: parent.width;
+            height: 1px;
+            background: Theme.border;
+        }
+
+        HorizontalLayout {
+            padding-left: Theme.spacing-lg;
+            padding-right: Theme.spacing-md;
+            padding-top: Theme.spacing-sm;
+            padding-bottom: Theme.spacing-sm;
+            spacing: Theme.spacing-md;
+
+            // Brand-Block: Stern + Titel + Subtitel
+            // Brand block: star + title + subtitle
+            HorizontalLayout {
+                spacing: Theme.spacing-sm;
+                Text {
+                    text: "★";
+                    font-size: Theme.font-xxl;
+                    color: Theme.accent;
+                    vertical-alignment: center;
+                }
+                VerticalLayout {
+                    Text {
+                        text: root.app-title;
+                        font-size: Theme.font-xl;
+                        font-weight: 700;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: root.app-subtitle;
+                        font-size: Theme.font-xs;
+                        color: Theme.text-muted;
+                    }
+                }
+            }
+
+            // Spacer
+            Rectangle { horizontal-stretch: 1; }
+
+            // Versions-Badge
+            // Version badge
+            if root.version-text != "": Rectangle {
+                background: Theme.bg-hover;
+                border-radius: Theme.radius-sm;
+                width: ver-text.preferred-width + 16px;
+                vertical-stretch: 0;
+                preferred-height: 24px;
+                y: (parent.height - 24px) / 2;
+                ver-text := Text {
+                    text: root.version-text;
+                    font-size: Theme.font-xs;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            ThemeToggle {}
+        }
+    }
+
     // Wiederverwendbares ⓘ-Help-Icon. Bei Hover erscheint ein kleiner
     // dunkler Tooltip-Kasten mit Erklaerungstext direkt rechts neben
     // dem Icon. Tooltip wird nur eingeblendet, ueberlappt Nachbarn
@@ -56,8 +311,8 @@ slint::slint! {
 
         Text {
             text: "ⓘ";
-            font-size: 14px;
-            color: #4f7cad;
+            font-size: Theme.font-lg;
+            color: Theme.accent;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -69,9 +324,9 @@ slint::slint! {
         if ta.has-hover: Rectangle {
             x: parent.width + 6px;
             y: parent.height / 2;
-            background: #2c2c2c;
-            border-radius: 4px;
-            border-color: #6c8eaf;
+            background: Theme.dark ? #15151c : #1f2937;
+            border-radius: Theme.radius-sm;
+            border-color: Theme.border-strong;
             border-width: 1px;
             width: 320px;
             height: tip-text.preferred-height + 14px;
@@ -82,7 +337,7 @@ slint::slint! {
                 width: parent.width - 16px;
                 text: root.tip;
                 color: white;
-                font-size: 11px;
+                font-size: Theme.font-xs;
                 wrap: word-wrap;
             }
         }
@@ -175,6 +430,14 @@ slint::slint! {
         preferred-height: 720px;
         min-width: 800px;
         min-height: 560px;
+        background: Theme.bg-app;
+
+        // Versions-/Branding-Anzeige im HeaderBar — wird von main.rs
+        // beim Setup gesetzt, damit die GUI nicht selbst entscheiden
+        // muss, was sie als Versionsstring zeigt.
+        // Version / branding text for the HeaderBar — set by main.rs at
+        // setup so the UI does not need to decide what to render.
+        in property <string> app-version: "v1.5.3";
 
         // ============================================================
         // Analyze-Tab Properties / Analyze tab properties
@@ -328,17 +591,30 @@ slint::slint! {
         in-out property <string> d-pending-delete-id;
         in-out property <string> d-pending-delete-label;
 
-        VerticalBox {
-            padding: 8px;
-            spacing: 6px;
+        VerticalLayout {
+            spacing: 0;
 
-            Text {
-                text: "Stars — AD Permission Analyzer";
-                font-size: 18px;
-                horizontal-alignment: left;
+            HeaderBar {
+                app-title: "Stars";
+                app-subtitle: "AD Permission Analyzer";
+                version-text: root.app-version;
             }
 
-            TabWidget {
+            // Inhalts-Bereich mit gleichmaessigem Padding um das
+            // TabWidget; das TabWidget selbst behaelt seinen Slint-
+            // Standard-Look, bekommt aber etwas Atemraum.
+            // Content area with consistent padding around the TabWidget;
+            // the TabWidget keeps its Slint default look but gets some air.
+            Rectangle {
+                background: Theme.bg-app;
+
+                VerticalLayout {
+                    padding-left: Theme.spacing-md;
+                    padding-right: Theme.spacing-md;
+                    padding-top: Theme.spacing-md;
+                    padding-bottom: Theme.spacing-md;
+
+                    TabWidget {
                 // ============================================================
                 // Tab: Analyze
                 // ============================================================
@@ -347,15 +623,15 @@ slint::slint! {
 
                     ScrollView {
                         VerticalBox {
-                            padding: 8px;
-                            spacing: 8px;
+                            padding: Theme.spacing-md;
+                            spacing: Theme.spacing-sm;
 
                             GroupBox {
                                 title: "Ziel / Target";
                                 VerticalBox {
-                                    spacing: 6px;
+                                    spacing: Theme.spacing-sm;
                                     GridBox {
-                                        spacing: 6px;
+                                        spacing: Theme.spacing-sm;
                                         Row {
                                             Text { text: "Pfad:"; vertical-alignment: center; }
                                             LineEdit {
@@ -376,7 +652,7 @@ slint::slint! {
                                             Text { text: ""; }
                                             HorizontalBox {
                                                 alignment: start;
-                                                spacing: 6px;
+                                                spacing: Theme.spacing-sm;
                                                 padding: 0px;
                                                 Button {
                                                     text: "🔍 SID auflösen";
@@ -387,8 +663,8 @@ slint::slint! {
                                         Row {
                                             Text { text: ""; }
                                             if root.a-suggestions.length > 0: Rectangle {
-                                                background: #ffffff;
-                                                border-color: #c0c0c0;
+                                                background: Theme.bg-card;
+                                                border-color: Theme.border;
                                                 border-width: 1px;
                                                 border-radius: 4px;
                                                 VerticalLayout {
@@ -400,23 +676,23 @@ slint::slint! {
                                                         HorizontalLayout {
                                                             padding-left: 6px;
                                                             padding-right: 6px;
-                                                            spacing: 8px;
+                                                            spacing: Theme.spacing-sm;
                                                             Text {
                                                                 text: "[" + sug.kind_icon + "]";
-                                                                color: #666;
+                                                                color: Theme.text-secondary;
                                                                 width: 28px;
                                                                 vertical-alignment: center;
                                                             }
                                                             Text {
                                                                 text: sug.qualified;
-                                                                color: #2c3e50;
+                                                                color: Theme.text-primary;
                                                                 vertical-alignment: center;
                                                                 width: 320px;
                                                                 overflow: elide;
                                                             }
                                                             Text {
                                                                 text: sug.description;
-                                                                color: #999;
+                                                                color: Theme.text-muted;
                                                                 horizontal-stretch: 1;
                                                                 overflow: elide;
                                                                 vertical-alignment: center;
@@ -436,7 +712,7 @@ slint::slint! {
                                     }
                                     if root.a-name-error != "": Text {
                                         text: root.a-name-error;
-                                        color: #c0392b;
+                                        color: Theme.error;
                                         wrap: word-wrap;
                                     }
                                 }
@@ -445,9 +721,9 @@ slint::slint! {
                             GroupBox {
                                 title: "Identitätsauflösung";
                                 VerticalBox {
-                                    spacing: 6px;
+                                    spacing: Theme.spacing-sm;
                                     HorizontalBox {
-                                        spacing: 8px;
+                                        spacing: Theme.spacing-sm;
                                         padding: 0px;
                                         Text {
                                             text: "Modus:";
@@ -469,7 +745,7 @@ slint::slint! {
                                     }
 
                                     if root.a-ldap-mode > 0: GridBox {
-                                        spacing: 6px;
+                                        spacing: Theme.spacing-sm;
                                         Row {
                                             Text { text: "Server:"; vertical-alignment: center; }
                                             LineEdit {
@@ -517,13 +793,13 @@ slint::slint! {
                             GroupBox {
                                 title: "SMB-Freigabe (optional, kombiniert NTFS ∩ Share)";
                                 VerticalBox {
-                                    spacing: 6px;
+                                    spacing: Theme.spacing-sm;
                                     CheckBox {
                                         text: "Share-Maske berücksichtigen";
                                         checked <=> root.a-smb-enabled;
                                     }
                                     if root.a-smb-enabled: GridBox {
-                                        spacing: 6px;
+                                        spacing: Theme.spacing-sm;
                                         Row {
                                             Text { text: "Server:"; vertical-alignment: center; }
                                             LineEdit {
@@ -544,9 +820,9 @@ slint::slint! {
 
                             HorizontalBox {
                                 alignment: start;
-                                spacing: 8px;
-                                Button {
-                                    text: root.a-is-running ? "Läuft..." : "Analysieren";
+                                spacing: Theme.spacing-sm;
+                                PrimaryButton {
+                                    text: root.a-is-running ? "Läuft..." : "▶  Analysieren";
                                     enabled: !root.a-is-running;
                                     clicked => { root.analyze-clicked(); }
                                 }
@@ -565,13 +841,13 @@ slint::slint! {
 
                             if root.a-status != "": Text {
                                 text: root.a-status;
-                                color: root.a-status-is-error ? #c0392b : #2c3e50;
+                                color: root.a-status-is-error ? Theme.error : Theme.text-primary;
                                 wrap: word-wrap;
                             }
 
                             Text {
                                 text: "Hinweis: jede Analyse wird automatisch in der Scan-Historie gespeichert und ist anschließend im Delta-Tab vergleichbar.";
-                                color: #6c7a89;
+                                color: Theme.text-muted;
                                 font-size: 12px;
                                 wrap: word-wrap;
                             }
@@ -586,11 +862,11 @@ slint::slint! {
                                     }
                                     Text {
                                         text: "Access-Mask: " + root.a-mask-hex;
-                                        color: #555;
+                                        color: Theme.text-secondary;
                                     }
                                     if root.a-share-line != "": Text {
                                         text: root.a-share-line;
-                                        color: #555;
+                                        color: Theme.text-secondary;
                                     }
                                     Text {
                                         text: "Berechtigungspfad:";
@@ -614,7 +890,7 @@ slint::slint! {
                                 VerticalBox {
                                     spacing: 4px;
                                     HorizontalBox {
-                                        spacing: 8px;
+                                        spacing: Theme.spacing-sm;
                                         Text { text: "Trustee"; font-weight: 700; horizontal-stretch: 2; }
                                         Text { text: "Art"; font-weight: 700; width: 70px; }
                                         Text { text: "Rechte"; font-weight: 700; width: 220px; }
@@ -623,10 +899,10 @@ slint::slint! {
                                         Text { text: "Schicht"; font-weight: 700; width: 70px; }
                                     }
                                     for t[i] in root.a-trustees: HorizontalBox {
-                                        spacing: 8px;
+                                        spacing: Theme.spacing-sm;
                                         Text {
                                             text: t.display_name;
-                                            color: #2c3e50;
+                                            color: Theme.text-primary;
                                             horizontal-stretch: 2;
                                             overflow: elide;
                                         }
@@ -637,24 +913,24 @@ slint::slint! {
                                         }
                                         Text {
                                             text: t.rights_label;
-                                            color: #555;
+                                            color: Theme.text-secondary;
                                             width: 220px;
                                             overflow: elide;
                                         }
                                         Text {
                                             text: t.source;
-                                            color: #555;
+                                            color: Theme.text-secondary;
                                             width: 80px;
                                         }
                                         Text {
                                             text: t.applies_to;
-                                            color: #555;
+                                            color: Theme.text-secondary;
                                             width: 220px;
                                             overflow: elide;
                                         }
                                         Text {
                                             text: t.category;
-                                            color: #555;
+                                            color: Theme.text-secondary;
                                             width: 70px;
                                         }
                                     }
@@ -672,15 +948,15 @@ slint::slint! {
 
                     ScrollView {
                         VerticalBox {
-                            padding: 8px;
-                            spacing: 8px;
+                            padding: Theme.spacing-md;
+                            spacing: Theme.spacing-sm;
 
                             GroupBox {
                                 title: "Ziel / Target";
                                 VerticalBox {
-                                    spacing: 6px;
+                                    spacing: Theme.spacing-sm;
                                     GridBox {
-                                        spacing: 6px;
+                                        spacing: Theme.spacing-sm;
                                         Row {
                                             Text { text: "Wurzelpfad:"; vertical-alignment: center; }
                                             LineEdit {
@@ -701,7 +977,7 @@ slint::slint! {
                                             Text { text: ""; }
                                             HorizontalBox {
                                                 alignment: start;
-                                                spacing: 6px;
+                                                spacing: Theme.spacing-sm;
                                                 padding: 0px;
                                                 Button {
                                                     text: "🔍 SID auflösen";
@@ -712,8 +988,8 @@ slint::slint! {
                                         Row {
                                             Text { text: ""; }
                                             if root.s-suggestions.length > 0: Rectangle {
-                                                background: #ffffff;
-                                                border-color: #c0c0c0;
+                                                background: Theme.bg-card;
+                                                border-color: Theme.border;
                                                 border-width: 1px;
                                                 border-radius: 4px;
                                                 VerticalLayout {
@@ -725,23 +1001,23 @@ slint::slint! {
                                                         HorizontalLayout {
                                                             padding-left: 6px;
                                                             padding-right: 6px;
-                                                            spacing: 8px;
+                                                            spacing: Theme.spacing-sm;
                                                             Text {
                                                                 text: "[" + sug.kind_icon + "]";
-                                                                color: #666;
+                                                                color: Theme.text-secondary;
                                                                 width: 28px;
                                                                 vertical-alignment: center;
                                                             }
                                                             Text {
                                                                 text: sug.qualified;
-                                                                color: #2c3e50;
+                                                                color: Theme.text-primary;
                                                                 vertical-alignment: center;
                                                                 width: 320px;
                                                                 overflow: elide;
                                                             }
                                                             Text {
                                                                 text: sug.description;
-                                                                color: #999;
+                                                                color: Theme.text-muted;
                                                                 horizontal-stretch: 1;
                                                                 overflow: elide;
                                                                 vertical-alignment: center;
@@ -761,12 +1037,12 @@ slint::slint! {
                                     }
                                     if root.s-name-error != "": Text {
                                         text: root.s-name-error;
-                                        color: #c0392b;
+                                        color: Theme.error;
                                         wrap: word-wrap;
                                     }
                                 }
                                 HorizontalBox {
-                                    spacing: 8px;
+                                    spacing: Theme.spacing-sm;
                                     alignment: start;
                                     CheckBox {
                                         text: "Tiefe begrenzen";
@@ -784,9 +1060,9 @@ slint::slint! {
                             GroupBox {
                                 title: "Identitätsauflösung";
                                 VerticalBox {
-                                    spacing: 6px;
+                                    spacing: Theme.spacing-sm;
                                     HorizontalBox {
-                                        spacing: 8px;
+                                        spacing: Theme.spacing-sm;
                                         padding: 0px;
                                         Text {
                                             text: "Modus:";
@@ -808,7 +1084,7 @@ slint::slint! {
                                     }
 
                                     if root.s-ldap-mode > 0: GridBox {
-                                        spacing: 6px;
+                                        spacing: Theme.spacing-sm;
                                         Row {
                                             Text { text: "Server:"; vertical-alignment: center; }
                                             LineEdit {
@@ -856,13 +1132,13 @@ slint::slint! {
                             GroupBox {
                                 title: "SMB-Freigabe (optional)";
                                 VerticalBox {
-                                    spacing: 6px;
+                                    spacing: Theme.spacing-sm;
                                     CheckBox {
                                         text: "Share-Maske berücksichtigen";
                                         checked <=> root.s-smb-enabled;
                                     }
                                     if root.s-smb-enabled: GridBox {
-                                        spacing: 6px;
+                                        spacing: Theme.spacing-sm;
                                         Row {
                                             Text { text: "Server:"; vertical-alignment: center; }
                                             LineEdit {
@@ -883,14 +1159,14 @@ slint::slint! {
 
                             HorizontalBox {
                                 alignment: start;
-                                spacing: 8px;
-                                Button {
-                                    text: root.s-is-running ? "Läuft..." : "Scan starten";
+                                spacing: Theme.spacing-sm;
+                                PrimaryButton {
+                                    text: root.s-is-running ? "Läuft..." : "▶  Scan starten";
                                     enabled: !root.s-is-running;
                                     clicked => { root.scan-clicked(); }
                                 }
-                                Button {
-                                    text: "Abbrechen";
+                                DangerButton {
+                                    text: "■  Abbrechen";
                                     enabled: root.s-is-running;
                                     clicked => { root.scan-cancel-clicked(); }
                                 }
@@ -898,7 +1174,7 @@ slint::slint! {
 
                             if root.s-status != "": Text {
                                 text: root.s-status;
-                                color: root.s-status-is-error ? #c0392b : #2c3e50;
+                                color: root.s-status-is-error ? Theme.error : Theme.text-primary;
                                 wrap: word-wrap;
                             }
 
@@ -906,9 +1182,9 @@ slint::slint! {
                                 title: "Ergebnisse (" + root.s-total + " Pfade, "
                                     + root.s-error-count + " Fehler)";
                                 VerticalBox {
-                                    spacing: 6px;
+                                    spacing: Theme.spacing-sm;
                                     HorizontalBox {
-                                        spacing: 6px;
+                                        spacing: Theme.spacing-sm;
                                         Text { text: "Filter:"; vertical-alignment: center; }
                                         LineEdit {
                                             placeholder-text: "Teilstring im Pfad";
@@ -922,7 +1198,7 @@ slint::slint! {
                                         TouchArea {
                                             clicked => { root.scan-row-toggle(i); }
                                             HorizontalBox {
-                                                spacing: 8px;
+                                                spacing: Theme.spacing-sm;
                                                 alignment: start;
                                                 Text {
                                                     text: row.expanded ? "▼" : "▶";
@@ -930,13 +1206,13 @@ slint::slint! {
                                                 }
                                                 Text {
                                                     text: row.path;
-                                                    color: row.has_diagnostic ? #c0392b : #2c3e50;
+                                                    color: row.has_diagnostic ? Theme.error : Theme.text-primary;
                                                     overflow: elide;
                                                     horizontal-stretch: 1;
                                                 }
                                                 Text {
                                                     text: row.rights_label;
-                                                    color: #2c3e50;
+                                                    color: Theme.text-primary;
                                                     width: 200px;
                                                 }
                                                 Text {
@@ -948,7 +1224,7 @@ slint::slint! {
                                         }
                                         if row.expanded: VerticalBox {
                                             padding-left: 24px;
-                                            spacing: 6px;
+                                            spacing: Theme.spacing-sm;
                                             VerticalBox {
                                                 spacing: 1px;
                                                 for step[j] in row.steps: Text {
@@ -970,26 +1246,26 @@ slint::slint! {
                                                 spacing: 1px;
                                                 Text {
                                                     text: "Wer hat Zugriff (" + row.trustees.length + " ACE-Einträge):";
-                                                    color: #2c3e50;
+                                                    color: Theme.text-primary;
                                                     font-weight: 700;
                                                 }
                                                 HorizontalBox {
-                                                    spacing: 6px;
-                                                    Text { text: "Trustee"; font-weight: 700; horizontal-stretch: 2; color: #555; }
-                                                    Text { text: "Art"; font-weight: 700; width: 60px; color: #555; }
-                                                    Text { text: "Rechte"; font-weight: 700; width: 180px; color: #555; }
-                                                    Text { text: "Quelle"; font-weight: 700; width: 70px; color: #555; }
-                                                    Text { text: "Anwendung"; font-weight: 700; width: 200px; color: #555; }
-                                                    Text { text: "Schicht"; font-weight: 700; width: 60px; color: #555; }
+                                                    spacing: Theme.spacing-sm;
+                                                    Text { text: "Trustee"; font-weight: 700; horizontal-stretch: 2; color: Theme.text-secondary; }
+                                                    Text { text: "Art"; font-weight: 700; width: 60px; color: Theme.text-secondary; }
+                                                    Text { text: "Rechte"; font-weight: 700; width: 180px; color: Theme.text-secondary; }
+                                                    Text { text: "Quelle"; font-weight: 700; width: 70px; color: Theme.text-secondary; }
+                                                    Text { text: "Anwendung"; font-weight: 700; width: 200px; color: Theme.text-secondary; }
+                                                    Text { text: "Schicht"; font-weight: 700; width: 60px; color: Theme.text-secondary; }
                                                 }
                                                 for t[k] in row.trustees: HorizontalBox {
-                                                    spacing: 6px;
+                                                    spacing: Theme.spacing-sm;
                                                     Text { text: t.display_name; color: #444; horizontal-stretch: 2; overflow: elide; }
                                                     Text { text: t.kind; color: t.kind_color; width: 60px; }
-                                                    Text { text: t.rights_label; color: #555; width: 180px; overflow: elide; }
-                                                    Text { text: t.source; color: #555; width: 70px; }
-                                                    Text { text: t.applies_to; color: #555; width: 200px; overflow: elide; }
-                                                    Text { text: t.category; color: #555; width: 60px; }
+                                                    Text { text: t.rights_label; color: Theme.text-secondary; width: 180px; overflow: elide; }
+                                                    Text { text: t.source; color: Theme.text-secondary; width: 70px; }
+                                                    Text { text: t.applies_to; color: Theme.text-secondary; width: 200px; overflow: elide; }
+                                                    Text { text: t.category; color: Theme.text-secondary; width: 60px; }
                                                 }
                                             }
                                         }
@@ -1002,10 +1278,10 @@ slint::slint! {
                                 VerticalBox {
                                     spacing: 2px;
                                     for err[i] in root.s-errors: HorizontalBox {
-                                        spacing: 8px;
+                                        spacing: Theme.spacing-sm;
                                         Text {
                                             text: err.path != "" ? err.path : "(ohne Pfad)";
-                                            color: #c0392b;
+                                            color: Theme.error;
                                             width: 320px;
                                             overflow: elide;
                                         }
@@ -1025,7 +1301,7 @@ slint::slint! {
                                     for risk[i] in root.s-risks: VerticalBox {
                                         spacing: 1px;
                                         HorizontalBox {
-                                            spacing: 8px;
+                                            spacing: Theme.spacing-sm;
                                             alignment: start;
                                             Text {
                                                 text: "[" + risk.severity_label + "]";
@@ -1034,12 +1310,12 @@ slint::slint! {
                                             }
                                             Text {
                                                 text: risk.rule_id;
-                                                color: #2c3e50;
+                                                color: Theme.text-primary;
                                                 width: 220px;
                                             }
                                             Text {
                                                 text: risk.affected_path;
-                                                color: #555;
+                                                color: Theme.text-secondary;
                                                 overflow: elide;
                                                 horizontal-stretch: 1;
                                             }
@@ -1058,16 +1334,16 @@ slint::slint! {
                             if root.s-done: GroupBox {
                                 title: "HTML-Bericht exportieren";
                                 VerticalBox {
-                                    spacing: 6px;
+                                    spacing: Theme.spacing-sm;
                                     HorizontalBox {
-                                        spacing: 6px;
+                                        spacing: Theme.spacing-sm;
                                         Text { text: "Zieldatei:"; vertical-alignment: center; }
                                         LineEdit {
                                             placeholder-text: "C:\\Berichte\\scan.html";
                                             text <=> root.s-export-path;
                                         }
-                                        Button {
-                                            text: "Exportieren";
+                                        PrimaryButton {
+                                            text: "💾  Exportieren";
                                             clicked => { root.export-clicked(); }
                                         }
                                     }
@@ -1090,22 +1366,22 @@ slint::slint! {
 
                     ScrollView {
                         VerticalBox {
-                            padding: 8px;
-                            spacing: 8px;
+                            padding: Theme.spacing-md;
+                            spacing: Theme.spacing-sm;
 
                             Text {
                                 text: "Vergleich zweier Scan-Läufe — zeige Pfade, "
                                     + "die hinzugekommen, entfernt oder mit anderen "
                                     + "Rechten gespeichert sind.";
                                 wrap: word-wrap;
-                                color: #555;
+                                color: Theme.text-secondary;
                             }
 
                             HorizontalBox {
                                 alignment: start;
-                                spacing: 8px;
-                                Button {
-                                    text: root.d-is-loading ? "Lädt..." : "📂 Scan-Historie laden";
+                                spacing: Theme.spacing-sm;
+                                PrimaryButton {
+                                    text: root.d-is-loading ? "Lädt..." : "📂  Scan-Historie laden";
                                     enabled: !root.d-is-loading;
                                     clicked => { root.delta-load-runs-clicked(); }
                                 }
@@ -1113,7 +1389,7 @@ slint::slint! {
 
                             if root.d-status != "": Text {
                                 text: root.d-status;
-                                color: root.d-status-is-error ? #c0392b : #2c3e50;
+                                color: root.d-status-is-error ? Theme.error : Theme.text-primary;
                                 wrap: word-wrap;
                             }
 
@@ -1122,7 +1398,7 @@ slint::slint! {
                                 VerticalBox {
                                     spacing: 4px;
                                     HorizontalBox {
-                                        spacing: 8px;
+                                        spacing: Theme.spacing-sm;
                                         Text {
                                             text: "Alt";
                                             width: 60px;
@@ -1140,7 +1416,7 @@ slint::slint! {
                                         }
                                     }
                                     for run[i] in root.d-scan-runs: HorizontalBox {
-                                        spacing: 8px;
+                                        spacing: Theme.spacing-sm;
                                         CheckBox {
                                             text: "";
                                             width: 60px;
@@ -1181,9 +1457,9 @@ slint::slint! {
 
                             if root.d-scan-runs.length > 0: HorizontalBox {
                                 alignment: start;
-                                spacing: 8px;
-                                Button {
-                                    text: "⟳ Vergleichen";
+                                spacing: Theme.spacing-sm;
+                                PrimaryButton {
+                                    text: "⟳  Vergleichen";
                                     clicked => { root.delta-compare-clicked(); }
                                 }
                             }
@@ -1201,8 +1477,8 @@ slint::slint! {
                                 border-width: 1px;
                                 border-radius: 4px;
                                 VerticalBox {
-                                    padding: 8px;
-                                    spacing: 6px;
+                                    padding: Theme.spacing-md;
+                                    spacing: Theme.spacing-sm;
                                     Text {
                                         text: "Scan-Lauf wirklich entfernen?";
                                         font-weight: 700;
@@ -1220,7 +1496,7 @@ slint::slint! {
                                         font-size: 12px;
                                     }
                                     HorizontalBox {
-                                        spacing: 8px;
+                                        spacing: Theme.spacing-sm;
                                         alignment: end;
                                         Button {
                                             text: "Abbrechen";
@@ -1248,7 +1524,7 @@ slint::slint! {
                                 VerticalBox {
                                     spacing: 2px;
                                     HorizontalBox {
-                                        spacing: 8px;
+                                        spacing: Theme.spacing-sm;
                                         Text {
                                             text: "Pfad";
                                             font-weight: 700;
@@ -1278,14 +1554,14 @@ slint::slint! {
                                     // thinks the click was lost.
                                     if root.d-rows.length == 0: Text {
                                         text: "Keine Unterschiede zwischen den beiden Scans gefunden. Beide Läufe enthalten dieselben Pfade mit identischen effektiven Berechtigungen.";
-                                        color: #2c3e50;
+                                        color: Theme.text-primary;
                                         wrap: word-wrap;
                                     }
                                     for entry[i] in root.d-rows: HorizontalBox {
-                                        spacing: 8px;
+                                        spacing: Theme.spacing-sm;
                                         Text {
                                             text: entry.path;
-                                            color: #2c3e50;
+                                            color: Theme.text-primary;
                                             overflow: elide;
                                             horizontal-stretch: 1;
                                         }
@@ -1296,13 +1572,13 @@ slint::slint! {
                                         }
                                         Text {
                                             text: entry.old_rights;
-                                            color: #555;
+                                            color: Theme.text-secondary;
                                             width: 180px;
                                             overflow: elide;
                                         }
                                         Text {
                                             text: entry.new_rights;
-                                            color: #555;
+                                            color: Theme.text-secondary;
                                             width: 180px;
                                             overflow: elide;
                                         }
@@ -1311,6 +1587,8 @@ slint::slint! {
                             }
                         }
                     }
+                }
+            }
                 }
             }
         }
@@ -1375,6 +1653,23 @@ fn main() {
     );
 
     std::env::set_var("SLINT_BACKEND", "winit-software");
+    // Slint-Style explizit auf "fluent" fixieren — sonst kann der
+    // Default je nach System-Theme blasse Standard-Texte produzieren.
+    // Force fluent style so default widget text colors stay legible
+    // regardless of the host system theme.
+    std::env::set_var("SLINT_STYLE", "fluent");
+    // Slint leitet das Color-Scheme der Standard-Widget-Palette per
+    // Default aus dem System-Theme ab. Auf Windows-Server-DCs ohne
+    // explizites Light-Theme bekommt man darüber eine dunkle Palette
+    // — die hellgraue Schrift verschwindet dann auf unserem hellen
+    // App-Hintergrund. SLINT_COLOR_SCHEME fixiert den Wert hart auf
+    // "light", damit die GroupBox-Titel und Labels dunkel gerendert
+    // werden. Die Theme-Umschaltung (Mond-Icon) wirkt auf unsere
+    // eigenen Komponenten unabhängig davon.
+    // Slint normally derives the std-widget color scheme from the OS
+    // theme. On Windows Server hosts that yields a dark palette and
+    // light grey text disappears on our light background. Pin it.
+    std::env::set_var("SLINT_COLOR_SCHEME", "light");
 
     if let Err(e) = run_ui(&log_path) {
         tracing::error!(error = %e, "Slint UI failed");
