@@ -61,8 +61,8 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         // Eine leere DACL (dacl == [] && null_dacl == false) hingegen verweigert alles.
         // NULL DACL means "no access control" — Windows grants everyone full access.
         // An empty DACL (dacl == [] && null_dacl == false) by contrast denies everything.
-        let mut ntfs_raw = if input.file_system_object.null_dacl {
-            MASK_FULL_CONTROL
+        let (mut ntfs_raw, denied_raw) = if input.file_system_object.null_dacl {
+            (MASK_FULL_CONTROL, 0u32)
         } else {
             evaluate_dacl_ordered(
                 &input.file_system_object.dacl,
@@ -111,6 +111,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             &input.file_system_object.dacl,
             &user_sids,
             ntfs_raw,
+            denied_raw,
             share_mask_for_output,
             effective_raw,
             &input.sid_names,
@@ -438,7 +439,16 @@ fn collect_matched_aces(dacl: &[AceEntry], user_sids: &HashSet<String>) -> Vec<A
 /// canonical order (explicit-deny → explicit-allow → inherited-deny →
 /// inherited-allow) a warning is logged; the result still follows the
 /// stored order.
-fn evaluate_dacl_ordered(dacl: &[AceEntry], user_sids: &HashSet<String>, _path: &str) -> u32 {
+/// Returns `(granted, denied)`. `granted` is the effective NTFS mask. `denied`
+/// is the union of bits that were taken by a Deny ACE before any Allow ACE
+/// could grant them — surfaced separately so the explanation path can call out
+/// "those bits got blocked by Deny" instead of leaving the reader to derive
+/// it from the raw hex value of the effective mask.
+fn evaluate_dacl_ordered(
+    dacl: &[AceEntry],
+    user_sids: &HashSet<String>,
+    _path: &str,
+) -> (u32, u32) {
     // Diagnose-Erkennung (inkl. warn-Log) erfolgt zentral in `collect_diagnostics`
     // im Aufruf-Pfad von `evaluate`, damit der Marker auch in der strukturierten
     // `EffectivePermission.diagnostics`-Liste landet (Folge-Befund 3).
@@ -469,7 +479,7 @@ fn evaluate_dacl_ordered(dacl: &[AceEntry], user_sids: &HashSet<String>, _path: 
             AceKind::Deny => denied |= bits,
         }
     }
-    granted
+    (granted, denied)
 }
 
 /// Sammelt strukturierte Diagnose-Marker, die einer effektiven Berechtigung
@@ -629,6 +639,7 @@ fn build_explanation(
     dacl: &[adpa_core::model::AceEntry],
     user_sids: &HashSet<String>,
     ntfs_raw: u32,
+    denied_raw: u32,
     share_mask: Option<AccessMask>,
     effective_raw: u32,
     sid_names: &std::collections::BTreeMap<String, String>,
@@ -691,6 +702,25 @@ fn build_explanation(
                 inherit_only_note,
             )),
         }
+    }
+
+    // 3b. Deny-Aggregation explizit: macht sichtbar, dass die anschliessende
+    // NTFS-Maske durch Deny-ACEs reduziert wurde — sonst muesste der Leser
+    // selbst aus der Hex-Differenz schliessen, dass Allow-Bits durch Deny
+    // unterdrueckt wurden (besonders verwirrend bei "Special (0x00100000)" =
+    // nur SYNCHRONIZE uebrig).
+    // 3b. Explicit deny aggregation step: makes it visible that the NTFS
+    // mask below was reduced by Deny ACEs. Without it the reader has to
+    // diff the hex values to realize Allow bits got blocked (especially
+    // confusing when the result is "Special (0x00100000)" — only the
+    // SYNCHRONIZE bit left).
+    if denied_raw != 0 {
+        let deny_rights = NormalizedRights::new(denied_raw);
+        steps.push(format!(
+            "Deny aggregation: {} (0x{:08X}) blocked by Deny ACEs — those bits were removed from the effective NTFS mask",
+            deny_rights.display_name(),
+            denied_raw,
+        ));
     }
 
     // 4. NTFS-effektiv / NTFS effective
@@ -2780,6 +2810,114 @@ mod tests {
         assert!(
             step.contains("LocalGroup"),
             "source must still be labelled LocalGroup; got: {step}"
+        );
+    }
+
+    /// Block A Verifikation 2026-06-05: ein Deny-ACE, der eine vorhandene
+    /// Allow-ACE zermalmt, muss als eigener "Deny aggregation"-Step im
+    /// Erklaerungspfad auftauchen — sonst sieht ein Wald-und-Wiesen-Admin
+    /// nur "Effective: Special (0x00100000)" und kann nicht erkennen, dass
+    /// Deny die Allow-Bits entfernt hat.
+    /// Block A verification 2026-06-05: a Deny ACE that overrides an Allow
+    /// must surface as its own "Deny aggregation" step. Otherwise the reader
+    /// only sees "Effective: Special (0x...)" without grasping that Deny
+    /// stripped the Allow bits.
+    #[test]
+    fn deny_aggregation_step_surfaces_blocked_bits() {
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![membership(USER, GROUP_A)],
+                file_system_object: fso(
+                    None,
+                    vec![
+                        // Explicit Deny Modify for the user (cannonical first).
+                        deny_ace(USER, MASK_MODIFY, false),
+                        // Inherited Allow Modify via group membership.
+                        allow_ace(GROUP_A, MASK_MODIFY, true),
+                    ],
+                ),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: Vec::new(),
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                access_context: AccessContext::Unspecified,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
+            })
+            .unwrap();
+
+        // Deny gewinnt — alle Modify-Bits sind blockiert, ausser den Bits
+        // die in Allow gesetzt sind aber nicht in Deny (Modify hat aber
+        // beide Seiten gleich, daher 0 fuer alle Modify-Bits).
+        // Deny wins for all overlapping bits → effective is 0.
+        assert_eq!(
+            result.effective_mask.0, 0,
+            "Deny Modify must zero out Allow Modify, got 0x{:08X}",
+            result.effective_mask.0
+        );
+
+        // Erklaerung muss den Deny-Aggregation-Step enthalten.
+        let deny_step = result
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("Deny aggregation"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "explanation must contain a 'Deny aggregation' step; got: {:?}",
+                    result.path_explanation.steps
+                )
+            });
+        assert!(
+            deny_step.contains(&format!("0x{:08X}", MASK_MODIFY)),
+            "Deny aggregation step must name the blocked mask 0x{:08X}; got: {deny_step}",
+            MASK_MODIFY
+        );
+        assert!(
+            deny_step.contains("blocked by Deny ACEs"),
+            "Deny aggregation step must spell out 'blocked by Deny ACEs'; got: {deny_step}"
+        );
+    }
+
+    /// Komplement-Test: ohne Deny-ACE darf der neue Step NICHT auftauchen
+    /// — sonst spammt er jeden normalen Bericht.
+    /// Complement: if there is no Deny ACE, the new step must not appear,
+    /// otherwise it would clutter every normal report.
+    #[test]
+    fn deny_aggregation_step_absent_when_no_deny() {
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![membership(USER, GROUP_A)],
+                file_system_object: fso(None, vec![allow_ace(GROUP_A, MASK_MODIFY, true)]),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: Vec::new(),
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                access_context: AccessContext::Unspecified,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
+            })
+            .unwrap();
+
+        let has_deny_step = result
+            .path_explanation
+            .steps
+            .iter()
+            .any(|s| s.contains("Deny aggregation"));
+        assert!(
+            !has_deny_step,
+            "no Deny ACE present → no Deny aggregation step expected; got: {:?}",
+            result.path_explanation.steps
         );
     }
 }

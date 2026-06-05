@@ -242,3 +242,162 @@ Risk Findings (0)
 | Finding 1 — LocalGroup-Source im Erklärungspfad | ✓ in T1 sichtbar (`source: LocalGroup`) |
 
 Die Lab-Topologie reproduziert die zwei wichtigsten realen Auditing-Szenarien, die ein Single-Forest-Setup nicht abbildet (Cross-Forest-FSPs und sauber getrennte Schemata), und zeigt, dass Stars sie auswertbar berichtet.
+
+## Teil D — Block A: NTFS-Edge-Cases (Deny, Protect-Inheritance, SMB-Share ∩ NTFS)
+
+> Hinzugefügt im Release-Zyklus **v1.5.7** (2026-06-05). Reproduktions-Skript:
+> [`scripts/09-blockA-edge-cases.sh`](scripts/09-blockA-edge-cases.sh).
+
+Block A prüft drei Edge-Cases, die ein typisches AD-Audit-Tool falsch
+aggregieren kann, ohne dass es jemand bemerkt:
+
+### D.1  E1 — Deny-ACE schlägt geerbte Allow-ACE
+
+Setup auf tier0:
+
+- `C:\TestShare\DenyZone` Subordner mit Vererbung vom Parent
+- **Explicit Deny Modify** für `T0LAB\alice`
+- **Inherited Allow Modify** für `T0LAB\GroupB` (alice ist via GroupA → GroupB Mitglied)
+
+Stars-Ergebnis (Auszug):
+
+```text
+Effective Rights
+  NTFS    : Special (0x00100000)
+  Result  : Special (0x00100000)
+
+Explanation Path
+  ...
+  6. Deny ACE [explicit] for T0LAB\alice → Special (0x000301BF)
+  7. Allow ACE [inherited] for GroupB → Modify (0x001301BF)
+  ...
+  11. Deny aggregation: Special (0x000301BF) blocked by Deny ACEs —
+      those bits were removed from the effective NTFS mask
+  12. NTFS effective: Special (0x00100000)
+```
+
+**Bestätigt:**
+- Engine rechnet Allow ⊖ Deny korrekt aus (übrig bleibt nur das
+  SYNCHRONIZE-Bit `0x00100000`, faktisch kein Datenzugriff).
+- Pfad benennt die Deny-Auswirkung jetzt explizit (Schritt 11, siehe
+  ADR 0042) — vor v1.5.7 musste der Auditor die Hex-Differenz selbst
+  erkennen.
+
+### D.2  E2 — Vererbungs-Unterbrechung (`Protect`)
+
+Setup auf tier0:
+
+- `C:\TestShare\Protected` Subordner
+- `SetAccessRuleProtection($true, $false)` — Vererbung deaktiviert, geerbte
+  Regeln entfernt
+- Nur `BUILTIN\Administrators` und `NT AUTHORITY\SYSTEM` als explizite Allow-Regeln
+
+Stars-Ergebnis:
+
+```text
+Inheritance : Protected (inheritance disabled)
+Matching ACEs (for this identity) : (none)
+
+Effective Rights
+  NTFS    : Special (0x00000000)
+  Result  : Special (0x00000000)
+
+Explanation Path
+  1. User: alice (...)
+  2-5. (Mitgliedschaftskette)
+  6. NTFS effective: Special (0x00000000)
+
+Risk Findings (0)
+```
+
+**Bestätigt:**
+- Vererbungs-Unterbrechung wird sichtbar gemeldet (`Inheritance:
+  Protected (inheritance disabled)`).
+- Kein false-positive auf inherited-Ebene: weil GroupB hier nicht erbt,
+  hat alice gar keinen Treffer.
+- Risk-Engine schweigt korrekt (keine Rechte, kein Risiko).
+
+### D.3  E3 — SMB-Share-Permissions dominieren über NTFS
+
+Setup auf tier0:
+
+- `New-SmbShare -Name TestShareSMB -Path C:\TestShare -ReadAccess Everyone -FullAccess "T0LAB\Domain Admins"`
+- NTFS hat weiterhin GroupB=Modify (alice via Mediator-Kette).
+
+Stars-Aufruf mit UNC-Pfad + Share-Hint:
+
+```text
+adpa.exe analyze \
+    --path '\\tier0\TestShareSMB' \
+    --user 'T0LAB\alice' \
+    --smb-server tier0 \
+    --share-name TestShareSMB \
+    ...
+```
+
+Ergebnis:
+
+```text
+Effective Rights
+  NTFS    : Modify              (0x001301BF)
+  Share   : Read & Execute      (0x001200A9)
+  Result  : Read & Execute      (0x001200A9)
+
+Explanation Path
+  ...
+  10. NTFS effective: Modify (0x001301BF)
+  11. Share permission: Read & Execute (0x001200A9)
+  12. Effective (NTFS ∩ Share): Read & Execute (0x001200A9)
+```
+
+**Bestätigt:**
+- Stars liest Share-Permissions per SMB korrekt aus (Everyone=Read
+  mapped auf Read & Execute).
+- `Result = NTFS ∩ Share` (restriktiver gewinnt) — der Pfad rendert die
+  Aggregation als eigenen Schritt 12.
+
+## Teil E — Block B: GUI-Boot-Smoke
+
+> Hinzugefügt im Release-Zyklus **v1.5.7** (2026-06-05). Reproduktions-Skript:
+> [`scripts/10-blockB-gui-smoke.sh`](scripts/10-blockB-gui-smoke.sh).
+
+Volle UI-Validierung der GUI bleibt ein manueller Schritt — `qm guest
+exec` hat keinen interaktiven Desktop und kann keine Screenshots machen.
+Was sich automatisieren lässt, ist der **Boot-Smoke**: Prozess startet,
+hält stabil, terminiert sauber.
+
+Ergebnis auf tier0:
+
+```text
+gui-binary: C:\Stars\adpa-gui.exe
+gui-size  : 18734592 bytes
+launched pid=4036
+still-alive-after-15s pid=4036 handle-count=240 ws=22.83MB
+process-terminated cleanly
+stderr: (empty)
+```
+
+**Bestätigt:**
+- Slint + winit-software-Backend bootet auf der VirtIO-GPU-VM
+  fehlerfrei (Memory `project-deployment-target` ist also weiterhin
+  valide).
+- Working Set ~23 MB nach Boot, keine Auffälligkeiten im stderr.
+- Prozess lässt sich sauber per Stop-Process beenden, keine
+  hängenden Threads.
+
+Was Block B **nicht** abdeckt und manuell durch den Betreiber via
+RDP/SPICE geprüft werden muss:
+
+- Rendering-Korrektheit der Theme-Umschaltung
+- Layout-Stabilität bei Fenster-Resize
+- Eingabe-Validierung in Live-Forms
+- Output-Tabellen mit echten Scan-Ergebnissen
+
+## Zusammenfassung v1.5.7
+
+| Bereich | Ergebnis |
+|---|---|
+| Block A E1 — Deny-Override | ✓ rechnerisch + neuer Erklär-Step (ADR 0042) |
+| Block A E2 — Protect-Inheritance | ✓ ohne false-positive |
+| Block A E3 — Share ∩ NTFS | ✓ Share dominiert, Pfad expliziert die Aggregation |
+| Block B — GUI Boot-Smoke | ✓ kein Slint-Crash auf VirtIO-GPU |

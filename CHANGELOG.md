@@ -12,6 +12,56 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.7] — 2026-06-05
+
+**Bugfix-/Verifikations-Release.** Zwei Themen:
+
+1. **Deny-Aggregation explizit im Erklärungspfad** (ADR 0042). Wenn eine
+   Deny-ACE im Spiel ist und Bits einer Allow-ACE blockiert, taucht jetzt
+   ein eigener Pfad-Schritt auf, der genau das benennt:
+
+   ```text
+   Deny aggregation: Special (0x000301BF) blocked by Deny ACEs — those
+   bits were removed from the effective NTFS mask
+   NTFS effective: Special (0x00100000)
+   ```
+
+   Damit muss der Auditor nicht mehr aus der Differenz der Hex-Werte
+   schließen, dass Deny Allow-Bits zermalmt hat. Ohne Deny ändert sich
+   nichts — der Step erscheint nur bei real existierenden Deny-Effekten.
+
+2. **Lab-Verifikations-Block A** durchgeführt und in
+   [`docs/lab/verification.md`](docs/lab/verification.md) festgehalten.
+   Stars wurde gegen drei weitere Edge-Cases gestellt:
+   - E1: Deny Modify vs. inherited Allow Modify → korrekt
+   - E2: Vererbung unterbrochen (`Protect`), nur Admins+SYSTEM → korrekt
+   - E3: UNC-Pfad, Share=Read + NTFS=Modify → Result=Read (Share dominiert)
+
+   Zusätzlich ein GUI-Boot-Smoke auf tier0 — `adpa-gui.exe` startet
+   unter VirtIO-GPU + Slint-software-Backend ohne Crash, hält 15 s
+   stabil, terminiert sauber.
+
+### Engine
+
+- `evaluate_dacl_ordered` gibt jetzt `(granted, denied)` zurück, sodass
+  die Deny-Maske in den Erklärungspfad fließen kann.
+- `build_explanation` rendert bei `denied != 0` einen
+  `Deny aggregation`-Step vor dem `NTFS effective`-Step.
+- Zwei neue Engine-Tests (`deny_aggregation_step_surfaces_blocked_bits`,
+  `deny_aggregation_step_absent_when_no_deny`).
+
+### Dokumentation
+
+- ADR 0042 — Deny-Aggregation als eigener Erklärungspfad-Schritt.
+- `docs/lab/verification.md` erweitert um Block A (E1–E3) und Block B
+  (GUI-Boot-Smoke).
+- `docs/lab/scripts/09-blockA-edge-cases.sh` und `10-blockB-gui-smoke.sh`
+  als sanitisierte Reproduktionsskripte.
+
+Installer-Versionshinweise in den User-Dokus auf `v1.5.7` aktualisiert.
+
+---
+
 ## [1.5.6] — 2026-06-05
 
 **Bugfix-Release.** Lokale Server-Gruppen erscheinen jetzt **vollständig

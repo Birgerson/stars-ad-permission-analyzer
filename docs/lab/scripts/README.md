@@ -25,6 +25,8 @@ Diese Bash-Skripte werden **auf dem Proxmox-Host** ausgeführt (per SSH oder PVE
 | 6 | [`06-forest-trusts.sh`](06-forest-trusts.sh) | Bidirektionale Forest-Trusts via `Forest.CreateTrustRelationship`. |
 | 7 | [`07-testdata.sh`](07-testdata.sh) | Test-OUs, Test-User (alice/bob/carol), verschachtelte Gruppen, Test-ACL inkl. Cross-Forest-FSP-ACE. |
 | 8 | [`08-stars-smoke.sh`](08-stars-smoke.sh) | Führt drei Stars-CLI-Smoke-Tests gegen das Lab aus. Voraussetzung: `C:\Stars\adpa.exe` existiert auf VMID 100 (siehe [`verification.md`](../verification.md)). |
+| 9 | [`09-blockA-edge-cases.sh`](09-blockA-edge-cases.sh) | Block A (v1.5.7) — legt drei Edge-Case-Fixtures an (Deny-ACE, Protect-Inheritance, SMB-Share mit restriktiver Share-Permission) und prüft Stars-CLI dagegen. |
+| 10 | [`10-blockB-gui-smoke.sh`](10-blockB-gui-smoke.sh) | Block B (v1.5.7) — startet `adpa-gui.exe` auf tier0 für 15 s und prüft, dass Slint + winit-software auf VirtIO-GPU sauber bootet und sich beenden lässt. Voraussetzung: `C:\Stars\adpa-gui.exe`. |
 
 ## Skripte sind kein Production-Code
 
