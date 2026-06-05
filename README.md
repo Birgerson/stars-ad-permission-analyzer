@@ -28,7 +28,7 @@ Systemvoraussetzungen: Windows 10, Windows 11 oder Windows Server. Keine weitere
 > **Getestete Plattform:** Stars ist gegen **Windows Server 2022 Standard** getestet.
 > **Windows Server 2025 wurde bisher nicht geprüft.**
 >
-> **Haftungsausschluss:** Die Nutzung von Stars erfolgt **immer auf eigene Verantwortung** — auf allen Plattformen, auch auf den getesteten. Birger Labinsch übernimmt **keine Haftung** für Schäden, Datenverluste, falsche Audit-Ergebnisse oder Folgen aus der Nutzung dieser Software. Siehe Abschnitt „Haftungsausschluss" am Ende dieses Dokuments.
+> **Haftungsausschluss:** Die Nutzung von Stars erfolgt **immer auf eigene Verantwortung** — auf allen Plattformen, auch auf den getesteten. Birger Labinsch übernimmt **keine Haftung** für Schäden, Datenverluste, falsche Audit-Ergebnisse oder Folgen aus der Nutzung dieser Software. **Vor jeder Nutzung in einer produktiven Umgebung ist ein vollständiges, getestetes Backup der betroffenen Systeme verpflichtend** — auch wenn Stars architektonisch ausschließlich lesend arbeitet. Siehe Abschnitt „Haftungsausschluss" am Ende dieses Dokuments.
 
 ### Was ist Stars?
 
@@ -351,6 +351,17 @@ Die Nutzung erfolgt **ausschließlich auf eigene Verantwortung des Anwenders** �
 
 Der Anwender ist verpflichtet, die Eignung von Stars für seinen konkreten Einsatz­zweck vor produktiver Nutzung **selbst zu prüfen** und die Ergebnisse durch geeignete Kontroll­maßnahmen abzusichern.
 
+#### Pflicht zur Datensicherung vor Nutzung
+
+Stars ist als **read-only-Analysewerkzeug** konzipiert und greift gemäß seiner Architektur weder schreibend auf NTFS-Berechtigungen, SMB-Freigaben, AD-Objekte noch auf Dateien oder Ordner der Zielsysteme zu (siehe [`AGENTS.md`](AGENTS.md) und [`docs/known-limitations.md`](docs/known-limitations.md)). Diese Architektur­zusicherung ist jedoch **keine Garantie** gegen jeden denkbaren Nebeneffekt — z. B. durch Inkompatibilitäten, Treiberfehler, Antiviren-Eingriffe, Sperrkonflikte, Logging-Nebenwirkungen oder die ungewollte Auslastung von Ziel­systemen unter Last.
+
+**Der Anwender ist deshalb verpflichtet, vor jeder Nutzung von Stars in einer produktiven oder produktions­nahen Umgebung ein vollständiges, getestetes Backup der betroffenen Systeme und Datenbestände anzufertigen** — einschließlich Domain Controller, Dateiserver, NTFS-Volumes und SMB-Share-Konfigurationen. Dies gilt **auch dann**, wenn Stars laut Architektur und Dokumentation ausschließlich lesend agiert. Birger Labinsch übernimmt **keinerlei Haftung** für Datenverluste, Konfigurations­schäden oder Betriebs­unterbrechungen, die durch fehlende, unvollständige oder nicht getestete Backups verursacht oder verschlimmert wurden.
+
+Verifizieren Sie zusätzlich:
+- dass die Backup-Wiederherstellung in einer **isolierten Testumgebung** funktioniert,
+- dass Stars zunächst in einer Test- oder Pilot­umgebung evaluiert wurde, bevor es auf produktive Systeme angewendet wird,
+- dass alle relevanten Stakeholder (Betriebs-, Security-, Compliance-Teams) vor der Anwendung informiert sind.
+
 ### Lizenz
 
 MIT License — siehe [LICENSE](LICENSE).
@@ -378,7 +389,7 @@ System requirements: Windows 10, Windows 11, or Windows Server. No additional ru
 > **Tested platform:** Stars is verified against **Windows Server 2022 Standard**.
 > **Windows Server 2025 has not been verified yet.**
 >
-> **Disclaimer:** Use of Stars is **always at your own risk** — on all platforms, including the tested ones. Birger Labinsch assumes **no liability** for damages, data loss, incorrect audit results, or any consequences arising from the use of this software. See the "Disclaimer" section at the end of this document.
+> **Disclaimer:** Use of Stars is **always at your own risk** — on all platforms, including the tested ones. Birger Labinsch assumes **no liability** for damages, data loss, incorrect audit results, or any consequences arising from the use of this software. **A complete, tested backup of all affected systems is mandatory before each use in any production environment** — even though Stars per its architecture only reads. See the "Disclaimer" section at the end of this document.
 
 ### What is Stars?
 
@@ -700,6 +711,17 @@ Use is **at the user's sole risk** — on **all** platforms, including those mar
 - Any indirect or direct consequential damages
 
 The user is required to verify Stars' fitness for their specific use case before production use **themselves** and to safeguard the results through suitable control measures.
+
+#### Mandatory backup before use
+
+Stars is designed as a **read-only analysis tool** and, per its architecture, does not write to NTFS permissions, SMB shares, AD objects, or files and folders on target systems (see [`AGENTS.md`](AGENTS.md) and [`docs/known-limitations.md`](docs/known-limitations.md)). This architectural commitment is, however, **not a guarantee** against every conceivable side effect — for example through incompatibilities, driver bugs, antivirus interference, locking conflicts, logging side effects, or unintended load on target systems.
+
+**The user is therefore required to create a complete, tested backup of all affected systems and data before each use of Stars in a production or production-like environment** — including domain controllers, file servers, NTFS volumes, and SMB share configurations. This applies **even though** Stars per its architecture and documentation only reads. Birger Labinsch assumes **no liability whatsoever** for data loss, configuration damage, or operational outages caused or worsened by missing, incomplete, or untested backups.
+
+Additionally verify:
+- that backup restoration works in an **isolated test environment**,
+- that Stars has first been evaluated in a test or pilot environment before being applied to production systems,
+- that all relevant stakeholders (operations, security, compliance teams) are informed before use.
 
 ### License
 
