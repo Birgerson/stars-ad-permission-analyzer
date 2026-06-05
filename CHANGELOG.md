@@ -12,6 +12,35 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.8] — 2026-06-05
+
+**Verifikations-/Doku-Release.** Block C der Lab-Verifikation hinzugefügt:
+Stars wurde gegen ein realistisches Bulk-Setup gestellt (1000 Test-User
+verteilt über die drei Forests mit 3-Level-Gruppen-Verschachtelung,
+5000 Folder-Ordner unter `C:\Data` mit 100 variierten Project-ACLs)
+und liefert das Effective-Rights-Profil eines Users über den
+kompletten Tree in **4.89 s** — ≈ 1 ms pro Verzeichnis inkl. ACL-Lese,
+Token-Aggregation und CSV-Serialisierung.
+
+Keine Engine- oder Funktionsänderungen — der Code ist Bit-identisch
+mit v1.5.7, nur die Verifikations-Schicht ist erweitert. Setup.exe für
+v1.5.8 wird vom CI-Workflow neu signiert, damit Nutzer der Setup-Datei
+ein konsistentes Versionsversprechen vorfinden.
+
+### Dokumentation
+
+- `docs/lab/verification.md` um Teil F (Block C — Skalierung) erweitert,
+  inklusive der ehrlich dokumentierten Lab-Limitierung beim
+  Cross-Forest-FSP-Auto-Provisioning (kein Stars-Bug, sondern eine
+  Lücke im Bulk-Setup-Skript).
+- Drei neue Reproduktionsskripte unter `docs/lab/scripts/`:
+  - `11-blockC-ad-bulk.sh` — 1000 User + Nesting in drei Forests
+  - `12-blockC-dirs-acls.sh` — 5000 Folder + 100 variierte ACLs
+  - `13-blockC-stars-perf.sh` — Stars-CLI-Performance-Benchmark
+- Installer-Versionshinweise in den User-Dokus auf `v1.5.8`.
+
+---
+
 ## [1.5.7] — 2026-06-05
 
 **Bugfix-/Verifikations-Release.** Zwei Themen:

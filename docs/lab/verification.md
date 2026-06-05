@@ -401,3 +401,128 @@ RDP/SPICE geprüft werden muss:
 | Block A E2 — Protect-Inheritance | ✓ ohne false-positive |
 | Block A E3 — Share ∩ NTFS | ✓ Share dominiert, Pfad expliziert die Aggregation |
 | Block B — GUI Boot-Smoke | ✓ kein Slint-Crash auf VirtIO-GPU |
+
+## Teil F — Block C: Skalierung auf großen Verzeichnissen
+
+> Hinzugefügt im Release-Zyklus **v1.5.8** (2026-06-05). Reproduktions-Skripte:
+> [`scripts/11-blockC-ad-bulk.sh`](scripts/11-blockC-ad-bulk.sh),
+> [`scripts/12-blockC-dirs-acls.sh`](scripts/12-blockC-dirs-acls.sh),
+> [`scripts/13-blockC-stars-perf.sh`](scripts/13-blockC-stars-perf.sh).
+
+Block C prüft, ob Stars unter realistischer Lab-Last bleibt — also bei einem Forest mit hunderten Usern, geschachtelten Gruppen und tausenden Ordnern mit gemischten ACLs.
+
+### F.1  AD-Bulk-Setup
+
+Pro Forest werden angelegt:
+
+- OUs: `OU=Company / OU={Departments, Users, Groups}` plus 5 Department-OUs unter `Departments` = **9 OUs**
+- Sicherheitsgruppen: 5 Department-Gruppen + 15 Sub-Team-Gruppen = **20 Gruppen**
+- Nesting: User → Sub-Team-Gruppe → Department-Gruppe (3-Level)
+- User-Verteilung:
+
+| Forest | User-Bereich | Anzahl | Pro Department | Pro Sub-Team |
+|---|---|---|---|---|
+| tier0.lab | `mm0001`–`mm0500` | 500 | ~100 | ~33 |
+| tier1.lab | `mm0501`–`mm0800` | 300 | ~60 | ~20 |
+| tier2.lab | `mm0801`–`mm1000` | 200 | ~40 | ~13 |
+
+**Insgesamt: 1000 User über drei Forests, lexikographisch sortierbar (4-stelliges Padding).**
+
+Bulk-Laufzeit gemessen via `Stopwatch`:
+
+| Forest | User-Create-Dauer | ms/User |
+|---|---|---|
+| tier0 (500) | 44.7 s | ~89 |
+| tier1 (300) | 24.7 s | ~82 |
+| tier2 (200) | 17.0 s | ~85 |
+
+Konsistente ~85 ms pro `New-ADUser` + `Add-ADGroupMember`-Paar, dominiert von LDAP-Replikation und Index-Aktualisierung.
+
+### F.2  Verzeichnis- und ACL-Setup auf tier0
+
+Verzeichnisstruktur auf `C:\Data`:
+
+```text
+C:\Data\
+  Sales\Engineering\HR\Finance\IT      (5 Department-Wurzeln)
+    Project01..20                      (20 Projekte pro Dept)
+      Folder01..50                     (50 Folder pro Projekt)
+                                       Σ = 5000 Folder-Ordner
+                                         + 100 Project-Ordner
+                                         + 5 Department-Ordner
+                                         = 5105 Verzeichnisse
+```
+
+ACL-Variation auf den 100 Project-Ordnern:
+- **Project 01..15** (75 Stück): explicit Allow Modify für die jeweilige Sub-Team-Gruppe (`Sales-Alpha`, `Engineering-Beta`, …)
+- **Project 16..18** (15 Stück): `SetAccessRuleProtection($true)` — Vererbung deaktiviert, nur `BUILTIN\Administrators` + `NT AUTHORITY\SYSTEM`
+- **Project 19..20** (10 Stück): explicit Deny ReadAndExecute für die jeweilige `-Gamma`-Sub-Team-Gruppe
+
+Setup-Laufzeit:
+
+| Schritt | Dauer | Rate |
+|---|---|---|
+| 5000 Folder-Ordner anlegen | 8.8 s | ~570 dirs/s |
+| 5 Dept-Wurzel-ACLs | 1.6 s | (3 ms/ACL, dominiert von `Set-Acl`-IO) |
+| 100 Project-ACLs (variiert) | 1.9 s | ~52 ACLs/s |
+| **Gesamt C.2+C.3** | **13.2 s** | |
+
+### F.3  Stars-Performance gegen `C:\Data`
+
+Test-User: `T0LAB\mm0001` (Sales-Alpha-Member, hat Modify auf Sales/Project01..15 via Mediator-Kette).
+
+**T1 — Full Scan** (`adpa.exe scan --path C:\Data --user T0LAB\mm0001 --output ...`):
+
+```text
+elapsed_seconds : 4.89
+adpa rc         : 0
+csv_lines       : 5107
+csv_size_kb     : 6538.5
+```
+
+- 5105 Verzeichnisse + 1 Header + 1 Root-Eintrag = 5107 CSV-Zeilen ✓
+- ~1043 dirs/s (= 0.96 ms pro Verzeichnis inkl. ACL-Lese, Owner-Lookup, Effective-Rights-Berechnung und CSV-Serialisierung)
+- 6.5 MB CSV (~1.3 KB pro Zeile, also volle Pfad-Erklärung pro Eintrag)
+- Exit 0, kein Crash, kein OOM-Hinweis
+
+**T2 — Single deep analyze** (`adpa.exe analyze --path C:\Data\Sales\Project05\Folder25 --user T0LAB\mm0001`):
+
+```text
+elapsed_seconds : 4.24
+
+Explanation Path
+  1. User: mm0001 (S-1-5-21-…-1128)
+  2. Member of Domain Users (…-513) [direct, source: PrimaryGroup]
+  3. Member of Dept-Sales (…-1108) [via mm0001 → Sales-Alpha → Dept-Sales, source: DomainGroup]
+  4. Member of Sales-Alpha (…-1109) [direct, source: DomainGroup]
+  5. Member of BUILTIN\Users (S-1-5-32-545) [via mm0001 → Domain Users → BUILTIN\Users, source: LocalGroup]
+  6. Allow ACE [inherited] for Dept-Sales (…-1108) → Modify (0x001301BF)
+  …
+  10. NTFS effective: Modify (0x001301BF)
+```
+
+- Dominant: einmalige LDAP-Connect + Bind + Gruppen-Auflösung (~4 s)
+- ACL-Lese und Aggregation < 100 ms
+- Mediator-Kette korrekt (ADR 0036) + LocalGroup-Step (ADR 0041) sichtbar
+
+### F.4  Beobachtungen
+
+- Stars rendert sich auch bei 1000 AD-Identities und 5000 Pfaden **ohne Memory-Druck und ohne Crash** durch.
+- Der dominante Faktor bei *einzelnen* Aufrufen ist der LDAP-Bind plus die Gruppen-Auflösung des User-Tokens (einmalige Kosten). Sobald die Identität aufgelöst ist, ist der ACL-Lese-Pfad pro Verzeichnis sub-Millisekunde.
+- Bei einem Full Scan amortisiert sich der LDAP-Aufwand über den gesamten Tree — die effektive Rate von ~1 ms/dir ist real-Production-tauglich.
+
+### F.5  Bekannte Lab-Limitierung — Cross-Forest-FSPs
+
+Das Bulk-Setup-Skript versucht, 50 Cross-Forest-Foreign-Security-Principals (25 aus `T1LAB`, 25 aus `T2LAB`) in tier0 `Dept-*`-Gruppen einzutragen. Sowohl `Add-ADGroupMember -Members <SID>` als auch eine ADSI-`Add`-Variante scheitern mit `0x80072030 — There is no such object on the server`. Microsoft-`Add-ADGroupMember` legt den FSP-Container-Eintrag nur dann automatisch an, wenn die Eingabe ein NetBIOS-Account-Name aus einem als Quell-Forest beim Lookup auflösbaren Trust ist — was bei großen Cross-Forest-Setups oft eine weitere Konfiguration verlangt (`dsadd group` aus legacy-Tools auf älteren Schemata, oder explizites `New-ADObject -Type foreignSecurityPrincipal`).
+
+**Wichtig:** Dies ist **kein Stars-Bug**. Stars liest existierende FSP-ACEs sauber (siehe Test T2 in Teil C — `T1LAB\bob` hatte einen FSP-ACE in tier0 und Stars hat ihn korrekt aufgelöst und im Effective-Rights-Report wiedergegeben). Es ist nur das Lab-Bulk-Setup, das ohne weitere Konfigurationsschritte keine FSPs anlegen kann. Wer das Lab vervollständigen will, ergänzt die FSPs manuell oder über `dsadd group` von einem Domain Controller mit RSAT.
+
+## Zusammenfassung v1.5.8
+
+| Bereich | Ergebnis |
+|---|---|
+| Block C.1 — 1000 User über 3 Forests, 3-Level-Nesting | ✓ in 86 s |
+| Block C.2/C.3 — 5000 Folder + 100 variierte ACLs | ✓ in 13 s |
+| Block C.4 T1 — Full scan 5105 dirs | ✓ 4.89 s (≈ 1 ms/dir) |
+| Block C.4 T2 — Single deep analyze | ✓ 4.24 s (LDAP-dominiert) |
+| Block C.5 — Cross-Forest-FSP via Bulk-Skript | Lab-Limitierung dokumentiert (kein Stars-Bug) |

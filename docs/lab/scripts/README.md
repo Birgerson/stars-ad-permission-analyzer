@@ -27,6 +27,9 @@ Diese Bash-Skripte werden **auf dem Proxmox-Host** ausgeführt (per SSH oder PVE
 | 8 | [`08-stars-smoke.sh`](08-stars-smoke.sh) | Führt drei Stars-CLI-Smoke-Tests gegen das Lab aus. Voraussetzung: `C:\Stars\adpa.exe` existiert auf VMID 100 (siehe [`verification.md`](../verification.md)). |
 | 9 | [`09-blockA-edge-cases.sh`](09-blockA-edge-cases.sh) | Block A (v1.5.7) — legt drei Edge-Case-Fixtures an (Deny-ACE, Protect-Inheritance, SMB-Share mit restriktiver Share-Permission) und prüft Stars-CLI dagegen. |
 | 10 | [`10-blockB-gui-smoke.sh`](10-blockB-gui-smoke.sh) | Block B (v1.5.7) — startet `adpa-gui.exe` auf tier0 für 15 s und prüft, dass Slint + winit-software auf VirtIO-GPU sauber bootet und sich beenden lässt. Voraussetzung: `C:\Stars\adpa-gui.exe`. |
+| 11 | [`11-blockC-ad-bulk.sh`](11-blockC-ad-bulk.sh) | Block C.1 (v1.5.8) — legt OUs, 20 Sicherheitsgruppen pro Forest und 1000 User (`max.mustermann0001..1000`) über die drei Forests an, mit 3-Level-Nesting (User → Sub-Team → Department). |
+| 12 | [`12-blockC-dirs-acls.sh`](12-blockC-dirs-acls.sh) | Block C.2/C.3 (v1.5.8) — erzeugt 5000 Folder-Ordner auf tier0 (`C:\Data\<Dept>\<Project>\<Folder>`) und setzt 100 Project-ACLs mit bewusster Variation (Standard, Protect-Inheritance, Deny). |
+| 13 | [`13-blockC-stars-perf.sh`](13-blockC-stars-perf.sh) | Block C.4 (v1.5.8) — Stars-Performance-Benchmark: `scan` über die 5105 Ordner mit Live-LDAP-Resolve, plus ein `analyze`-Aufruf für Vergleichswerte. |
 
 ## Skripte sind kein Production-Code
 
