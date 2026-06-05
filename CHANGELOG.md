@@ -12,6 +12,55 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.4] — 2026-06-05
+
+**Patch-Release.** Reine UI-Politur. Keine Funktionsänderungen am
+Audit-Tool, keine neuen Findings, keine Modell-/Engine-/Risk-Änderungen
+— alle 488 Tests grün, Architektur und Diagnostik bleiben identisch
+zu v1.5.3.
+
+### Hinzugefügt
+- **Light/Dark-Theme-System mit Toggle** im HeaderBar (Sonne/Mond
+  oben rechts). Zentrale `Theme`-Global-Komponente hält Farben,
+  Spacings, Schriftgrößen und Radien — vorher verteilt auf
+  Hardcoded-Hex-Werte (`#2c3e50`, `#555`, `#6c7a89`, `#c0392b`,
+  `#c0c0c0`, `#ffffff`, …). Theme synchronisiert sich reaktiv mit der
+  Slint-Standard-Widget-Palette via `init` + `changed`-Callback;
+  Dunkler Hintergrund ⇒ helle Schrift, hell ⇒ dunkel — unabhängig
+  vom OS-Theme des Hosts.
+- **HeaderBar** mit Brand-Block (★ Stars + Subtitle), Versions-Badge,
+  Theme-Toggle.
+- **PrimaryButton + DangerButton** als eigene Slint-Komponenten;
+  ausgerollt für die Haupt-Aktionen: Analyze, Scan starten/Abbrechen,
+  Exportieren, Compare, Historie laden.
+- **Arial** als Default-Schrift (`default-font-family`) — Stars läuft
+  ausschließlich auf Windows-Server, Arial ist dort garantiert
+  verfügbar und liefert ein konsistentes Schriftbild.
+
+### Behoben
+- **Aufgeblähte Buttons**: PrimaryButton, DangerButton, SpinBox haben
+  `vertical-stretch: 0` und `max-height` / `height`-Constraints;
+  vorher konnten umgebende Layouts sie auf die volle Container-Höhe
+  aufblähen (z. B. fast bildschirmhohe „Scan-Historie laden"-
+  Schaltfläche im Delta-Tab).
+- **Versetzte CheckBox + SpinBox** in der Tiefe-Begrenzen-Reihe: jedes
+  Element jetzt in einem eigenen `VerticalLayout { alignment: center }`,
+  damit beide unabhängig von ihren intrinsischen Höhen auf derselben
+  Y-Linie sitzen. Die Reihe selbst sitzt jetzt als reguläre GridBox-
+  Row unter „Benutzer-SID:" statt in einer separaten Layout-Schicht
+  oberhalb.
+- **Aufgeblähte Label-Spalte**: GridBox-Spalten dehnen sich in Slint
+  per Default. Labels haben jetzt `width: 140px;
+  horizontal-stretch: 0;` — Eingabefelder sitzen direkt daneben statt
+  weit nach rechts gerückt.
+- **README**: „Wie wird Stars gestartet?"-Sektion (DE + EN) auf den
+  signierten Installer (`Stars-vX.Y.Z-Setup.exe`) umgestellt. Vorher
+  stand dort „erfordert keine Installation", was seit Existenz des
+  Setup-Installers veraltet war. CLI-Beispiele zusätzlich: `analyze`
+  für Einzelpfad, `scan` für rekursiven Baum-Scan.
+
+---
+
 ## [1.5.3] — 2026-06-04
 
 **Patch-Release.** Schließt beide Findings aus ChatGPT-Code-Review
