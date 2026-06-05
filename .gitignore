@@ -10,3 +10,25 @@ compare.md
 
 # Rust build artifacts
 /target/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+
+# OS-Cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs / Temp
+*.log
+*.tmp
+
+# Lokale Test-Outputs (z.B. scan, history) — gehoeren nicht ins Repo
+*.sqlite
+*.sqlite-journal
+scan-output.csv
