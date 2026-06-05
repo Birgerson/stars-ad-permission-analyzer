@@ -15,6 +15,35 @@ Das Tool zeigt für jeden Benutzer, welche effektiven Zugriffsrechte er tatsäch
 
 > **Stars ist ausschließlich ein Lese- und Analysetool. Es verändert keine Berechtigungen, Gruppen oder AD-Objekte.**
 
+### Kann Stars dir helfen? — 30-Sekunden-Übersicht
+
+> **Volle Übersicht:** [`docs/can-stars-help-you.md`](docs/can-stars-help-you.md) (DE + EN, mit Entscheidungs-Matrix).
+
+**✅ Stars ist das richtige Tool, wenn du:**
+
+- erklären musst, **warum** ein Benutzer auf einen Ordner / eine Freigabe genau diese effektive Berechtigung hat (mit vollständigem Pfad: Identität → Gruppe → Mediator → ACE → Aggregation)
+- die Kombination aus NTFS- und SMB-Share-Rechten als „restriktivere gewinnt" sehen willst
+- mit verschachtelten AD-Gruppen, lokalen Server-Gruppen (`BUILTIN\…`), Deny-ACEs und Vererbungs-Unterbrechungen arbeitest
+- ein Tool brauchst, das **nichts** an AD, NTFS oder SMB verändert — auch nicht „nur zur Reparatur"
+- einen Berechtigungs-Snapshot eines Ordnerbaums (z. B. 5000 Verzeichnisse) als CSV / JSON / HTML brauchst
+
+**❌ Stars ist *nicht* das richtige Tool, wenn du brauchst:**
+
+| Bedarf | Stattdessen |
+|---|---|
+| Aktive Reparatur, ACL-Cleanup, Owner-Wechsel | dein bevorzugtes ACL-Management-Werkzeug |
+| Kontinuierliches Auditing, Event-Stream, Logon-Tracking | ManageEngine ADAudit Plus / SIEM |
+| AD-Security-Score, Forest-Härtungs-Bewertung | PingCastle, Purple Knight |
+| Angriffspfad-Analyse aus Angreifer-Sicht | BloodHound CE |
+| Access-Governance, Rezertifizierung, Workflows | SolarWinds ARM, Netwrix, Quest, Lepide |
+| Breite AD-Inventarberichte (GPOs, Trusts, Sites) | ADRecon |
+
+**Drei harte Grenzen, die Stars niemals überschreitet:**
+
+1. **Read-only.** Kein Release wird je Schreibfunktionen für NTFS / SMB / AD bekommen.
+2. **Kein Agent** auf Zielsystemen. Stars läuft auf einer Audit-Workstation oder einem Audit-DC.
+3. **Keine Backdoor-Authentifizierung.** Stars bindet per LDAP (idealerweise LDAPS), sonst nichts.
+
 ### Download
 
 Den aktuellen Windows-Installer gibt es auf der **[Releases-Seite](https://github.com/Birgerson/Stars/releases)**.
@@ -375,6 +404,35 @@ MIT License — siehe [LICENSE](LICENSE).
 For every user, the tool shows the effective access rights that actually apply to folders and files — including a complete explanation of which groups and ACL entries grant those rights.
 
 > **Stars is exclusively a read-and-analyze tool. It does not modify any permissions, groups, or AD objects.**
+
+### Can Stars help you? — 30-second overview
+
+> **Full overview:** [`docs/can-stars-help-you.md`](docs/can-stars-help-you.md) (DE + EN, decision matrix).
+
+**✅ Stars is the right tool when you need to:**
+
+- explain **why** a user has exactly this effective permission on a folder / share (full path: identity → group → mediator → ACE → aggregation)
+- see the NTFS + SMB-share combination as “more restrictive wins”
+- handle nested AD groups, local server groups (`BUILTIN\…`), Deny ACEs, and protected inheritance
+- use a tool that changes **nothing** in AD, NTFS, or SMB — not even “just to fix it”
+- snapshot a directory tree (e.g. 5000 folders) as CSV / JSON / HTML
+
+**❌ Stars is *not* the right tool when you need:**
+
+| Need | Use instead |
+|---|---|
+| Active remediation, ACL cleanup, owner change | your preferred ACL management tool |
+| Continuous auditing, event stream, logon tracking | ManageEngine ADAudit Plus / SIEM |
+| AD security score, forest hardening assessment | PingCastle, Purple Knight |
+| Attack-path analysis from an attacker’s perspective | BloodHound CE |
+| Access governance, recertification, workflows | SolarWinds ARM, Netwrix, Quest, Lepide |
+| Broad AD inventory reports (GPOs, trusts, sites) | ADRecon |
+
+**Three hard limits Stars will never cross:**
+
+1. **Read-only.** No release will ever ship write functions for NTFS / SMB / AD.
+2. **No agent** on target systems. Stars runs on an audit workstation or audit DC.
+3. **No backdoor auth.** Stars binds via LDAP (ideally LDAPS), nothing else.
 
 ### Download
 
