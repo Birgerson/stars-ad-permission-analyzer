@@ -2920,4 +2920,85 @@ mod tests {
             result.path_explanation.steps
         );
     }
+
+    /// Round-7 Finding 1 (end-to-end): mit `AccessContext::RemoteSmb` muss
+    /// `NETWORK` (S-1-5-2) im Token landen und ein Allow-ACE auf NETWORK
+    /// muss die effektive Maske entsprechend setzen — egal ob der Pfad eine
+    /// UNC- oder eine lokale Form hat. Das ist die Engine-seitige Bedingung
+    /// dafuer, dass `AccessContext::for_path_with_smb` ueberhaupt Wirkung
+    /// zeigt.
+    /// Round-7 finding 1 (end-to-end): with `AccessContext::RemoteSmb` the
+    /// `NETWORK` well-known (S-1-5-2) must land in the token and an Allow
+    /// ACE on NETWORK must drive the effective mask — regardless of whether
+    /// the path is UNC or local. This is the engine-side prerequisite for
+    /// `AccessContext::for_path_with_smb` to do anything useful.
+    #[test]
+    fn remote_smb_context_grants_network_ace_even_on_local_path() {
+        const NETWORK_SID: &str = "S-1-5-2";
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: Vec::new(),
+                file_system_object: fso(None, vec![allow_ace(NETWORK_SID, MASK_READ, false)]),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: Vec::new(),
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                // Schluesselsetting: lokaler Pfad, aber explizit RemoteSmb,
+                // wie CLI/GUI es jetzt via for_path_with_smb setzen, sobald
+                // --smb-server / --share-name vorhanden ist.
+                // Key setting: local-looking input, explicit RemoteSmb —
+                // mirrors what CLI/GUI now produce via for_path_with_smb
+                // when --smb-server / --share-name is provided.
+                access_context: AccessContext::RemoteSmb,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
+            })
+            .unwrap();
+        assert_eq!(
+            result.effective_mask.0, MASK_READ,
+            "NETWORK Allow Read must take effect under RemoteSmb (got 0x{:08X})",
+            result.effective_mask.0
+        );
+    }
+
+    /// Spiegelbild zu obigem Test: mit `LocalInteractive` darf eine NETWORK-
+    /// Allow-ACE NICHT wirken (vor der Round-7-Korrektur war das das stille
+    /// Falsch-Ergebnis fuer lokalen Pfad + SMB-Kontext — Pfad allein
+    /// erzeugte LocalInteractive, NETWORK fehlte im Token, der Auditor
+    /// sah „kein Zugriff" obwohl der Share-DACL anders entschieden hatte).
+    /// Counterpart: under `LocalInteractive` a NETWORK Allow ACE must NOT
+    /// take effect — that was the silent-wrong outcome for local-path +
+    /// SMB-context before the round-7 fix.
+    #[test]
+    fn local_interactive_context_ignores_network_ace() {
+        const NETWORK_SID: &str = "S-1-5-2";
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: Vec::new(),
+                file_system_object: fso(None, vec![allow_ace(NETWORK_SID, MASK_READ, false)]),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: Vec::new(),
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                access_context: AccessContext::LocalInteractive,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
+            })
+            .unwrap();
+        assert_eq!(
+            result.effective_mask.0, 0,
+            "NETWORK Allow must NOT take effect under LocalInteractive (got 0x{:08X})",
+            result.effective_mask.0
+        );
+    }
 }

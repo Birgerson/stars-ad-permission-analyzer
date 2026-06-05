@@ -103,6 +103,33 @@ impl AccessContext {
         }
         Self::LocalInteractive
     }
+
+    /// Wie [`Self::for_path`], aber zwingt `RemoteSmb`, sobald ein expliziter
+    /// SMB-Kontext angegeben wurde (`--smb-server` / `--share-name` in der CLI,
+    /// die entsprechenden GUI-Felder). Das fixt Round-7-Finding 1: ein lokaler
+    /// NTFS-Pfad, der mit explizitem SMB-Kontext analysiert wird, lieferte
+    /// vorher `LocalInteractive` — `NETWORK` fehlte im Token, Share-DACL-ACEs
+    /// auf `NETWORK`/`INTERACTIVE`/`LOCAL` wurden falsch aggregiert.
+    ///
+    /// Like [`Self::for_path`], but forces `RemoteSmb` as soon as an explicit
+    /// SMB context is supplied (`--smb-server` / `--share-name` on the CLI,
+    /// the corresponding GUI fields). This fixes round-7 finding 1: a local
+    /// NTFS path analysed with an explicit SMB context previously produced
+    /// `LocalInteractive` — `NETWORK` was missing from the token and share
+    /// DACL ACEs targeting `NETWORK`/`INTERACTIVE`/`LOCAL` were aggregated
+    /// incorrectly.
+    pub fn for_path_with_smb(
+        path: &str,
+        smb_server: Option<&str>,
+        share_name: Option<&str>,
+    ) -> Self {
+        let has_explicit_smb = smb_server.map(|s| !s.is_empty()).unwrap_or(false)
+            || share_name.map(|s| !s.is_empty()).unwrap_or(false);
+        if has_explicit_smb {
+            return Self::RemoteSmb;
+        }
+        Self::for_path(path)
+    }
 }
 
 /// Mitgliedschaft einer Identität in einer Gruppe
@@ -794,6 +821,54 @@ mod tests {
         // \\?\C:\... — long-path-Form für lokalen Pfad
         assert_eq!(
             AccessContext::for_path(r"\\?\C:\very\long\path"),
+            AccessContext::LocalInteractive
+        );
+    }
+
+    // Round-7 Finding 1: ein lokaler Pfad mit explizitem SMB-Kontext muss
+    // RemoteSmb liefern, damit NETWORK im Token landet und Share-DACL-ACEs
+    // gegen NETWORK korrekt aggregiert werden.
+    // Round-7 finding 1: a local path with an explicit SMB context must
+    // yield RemoteSmb so NETWORK lands in the token and share DACL ACEs
+    // targeting NETWORK are aggregated correctly.
+    #[test]
+    fn access_context_for_path_with_smb_forces_remote_when_smb_server_given() {
+        assert_eq!(
+            AccessContext::for_path_with_smb(r"C:\TestShare", Some("fs01"), None),
+            AccessContext::RemoteSmb
+        );
+    }
+
+    #[test]
+    fn access_context_for_path_with_smb_forces_remote_when_share_name_given() {
+        assert_eq!(
+            AccessContext::for_path_with_smb(r"D:\data", None, Some("Data")),
+            AccessContext::RemoteSmb
+        );
+    }
+
+    #[test]
+    fn access_context_for_path_with_smb_keeps_unc_as_remote() {
+        assert_eq!(
+            AccessContext::for_path_with_smb(r"\\server\share", None, None),
+            AccessContext::RemoteSmb
+        );
+    }
+
+    #[test]
+    fn access_context_for_path_with_smb_keeps_local_when_no_smb_hint() {
+        assert_eq!(
+            AccessContext::for_path_with_smb(r"C:\Windows", None, None),
+            AccessContext::LocalInteractive
+        );
+    }
+
+    #[test]
+    fn access_context_for_path_with_smb_ignores_empty_smb_hints() {
+        // Empty-string SMB hints (e.g. an unfilled GUI field) must NOT
+        // override the path-based default.
+        assert_eq!(
+            AccessContext::for_path_with_smb(r"C:\Windows", Some(""), Some("")),
             AccessContext::LocalInteractive
         );
     }

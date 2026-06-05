@@ -1,6 +1,6 @@
 # Stars — Technische Dokumentation
 
-**Version:** v1.5.8 (2026-06-05)
+**Version:** v1.5.9 (2026-06-05)
 **Zielgruppe:** Entwickler, Code-Reviewer, Security-Engineers, die
 verstehen wollen, *wie* Stars intern funktioniert — nicht *wie es zu
 bedienen* ist (das deckt das [Anwender-Handbuch](anwender-handbuch.md)

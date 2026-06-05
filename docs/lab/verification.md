@@ -1,9 +1,19 @@
 # Verifikation des Lab-Aufbaus und der Stars-Software
 
-> **Verifikationszeitpunkt:** Bauzeitpunkt der ersten Forest-Topologie (siehe Commit-Zeitstempel von [`forest-topology.md`](forest-topology.md)).
-> Stars-Version unter Test: `adpa 1.5.5` (Build aus dem Workspace zum Bauzeitpunkt).
+> **Letzter Update-Stand:** v1.5.9 (2026-06-05). Die Datei wächst pro Release um den jeweils neuen Verifikations-Block; ältere Blöcke bleiben unverändert als historischer Beleg.
+> Jeder Verifikations-Block notiert seine eigene Stars-Version (z. B. „Block C — v1.5.8"). Die Lab-Topologie selbst stammt aus dem ersten Aufbau (siehe Commit-Zeitstempel von [`forest-topology.md`](forest-topology.md)).
 
 Diese Datei dokumentiert *was* verifiziert wurde, *wie* es geprüft wurde, und *was* Stars dabei tatsächlich ausgegeben hat. Reproduzieren mit den Skripten unter [`scripts/`](scripts/).
+
+| Block | Stars-Version | Thema |
+|---|---|---|
+| A — Lab-Infrastruktur | v1.5.5 (initial) | Forest-/Trust-/CF-Snapshot beim ersten Lab-Build |
+| B — Test-Datenbestückung | v1.5.5 (initial) | OUs, Test-User, Test-ACL inkl. FSP |
+| C — Stars-Tests (initial) | v1.5.5 | T1 nested-groups, T2 cross-forest FSP, T3 cross-forest no-ACE |
+| D — Block A | v1.5.7 | NTFS-Edge-Cases (Deny, Protect, Share ∩ NTFS) |
+| E — Block B | v1.5.7 | GUI-Boot-Smoke auf VirtIO-GPU |
+| F — Block C | v1.5.8 | Skalierung — 1000 User, 5000 Dirs |
+| G — Block D | v1.5.9 | NETWORK-SID bei lokalem Pfad + explizitem SMB-Kontext (Round-7 Finding 1) |
 
 ## Teil A — Lab-Infrastruktur
 
@@ -526,3 +536,82 @@ Das Bulk-Setup-Skript versucht, 50 Cross-Forest-Foreign-Security-Principals (25 
 | Block C.4 T1 — Full scan 5105 dirs | ✓ 4.89 s (≈ 1 ms/dir) |
 | Block C.4 T2 — Single deep analyze | ✓ 4.24 s (LDAP-dominiert) |
 | Block C.5 — Cross-Forest-FSP via Bulk-Skript | Lab-Limitierung dokumentiert (kein Stars-Bug) |
+
+## Teil G — Block D: NETWORK-SID bei lokalem Pfad + explizitem SMB-Kontext (v1.5.9)
+
+> Hinzugefügt im Release-Zyklus **v1.5.9** (2026-06-05). Reproduktions-Skript:
+> [`scripts/14-blockD-network-context.sh`](scripts/14-blockD-network-context.sh).
+> Referenzen: Round-7 Review Finding 1, ADR 0043.
+
+Block D verifiziert die zentrale Wirkung des Round-7-Fixes: wenn ein Auditor einen **lokalen NTFS-Pfad** (z. B. `C:\TestShare\NetworkBlock`) zusammen mit einem **expliziten SMB-Kontext** (`--smb-server` + `--share-name`) analysiert — der häufige Fileserver-lokal-Audit-Fall — muss Stars die `NETWORK`-Well-Known-SID in den Token aufnehmen und Share-DACL-ACEs gegen `NETWORK` korrekt aggregieren.
+
+### G.1  Setup
+
+`C:\TestShare\NetworkBlock` ist ein Unterordner mit der von `C:\TestShare` geerbten NTFS-DACL — `T0LAB\GroupB` hat dort **Modify**, und alice (via `Sales-Alpha → GroupB`-Mediator) damit auch.
+
+Neue SMB-Freigabe `TestShareNetBlock` zeigt auf diesen Subordner und hat eine restriktive Share-Permission-Liste:
+
+```text
+Everyone              Full Allow
+NT AUTHORITY\NETWORK  Full Deny
+NT AUTHORITY\NETWORK  Read Allow
+```
+
+Die Reihenfolge ist absichtlich: Allow Everyone + explizit Deny NETWORK. Über SMB landet der Zugriff über `NETWORK` — der Deny dominiert.
+
+### G.2  Drei Stars-Szenarien
+
+| Szenario | Pfad | `--smb-server` / `--share-name` | Stars-Output (`Result`) |
+|---|---|---|---|
+| **E4a** | `C:\TestShare\NetworkBlock` | — (nicht gesetzt) | `Modify (0x001301BF)` |
+| **E4b** | `C:\TestShare\NetworkBlock` | `tier0` / `TestShareNetBlock` | `Special (0x00000000)` |
+| **E4c** | `\\tier0\TestShareNetBlock` (Kontrolle) | `tier0` / `TestShareNetBlock` | Access denied beim NTFS-Read (Share blockt NETWORK an der Quelle) |
+
+### G.3  Analyse
+
+**E4a — keinen SMB-Hint, Stars nutzt `LocalInteractive`:**
+- Kein Share-Kontext → Share-DACL wird gar nicht abgefragt → `Share: (not specified)`
+- NTFS dominiert: `Modify`
+- Korrekt: ein lokaler Audit ohne SMB-Bezug soll die NTFS-Sicht zeigen.
+
+**E4b — derselbe lokale Pfad mit explizitem SMB-Hint:**
+- *Vor v1.5.9:* `AccessContext::for_path(&path)` lieferte `LocalInteractive`, `NETWORK` fehlte im Token, der Deny-ACE gegen NETWORK wirkte nicht → Stars meldete fälschlich `Result = Modify`.
+- *Mit v1.5.9 (`for_path_with_smb(path, smb_server, share_name)`):* `RemoteSmb`, NETWORK im Token, Deny-ACE auf NETWORK greift → Stars rendert die volle Aggregation:
+
+```text
+Effective Rights
+  NTFS    : Modify (0x001301BF)
+  Share   : Special (0x00000000)
+  Result  : Special (0x00000000)
+
+Explanation Path (Auszug)
+  ...
+  10. NTFS effective: Modify (0x001301BF)
+  11. Share permission: Special (0x00000000)
+  12. Effective (NTFS ∩ Share): Special (0x00000000)
+```
+
+Damit ist genau die Konstellation gefixt, die ein Auditor in der Praxis hat: lokal auf den Fileserver, aber Share-Sicht haben wollen.
+
+**E4c — UNC-Pfad als Kontrollfall:**
+- Die Share-Permission blockt NETWORK schon auf der Verbindungsebene. Stars läuft als LocalSystem, ist beim NTFS-Read der UNC-Pfad-Form selbst NETWORK → bekommt **Access denied** beim ACL-Lesen.
+- Das ist semantisch konsistent: die Share verbietet NETWORK-Zugang, und auch ein Audit-Tool darf da nicht durch.
+- Für die Engine-Korrektheit ist E4b der eigentliche Beweis-Punkt.
+
+### G.4  Engine-Tests
+
+Zwei neue Engine-Unit-Tests in `crates/permission_engine/src/engine.rs::tests` decken den End-to-End-Pfad ab:
+
+- `remote_smb_context_grants_network_ace_even_on_local_path` — mit `AccessContext::RemoteSmb` aggregiert die Engine eine Allow-NETWORK-ACE korrekt.
+- `local_interactive_context_ignores_network_ace` — Spiegelbild: unter `LocalInteractive` ignoriert sie sie korrekt.
+
+Plus fünf Tests für die Helfer-Funktion `AccessContext::for_path_with_smb` in `crates/core/src/model.rs::tests`.
+
+## Zusammenfassung v1.5.9
+
+| Bereich | Ergebnis |
+|---|---|
+| Finding 1 — `AccessContext::for_path_with_smb` + 6 Call-Sites | ✓ E4b live verifiziert: Result `Modify` → `Special (0x00000000)` |
+| Finding 2 — GUI HTML-Export Overwrite-Schutz | ✓ Worker-Test verifiziert: bestehende Datei wird abgelehnt, Inhalt bleibt unverändert |
+| Finding 3 — `--bind-password` deprecate | ✓ Help-Text + Runtime-Warnung als DEPRECATED |
+| Finding 4 — verification.md aufgeräumt | ✓ Header-Stand auf v1.5.9, Block-Übersicht mit Version pro Block |

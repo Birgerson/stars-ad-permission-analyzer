@@ -48,7 +48,7 @@ use share_scanner::{effective_share_mask, get_share_dacl};
 use tracing::{info, warn};
 use uuid::Uuid;
 use validation::{
-    export_path::validate_export_path,
+    export_path::{validate_export_path, ExportPathStatus},
     net::{
         validate_dn, validate_identity_query, validate_ldap_endpoint, validate_share_name,
         validate_smb_server,
@@ -779,7 +779,7 @@ async fn handle_analyze(
         sid,
         &res.memberships,
         &local_group_sids,
-        AccessContext::for_path(path),
+        AccessContext::for_path_with_smb(path, smb_server, share_name),
     );
 
     // SID→Name-Tabelle für den Erklärungspfad. Die DACL-Trustees werden
@@ -811,7 +811,7 @@ async fn handle_analyze(
             share_status,
             local_group_sids,
             local_group_status,
-            access_context: AccessContext::for_path(path),
+            access_context: AccessContext::for_path_with_smb(path, smb_server, share_name),
             unsupported_share_ace_count,
             sid_names,
             group_resolution_via_sam_fallback: engine_flags.group_resolution_via_sam_fallback,
@@ -1018,7 +1018,7 @@ async fn handle_scan(
         sid,
         &memberships,
         &local_group_sids,
-        AccessContext::for_path(root),
+        AccessContext::for_path_with_smb(root, smb_server, share_name),
     );
     if scan_unsupported_share_ace_count > 0 {
         let msg = format!(
@@ -1051,7 +1051,7 @@ async fn handle_scan(
 
     let engine = DefaultPermissionEngine;
     let mut permissions = Vec::with_capacity(walk.objects.len());
-    let scan_access_context = AccessContext::for_path(root);
+    let scan_access_context = AccessContext::for_path_with_smb(root, smb_server, share_name);
 
     // SID→Name-Tabelle einmal für den gesamten Scan aufbauen. Trustee-SIDs
     // wiederholen sich quer über alle Pfade — wir sammeln unique SIDs aus
@@ -1333,6 +1333,24 @@ fn export_html(
 ) -> Result<(), String> {
     let status =
         validate_export_path(output_path).map_err(|e| format!("Invalid export path: {e}"))?;
+    // Round-7 Finding 2: die GUI hatte bisher keine Overwrite-Policy. Eine
+    // bereits existierende Datei wurde von HtmlExporter (fs::File::create)
+    // stillschweigend gekürzt. Auditberichte sind sensibel — ein zweiter
+    // Lauf darf einen ersten Bericht nicht ungefragt überschreiben. Wir
+    // lehnen den Exists-Fall mit klarer Meldung ab; die GUI zeigt sie in
+    // s_export_message. Wer wirklich überschreiben will, wählt einen
+    // anderen Pfad oder loescht die Datei vorab.
+    // Round-7 finding 2: the GUI had no overwrite policy. Pre-existing
+    // files were silently truncated by HtmlExporter (fs::File::create).
+    // Audit reports are sensitive — a re-run must not overwrite a prior
+    // report unattended. We refuse the Exists case with a clear message
+    // and let the user pick a fresh path.
+    if let ExportPathStatus::Exists(p) = &status {
+        return Err(format!(
+            "Zieldatei existiert bereits: {}. Bitte anderen Namen wählen oder die Datei vorab loeschen.",
+            p.0.display()
+        ));
+    }
     let validated_path = status.path().0.clone();
     let result = AnalysisResult {
         permissions: permissions.to_vec(),
@@ -2271,6 +2289,48 @@ mod tests {
         assert!(
             !raw.starts_with("S-1-"),
             "regression guard: raw value must NOT classify as a SID — proves the fix is necessary"
+        );
+    }
+
+    /// Round-7 Finding 2: GUI-HTML-Export muss eine bereits existierende
+    /// Zieldatei ablehnen statt sie wie bisher still zu kuerzen. CLI
+    /// erzwingt das schon ueber `check_overwrite_policy`; der GUI-Worker
+    /// uebernimmt die gleiche Policy jetzt direkt im `export_html`.
+    /// Round-7 finding 2: GUI HTML export must refuse to overwrite an
+    /// existing target file instead of silently truncating it. CLI
+    /// already enforces this via `check_overwrite_policy`; the GUI worker
+    /// now enforces the same policy directly inside `export_html`.
+    #[test]
+    fn export_html_refuses_to_overwrite_existing_file() {
+        use std::io::Write;
+        // Mit einem eindeutigen Namen direkt im std::env::temp_dir() —
+        // brauchen keine externe tempfile-Dependency.
+        let unique = format!("adpa-gui-export-overwrite-{}.html", Uuid::new_v4());
+        let path = std::env::temp_dir().join(unique);
+
+        // Pre-existing file with sentinel content.
+        {
+            let mut f = std::fs::File::create(&path).expect("create sentinel file");
+            f.write_all(b"<!-- sentinel: must not be overwritten -->")
+                .expect("write sentinel");
+        }
+
+        let result = export_html(&[], &[], &[], path.to_str().expect("valid utf-8 path"));
+
+        // Cleanup BEFORE asserting so a failure does not leak the file.
+        let sentinel_before_cleanup = std::fs::read(&path).ok();
+        let _ = std::fs::remove_file(&path);
+
+        let err = result.expect_err("export must refuse pre-existing target");
+        assert!(
+            err.contains("existiert bereits"),
+            "error must name the overwrite condition; got: {err}"
+        );
+        // Sentinel must still be intact at the time of refusal.
+        assert_eq!(
+            sentinel_before_cleanup.as_deref(),
+            Some(b"<!-- sentinel: must not be overwritten -->".as_ref()),
+            "pre-existing file content must remain untouched"
         );
     }
 }

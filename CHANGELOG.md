@@ -12,6 +12,74 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.9] — 2026-06-05
+
+**Bugfix-Release.** Schließt drei Findings aus der ChatGPT-Review für
+v1.5.8 (Round 7).
+
+### Engine / CLI / GUI — Finding 1 (High, ADR 0043)
+
+`AccessContext::for_path` leitete den Logon-Kontext nur aus der **Pfadform**
+ab. Ein lokaler NTFS-Pfad mit explizitem SMB-Kontext (`--smb-server` und
+`--share-name`) bekam dadurch fälschlich `LocalInteractive`. `NETWORK`
+fehlte im Token, Share-DACL-ACEs auf `NETWORK` wirkten nicht — eine
+**stille Unter-/Überbewertung** im real häufigsten Audit-Fall
+(Fileserver, lokal eingewählt, Share-Sicht gefragt).
+
+Neu: `AccessContext::for_path_with_smb(path, smb_server, share_name)`.
+Sobald einer der beiden SMB-Hints gesetzt ist, ist der Kontext
+`RemoteSmb`. CLI- und GUI-Pfade (je 3 Stellen) nutzen den Helfer
+konsistent. Live im Lab verifiziert (`docs/lab/verification.md`,
+Teil G, Szenario E4b: `Result` springt von `Modify` auf
+`Special (0x00000000)` mit dem Deny-NETWORK).
+
+### GUI — Finding 2 (Medium)
+
+`export_html` lehnt jetzt eine bereits existierende Zieldatei mit
+einer klaren Fehlermeldung ab, statt sie wie bisher still über
+`fs::File::create` zu kürzen. Der GUI-Worker bleibt damit konsistent
+zu `check_overwrite_policy` der CLI. Worker-Test
+`export_html_refuses_to_overwrite_existing_file` deckt das Verhalten
+ab — einschließlich Bestätigung, dass die existierende Datei beim
+Refusal **unverändert** bleibt.
+
+### CLI — Finding 3 (Low)
+
+`--bind-password` ist jetzt explizit als **DEPRECATED** markiert:
+
+- Help-Text nennt das Risiko (Prozesslisten, Shell-History).
+- Runtime-Warnung bei Nutzung beginnt mit `--bind-password is DEPRECATED`
+  und verweist auf `ADPA_BIND_PASSWORD`.
+- Fehlerpfad „weder Argument noch Env-Var gesetzt" erwähnt den
+  deprecation-Status.
+
+Das Argument bleibt aus Rückwärtskompatibilität funktionsfähig und
+wird in einem späteren Release entfernt.
+
+### Dokumentation — Finding 4
+
+`docs/lab/verification.md` aufgeräumt: oben jetzt
+`Letzter Update-Stand: v1.5.9`, plus eine Block-Übersicht mit
+Stars-Version pro Block. Neuer Teil G (Block D — NETWORK-SID) mit
+Setup, drei Szenarien (E4a/b/c) und Engine-Test-Bezug.
+
+### Tests
+
+- Fünf neue `for_path_with_smb`-Tests in `crates/core`.
+- Zwei neue Engine-Tests `remote_smb_context_grants_network_ace_even_on_local_path`
+  und `local_interactive_context_ignores_network_ace`.
+- Ein neuer GUI-Worker-Test `export_html_refuses_to_overwrite_existing_file`.
+- Alle bestehenden Tests grün, `clippy --workspace --all-targets -- -D warnings`
+  sauber, `cargo fmt --all -- --check` sauber.
+
+### Doku
+
+- ADR 0043 — Effective Access Context bei explizitem SMB-Kontext.
+- `docs/lab/scripts/14-blockD-network-context.sh` als Reproduktionsskript.
+- Installer-Versionshinweise in den User-Dokus auf `v1.5.9`.
+
+---
+
 ## [1.5.8] — 2026-06-05
 
 **Verifikations-/Doku-Release.** Block C der Lab-Verifikation hinzugefügt:

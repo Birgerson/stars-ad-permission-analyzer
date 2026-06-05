@@ -30,6 +30,7 @@ Diese Bash-Skripte werden **auf dem Proxmox-Host** ausgeführt (per SSH oder PVE
 | 11 | [`11-blockC-ad-bulk.sh`](11-blockC-ad-bulk.sh) | Block C.1 (v1.5.8) — legt OUs, 20 Sicherheitsgruppen pro Forest und 1000 User (`max.mustermann0001..1000`) über die drei Forests an, mit 3-Level-Nesting (User → Sub-Team → Department). |
 | 12 | [`12-blockC-dirs-acls.sh`](12-blockC-dirs-acls.sh) | Block C.2/C.3 (v1.5.8) — erzeugt 5000 Folder-Ordner auf tier0 (`C:\Data\<Dept>\<Project>\<Folder>`) und setzt 100 Project-ACLs mit bewusster Variation (Standard, Protect-Inheritance, Deny). |
 | 13 | [`13-blockC-stars-perf.sh`](13-blockC-stars-perf.sh) | Block C.4 (v1.5.8) — Stars-Performance-Benchmark: `scan` über die 5105 Ordner mit Live-LDAP-Resolve, plus ein `analyze`-Aufruf für Vergleichswerte. |
+| 14 | [`14-blockD-network-context.sh`](14-blockD-network-context.sh) | Block D (v1.5.9) — Round-7 Finding 1: lokaler Pfad + `--smb-server`/`--share-name` muss NETWORK in den Token packen. Drei Stars-Aufrufe (lokal ohne Hint / lokal mit Hint / UNC) verifizieren das Verhalten end-to-end. |
 
 ## Skripte sind kein Production-Code
 

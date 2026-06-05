@@ -67,7 +67,14 @@ enum Commands {
         base_dn: Option<String>,
         #[arg(long)]
         bind_dn: Option<String>,
-        /// LDAP bind password (alternative: ADPA_BIND_PASSWORD env var)
+        /// **DEPRECATED — unsicher.** Sichtbar in Prozesslisten und Shell-History.
+        /// Nutze stattdessen die Umgebungsvariable `ADPA_BIND_PASSWORD`.
+        /// Bleibt aus Rueckwaertskompatibilitaet erhalten, wird in einer
+        /// kommenden Version entfernt.
+        /// **DEPRECATED — insecure.** Visible in process listings and shell
+        /// history. Use the `ADPA_BIND_PASSWORD` environment variable
+        /// instead. Kept for backwards compatibility; will be removed in
+        /// a future release.
         #[arg(long)]
         bind_password: Option<String>,
         /// Unverschlüsseltes LDAP (Port 389) — Passwort im Klartext. Nur für Testumgebungen.
@@ -106,7 +113,14 @@ enum Commands {
         base_dn: Option<String>,
         #[arg(long)]
         bind_dn: Option<String>,
-        /// LDAP bind password (alternative: ADPA_BIND_PASSWORD env var)
+        /// **DEPRECATED — unsicher.** Sichtbar in Prozesslisten und Shell-History.
+        /// Nutze stattdessen die Umgebungsvariable `ADPA_BIND_PASSWORD`.
+        /// Bleibt aus Rueckwaertskompatibilitaet erhalten, wird in einer
+        /// kommenden Version entfernt.
+        /// **DEPRECATED — insecure.** Visible in process listings and shell
+        /// history. Use the `ADPA_BIND_PASSWORD` environment variable
+        /// instead. Kept for backwards compatibility; will be removed in
+        /// a future release.
         #[arg(long)]
         bind_password: Option<String>,
         /// Unverschlüsseltes LDAP (Port 389) — Passwort im Klartext. Nur für Testumgebungen.
@@ -352,16 +366,18 @@ async fn resolve_identity(
         })?;
         let password = if let Some(p) = bind_password {
             eprintln!(
-                "[WARNING] --bind-password: credentials passed as a CLI argument are visible \
-                 in process listings and shell history. \
-                 Use the ADPA_BIND_PASSWORD environment variable instead."
+                "[WARNING] --bind-password is DEPRECATED — credentials passed as a CLI argument \
+                 are visible in process listings and shell history. \
+                 Use the ADPA_BIND_PASSWORD environment variable instead. \
+                 --bind-password will be removed in a future release."
             );
             p
         } else if let Ok(p) = std::env::var("ADPA_BIND_PASSWORD") {
             p
         } else {
             return Err(anyhow::anyhow!(
-                "--bind-password or environment variable ADPA_BIND_PASSWORD is required"
+                "ADPA_BIND_PASSWORD environment variable is required (the --bind-password \
+                 argument exists for backwards compatibility but is deprecated)"
             ));
         };
 
@@ -590,7 +606,8 @@ async fn run_analyze(
         );
     }
 
-    let access_context = AccessContext::for_path(&path);
+    let access_context =
+        AccessContext::for_path_with_smb(&path, smb_server.as_deref(), share_name.as_deref());
     let (share_status, unsupported_share_ace_count) = resolve_scan_share_status(
         &path,
         smb_server.as_deref(),
@@ -822,7 +839,8 @@ async fn run_scan(
     }
 
     // 4b. Share-Status auflösen (optional) / resolve share status (optional)
-    let scan_access_context = AccessContext::for_path(&path);
+    let scan_access_context =
+        AccessContext::for_path_with_smb(&path, smb_server.as_deref(), share_name.as_deref());
     let (scan_share_status, scan_unsupported_share_ace_count) = resolve_scan_share_status(
         &path,
         smb_server.as_deref(),
