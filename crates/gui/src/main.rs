@@ -38,6 +38,7 @@ slint::slint! {
     import {
         TabWidget, VerticalBox, HorizontalBox, GridBox, GroupBox,
         LineEdit, Button, CheckBox, ScrollView, SpinBox, ComboBox,
+        Palette,
     } from "std-widgets.slint";
 
     // ============================================================
@@ -126,6 +127,12 @@ slint::slint! {
     // PrimaryButton — Akzent-Hintergrund, weisser Text. Fuer
     // Haupt-Aktionen wie Analyze, Scan starten, Vergleichen.
     // PrimaryButton — accent background, white text. For main actions.
+    //
+    // Wichtig: `horizontal-stretch: 0; vertical-stretch: 0` plus
+    // `preferred-*` und `max-height` verhindern, dass das umgebende
+    // Layout den Button auf die volle Container-Hoehe/Breite aufblaeht.
+    // Important: pinning stretch + max-height keeps the parent layout
+    // from inflating the button to fill the available space.
     component PrimaryButton inherits Rectangle {
         in property <string> text;
         in property <bool> enabled: true;
@@ -135,22 +142,26 @@ slint::slint! {
             ? Theme.border
             : (ta.has-hover ? Theme.accent-hover : Theme.accent);
         border-radius: Theme.radius-sm;
-        min-height: 28px;
-        min-width: 88px;
+        horizontal-stretch: 0;
+        vertical-stretch: 0;
+        preferred-height: 30px;
+        max-height: 30px;
+        preferred-width: label.preferred-width + 2 * Theme.spacing-lg;
+        min-width: 96px;
 
         animate background { duration: 80ms; }
 
-        HorizontalLayout {
-            padding-left: Theme.spacing-md;
-            padding-right: Theme.spacing-md;
-            Text {
-                text: root.text;
-                color: Theme.text-inverse;
-                font-size: Theme.font-md;
-                font-weight: 600;
-                vertical-alignment: center;
-                horizontal-alignment: center;
-            }
+        label := Text {
+            x: Theme.spacing-md;
+            y: 0;
+            height: parent.height;
+            width: parent.width - 2 * Theme.spacing-md;
+            text: root.text;
+            color: Theme.text-inverse;
+            font-size: Theme.font-md;
+            font-weight: 600;
+            vertical-alignment: center;
+            horizontal-alignment: center;
         }
 
         ta := TouchArea {
@@ -171,22 +182,26 @@ slint::slint! {
             ? Theme.border
             : (ta.has-hover ? #b91c1c : Theme.error);
         border-radius: Theme.radius-sm;
-        min-height: 28px;
-        min-width: 88px;
+        horizontal-stretch: 0;
+        vertical-stretch: 0;
+        preferred-height: 30px;
+        max-height: 30px;
+        preferred-width: dlabel.preferred-width + 2 * Theme.spacing-lg;
+        min-width: 96px;
 
         animate background { duration: 80ms; }
 
-        HorizontalLayout {
-            padding-left: Theme.spacing-md;
-            padding-right: Theme.spacing-md;
-            Text {
-                text: root.text;
-                color: Theme.text-inverse;
-                font-size: Theme.font-md;
-                font-weight: 600;
-                vertical-alignment: center;
-                horizontal-alignment: center;
-            }
+        dlabel := Text {
+            x: Theme.spacing-md;
+            y: 0;
+            height: parent.height;
+            width: parent.width - 2 * Theme.spacing-md;
+            text: root.text;
+            color: Theme.text-inverse;
+            font-size: Theme.font-md;
+            font-weight: 600;
+            vertical-alignment: center;
+            horizontal-alignment: center;
         }
 
         ta := TouchArea {
@@ -431,6 +446,31 @@ slint::slint! {
         min-width: 800px;
         min-height: 560px;
         background: Theme.bg-app;
+        // Stars laeuft ausschliesslich auf Windows-Server-Systemen
+        // (siehe AGENTS.md). Arial ist dort garantiert verfuegbar und
+        // liefert gleichmaessige Glyphbreiten — kein Fallback auf eine
+        // System-Schrift, die je nach Edition unterschiedlich aussieht.
+        // Stars only runs on Windows Server hosts (see AGENTS.md).
+        // Arial is guaranteed and renders consistently across editions.
+        default-font-family: "Arial";
+
+        // Slint-Standard-Widgets (GroupBox-Titel, LineEdit-Text,
+        // ComboBox-Inhalt …) leiten ihre Schriftfarbe per Default vom
+        // System-Theme ab. Auf einem Windows-Host im Dark-Mode wuerde
+        // Slint dadurch helle Schrift auf unserem hellen App-Hintergrund
+        // rendern — unlesbar. Wir koppeln die Slint-Palette-Color-Scheme
+        // hart an unseren Theme-Toggle: dunkle Schrift auf hellem
+        // Hintergrund, helle Schrift auf dunklem Hintergrund.
+        // Pin Slint widget palette to our explicit toggle so the
+        // host theme cannot override readability. Reactive binding via
+        // a tracking property + `changed` callback (Slint 1.6+).
+        property <ColorScheme> _palette-scheme: Theme.dark ? ColorScheme.dark : ColorScheme.light;
+        init => {
+            Palette.color-scheme = self._palette-scheme;
+        }
+        changed _palette-scheme => {
+            Palette.color-scheme = self._palette-scheme;
+        }
 
         // Versions-/Branding-Anzeige im HeaderBar — wird von main.rs
         // beim Setup gesetzt, damit die GUI nicht selbst entscheiden
@@ -633,14 +673,14 @@ slint::slint! {
                                     GridBox {
                                         spacing: Theme.spacing-sm;
                                         Row {
-                                            Text { text: "Pfad:"; vertical-alignment: center; }
+                                            Text { text: "Pfad:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "C:\\Ordner  oder  \\\\server\\share\\Ordner";
                                                 text <=> root.a-path;
                                             }
                                         }
                                         Row {
-                                            Text { text: "Benutzer/Gruppe:"; vertical-alignment: center; }
+                                            Text { text: "Benutzer/Gruppe:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "ad  →  Administrator, Domain Admins, BUILTIN\\Administrators, …";
                                                 text <=> root.a-name;
@@ -703,7 +743,7 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Benutzer-SID:"; vertical-alignment: center; }
+                                            Text { text: "Benutzer-SID:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "S-1-5-21-...   (entweder direkt eintippen oder oben auflösen lassen)";
                                                 text <=> root.a-sid;
@@ -747,7 +787,7 @@ slint::slint! {
                                     if root.a-ldap-mode > 0: GridBox {
                                         spacing: Theme.spacing-sm;
                                         Row {
-                                            Text { text: "Server:"; vertical-alignment: center; }
+                                            Text { text: "Server:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "dc01.domain.local";
                                                 text <=> root.a-ldap-server;
@@ -757,7 +797,7 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Base DN:"; vertical-alignment: center; }
+                                            Text { text: "Base DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "DC=domain,DC=local";
                                                 text <=> root.a-ldap-base-dn;
@@ -767,7 +807,7 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Bind DN:"; vertical-alignment: center; }
+                                            Text { text: "Bind DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "CN=SvcScan,CN=Users,DC=domain,DC=local";
                                                 text <=> root.a-ldap-bind-dn;
@@ -777,7 +817,7 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Passwort:"; vertical-alignment: center; }
+                                            Text { text: "Passwort:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 input-type: password;
                                                 text <=> root.a-ldap-password;
@@ -801,14 +841,14 @@ slint::slint! {
                                     if root.a-smb-enabled: GridBox {
                                         spacing: Theme.spacing-sm;
                                         Row {
-                                            Text { text: "Server:"; vertical-alignment: center; }
+                                            Text { text: "Server:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "fileserver";
                                                 text <=> root.a-smb-server;
                                             }
                                         }
                                         Row {
-                                            Text { text: "Share:"; vertical-alignment: center; }
+                                            Text { text: "Share:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "Daten";
                                                 text <=> root.a-smb-share;
@@ -958,14 +998,14 @@ slint::slint! {
                                     GridBox {
                                         spacing: Theme.spacing-sm;
                                         Row {
-                                            Text { text: "Wurzelpfad:"; vertical-alignment: center; }
+                                            Text { text: "Wurzelpfad:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "C:\\Daten  oder  \\\\server\\share\\Daten";
                                                 text <=> root.s-root;
                                             }
                                         }
                                         Row {
-                                            Text { text: "Benutzer/Gruppe:"; vertical-alignment: center; }
+                                            Text { text: "Benutzer/Gruppe:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "ad  →  Administrator, Domain Admins, BUILTIN\\Administrators, …";
                                                 text <=> root.s-name;
@@ -1028,10 +1068,54 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Benutzer-SID:"; vertical-alignment: center; }
+                                            Text { text: "Benutzer-SID:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "S-1-5-21-...   (entweder direkt eintippen oder oben auflösen lassen)";
                                                 text <=> root.s-sid;
+                                            }
+                                        }
+                                        // Tiefe-Begrenzen-Reihe als regulaere
+                                        // GridBox-Row. Die HorizontalLayout
+                                        // bekommt `horizontal-stretch: 1`,
+                                        // damit sie die 2. Spalte gleich wie
+                                        // die LineEdits darüber ausfuellt und
+                                        // die Label-Spalte nicht aufweitet.
+                                        // Depth limit row stretches its
+                                        // second-column container so the
+                                        // label column stays aligned with
+                                        // the rows above.
+                                        Row {
+                                            Text { text: "Tiefe:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            HorizontalLayout {
+                                                spacing: Theme.spacing-md;
+                                                alignment: start;
+                                                horizontal-stretch: 1;
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    horizontal-stretch: 0;
+                                                    CheckBox {
+                                                        text: "Tiefe begrenzen";
+                                                        checked <=> root.s-limit-depth;
+                                                    }
+                                                }
+                                                if root.s-limit-depth: VerticalLayout {
+                                                    alignment: center;
+                                                    horizontal-stretch: 0;
+                                                    SpinBox {
+                                                        minimum: 1;
+                                                        maximum: 100;
+                                                        value <=> root.s-max-depth;
+                                                        width: 120px;
+                                                        height: 30px;
+                                                    }
+                                                }
+                                                // Spacer rechts, damit die
+                                                // Inhalte links-buendig stehen
+                                                // ohne die HorizontalLayout zu
+                                                // verbreitern.
+                                                // Spacer to keep contents left-
+                                                // aligned without inflating.
+                                                Rectangle { horizontal-stretch: 1; }
                                             }
                                         }
                                     }
@@ -1039,20 +1123,6 @@ slint::slint! {
                                         text: root.s-name-error;
                                         color: Theme.error;
                                         wrap: word-wrap;
-                                    }
-                                }
-                                HorizontalBox {
-                                    spacing: Theme.spacing-sm;
-                                    alignment: start;
-                                    CheckBox {
-                                        text: "Tiefe begrenzen";
-                                        checked <=> root.s-limit-depth;
-                                    }
-                                    if root.s-limit-depth: SpinBox {
-                                        minimum: 1;
-                                        maximum: 100;
-                                        value <=> root.s-max-depth;
-                                        width: 120px;
                                     }
                                 }
                             }
@@ -1086,7 +1156,7 @@ slint::slint! {
                                     if root.s-ldap-mode > 0: GridBox {
                                         spacing: Theme.spacing-sm;
                                         Row {
-                                            Text { text: "Server:"; vertical-alignment: center; }
+                                            Text { text: "Server:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "dc01.domain.local";
                                                 text <=> root.s-ldap-server;
@@ -1096,7 +1166,7 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Base DN:"; vertical-alignment: center; }
+                                            Text { text: "Base DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "DC=domain,DC=local";
                                                 text <=> root.s-ldap-base-dn;
@@ -1106,7 +1176,7 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Bind DN:"; vertical-alignment: center; }
+                                            Text { text: "Bind DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "CN=SvcScan,CN=Users,DC=domain,DC=local";
                                                 text <=> root.s-ldap-bind-dn;
@@ -1116,7 +1186,7 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Passwort:"; vertical-alignment: center; }
+                                            Text { text: "Passwort:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 input-type: password;
                                                 text <=> root.s-ldap-password;
@@ -1140,14 +1210,14 @@ slint::slint! {
                                     if root.s-smb-enabled: GridBox {
                                         spacing: Theme.spacing-sm;
                                         Row {
-                                            Text { text: "Server:"; vertical-alignment: center; }
+                                            Text { text: "Server:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "fileserver";
                                                 text <=> root.s-smb-server;
                                             }
                                         }
                                         Row {
-                                            Text { text: "Share:"; vertical-alignment: center; }
+                                            Text { text: "Share:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "Daten";
                                                 text <=> root.s-smb-share;
@@ -1185,7 +1255,7 @@ slint::slint! {
                                     spacing: Theme.spacing-sm;
                                     HorizontalBox {
                                         spacing: Theme.spacing-sm;
-                                        Text { text: "Filter:"; vertical-alignment: center; }
+                                        Text { text: "Filter:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                         LineEdit {
                                             placeholder-text: "Teilstring im Pfad";
                                             text <=> root.s-filter;
@@ -1337,7 +1407,7 @@ slint::slint! {
                                     spacing: Theme.spacing-sm;
                                     HorizontalBox {
                                         spacing: Theme.spacing-sm;
-                                        Text { text: "Zieldatei:"; vertical-alignment: center; }
+                                        Text { text: "Zieldatei:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                         LineEdit {
                                             placeholder-text: "C:\\Berichte\\scan.html";
                                             text <=> root.s-export-path;
