@@ -7,10 +7,14 @@
 pub mod csv;
 pub mod html;
 pub mod json;
+pub mod trustees;
 
 pub use csv::{write_csv, CsvExporter};
 pub use html::{render_html, HtmlExporter};
 pub use json::JsonExporter;
+pub use trustees::{
+    build_path_trustees, build_path_trustees_with_share, read_share_overlay, ShareTrusteeOverlay,
+};
 
 /// Zentrale Overwrite-Policy fuer alle Datei-basierten Exporter.
 /// Implementiert Round-8-Folgereview Finding 1: der Trait-Default

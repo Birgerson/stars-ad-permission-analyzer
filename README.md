@@ -116,7 +116,7 @@ Benutzer max.muster → Mitglied von "Buchhaltung" → Mitglied von "FileServer_
 
 ### Wie wird Stars gestartet?
 
-Stars wird über den **signierten Setup-Installer** auf der [Release-Seite](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) bereitgestellt — aktuell `Stars-v1.5.13-Setup.exe`. Der Installer legt die Anwendung nach `C:\Program Files\Stars\` ab, erstellt einen Start-Menü-Eintrag „Stars" und richtet keine Hintergrunddienste oder Auto-Start-Komponenten ein.
+Stars wird über den **signierten Setup-Installer** auf der [Release-Seite](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) bereitgestellt — aktuell `Stars-v1.5.14-Setup.exe`. Der Installer legt die Anwendung nach `C:\Program Files\Stars\` ab, erstellt einen Start-Menü-Eintrag „Stars" und richtet keine Hintergrunddienste oder Auto-Start-Komponenten ein.
 
 Für Entwickler und CI-Builds können die `.exe`-Dateien aus `target/release/` (`adpa.exe`, `adpa-gui.exe`) nach `cargo build --release` auch ohne Installer direkt gestartet werden — der produktive Auslieferungsweg bleibt der Installer.
 
@@ -508,7 +508,7 @@ User max.muster → member of "Accounting" → member of "FileServer_Read"
 
 ### How is Stars started?
 
-Stars is distributed as a **signed setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.5.13-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and configures no background services or auto-start components.
+Stars is distributed as a **signed setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.5.14-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and configures no background services or auto-start components.
 
 Developers and CI builds may also run the `.exe` files from `target/release/` (`adpa.exe`, `adpa-gui.exe`) directly after `cargo build --release` — the production delivery path remains the installer.
 

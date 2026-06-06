@@ -1532,166 +1532,27 @@ fn analyze_trustees(
     ))
 }
 
-/// Vorgefertigte Share-Schicht für die Pfad-Trustee-Liste. Liefert
-/// `read_share_overlay`, verbraucht von [`build_path_trustees_with_share`].
-/// Wird im Scan-Pfad einmal pro Share gelesen und an jeden Pfad-Aufruf
-/// weitergegeben — closes review round 3 finding 3.
-/// Pre-built share layer for the path trustee list.
-#[derive(Debug, Clone)]
-pub struct ShareTrusteeOverlay {
-    pub trustees: Vec<adpa_core::model::PathTrustee>,
-}
+// Die rohe Trustee-Build-Logik (read_share_overlay,
+// build_path_trustees, build_path_trustees_with_share) liegt seit
+// Review Runde 9 Finding 1 in `crates/exporter/src/trustees.rs` —
+// damit CLI und GUI denselben Helper teilen ohne dass eine der beiden
+// Schichten auf die andere referenzieren muss.
+// GUI re-exportiert die fuer die Aufrufer relevanten Symbole, damit
+// existierende Aufrufstellen ohne Anpassung weiterlaufen.
+// The raw trustee-build logic (read_share_overlay, build_path_trustees,
+// build_path_trustees_with_share) was moved to
+// `crates/exporter/src/trustees.rs` in round-9 finding 1 so CLI and
+// GUI share the same helper without either layer referencing the
+// other. The GUI re-exports the symbols so existing call sites keep
+// compiling.
+pub use exporter::{
+    build_path_trustees, build_path_trustees_with_share, read_share_overlay, ShareTrusteeOverlay,
+};
 
-/// Liest die Share-DACL einmal und produziert die [`ShareTrusteeOverlay`].
-/// Reads the share DACL once and produces the [`ShareTrusteeOverlay`].
-pub fn read_share_overlay(server: &str, share_name: &str) -> ShareTrusteeOverlay {
-    use adpa_core::model::{AccessMask, AceKind, PathTrustee, Sid, TrusteeCategory};
-    let mut trustees: Vec<PathTrustee> = Vec::new();
-    match get_share_dacl(server, share_name) {
-        Ok(scan) => match scan.dacl {
-            share_scanner::ShareDacl::NullDacl => {
-                trustees.push(PathTrustee {
-                    sid: Sid("S-1-1-0".to_owned()),
-                    display_name: Some(
-                        "Everyone (Share NULL DACL — no SMB restriction)".to_owned(),
-                    ),
-                    kind: AceKind::Allow,
-                    mask: AccessMask(0x001F01FF),
-                    inherited: false,
-                    inheritance_flags: 0,
-                    propagation_flags: 0,
-                    category: TrusteeCategory::Share,
-                });
-            }
-            share_scanner::ShareDacl::Acl(perms) => {
-                for p in perms {
-                    trustees.push(PathTrustee {
-                        sid: p.sid.clone(),
-                        display_name: None,
-                        kind: p.kind.clone(),
-                        mask: p.mask,
-                        inherited: false,
-                        inheritance_flags: 0,
-                        propagation_flags: 0,
-                        category: TrusteeCategory::Share,
-                    });
-                }
-            }
-        },
-        Err(e) => {
-            // Sichtbare „Lese-Fehler"-Pseudo-Zeile — keine stillen Skips.
-            // Visible "read failure" pseudo-row — no silent skips.
-            trustees.push(PathTrustee {
-                sid: Sid(String::new()),
-                display_name: Some(format!("Share-DACL nicht lesbar: {e}")),
-                kind: AceKind::Allow,
-                mask: AccessMask(0),
-                inherited: false,
-                inheritance_flags: 0,
-                propagation_flags: 0,
-                category: TrusteeCategory::Share,
-            });
-        }
-    }
-    ShareTrusteeOverlay { trustees }
-}
-
-/// Baut die rohe Trustee-Liste aus einem bereits gelesenen FSO. Liefert
-/// das Core-Modell (`PathTrustee`) ohne Display-Formatierung — wird sowohl
-/// vom HTML-Exporter als auch vom GUI-Renderer (über
-/// [`trustee_row_for_display`]) konsumiert.
-///
-/// Builds the raw trustee list from an already-loaded FSO. Returns the core
-/// model (`PathTrustee`) without display formatting — consumed by both the
-/// HTML exporter and the GUI renderer (via [`trustee_row_for_display`]).
-pub fn build_path_trustees(
-    fso: &adpa_core::model::FileSystemObject,
-    smb_server: Option<&str>,
-    share_name: Option<&str>,
-) -> Vec<adpa_core::model::PathTrustee> {
-    // Schließt Review 2026-06-04 Runde 3 Finding 3: die Share-Trustees
-    // werden jetzt über einen wiederverwendbaren Helper hinzugefügt,
-    // damit der Scan-Pfad die Share-DACL **einmal pro Share** liest und
-    // an alle Pfade unter diesem Share hängt — statt sie pro Pfad neu
-    // anzufragen oder ganz wegzulassen.
-    // Closes review round 3 finding 3.
-    let share_overlay = match (smb_server, share_name) {
-        (Some(server), Some(name)) => Some(read_share_overlay(server, name)),
-        _ => None,
-    };
-    build_path_trustees_with_share(fso, share_overlay.as_ref())
-}
-
-/// Wie [`build_path_trustees`], aber mit bereits gelesenem
-/// Share-Overlay. Der Scan-Pfad ruft `read_share_overlay` einmal vor
-/// der Schleife auf und übergibt die Referenz an jeden Pfad-Aufruf;
-/// dadurch entfällt ein Re-Read pro Pfad und es können keine Share-
-/// Trustees mehr versehentlich weggelassen werden.
-/// Variant of [`build_path_trustees`] taking a pre-read share overlay.
-pub fn build_path_trustees_with_share(
-    fso: &adpa_core::model::FileSystemObject,
-    share_overlay: Option<&ShareTrusteeOverlay>,
-) -> Vec<adpa_core::model::PathTrustee> {
-    use adpa_core::model::{AccessMask, AceKind, PathTrustee, Sid, TrusteeCategory};
-
-    let mut out: Vec<PathTrustee> = Vec::new();
-
-    // NTFS-DACL
-    if fso.null_dacl {
-        out.push(PathTrustee {
-            sid: Sid("S-1-1-0".to_owned()),
-            display_name: Some("Everyone (NULL DACL — no access restriction)".to_owned()),
-            kind: AceKind::Allow,
-            mask: AccessMask(0x001F01FF),
-            inherited: false,
-            inheritance_flags: 0x03, // OI | CI
-            propagation_flags: 0,
-            category: TrusteeCategory::Ntfs,
-        });
-    } else {
-        for ace in &fso.dacl {
-            out.push(PathTrustee {
-                sid: ace.sid.clone(),
-                display_name: None,
-                kind: ace.kind.clone(),
-                mask: ace.mask,
-                inherited: ace.inherited,
-                inheritance_flags: ace.inheritance_flags,
-                propagation_flags: ace.propagation_flags,
-                category: TrusteeCategory::Ntfs,
-            });
-        }
-    }
-
-    // Share-DACL — optional, schon gelesen.
-    if let Some(overlay) = share_overlay {
-        out.extend(overlay.trustees.iter().cloned());
-    }
-
-    // SIDs in lesbare Namen auflösen — eine Runde LSA pro eindeutiger SID.
-    // Resolve SIDs to readable names — one LSA round per unique SID.
-    #[cfg(windows)]
-    {
-        let sids: Vec<String> = out
-            .iter()
-            .map(|r| r.sid.0.clone())
-            .filter(|s| !s.is_empty())
-            .collect();
-        let map = ad_resolver::build_sid_name_map(&[], sids);
-        for row in &mut out {
-            if row.display_name.is_some() {
-                // Erklärende Pseudo-Zeilen (NULL DACL, Lesefehler) nicht
-                // überschreiben.
-                // Keep explanatory pseudo-rows (NULL DACL, read error).
-                continue;
-            }
-            if let Some(name) = map.get(&row.sid.0) {
-                row.display_name = Some(name.clone());
-            }
-        }
-    }
-    out
-}
+// Der frueher hier definierte Helfer-Block (ShareTrusteeOverlay-Struct
+// plus drei Funktionen) wurde entfernt — siehe Re-Export oben.
+// The local helper block (ShareTrusteeOverlay struct plus three
+// functions) was removed in favour of the shared module above.
 
 /// Konvertiert einen rohen `PathTrustee` in die display-formatierte
 /// `TrusteeRow` für die Slint-UI. Macht „Applies to", Maske-Hex und das

@@ -696,10 +696,25 @@ async fn run_analyze(
         let status = validate_export_path(&out_path)
             .map_err(|e| anyhow::anyhow!("Invalid export path: {e}"))?;
         check_overwrite_policy(&status, force)?;
+        // Review-Runde 9 Finding 1: CLI-Exports muessen jetzt auch die
+        // pfadzentrische Trustee-Liste mitliefern — vorher war
+        // path_trustees im CLI-Pfad immer leer und JSON/HTML-Audits
+        // sahen die zweite Audit-Frage "wer steht ueberhaupt auf der
+        // ACL?" nur in der GUI.
+        // Round-9 finding 1: CLI exports must now also carry the
+        // path-centric trustee list. Before that, path_trustees was
+        // always empty in the CLI path and JSON/HTML audits only saw
+        // the second audit question "who is on the ACL at all?" in
+        // the GUI.
+        let trustees =
+            exporter::build_path_trustees(&fso, smb_server.as_deref(), share_name.as_deref());
         let analysis = AnalysisResult {
             permissions: vec![result.clone()],
             risk_findings: risk_findings.clone(),
-            ..Default::default()
+            path_trustees: vec![adpa_core::model::PathTrustees {
+                path: fso.path.clone(),
+                trustees,
+            }],
         };
         export_analysis(&status.path().0, &analysis, force)?;
         println!("Results exported to: {out_path}");
@@ -908,7 +923,30 @@ async fn run_scan(
     };
 
     let mut all_permissions = Vec::with_capacity(walk.objects.len());
+    let mut all_path_trustees: Vec<adpa_core::model::PathTrustees> =
+        Vec::with_capacity(walk.objects.len());
     let mut unsupported_ace_paths = 0usize;
+
+    // Review-Runde 9 Finding 1: Share-Overlay einmalig pro Scan lesen
+    // (analog zur GUI seit ADR 0038), damit jeder Pfad-Aufruf von
+    // build_path_trustees_with_share dieselbe Share-DACL anhaengt ohne
+    // sie pro Pfad neu lesen zu muessen. Auf Nicht-Windows-Plattformen
+    // ist read_share_overlay nicht aufrufbar — fuer den CI-Build setzen
+    // wir den Overlay dort konsequent auf None.
+    // Round-9 finding 1: read the share overlay once per scan (like the
+    // GUI does since ADR 0038) so every build_path_trustees_with_share
+    // call appends the same share DACL without re-reading it per path.
+    // On non-Windows platforms `read_share_overlay` is not callable —
+    // the CI build keeps the overlay None there.
+    #[cfg(windows)]
+    let scan_share_overlay = match (smb_server.as_deref(), share_name.as_deref()) {
+        (Some(server), Some(name)) if !server.is_empty() && !name.is_empty() => {
+            Some(exporter::read_share_overlay(server, name))
+        }
+        _ => None,
+    };
+    #[cfg(not(windows))]
+    let scan_share_overlay: Option<exporter::ShareTrusteeOverlay> = None;
     // scan_local_group_sids wurde bereits oben (vor der Share-Maske) aufgelöst.
     // scan_local_group_sids was already resolved above (before the share mask).
     // scan_access_context wurde ebenfalls schon vor der Share-Maske abgeleitet.
@@ -971,6 +1009,19 @@ async fn run_scan(
         let result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
             anyhow::anyhow!("Permission evaluation failed for '{}': {e}", fso.path.0)
         })?;
+
+        // Round-9 Finding 1: pro Pfad die Trustee-Liste sammeln —
+        // identisch zur GUI seit ADR 0038. Der einmal gelesene
+        // Share-Overlay wird hier nur referenziert, nicht erneut
+        // angefragt.
+        // Round-9 finding 1: collect trustees per path — identical to
+        // the GUI since ADR 0038. The share overlay was read once and
+        // is only referenced here.
+        let trustees = exporter::build_path_trustees_with_share(fso, scan_share_overlay.as_ref());
+        all_path_trustees.push(adpa_core::model::PathTrustees {
+            path: fso.path.clone(),
+            trustees,
+        });
 
         let rights = NormalizedRights::new(result.effective_mask.0);
         // Diagnose: Pfade mit nicht ausgewerteten ACE-Typen sichtbar markieren.
@@ -1059,7 +1110,7 @@ async fn run_scan(
         let analysis = AnalysisResult {
             permissions: all_permissions,
             risk_findings,
-            ..Default::default()
+            path_trustees: all_path_trustees,
         };
         export_analysis(&status.path().0, &analysis, force)?;
         println!("  Results exported to: {out_path}");

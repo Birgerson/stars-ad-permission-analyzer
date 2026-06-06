@@ -12,6 +12,69 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.14] — 2026-06-06
+
+**CLI-Reports-vollständig-Release.** Schließt das verbleibende
+Medium-Finding aus der ChatGPT-Review für v1.5.13 (Round 9):
+`path_trustees` werden jetzt nicht mehr nur von der GUI gefüllt,
+sondern auch von CLI-`analyze` und CLI-`scan`. JSON- und HTML-
+Auditreports aus der CLI sind damit so vollständig wie aus der GUI.
+
+### Architektur (Round-9 Finding 1)
+
+Die rohe Trustee-Bau-Logik lag bisher in `crates/gui/src/worker.rs`
+(`read_share_overlay`, `build_path_trustees`,
+`build_path_trustees_with_share`). Damit die CLI dieselbe Logik
+nutzen kann, ohne dass eine der beiden Schichten auf die andere
+referenzieren muss:
+
+- Neues Modul **`crates/exporter/src/trustees.rs`** trägt jetzt die
+  drei Funktionen plus den `ShareTrusteeOverlay`-Typ.
+  - Drei Unit-Tests (NTFS-only, NULL-DACL-Pseudo-Zeile,
+    Share-Overlay angehängt) verifizieren die Build-Funktion auf
+    Crate-Ebene und sind plattform-unabhängig.
+  - SID→Name-Auflösung bleibt `cfg(windows)`-only — auf CI-Linux
+    bleiben `display_names` einfach `None`.
+- **`crates/exporter/Cargo.toml`** bekommt `share_scanner` als
+  Workspace-Dependency und `ad_resolver` als
+  `cfg(windows)`-Dependency.
+- **`crates/gui/src/worker.rs`** entfernt die alten privaten Helfer
+  und re-exportiert die Symbole aus `exporter`. Die 11 bestehenden
+  GUI-Tests laufen unverändert weiter.
+- **`crates/cli/src/main.rs`**:
+  - `run_analyze` ruft `exporter::build_path_trustees(&fso,
+    smb_server, share_name)` und befüllt
+    `AnalysisResult.path_trustees` mit einem Eintrag für den
+    analysierten Pfad.
+  - `run_scan` liest **einmal** vor der Pfad-Schleife
+    `exporter::read_share_overlay(...)` (cfg-gated für Windows) und
+    übergibt den Overlay an `build_path_trustees_with_share` pro
+    Pfad — keine N+1-Share-Reads, identisches Verhalten wie der GUI-
+    Scan-Pfad.
+
+### Konsequenz für Audit-Pipelines
+
+- `adpa analyze --output report.json --user alice --path X` liefert
+  jetzt zusätzlich zu `permissions` und `risk_findings` auch
+  `path_trustees` für `X`.
+- `adpa scan --output report.json --user alice --path X` liefert
+  `path_trustees` für jeden gescannten Pfad unter `X`.
+- HTML-Output aus der CLI rendert die Trustee-Tabelle automatisch,
+  sobald die Liste nicht leer ist (Logik im `HtmlExporter` war
+  bereits vorhanden, nur die Daten fehlten).
+- Die JSON-Schema-Version bleibt bei **`2`** (in v1.5.13 von 1→2
+  gehoben). Das Feld existiert seit v1.5.13 im Schema; v1.5.14
+  füllt es nur jetzt auch aus der CLI.
+
+### Doku
+
+Versionshinweise in `README.md`, `docs/anwender-handbuch.md`,
+`docs/user-guide.md`, `docs/technische-dokumentation.md`,
+`docs/technical-documentation.md` und `docs/known-limitations.md`
+auf `v1.5.14`.
+
+---
+
 ## [1.5.13] — 2026-06-06
 
 **Exporter-Vertrags-Release.** Schließt die zwei Medium-Findings aus
