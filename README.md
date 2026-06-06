@@ -1,7 +1,7 @@
 # Stars — AD Permission Analyzer
 
-[![Latest Release](https://img.shields.io/github/v/release/Birgerson/Stars?include_prereleases&label=Release&color=4fc3f7)](https://github.com/Birgerson/Stars/releases)
-[![CI](https://github.com/Birgerson/Stars/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Birgerson/Stars/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/Birgerson/stars-ad-permission-analyzer?include_prereleases&label=Release&color=4fc3f7)](https://github.com/Birgerson/stars-ad-permission-analyzer/releases)
+[![CI](https://github.com/Birgerson/stars-ad-permission-analyzer/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Birgerson/stars-ad-permission-analyzer/actions/workflows/ci.yml)
 
 [**Deutsch**](#deutsch) · [**English**](#english)
 
@@ -46,7 +46,7 @@ Das Tool zeigt für jeden Benutzer, welche effektiven Zugriffsrechte er tatsäch
 
 ### Download
 
-Den aktuellen Windows-Installer gibt es auf der **[Releases-Seite](https://github.com/Birgerson/Stars/releases)**.
+Den aktuellen Windows-Installer gibt es auf der **[Releases-Seite](https://github.com/Birgerson/stars-ad-permission-analyzer/releases)**.
 
 1. Auf den neuesten Release klicken (oben in der Liste).
 2. `Stars-vX.Y.Z-Setup.exe` unter *Assets* herunterladen.
@@ -438,7 +438,7 @@ For every user, the tool shows the effective access rights that actually apply t
 
 ### Download
 
-Get the current Windows installer from the **[Releases page](https://github.com/Birgerson/Stars/releases)**.
+Get the current Windows installer from the **[Releases page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases)**.
 
 1. Click the latest release at the top of the list.
 2. Download `Stars-vX.Y.Z-Setup.exe` from *Assets*.
