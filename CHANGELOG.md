@@ -12,6 +12,50 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.12] — 2026-06-05
+
+**GUI-Bugfix-Release.** Behebt zwei Sichtbarkeitsprobleme in der
+HeaderBar, die beim manuellen Lab-Test im Anschluss an v1.5.11
+aufgefallen sind.
+
+### Versionsnummer in der HeaderBar
+
+In v1.5.10 wurde der Slint-Default `app-version: "v1.5.5"` auf `""`
+gesetzt (Round-8 Finding 2 / ChatGPT-Review), in der Annahme, dass
+die Rust-Seite die Version zur Laufzeit per `CARGO_PKG_VERSION`
+setzt. Tatsächlich hat das **niemand getan** — `app_version` blieb
+leer, das `if version-text != ""`-gegate Versions-Badge wurde nie
+gerendert, in der HeaderBar war keine Versionsnummer zu sehen.
+
+Behoben:
+
+- `run_ui` ruft jetzt direkt nach `MainWindow::new()` den Setter
+  `ui.set_app_version(format!("v{}", env!("CARGO_PKG_VERSION")))`
+  auf.
+- HeaderBar-Layout umgebaut: die Versionsnummer steht jetzt
+  **direkt neben dem Titel** „Stars" (kein separates Badge rechts
+  mehr). Auf einen Blick: „Stars v1.5.12".
+
+### Theme-Toggle sichtbar
+
+Der Theme-Toggle war als 32×32-Quadrat mit alleinigem Unicode-Glyph
+(`☾` = U+263E, `☀` = U+2600) realisiert. Slints
+Software-Backend rendert mit der Default-Font auf Windows Server
+2022 diese Glyphen unzuverlässig — der Toggle war praktisch
+unsichtbar.
+
+Behoben:
+
+- Toggle ist jetzt eine **110×32-Schaltfläche mit Border,
+  Hintergrund, Glyph und Text-Label**: „☾ Dunkel" / „☀ Hell".
+  Auch wenn die Default-Font das Glyph nicht hat, ist der Text
+  immer lesbar und der Button als Schaltfläche erkennbar.
+- Hover-State markiert mit Accent-Farbe als Border.
+
+Versionshinweise in den User-Dokus auf `v1.5.12`.
+
+---
+
 ## [1.5.11] — 2026-06-05
 
 **UX-Release.** Behebt eine konkrete Erstkontakt-Hürde aus dem

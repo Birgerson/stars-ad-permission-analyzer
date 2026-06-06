@@ -216,20 +216,42 @@ slint::slint! {
 
     // ThemeToggle — Sun/Mond-Umschalter fuer Light/Dark.
     // ThemeToggle — sun/moon switcher for light/dark.
+    // Theme-Umschalter — bewusst mit Text-Label statt nur Unicode-Glyph,
+    // weil das Slint-Software-Backend auf Windows Server (Default-Font)
+    // Glyphen wie U+263E (☾) / U+2600 (☀) nicht zuverlaessig rendert.
+    // Mit Border + Hintergrund + Text sieht der Anwender direkt eine
+    // klickbare Schaltflaeche.
+    // Theme toggle — deliberately uses a text label instead of a sole
+    // Unicode glyph, because Slint's software backend on Windows Server
+    // (default font) does not reliably render U+263E (☾) / U+2600 (☀).
+    // With border + background + text the toggle is clearly visible.
     component ThemeToggle inherits Rectangle {
-        width: 32px;
         height: 32px;
+        width: 110px;
         border-radius: Theme.radius-sm;
-        background: ta.has-hover ? Theme.bg-hover : transparent;
+        border-width: 1px;
+        border-color: ta.has-hover ? Theme.accent : Theme.border;
+        background: ta.has-hover ? Theme.bg-hover : Theme.bg-card;
 
-        animate background { duration: 80ms; }
+        animate background, border-color { duration: 80ms; }
 
-        Text {
-            text: Theme.dark ? "☀" : "☾";
-            font-size: 18px;
-            color: Theme.text-primary;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            spacing: 6px;
+            alignment: center;
+            Text {
+                text: Theme.dark ? "☀" : "☾";
+                font-size: 14px;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+            Text {
+                text: Theme.dark ? "Hell" : "Dunkel";
+                font-size: Theme.font-sm;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
         }
 
         ta := TouchArea {
@@ -263,8 +285,8 @@ slint::slint! {
             padding-bottom: Theme.spacing-sm;
             spacing: Theme.spacing-md;
 
-            // Brand-Block: Stern + Titel + Subtitel
-            // Brand block: star + title + subtitle
+            // Brand-Block: Stern + Titel (inkl. Versionsnummer) + Subtitel
+            // Brand block: star + title (incl. version) + subtitle
             HorizontalLayout {
                 spacing: Theme.spacing-sm;
                 Text {
@@ -274,11 +296,23 @@ slint::slint! {
                     vertical-alignment: center;
                 }
                 VerticalLayout {
-                    Text {
-                        text: root.app-title;
-                        font-size: Theme.font-xl;
-                        font-weight: 700;
-                        color: Theme.text-primary;
+                    HorizontalLayout {
+                        spacing: Theme.spacing-sm;
+                        alignment: start;
+                        Text {
+                            text: root.app-title;
+                            font-size: Theme.font-xl;
+                            font-weight: 700;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                        }
+                        if root.version-text != "": Text {
+                            text: root.version-text;
+                            font-size: Theme.font-sm;
+                            font-weight: 500;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
                     }
                     Text {
                         text: root.app-subtitle;
@@ -290,24 +324,6 @@ slint::slint! {
 
             // Spacer
             Rectangle { horizontal-stretch: 1; }
-
-            // Versions-Badge
-            // Version badge
-            if root.version-text != "": Rectangle {
-                background: Theme.bg-hover;
-                border-radius: Theme.radius-sm;
-                width: ver-text.preferred-width + 16px;
-                vertical-stretch: 0;
-                preferred-height: 24px;
-                y: (parent.height - 24px) / 2;
-                ver-text := Text {
-                    text: root.version-text;
-                    font-size: Theme.font-xs;
-                    color: Theme.text-secondary;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
 
             ThemeToggle {}
         }
@@ -1840,6 +1856,13 @@ thread_local! {
 
 fn run_ui(_log_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let ui = MainWindow::new()?;
+
+    // App-Version aus Cargo-Metadaten an die GUI durchreichen. Slint
+    // braucht das fuer das Versions-Badge in der HeaderBar — ohne diesen
+    // Aufruf bleibt das Badge per `if version-text != ""` ausgeblendet.
+    // App version from Cargo metadata into the GUI. Without this the
+    // HeaderBar version badge stays hidden behind its `if != ""` guard.
+    ui.set_app_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
 
     // notify-Callback: weckt den GUI-Thread, sobald der Worker ein Event
     // gesendet hat. Slints `invoke_from_event_loop` darf aus jedem Thread
