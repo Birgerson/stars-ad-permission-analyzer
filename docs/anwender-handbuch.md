@@ -394,6 +394,29 @@ Marker = Stars hat Vertrauen in die Berechnung.
 Bestehende Export-Dateien werden ohne `--force` (CLI) bzw. ohne
 ausdrückliche Bestätigung (GUI) **nicht überschrieben**.
 
+### Zwei Audit-Fragen, zwei Datenblöcke
+
+Stars beantwortet pro Pfad zwei unterschiedliche Audit-Fragen, und
+beide Antworten landen im Export:
+
+| Frage | Datenfeld im Bericht | Welcher Block? |
+|---|---|---|
+| „Welche effektiven Rechte hat **dieser eine Benutzer** auf dem Pfad?" | `permissions` mit `EffectivePermission` und vollständigem Erklärungs­pfad | identitäts­bezogener Block |
+| „Wer steht **überhaupt** auf der NTFS- bzw. Share-DACL des Pfads?" | `path_trustees` mit `PathTrustee`-Einträgen, getrennt nach NTFS und Share | pfad­zentrischer Block |
+
+Seit v1.5.14 sind **beide Blöcke auch in CLI-Exports** vollständig
+befüllt. Bis dahin lieferte nur die GUI die pfad­zentrische
+Trustee-Liste; der CLI-Export hatte sie strukturell vorgesehen, aber
+leer übergeben. JSON-Konsumenten finden das Feld unter dem Key
+`path_trustees` (Schema-Version 2), HTML rendert die Tabelle
+„Trustees pro Pfad" automatisch, sobald die Liste nicht leer ist.
+
+Praktisch heißt das: Wenn du `adpa analyze --output report.json --path X --user alice`
+oder `adpa scan --output report.json --path X --user alice` aufrufst,
+enthält der Report ab v1.5.14 sowohl die Antwort für `alice` als
+auch die vollständige ACE-Liste für `X` (und bei `scan` für alle
+Pfade darunter).
+
 ---
 
 ## Die CLI

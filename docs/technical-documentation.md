@@ -1171,6 +1171,57 @@ out paths without change client-side.
 - Diagnostic markers as coloured badges (`badge-high`,
   `badge-medium`, `badge-info`) with tooltip text.
 
+### 12.4 Path-centric trustees — `exporter::trustees`
+
+**Source:** [`crates/exporter/src/trustees.rs`](../crates/exporter/src/trustees.rs).
+**Architecture decision:** [ADR 0044](adr/0044-shared-path-trustees-module.md).
+
+Stars answers two audit questions per path:
+
+1. **Identity-bound:** "What effective right does *this one* identity have?" — `EffectivePermission` from the engine.
+2. **Path-centric:** "Who is *on the DACL at all*?" — `Vec<PathTrustee>`, split into NTFS and share.
+
+The second question does not depend on a specific identity. It is the raw enumeration of the ACEs in the NTFS DACL and the share DACL and answers who is configured for a path — regardless of whether that's a real identity or an orphaned SID.
+
+Until v1.5.13 the build logic for that lived privately in `crates/gui/src/worker.rs`. Consequence: CLI exports (`adpa analyze --output`, `adpa scan --output`) always shipped `AnalysisResult.path_trustees` empty — the JSON schema had been ready for it since v1.5.13, but the data never arrived.
+
+With v1.5.14 the logic moved to `crates/exporter/src/trustees.rs`. Choosing that home follows the workspace's layering rule: trustees are report data, not engine output. `exporter` is allowed to depend on `share_scanner` and (windows-only) `ad_resolver`, but not on `cli` or `gui` — so GUI and CLI are equal consumers.
+
+Public API:
+
+```rust
+pub struct ShareTrusteeOverlay { pub trustees: Vec<PathTrustee> }
+
+pub fn read_share_overlay(server: &str, share_name: &str) -> ShareTrusteeOverlay;
+
+pub fn build_path_trustees(
+    fso: &FileSystemObject,
+    smb_server: Option<&str>,
+    share_name: Option<&str>,
+) -> Vec<PathTrustee>;
+
+pub fn build_path_trustees_with_share(
+    fso: &FileSystemObject,
+    share_overlay: Option<&ShareTrusteeOverlay>,
+) -> Vec<PathTrustee>;
+```
+
+The plain `build_path_trustees` form reads the share DACL on each call — fine for `analyze` with one path. The `_with_share` form takes a pre-read overlay — the scan path reads the share DACL once before the per-path loop and passes the reference into every call. That keeps share DACL read load constant per scan instead of linear per path (identical to the GUI scan path since ADR 0038).
+
+NULL DACL and share read failures are intentionally surfaced as visible pseudo-rows — no silent skips:
+
+- NULL DACL → `Everyone (NULL DACL — no access restriction)` with mask `0x001F01FF`.
+- Share read failure → `Share-DACL nicht lesbar: <message>` with mask `0`.
+
+Consumers:
+
+- **GUI** (`crates/gui/src/worker.rs`) re-exports the symbols via `pub use exporter::{…}`. The old private implementation is gone; all 11 existing GUI tests keep passing unchanged.
+- **CLI** (`crates/cli/src/main.rs`):
+  - `run_analyze` calls `exporter::build_path_trustees(&fso, smb_server, share_name)` and stores the result in `AnalysisResult.path_trustees`.
+  - `run_scan` reads the overlay once (cfg-gated for Windows) and calls `exporter::build_path_trustees_with_share(fso, overlay.as_ref())` per path FSO.
+
+Three unit tests inside the module verify on crate level: NTFS-only trustees, NULL DACL pseudo-row, share overlay appended. Platform-independent — the SID-to-name resolution is `cfg(windows)`-only, on CI Linux `display_name` fields just stay `None`.
+
 ---
 
 ## 13. Validation at system boundaries

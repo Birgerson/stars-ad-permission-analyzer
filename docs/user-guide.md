@@ -389,6 +389,28 @@ Via the **Export** menu (or `--output` flag in the CLI):
 Existing export files are **not overwritten** without `--force` (CLI)
 or explicit confirmation (GUI).
 
+### Two audit questions, two report blocks
+
+Stars answers two distinct audit questions per path, and the export
+carries both answers:
+
+| Question | Report field | Block |
+|---|---|---|
+| "What effective rights does **this specific user** have on the path?" | `permissions` with `EffectivePermission` and a full explanation path | identity-bound block |
+| "Who is **on the NTFS/Share DACL at all** for this path?" | `path_trustees` with `PathTrustee` entries, split into NTFS and share | path-centric block |
+
+Since v1.5.14 **both blocks are also populated in CLI exports**.
+Before that only the GUI produced the path-centric trustee list; the
+CLI export had the field defined but passed it empty. JSON consumers
+find the field under the `path_trustees` key (schema version 2);
+HTML auto-renders the "Trustees per path" table whenever the list is
+not empty.
+
+In practice: `adpa analyze --output report.json --path X --user alice`
+and `adpa scan --output report.json --path X --user alice` now both
+contain the answer for `alice` *and* the full ACE listing for `X`
+(and for every sub-path under `X` in the scan case).
+
 ---
 
 ## The CLI
