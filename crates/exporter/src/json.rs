@@ -4,33 +4,44 @@
 //! JSON-Berichtsexport — stabil strukturiertes, maschinenlesbares Ausgabeformat.
 //! JSON report export — stable, structured, machine-readable output format.
 //!
-//! Der Export schreibt ein Top-Level-Objekt mit `version`, `permissions` und
-//! `risk_findings`. Die Felder beider Listen entsprechen den `Serialize`-
-//! Implementierungen von `EffectivePermission` und `RiskFinding`, sodass
-//! Audit-Pipelines Strukturen wie `share_status`, `local_group_status`,
-//! `incomplete` und `matched_aces` direkt konsumieren können.
+//! Der Export schreibt ein Top-Level-Objekt mit `version`, `permissions`,
+//! `risk_findings` und `path_trustees`. Die Felder beider Identitaets-
+//! orientierten Listen entsprechen den `Serialize`-Implementierungen von
+//! `EffectivePermission` und `RiskFinding`, sodass Audit-Pipelines
+//! Strukturen wie `share_status`, `local_group_status`, `incomplete` und
+//! `matched_aces` direkt konsumieren koennen. Die pfad-orientierte
+//! Trustee-Liste (`path_trustees`) wurde in Round-8-Folgereview Finding 2
+//! ergaenzt, damit die zweite Audit-Frage „wer hat ueberhaupt Zugriff?"
+//! auch im maschinenlesbaren Format vorhanden ist.
 //!
-//! Writes a top-level object with `version`, `permissions`, and `risk_findings`.
-//! Both lists mirror the `Serialize` implementations of `EffectivePermission`
-//! and `RiskFinding`, so audit pipelines can directly consume structures like
-//! `share_status`, `local_group_status`, `incomplete`, and `matched_aces`.
+//! Writes a top-level object with `version`, `permissions`,
+//! `risk_findings`, and `path_trustees`. Both identity-oriented lists
+//! mirror the `Serialize` implementations of `EffectivePermission` and
+//! `RiskFinding`, so audit pipelines can directly consume structures
+//! like `share_status`, `local_group_status`, `incomplete`, and
+//! `matched_aces`. The path-oriented `path_trustees` list was added in
+//! round-8 follow-up finding 2 so the second audit question "who has any
+//! access?" is also available in the machine-readable format.
 
 use adpa_core::{
     error::CoreError,
-    model::{EffectivePermission, RiskFinding},
+    model::{EffectivePermission, PathTrustees, RiskFinding},
     traits::{AnalysisResult, ExportTarget, Exporter},
 };
 use serde::Serialize;
 
 /// Versionsnummer des JSON-Schemas — bei strukturändernden Anpassungen erhöhen.
+/// Auf 2 erhoeht in Round-8-Folgereview Finding 2 (neues Feld `path_trustees`).
 /// Version number of the JSON schema — bump it on structural changes.
-const JSON_SCHEMA_VERSION: u32 = 1;
+/// Raised to 2 in round-8 follow-up finding 2 (new `path_trustees` field).
+pub const JSON_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Serialize)]
 struct JsonReport<'a> {
     version: u32,
     permissions: &'a [EffectivePermission],
     risk_findings: &'a [RiskFinding],
+    path_trustees: &'a [PathTrustees],
 }
 
 pub struct JsonExporter;
@@ -41,22 +52,17 @@ impl Exporter for JsonExporter {
             version: JSON_SCHEMA_VERSION,
             permissions: &result.permissions,
             risk_findings: &result.risk_findings,
+            path_trustees: &result.path_trustees,
         };
-        match target {
-            ExportTarget::File(path) => {
-                let file = std::fs::File::create(&path).map_err(|e| {
-                    CoreError::Export(format!("Cannot create JSON file {}: {e}", path.display()))
-                })?;
-                let mut writer = std::io::BufWriter::new(file);
-                serde_json::to_writer_pretty(&mut writer, &report)
-                    .map_err(|e| CoreError::Export(format!("JSON serialization failed: {e}")))?;
-                use std::io::Write;
-                writer
-                    .flush()
-                    .map_err(|e| CoreError::Export(format!("JSON flush failed: {e}")))?;
-                Ok(())
-            }
-        }
+        let file = crate::open_export_file(target)?;
+        let mut writer = std::io::BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut writer, &report)
+            .map_err(|e| CoreError::Export(format!("JSON serialization failed: {e}")))?;
+        use std::io::Write;
+        writer
+            .flush()
+            .map_err(|e| CoreError::Export(format!("JSON flush failed: {e}")))?;
+        Ok(())
     }
 }
 
@@ -200,6 +206,92 @@ mod tests {
         assert!(
             matches!(err, CoreError::Export(_)),
             "expected CoreError::Export, got {err:?}"
+        );
+    }
+
+    /// Round-8-Folgereview Finding 2: das JSON-Schema enthaelt jetzt eine
+    /// `path_trustees`-Liste und die Schema-Version steht auf 2.
+    /// Round-8 follow-up finding 2: the JSON schema now contains a
+    /// `path_trustees` list and the schema version is bumped to 2.
+    #[test]
+    fn export_includes_path_trustees_and_bumped_schema_version() {
+        use adpa_core::model::{AceKind, PathTrustee, PathTrustees, TrusteeCategory};
+        let result = AnalysisResult {
+            permissions: vec![],
+            risk_findings: vec![],
+            path_trustees: vec![PathTrustees {
+                path: NormalizedPath(r"C:\Audit".to_owned()),
+                trustees: vec![PathTrustee {
+                    sid: Sid("S-1-5-32-544".to_owned()),
+                    display_name: Some("BUILTIN\\Administrators".to_owned()),
+                    kind: AceKind::Allow,
+                    mask: AccessMask(0x001F_01FF),
+                    inherited: true,
+                    inheritance_flags: 0,
+                    propagation_flags: 0,
+                    category: TrusteeCategory::Ntfs,
+                }],
+            }],
+        };
+        let body = render(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+        assert_eq!(
+            parsed["version"], 2,
+            "schema version must be bumped to 2 for path_trustees field"
+        );
+        let trustees = parsed["path_trustees"]
+            .as_array()
+            .expect("path_trustees must be an array");
+        assert_eq!(trustees.len(), 1, "one path-trustee entry expected");
+        assert_eq!(trustees[0]["path"], r"C:\Audit");
+        assert_eq!(
+            trustees[0]["trustees"][0]["sid"], "S-1-5-32-544",
+            "trustee SID must propagate into JSON"
+        );
+        assert_eq!(
+            trustees[0]["trustees"][0]["display_name"], "BUILTIN\\Administrators",
+            "trustee display_name must propagate"
+        );
+    }
+
+    /// Round-8-Folgereview Finding 1: der JSON-Exporter darf eine
+    /// existierende Zieldatei NICHT mehr ueberschreiben, wenn
+    /// `ExportTarget::File` genutzt wird. Mit `ExportTarget::FileOverwrite`
+    /// ist Ueberschreiben explizit erlaubt.
+    /// Round-8 follow-up finding 1: the JSON exporter must NOT overwrite an
+    /// existing target file when called with `ExportTarget::File`. With
+    /// `ExportTarget::FileOverwrite` overwriting is explicitly allowed.
+    #[test]
+    fn export_refuses_overwrite_unless_explicitly_allowed() {
+        let dir = tempdir();
+        let path = dir.join("report.json");
+        let sentinel = b"sentinel\n";
+        std::fs::write(&path, sentinel).expect("write sentinel");
+
+        // Default-Branch muss ablehnen und Sentinel intakt lassen.
+        let result = AnalysisResult::default();
+        let refusal = JsonExporter
+            .export(&result, ExportTarget::File(path.clone()))
+            .expect_err("File branch must refuse to overwrite an existing file");
+        assert!(
+            matches!(refusal, CoreError::Export(_)),
+            "expected CoreError::Export refusal, got {refusal:?}"
+        );
+        let after_refusal = std::fs::read(&path).expect("read sentinel after refusal");
+        assert_eq!(
+            after_refusal, sentinel,
+            "pre-existing file content must stay intact when overwrite refused"
+        );
+
+        // Mit FileOverwrite darf die Datei truncatet werden.
+        JsonExporter
+            .export(&result, ExportTarget::FileOverwrite(path.clone()))
+            .expect("FileOverwrite branch must succeed");
+        let after_overwrite =
+            std::fs::read_to_string(&path).expect("read written file after overwrite");
+        assert!(
+            after_overwrite.contains("\"version\""),
+            "FileOverwrite must replace sentinel content with a JSON report"
         );
     }
 }

@@ -22,15 +22,10 @@ pub struct HtmlExporter;
 impl Exporter for HtmlExporter {
     fn export(&self, result: &AnalysisResult, target: ExportTarget) -> Result<(), CoreError> {
         let html = render_html(result)?;
-        match target {
-            ExportTarget::File(path) => {
-                let mut f = std::fs::File::create(&path)
-                    .map_err(|e| CoreError::Export(format!("Cannot create file: {e}")))?;
-                f.write_all(html.as_bytes())
-                    .map_err(|e| CoreError::Export(format!("Write failed: {e}")))?;
-                Ok(())
-            }
-        }
+        let mut f = crate::open_export_file(target)?;
+        f.write_all(html.as_bytes())
+            .map_err(|e| CoreError::Export(format!("Write failed: {e}")))?;
+        Ok(())
     }
 }
 
@@ -702,5 +697,49 @@ mod tests {
             s.contains("share mask is"),
             "tooltip must mention that the share mask may be incomplete"
         );
+    }
+
+    /// Round-8-Folgereview Finding 1: HTML-Exporter darf existierende Datei
+    /// mit `ExportTarget::File` nicht ueberschreiben.
+    /// Round-8 follow-up finding 1: HTML exporter must not overwrite an
+    /// existing target file when called with `ExportTarget::File`.
+    #[test]
+    fn html_refuses_overwrite_unless_explicitly_allowed() {
+        use adpa_core::error::CoreError;
+        use adpa_core::traits::{AnalysisResult, ExportTarget, Exporter};
+
+        let mut tmp = std::env::temp_dir();
+        tmp.push(format!(
+            "adpa_html_overwrite_{}_{}.html",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            std::process::id()
+        ));
+        let sentinel = b"<!-- sentinel -->";
+        std::fs::write(&tmp, sentinel).expect("write sentinel");
+
+        let result = AnalysisResult::default();
+        let refusal = super::HtmlExporter
+            .export(&result, ExportTarget::File(tmp.clone()))
+            .expect_err("File branch must refuse to overwrite an existing file");
+        assert!(matches!(refusal, CoreError::Export(_)));
+        let after_refusal = std::fs::read(&tmp).expect("read sentinel after refusal");
+        assert_eq!(
+            after_refusal, sentinel,
+            "pre-existing HTML content must stay intact when overwrite refused"
+        );
+
+        super::HtmlExporter
+            .export(&result, ExportTarget::FileOverwrite(tmp.clone()))
+            .expect("FileOverwrite branch must succeed");
+        let after_overwrite = std::fs::read_to_string(&tmp).expect("read after overwrite");
+        assert!(
+            after_overwrite.contains("<html"),
+            "FileOverwrite must replace sentinel content with HTML report"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
     }
 }

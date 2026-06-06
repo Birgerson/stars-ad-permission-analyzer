@@ -65,18 +65,9 @@ pub struct CsvExporter;
 
 impl Exporter for CsvExporter {
     fn export(&self, result: &AnalysisResult, target: ExportTarget) -> Result<(), CoreError> {
-        match target {
-            ExportTarget::File(path) => {
-                let file = std::fs::File::create(&path).map_err(|e| {
-                    CoreError::Export(format!(
-                        "Cannot create export file '{}': {e}",
-                        path.display()
-                    ))
-                })?;
-                write_csv(file, &result.permissions)
-                    .map_err(|e| CoreError::Export(format!("CSV write error: {e}")))
-            }
-        }
+        let file = crate::open_export_file(target)?;
+        write_csv(file, &result.permissions)
+            .map_err(|e| CoreError::Export(format!("CSV write error: {e}")))
     }
 }
 
@@ -671,5 +662,46 @@ mod tests {
             .export(&result, ExportTarget::File(bad_path))
             .unwrap_err();
         assert!(matches!(err, CoreError::Export(_)));
+    }
+
+    /// Round-8-Folgereview Finding 1: CSV-Exporter darf eine existierende
+    /// Datei mit `ExportTarget::File` nicht ueberschreiben.
+    /// Round-8 follow-up finding 1: CSV exporter must not overwrite an
+    /// existing target file when called with `ExportTarget::File`.
+    #[test]
+    fn csv_refuses_overwrite_unless_explicitly_allowed() {
+        let mut tmp = std::env::temp_dir();
+        tmp.push(format!(
+            "adpa_csv_overwrite_{}_{}.csv",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            std::process::id()
+        ));
+        let sentinel = b"sentinel,row\n";
+        std::fs::write(&tmp, sentinel).expect("write sentinel");
+
+        let result = AnalysisResult::default();
+        let refusal = CsvExporter
+            .export(&result, ExportTarget::File(tmp.clone()))
+            .expect_err("File branch must refuse to overwrite an existing file");
+        assert!(matches!(refusal, CoreError::Export(_)));
+        let after_refusal = std::fs::read(&tmp).expect("read sentinel after refusal");
+        assert_eq!(
+            after_refusal, sentinel,
+            "pre-existing file content must stay intact when overwrite refused"
+        );
+
+        CsvExporter
+            .export(&result, ExportTarget::FileOverwrite(tmp.clone()))
+            .expect("FileOverwrite branch must succeed");
+        let after_overwrite = std::fs::read_to_string(&tmp).expect("read after overwrite");
+        assert!(
+            after_overwrite.contains("user_sid") && after_overwrite.contains("path"),
+            "FileOverwrite must replace sentinel content with CSV header (got: {after_overwrite:?})"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
     }
 }

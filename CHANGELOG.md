@@ -12,6 +12,63 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.13] — 2026-06-06
+
+**Exporter-Vertrags-Release.** Schließt die zwei Medium-Findings aus
+der ChatGPT-Review für v1.5.12 (Round 8 Follow-up).
+
+### Exporter-Vertrag (Finding 1, Medium)
+
+Der `Exporter`-Trait traegt jetzt selbst die Overwrite-Policy. Vorher
+hatten CLI und GUI je einen Pre-Check, die Exporter haben aber intern
+weiterhin `std::fs::File::create()` benutzt und vorhandene Dateien
+truncatet — Direkt-Konsumenten der Trait-API konnten den Schutz
+umgehen.
+
+Neu in `crates/core/src/traits.rs`:
+
+```rust
+pub enum ExportTarget {
+    File(PathBuf),          // create_new — scheitert bei existierender Datei
+    FileOverwrite(PathBuf), // create+truncate — expliziter Opt-In
+}
+```
+
+Neuer Helfer `crates/exporter/src/lib.rs::open_export_file` kapselt
+die Policy zentral; HTML/CSV/JSON nutzen ihn. CLI mit `--force`
+schickt `FileOverwrite`, sonst `File`. Die GUI nutzt immer `File`
+(refuse-by-default, konsistent zu v1.5.9-Finding-2-Fix).
+
+Drei neue Tests — je einer pro Exporter — verifizieren live, dass
+eine bestehende Sentinel-Datei beim `File`-Branch unverändert bleibt
+und beim `FileOverwrite`-Branch korrekt ersetzt wird.
+
+### JSON-Schema (Finding 2, Medium)
+
+`AnalysisResult.path_trustees` (pfadzentrische Trustee-Liste —
+beantwortet „wer hat überhaupt Zugriff?") war bisher nur im HTML-
+Export sichtbar. Der JSON-Export hat das Feld stillschweigend
+weggelassen.
+
+Neu:
+
+- `JsonReport` enthält jetzt `path_trustees: &'a [PathTrustees]`.
+- `JSON_SCHEMA_VERSION` von `1` auf `2` erhöht (jetzt `pub` exportiert).
+- Test verifiziert, dass eine PathTrustee-Einträge inkl. SID,
+  display_name und Pfad im JSON wiedergefunden werden.
+
+Damit haben HTML und JSON die gleichen Audit-Informationen — keine
+Format-Asymmetrie mehr.
+
+### Doku
+
+Versionshinweise in `README.md`, `docs/anwender-handbuch.md`,
+`docs/user-guide.md`, `docs/technische-dokumentation.md`,
+`docs/technical-documentation.md` und `docs/known-limitations.md`
+auf `v1.5.13`.
+
+---
+
 ## [1.5.12] — 2026-06-05
 
 **GUI-Bugfix-Release.** Behebt zwei Sichtbarkeitsprobleme in der

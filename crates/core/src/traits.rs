@@ -155,8 +155,31 @@ pub struct RiskContext {
     pub findings: Vec<EffectivePermission>,
 }
 
+/// Ziel eines Export-Aufrufs. Round-8-Folgereview Finding 1: der
+/// `Exporter`-Trait traegt jetzt selbst die Overwrite-Policy, damit
+/// Direkt-Konsumenten der Trait-API nicht versehentlich vorhandene
+/// Audit-Berichte truncaten koennen.
+///
+/// - `File(path)` ist der konservative Default: scheitert wenn die
+///   Zieldatei bereits existiert (`OpenOptions::create_new`). Genau
+///   das Verhalten, das CLI ohne `--force` und die GUI erwarten.
+/// - `FileOverwrite(path)` ist der explizite Opt-In: ueberschreibt eine
+///   existierende Datei. CLI mit `--force` waehlt diesen Pfad bewusst,
+///   die GUI nutzt ihn nie.
+///
+/// Export call target. Round-8 follow-up finding 1: the `Exporter`
+/// trait now carries the overwrite policy itself so direct trait
+/// consumers cannot accidentally truncate existing audit reports.
+///
+/// - `File(path)` is the conservative default: fails if the target
+///   file already exists (`OpenOptions::create_new`). This matches the
+///   CLI-without-`--force` and the GUI behaviour.
+/// - `FileOverwrite(path)` is the explicit opt-in: truncates an
+///   existing file. CLI with `--force` deliberately picks this, the
+///   GUI never does.
 pub enum ExportTarget {
     File(std::path::PathBuf),
+    FileOverwrite(std::path::PathBuf),
 }
 
 #[derive(Default)]

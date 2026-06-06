@@ -701,7 +701,7 @@ async fn run_analyze(
             risk_findings: risk_findings.clone(),
             ..Default::default()
         };
-        export_analysis(&status.path().0, &analysis)?;
+        export_analysis(&status.path().0, &analysis, force)?;
         println!("Results exported to: {out_path}");
     }
 
@@ -1061,7 +1061,7 @@ async fn run_scan(
             risk_findings,
             ..Default::default()
         };
-        export_analysis(&status.path().0, &analysis)?;
+        export_analysis(&status.path().0, &analysis, force)?;
         println!("  Results exported to: {out_path}");
     }
 
@@ -1291,12 +1291,29 @@ fn check_overwrite_policy(status: &ExportPathStatus, force: bool) -> anyhow::Res
 /// Berechtigungen — in dem Fall wird ein Hinweis ausgegeben.
 /// `.html` and `.json` include risk findings; `.csv` only includes
 /// permissions — a note is printed in that case.
-fn export_analysis(target_path: &std::path::Path, analysis: &AnalysisResult) -> anyhow::Result<()> {
+fn export_analysis(
+    target_path: &std::path::Path,
+    analysis: &AnalysisResult,
+    force: bool,
+) -> anyhow::Result<()> {
     let ext = target_path
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase());
-    let target = ExportTarget::File(target_path.to_path_buf());
+    // Round-8-Folgereview Finding 1: bei --force explizit den
+    // Overwrite-Pfad des Exporters waehlen. Ohne --force passiert
+    // bewusst create_new — der Trait wird die Datei selbst ablehnen,
+    // wenn sie schon existiert (zusaetzliche Sicherheit zur
+    // CLI-Vorabpruefung in check_overwrite_policy).
+    // Round-8 follow-up finding 1: pick the exporter's explicit
+    // overwrite branch only when --force is set. Without --force the
+    // trait itself refuses an existing file (defence in depth on top of
+    // the CLI's check_overwrite_policy).
+    let target = if force {
+        ExportTarget::FileOverwrite(target_path.to_path_buf())
+    } else {
+        ExportTarget::File(target_path.to_path_buf())
+    };
     match ext.as_deref() {
         Some("html") => HtmlExporter
             .export(analysis, target)
