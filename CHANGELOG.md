@@ -12,6 +12,64 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.15] — 2026-06-06
+
+**Pflichtangaben-in-der-App-Release.** Neuer **„Info"-Tab** in der GUI
+mit allen Pflichtangaben, die sonst nur im Repo standen. Damit wer
+ein `Setup.exe` weitergibt, dem Empfänger nicht die Spur zum Original
+nimmt.
+
+### GUI — neuer Info-Tab
+
+Erreichbar rechts neben dem „Delta"-Tab. Vollständig **zweisprachig
+(English first, Deutsch danach)**, damit internationale Empfänger
+denselben Informationsstand haben wie deutschsprachige Auditoren:
+
+- **Author and license / Urheber und Lizenz:**
+  - Copyright (c) 2026 Birger Labinsch
+  - License: GNU Affero General Public License v3.0 or later
+  - License text URL: https://www.gnu.org/licenses/agpl-3.0.html
+  - **Source code link (required by AGPL):**
+    https://github.com/Birgerson/stars-ad-permission-analyzer
+  - Attribution-Hinweis: „Code with Anthropic Claude Opus. Birger
+    Labinsch is the prompt engineer, not the code author."
+- **Read-only principle — three hard limits / Read-only-Prinzip —
+  drei harte Grenzen:** kein NTFS-/SMB-/AD-Schreiben, kein Agent
+  auf Zielsystemen, keine Backdoor-Authentifizierung.
+- **Backup duty and disclaimer / Backup-Pflicht und
+  Haftungsausschluss:** vor jeder produktiven Nutzung getestetes
+  Backup verpflichtend; Nutzung auf eigene Verantwortung;
+  Verweis auf README.md.
+- **Contact and further documentation / Kontakt und weiterführende
+  Doku:** E-Mail `birger@labinsch.de`, Issues-URL,
+  Verweis auf `docs/can-stars-help-you.md`, Plattform-Status (Server
+  2022 verifiziert, Server 2025 noch nicht).
+
+### AGPL-Konformität
+
+Mit diesem Tab erfüllt Stars die AGPL-Pflicht, dass der Quellcode-
+Link in der ausgelieferten Software sichtbar sein muss — nicht nur
+in der Repository-LICENSE. Wer Stars als signierten Installer
+weitergibt, gibt damit automatisch auch die Spur zum Source-Code
+weiter.
+
+### Memory-Regel
+
+Die existierende Attribution-Regel wurde projektweit erweitert:
+„100 % Ehrlichkeit" gilt nicht nur für Code-Autorschaft, sondern auch
+für Plattform-/Test-Status, Release-Bewertungen, Review-Status und
+Code-vs-Doku-Synchronität. Festgehalten im internen
+`feedback-honest-attribution`-Memory.
+
+### Doku
+
+Versionshinweise in `README.md`, `docs/anwender-handbuch.md`,
+`docs/user-guide.md`, `docs/technische-dokumentation.md`,
+`docs/technical-documentation.md` und `docs/known-limitations.md`
+auf `v1.5.15`.
+
+---
+
 ## [1.5.14] — 2026-06-06
 
 **CLI-Reports-vollständig-Release.** Schließt das verbleibende

@@ -1705,6 +1705,269 @@ slint::slint! {
                         }
                     }
                 }
+
+                // ============================================================
+                // Tab: Info / Pflichtangaben
+                // Wer hat die Software gemacht, unter welcher Lizenz, wo
+                // ist der Quellcode, und was muss man wissen, bevor man sie
+                // in einer produktiven Umgebung einsetzt. Dieser Tab muss
+                // in der App selbst stehen — wer das Setup.exe weitergibt,
+                // soll dem Empfaenger nicht die Spur zum Repo nehmen.
+                // ============================================================
+                Tab {
+                    title: "Info";
+
+                    ScrollView {
+                        VerticalBox {
+                            padding: Theme.spacing-md;
+                            spacing: Theme.spacing-md;
+
+                            Text {
+                                text: "Stars — AD Permission Analyzer";
+                                font-size: Theme.font-xl;
+                                font-weight: 700;
+                                color: Theme.text-primary;
+                            }
+                            Text {
+                                text: root.app-version;
+                                font-size: Theme.font-md;
+                                color: Theme.text-secondary;
+                            }
+
+                            // ============================================================
+                            // English section
+                            // ============================================================
+                            Text {
+                                text: "— English —";
+                                font-size: Theme.font-md;
+                                font-weight: 700;
+                                color: Theme.accent;
+                            }
+
+                            GroupBox {
+                                title: "Author and license";
+                                VerticalLayout {
+                                    spacing: Theme.spacing-sm;
+                                    padding: Theme.spacing-sm;
+                                    Text {
+                                        text: "Copyright (c) 2026 Birger Labinsch";
+                                        color: Theme.text-primary;
+                                    }
+                                    Text {
+                                        text: "License: GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)";
+                                        color: Theme.text-primary;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "License text: https://www.gnu.org/licenses/agpl-3.0.html";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "Source code (required by AGPL): https://github.com/Birgerson/stars-ad-permission-analyzer";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "This software was largely implemented with AI assistance: Code with Anthropic Claude Opus. Birger Labinsch is the prompt engineer, not the code author.";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            GroupBox {
+                                title: "Read-only principle — three hard limits";
+                                VerticalLayout {
+                                    spacing: Theme.spacing-sm;
+                                    padding: Theme.spacing-sm;
+                                    Text {
+                                        text: "1. Read-only. Stars never writes to NTFS, SMB shares, or Active Directory. No future release will ship write functions either.";
+                                        color: Theme.text-primary;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "2. No agent on target systems. Stars runs on an audit workstation or an audit DC. It installs nothing on file servers or other DCs.";
+                                        color: Theme.text-primary;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "3. No backdoor authentication. Stars binds via LDAP (LDAPS preferred), nothing else. No hidden telemetry, no update beacons without signature verification.";
+                                        color: Theme.text-primary;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            GroupBox {
+                                title: "Backup duty and disclaimer";
+                                VerticalLayout {
+                                    spacing: Theme.spacing-sm;
+                                    padding: Theme.spacing-sm;
+                                    Text {
+                                        text: "Before any production use, a full and tested backup of the affected systems is mandatory — even though Stars is architecturally read-only. Driver bugs, antivirus interventions, or load spikes can cause incidents even with a pure read-only tool.";
+                                        color: Theme.text-primary;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "Use at your own risk. Birger Labinsch assumes no liability for damages, data loss, incorrect audit results, or consequences arising from the use of this software. Full disclaimer in README.md (section 'Disclaimer').";
+                                        color: Theme.text-primary;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            GroupBox {
+                                title: "Contact and further documentation";
+                                VerticalLayout {
+                                    spacing: Theme.spacing-sm;
+                                    padding: Theme.spacing-sm;
+                                    Text {
+                                        text: "E-mail: birger@labinsch.de";
+                                        color: Theme.text-primary;
+                                    }
+                                    Text {
+                                        text: "Issues / bugs: https://github.com/Birgerson/stars-ad-permission-analyzer/issues";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "Decision guide before use: docs/can-stars-help-you.md in the repo (DE + EN).";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "Build verified against Windows Server 2022 Standard. Windows Server 2025 has not been verified yet.";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            // ============================================================
+                            // Deutsche Sektion
+                            // ============================================================
+                            Text {
+                                text: "— Deutsch —";
+                                font-size: Theme.font-md;
+                                font-weight: 700;
+                                color: Theme.accent;
+                            }
+
+                            GroupBox {
+                                title: "Urheber und Lizenz";
+                                VerticalLayout {
+                                    spacing: Theme.spacing-sm;
+                                    padding: Theme.spacing-sm;
+                                    Text {
+                                        text: "Copyright (c) 2026 Birger Labinsch";
+                                        color: Theme.text-primary;
+                                    }
+                                    Text {
+                                        text: "Lizenz: GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)";
+                                        color: Theme.text-primary;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "Lizenztext: https://www.gnu.org/licenses/agpl-3.0.html";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "Quellcode (AGPL-Pflicht): https://github.com/Birgerson/stars-ad-permission-analyzer";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "Diese Software wurde ueberwiegend KI-gestuetzt implementiert: Code with Anthropic Claude Opus. Birger Labinsch ist Prompt Engineer, nicht Code-Autor.";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            GroupBox {
+                                title: "Read-only-Prinzip — drei harte Grenzen";
+                                VerticalLayout {
+                                    spacing: Theme.spacing-sm;
+                                    padding: Theme.spacing-sm;
+                                    Text {
+                                        text: "1. Read-only. Stars schreibt nie an NTFS, SMB-Shares oder Active Directory. Es wird auch in keinem zukuenftigen Release Schreibfunktionen bekommen.";
+                                        color: Theme.text-primary;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "2. Kein Agent auf Zielsystemen. Stars laeuft auf einer Audit-Workstation oder einem Audit-DC. Es installiert nichts auf Fileservern oder anderen DCs.";
+                                        color: Theme.text-primary;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "3. Keine Backdoor-Authentifizierung. Stars bindet per LDAP (idealerweise LDAPS), sonst nichts. Keine versteckte Telemetrie, keine Update-Beacons ohne Signaturpruefung.";
+                                        color: Theme.text-primary;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            GroupBox {
+                                title: "Backup-Pflicht und Haftungsausschluss";
+                                VerticalLayout {
+                                    spacing: Theme.spacing-sm;
+                                    padding: Theme.spacing-sm;
+                                    Text {
+                                        text: "Vor jeder Nutzung in einer produktiven Umgebung ist ein vollstaendiges, getestetes Backup der betroffenen Systeme verpflichtend — auch wenn Stars architektonisch ausschliesslich lesend arbeitet. Treiberbugs, Antivirus-Eingriffe oder Lastspitzen koennen auch bei einem reinen Read-only-Tool Stoerungen verursachen.";
+                                        color: Theme.text-primary;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "Die Nutzung erfolgt auf eigene Verantwortung. Birger Labinsch uebernimmt keine Haftung fuer Schaeden, Datenverluste, falsche Audit-Ergebnisse oder Folgen aus der Nutzung dieser Software. Vollstaendiger Haftungsausschluss in README.md (Abschnitt 'Haftungsausschluss').";
+                                        color: Theme.text-primary;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            GroupBox {
+                                title: "Kontakt und weiterfuehrende Doku";
+                                VerticalLayout {
+                                    spacing: Theme.spacing-sm;
+                                    padding: Theme.spacing-sm;
+                                    Text {
+                                        text: "E-Mail: birger@labinsch.de";
+                                        color: Theme.text-primary;
+                                    }
+                                    Text {
+                                        text: "Issues / Bugs: https://github.com/Birgerson/stars-ad-permission-analyzer/issues";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "Entscheidungshilfe vor Einsatz: docs/can-stars-help-you.md im Repo (DE + EN).";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: "Build verifiziert gegen Windows Server 2022 Standard. Windows Server 2025 ist noch nicht geprueft.";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
                 }
             }
