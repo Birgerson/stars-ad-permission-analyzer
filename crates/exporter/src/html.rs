@@ -10,8 +10,8 @@ use std::io::Write;
 use adpa_core::{
     error::CoreError,
     model::{
-        AceKind, EffectivePermission, LocalGroupEvalStatus, PathTrustees, PermissionDiagnostic,
-        RiskFinding, RiskSeverity, ShareEvalStatus, TrusteeCategory,
+        AceKind, EffectivePermission, LocalGroupEvalStatus, PathTrusteeEntry, PathTrustees,
+        PermissionDiagnostic, RiskFinding, RiskSeverity, ShareEvalStatus, TrusteeCategory,
     },
     traits::{AnalysisResult, ExportTarget, Exporter},
 };
@@ -387,40 +387,69 @@ fn write_trustees_table(s: &mut String, entries: &[PathTrustees]) -> Result<(), 
         }
         writeln!(
             s,
-            "<details><summary><strong>{}</strong> &nbsp;<span style=\"color:#6c7a89\">({} ACE-Eintr&auml;ge)</span></summary>",
+            "<details><summary><strong>{}</strong> &nbsp;<span style=\"color:#6c7a89\">({} Eintr&auml;ge)</span></summary>",
             escape_html(&entry.path.0),
             entry.trustees.len()
         )
         .map_err(|e| CoreError::Export(e.to_string()))?;
         s.push_str("<table><thead><tr><th>Trustee</th><th>Art</th><th>Rechte</th><th>Maske</th><th>Quelle</th><th>Anwendung</th><th>Schicht</th></tr></thead><tbody>\n");
-        for t in &entry.trustees {
-            let expanded = permission_engine::mask::expand_generic_rights(t.mask.0);
-            let rights = NormalizedRights::new(expanded);
-            let display = t.display_name.clone().unwrap_or_else(|| t.sid.0.clone());
-            let kind = match t.kind {
-                AceKind::Allow => "<span style=\"color:#278d4f;font-weight:700\">Allow</span>",
-                AceKind::Deny => "<span style=\"color:#c0392b;font-weight:700\">Deny</span>",
-            };
-            let source = if t.inherited { "inherited" } else { "explicit" };
-            let category = match t.category {
-                TrusteeCategory::Ntfs => "NTFS",
-                TrusteeCategory::Share => "Share",
-            };
-            let applies = if matches!(t.category, TrusteeCategory::Share) {
-                "Share".to_owned()
-            } else {
-                applies_to_label(t.inheritance_flags, t.propagation_flags)
-            };
-            writeln!(
-                s,
-                "<tr><td><span title=\"{}\">{}</span></td><td>{kind}</td><td>{}</td><td><code>0x{:08X}</code></td><td>{source}</td><td>{}</td><td>{category}</td></tr>",
-                escape_html(&t.sid.0),
-                escape_html(&display),
-                rights_badge(rights),
-                t.mask.0,
-                escape_html(&applies),
-            )
-            .map_err(|e| CoreError::Export(e.to_string()))?;
+        for entry_ref in &entry.trustees {
+            // Round-10 Finding 4: zwei Render-Pfade — Diagnostic-Zeilen
+            // werden visuell anders dargestellt (gelblicher Hintergrund,
+            // ITALIC, KEIN Allow/Deny-Label), damit Auditoren auf einen
+            // Blick sehen: das ist kein ACE, sondern ein Hinweis.
+            // Round-10 finding 4: two render paths — diagnostic rows are
+            // visually different (yellowish background, italic, no
+            // Allow/Deny label) so auditors immediately see this is not
+            // an ACE but a hint.
+            match entry_ref {
+                PathTrusteeEntry::Diagnostic { category, message } => {
+                    let category_label = match category {
+                        TrusteeCategory::Ntfs => "NTFS",
+                        TrusteeCategory::Share => "Share",
+                    };
+                    writeln!(
+                        s,
+                        "<tr style=\"background-color:#fff7d6\"><td colspan=\"6\"><em>&#9888; Diagnose: {}</em></td><td>{}</td></tr>",
+                        escape_html(message),
+                        category_label,
+                    )
+                    .map_err(|e| CoreError::Export(e.to_string()))?;
+                }
+                PathTrusteeEntry::Ace(t) => {
+                    let expanded = permission_engine::mask::expand_generic_rights(t.mask.0);
+                    let rights = NormalizedRights::new(expanded);
+                    let display = t.display_name.clone().unwrap_or_else(|| t.sid.0.clone());
+                    let kind = match t.kind {
+                        AceKind::Allow => {
+                            "<span style=\"color:#278d4f;font-weight:700\">Allow</span>"
+                        }
+                        AceKind::Deny => {
+                            "<span style=\"color:#c0392b;font-weight:700\">Deny</span>"
+                        }
+                    };
+                    let source = if t.inherited { "inherited" } else { "explicit" };
+                    let category = match t.category {
+                        TrusteeCategory::Ntfs => "NTFS",
+                        TrusteeCategory::Share => "Share",
+                    };
+                    let applies = if matches!(t.category, TrusteeCategory::Share) {
+                        "Share".to_owned()
+                    } else {
+                        applies_to_label(t.inheritance_flags, t.propagation_flags)
+                    };
+                    writeln!(
+                        s,
+                        "<tr><td><span title=\"{}\">{}</span></td><td>{kind}</td><td>{}</td><td><code>0x{:08X}</code></td><td>{source}</td><td>{}</td><td>{category}</td></tr>",
+                        escape_html(&t.sid.0),
+                        escape_html(&display),
+                        rights_badge(rights),
+                        t.mask.0,
+                        escape_html(&applies),
+                    )
+                    .map_err(|e| CoreError::Export(e.to_string()))?;
+                }
+            }
         }
         s.push_str("</tbody></table>\n</details>\n");
     }

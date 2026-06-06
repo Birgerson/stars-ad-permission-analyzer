@@ -742,12 +742,79 @@ pub struct PathTrustee {
     pub category: TrusteeCategory,
 }
 
-/// Trustee-Auflistung pro Pfad: Pfad → Liste seiner ACEs.
-/// Per-path trustee listing: path → list of its ACEs.
+/// Eintrag in der pfadzentrierten Trustee-Liste — entweder ein echter
+/// ACE oder ein Diagnose-Hinweis (zum Beispiel "Share-DACL konnte nicht
+/// gelesen werden", "NULL DACL festgestellt"). Vor Review-Runde 10
+/// wurden Diagnose-Hinweise als synthetische `PathTrustee`-Einträge
+/// mit `kind = Allow` und leerer SID modelliert — das war für JSON-
+/// Konsumenten irrefuehrend, weil ein Diagnose-Hinweis dort wie ein
+/// realer Allow-ACE aussah. Mit dem Enum wird die Unterscheidung
+/// typisiert und ist im JSON-Output via Tag (`"kind": "ace"` vs.
+/// `"kind": "diagnostic"`) eindeutig.
+///
+/// Entry in the path-centric trustee list — either a real ACE or a
+/// diagnostic hint (for example "share DACL could not be read",
+/// "NULL DACL detected"). Before review round 10 diagnostic hints
+/// were modelled as synthetic `PathTrustee` records with `kind = Allow`
+/// and empty SID — misleading for JSON consumers because the
+/// diagnostic looked like a real Allow ACE. With the enum the
+/// distinction is typed and visible in the JSON output via the tag
+/// (`"kind": "ace"` vs. `"kind": "diagnostic"`).
+// Der Discriminator heisst bewusst `entry_kind`, NICHT `kind`. Grund:
+// `PathTrustee` traegt ein Feld `kind: AceKind` (Allow/Deny). Ein
+// internally-tagged Enum mit `tag = "kind"` wuerde diesen Feldnamen im
+// JSON ueberschreiben (Serde wirft hier kein Compile-Error, sondern
+// silently versetzt den Inhalt). Ein eigener Tag-Name vermeidet das.
+// The discriminator is deliberately named `entry_kind`, NOT `kind`.
+// Reason: `PathTrustee` carries a field `kind: AceKind` (Allow/Deny).
+// An internally-tagged enum with `tag = "kind"` would silently
+// overwrite that field name in JSON (Serde does not raise a compile
+// error here). A dedicated tag name avoids the collision.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "entry_kind", rename_all = "snake_case")]
+pub enum PathTrusteeEntry {
+    /// Ein echter ACE aus der DACL.
+    /// A real ACE from the DACL.
+    Ace(PathTrustee),
+    /// Ein Diagnose-Hinweis. `category` gibt an, welche Schicht
+    /// (NTFS oder Share) gemeint ist; `message` enthaelt die fuer
+    /// Auditoren lesbare Begruendung.
+    /// A diagnostic hint. `category` says which layer (NTFS or share)
+    /// it refers to; `message` carries the auditor-readable reason.
+    Diagnostic {
+        category: TrusteeCategory,
+        message: String,
+    },
+}
+
+impl PathTrusteeEntry {
+    /// Hilfsfunktion: liefert die `TrusteeCategory` unabhaengig von der
+    /// Variante. Render-Code muss damit nicht selbst matchen.
+    /// Helper: returns the `TrusteeCategory` regardless of the variant.
+    /// Render code does not need to match itself.
+    pub fn category(&self) -> TrusteeCategory {
+        match self {
+            PathTrusteeEntry::Ace(ace) => ace.category,
+            PathTrusteeEntry::Diagnostic { category, .. } => *category,
+        }
+    }
+
+    /// Konstruktor fuer Diagnose-Hinweise.
+    /// Constructor for diagnostic hints.
+    pub fn diagnostic(category: TrusteeCategory, message: impl Into<String>) -> Self {
+        PathTrusteeEntry::Diagnostic {
+            category,
+            message: message.into(),
+        }
+    }
+}
+
+/// Trustee-Auflistung pro Pfad: Pfad → Liste seiner ACEs und Diagnose-Hinweise.
+/// Per-path trustee listing: path → list of its ACEs and diagnostic hints.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathTrustees {
     pub path: NormalizedPath,
-    pub trustees: Vec<PathTrustee>,
+    pub trustees: Vec<PathTrusteeEntry>,
 }
 
 /// Risikobefund

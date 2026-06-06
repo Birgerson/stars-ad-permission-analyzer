@@ -1,6 +1,6 @@
 # Stars — Bekannte Grenzen und Roadmap (v1.6+)
 
-**Stand:** v1.5.15 — 2026-06-06
+**Stand:** v1.5.16 — 2026-06-06
 **Zweck:** Ehrliche Aufzählung der Stellen, an denen Stars **strukturell
 nicht garantieren kann**, ein vollständiges Bild zu liefern.
 

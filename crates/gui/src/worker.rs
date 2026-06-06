@@ -1057,27 +1057,42 @@ async fn handle_scan(
     let scan_access_context = AccessContext::for_path_with_smb(root, smb_server, share_name);
 
     // SID→Name-Tabelle einmal für den gesamten Scan aufbauen. Trustee-SIDs
+    // Round-10 Finding 1: Server/Share-Ableitung lebt jetzt zentral in
+    // `validation::path::SmbAuditContext` — dieselbe Quelle wie CLI
+    // analyze/scan und `resolve_scan_share_status`. Ergebnis: alle
+    // Pfade in CLI und GUI sehen exakt dieselbe Server/Share-Logik.
+    // Round-10 finding 1: server/share derivation lives centrally in
+    // `validation::path::SmbAuditContext` — the same source CLI
+    // analyze/scan and `resolve_scan_share_status` use. Result: every
+    // path in CLI and GUI sees the exact same server/share logic.
+    let share_overlay: Option<ShareTrusteeOverlay> =
+        validation::path::SmbAuditContext::resolve(root, smb_server, share_name)
+            .map(|ctx| read_share_overlay(&ctx.server, &ctx.share));
+
+    // SID→Name-Tabelle für den gesamten Scan einmal aufbauen. Trustee-SIDs
     // wiederholen sich quer über alle Pfade — wir sammeln unique SIDs aus
     // allen DACLs vorab und vermeiden N×M LSA-Aufrufe.
+    // Round-10 Finding 2: deckt jetzt auch die Share-Overlay-SIDs ab und
+    // wird an die Trustee-Build-Funktion uebergeben, sodass diese KEINEN
+    // LSA-Aufruf pro Pfad mehr macht.
     // Build the SID→name table once for the entire scan. Trustee SIDs
     // repeat across all paths — we collect the unique SIDs from every
     // DACL up front and avoid N×M LSA round-trips.
+    // Round-10 finding 2: now also covers share-overlay SIDs and is
+    // handed to the trustee build function so it makes NO per-path LSA
+    // call.
     #[cfg(windows)]
     let scan_sid_names = {
         use std::collections::HashSet;
         let mut seen: HashSet<String> = HashSet::new();
-        let trustees: Vec<String> = walk
-            .objects
-            .iter()
-            .flat_map(|fso| fso.dacl.iter())
-            .filter_map(|ace| {
-                if seen.insert(ace.sid.0.clone()) {
-                    Some(ace.sid.0.clone())
-                } else {
-                    None
+        let mut trustees: Vec<String> = Vec::new();
+        for fso in &walk.objects {
+            for sid in exporter::collect_ace_sids_for_resolution(fso, share_overlay.as_ref()) {
+                if seen.insert(sid.clone()) {
+                    trustees.push(sid);
                 }
-            })
-            .collect();
+            }
+        }
         ad_resolver::build_sid_name_map(&memberships, trustees)
     };
     #[cfg(not(windows))]
@@ -1087,30 +1102,16 @@ async fn handle_scan(
     // Collects the raw path-centric trustee lists for the HTML exporter.
     let mut path_trustees: Vec<adpa_core::model::PathTrustees> = Vec::new();
 
-    // Share-DACL einmal pro Share lesen und als Overlay an jeden Pfad
-    // anhängen — closes review 2026-06-04 round 3 finding 3. Vorher fehlten
-    // die Share-Trustees komplett in der Pfad-Tabelle, obwohl die UI als
-    // „who can access this path at all" beschriftet war.
-    // Read the share DACL once per share and apply it as an overlay to
-    // every path — closes round 3 finding 3.
-    let share_overlay: Option<ShareTrusteeOverlay> = {
-        use validation::path::{effective_smb_target, parse_unc_components};
-        let server = effective_smb_target(root, smb_server);
-        let share = share_name
-            .map(|s| s.to_string())
-            .or_else(|| parse_unc_components(root).map(|(_, s)| s));
-        match (server, share) {
-            (Some(s), Some(n)) => Some(read_share_overlay(&s, &n)),
-            _ => None,
-        }
-    };
-
     for fso in walk.objects {
         let path = fso.path.0.clone();
         // Trustees pro Pfad bauen — NTFS aus dem FSO, Share aus dem
-        // vorab gelesenen Overlay (Single Read pro Share).
-        // Per-path trustees — NTFS from FSO, share from the pre-read overlay.
-        let raw_trustees = build_path_trustees_with_share(&fso, share_overlay.as_ref());
+        // vorab gelesenen Overlay (Single Read pro Share). Round-10
+        // Finding 2: die scan-weite SID→Name-Map vermeidet LSA pro Pfad.
+        // Per-path trustees — NTFS from FSO, share from the pre-read
+        // overlay. Round-10 finding 2: scan-wide SID→name map avoids
+        // per-path LSA.
+        let raw_trustees =
+            build_path_trustees_with_share_and_names(&fso, share_overlay.as_ref(), &scan_sid_names);
         let trustees_for_row: Vec<TrusteeRow> =
             raw_trustees.iter().map(trustee_row_for_display).collect();
         path_trustees.push(adpa_core::model::PathTrustees {
@@ -1546,8 +1547,16 @@ fn analyze_trustees(
 // other. The GUI re-exports the symbols so existing call sites keep
 // compiling.
 pub use exporter::{
-    build_path_trustees, build_path_trustees_with_share, read_share_overlay, ShareTrusteeOverlay,
+    build_path_trustees, build_path_trustees_with_share_and_names, read_share_overlay,
+    ShareTrusteeOverlay,
 };
+
+// `build_path_trustees_with_share` (ohne SID-Map) bleibt in
+// `exporter` zugaenglich, wird in GUI seit Round-10 Finding 2 aber
+// nicht mehr benoetigt — der Scan-Pfad nutzt jetzt die Map-Variante.
+// `build_path_trustees_with_share` (no SID map) is still available in
+// `exporter`, but the GUI no longer needs it since round-10 finding 2
+// — the scan path now uses the map variant.
 
 // Der frueher hier definierte Helfer-Block (ShareTrusteeOverlay-Struct
 // plus drei Funktionen) wurde entfernt — siehe Re-Export oben.
@@ -1560,42 +1569,71 @@ pub use exporter::{
 /// Converts a raw `PathTrustee` to the display-formatted `TrusteeRow`
 /// consumed by the Slint UI. Derives "Applies to", mask hex and the
 /// Allow/Deny label from the raw model.
-pub fn trustee_row_for_display(t: &adpa_core::model::PathTrustee) -> TrusteeRow {
-    use adpa_core::model::{AceKind, TrusteeCategory};
+pub fn trustee_row_for_display(entry: &adpa_core::model::PathTrusteeEntry) -> TrusteeRow {
+    use adpa_core::model::{AceKind, PathTrusteeEntry, TrusteeCategory};
     use permission_engine::mask::expand_generic_rights;
 
-    let expanded = expand_generic_rights(t.mask.0);
-    let rights = NormalizedRights::new(expanded);
-    let category = match t.category {
-        TrusteeCategory::Ntfs => "NTFS",
-        TrusteeCategory::Share => "Share",
-    };
-    let kind_label = match t.kind {
-        AceKind::Allow => "Allow",
-        AceKind::Deny => "Deny",
-    };
-    // Bei Share-Einträgen ohne Inheritance-Modell die statische
-    // „Share"-Anwendung beibehalten — sonst die Windows-typische
-    // „Applies to"-Bezeichnung aus den Flags.
-    // For share entries without an inheritance model keep the static
-    // "Share" label — otherwise derive the Windows-style "Applies to"
-    // text from the flags.
-    let applies_to = if matches!(t.category, TrusteeCategory::Share) {
-        "Share".to_owned()
-    } else {
-        applies_to_label(t.inheritance_flags, t.propagation_flags)
-    };
-    let source = if t.inherited { "inherited" } else { "explicit" };
-    let display_name = t.display_name.clone().unwrap_or_else(|| t.sid.0.clone());
-    TrusteeRow {
-        sid: t.sid.0.clone(),
-        display_name,
-        kind: kind_label.to_owned(),
-        rights_label: format!("{} ({})", rights.display_name(), rights.label()),
-        mask_hex: format!("0x{:08X}", t.mask.0),
-        source: source.to_owned(),
-        applies_to,
-        category: category.to_owned(),
+    match entry {
+        // Round-10 Finding 4: Diagnose-Variante wird als eigenstaendige
+        // Zeile gerendert — kein Allow/Deny-Label, leere SID-/Maske-Felder,
+        // dafuer der Begruendungstext im display_name. Die GUI rendert sie
+        // visuell unterscheidbar (im Slint-Layout via leerem `kind` und
+        // gelblichem Hintergrund auf dem TrusteeRow-Render-Pfad).
+        // Round-10 finding 4: diagnostic variant becomes its own row —
+        // no Allow/Deny label, empty SID/mask fields, reason text in
+        // display_name. The GUI renders it visibly different (in Slint
+        // via empty `kind` and a yellowish background).
+        PathTrusteeEntry::Diagnostic { category, message } => {
+            let category_label = match category {
+                TrusteeCategory::Ntfs => "NTFS",
+                TrusteeCategory::Share => "Share",
+            };
+            TrusteeRow {
+                sid: String::new(),
+                display_name: format!("\u{26A0} {}", message),
+                kind: "Diagnose".to_owned(),
+                rights_label: "—".to_owned(),
+                mask_hex: "—".to_owned(),
+                source: "—".to_owned(),
+                applies_to: "—".to_owned(),
+                category: category_label.to_owned(),
+            }
+        }
+        PathTrusteeEntry::Ace(t) => {
+            let expanded = expand_generic_rights(t.mask.0);
+            let rights = NormalizedRights::new(expanded);
+            let category = match t.category {
+                TrusteeCategory::Ntfs => "NTFS",
+                TrusteeCategory::Share => "Share",
+            };
+            let kind_label = match t.kind {
+                AceKind::Allow => "Allow",
+                AceKind::Deny => "Deny",
+            };
+            // Bei Share-Einträgen ohne Inheritance-Modell die statische
+            // „Share"-Anwendung beibehalten — sonst die Windows-typische
+            // „Applies to"-Bezeichnung aus den Flags.
+            // For share entries without an inheritance model keep the static
+            // "Share" label — otherwise derive the Windows-style "Applies to"
+            // text from the flags.
+            let applies_to = if matches!(t.category, TrusteeCategory::Share) {
+                "Share".to_owned()
+            } else {
+                applies_to_label(t.inheritance_flags, t.propagation_flags)
+            };
+            let source = if t.inherited { "inherited" } else { "explicit" };
+            let display_name = t.display_name.clone().unwrap_or_else(|| t.sid.0.clone());
+            TrusteeRow {
+                sid: t.sid.0.clone(),
+                display_name,
+                kind: kind_label.to_owned(),
+                rights_label: format!("{} ({})", rights.display_name(), rights.label()),
+                mask_hex: format!("0x{:08X}", t.mask.0),
+                source: source.to_owned(),
+                applies_to,
+                category: category.to_owned(),
+            }
+        }
     }
 }
 
@@ -1834,23 +1872,20 @@ fn resolve_share_status(
     access_context: AccessContext,
 ) -> (adpa_core::model::ShareMaskStatus, usize) {
     use adpa_core::model::ShareMaskStatus;
-    // Server-Wahl: expliziter `smb_server` schlägt UNC-Server (Finding 2).
-    // Share-Wahl: expliziter `share_name` schlägt UNC-Share.
-    // Server selection: explicit `smb_server` beats the UNC server (finding 2).
-    // Share selection: explicit `share_name` beats the UNC share.
-    use validation::path::{effective_smb_target, parse_unc_components};
-    let path_components = parse_unc_components(path);
-    let server = match effective_smb_target(path, smb_server) {
-        Some(s) => s,
+    // Round-10 Finding 1: Server- und Share-Ableitung kommen jetzt aus
+    // `SmbAuditContext::resolve` — dieselbe Quelle, die der Trustee-
+    // Overlay-Bau und die CLI-Pfade nutzen. Damit verhalten sich Mask-
+    // Computation und Trustee-Overlay garantiert konsistent.
+    // Round-10 finding 1: server and share derivation come from
+    // `SmbAuditContext::resolve` — the same source the trustee overlay
+    // build and the CLI paths use. Mask computation and trustee
+    // overlay are guaranteed to agree.
+    let smb_ctx = match validation::path::SmbAuditContext::resolve(path, smb_server, share_name) {
+        Some(c) => c,
         None => return (ShareMaskStatus::NotApplicable, 0),
     };
-    let share = match share_name {
-        Some(s) => s.to_string(),
-        None => match path_components {
-            Some((_, s)) => s,
-            None => return (ShareMaskStatus::NotApplicable, 0),
-        },
-    };
+    let server = smb_ctx.server;
+    let share = smb_ctx.share;
 
     // Token-SIDs muessen Share- und NTFS-Auswertung uebereinstimmend abdecken.
     // Der Access-Context sorgt zusätzlich dafür, dass z. B. NETWORK (S-1-5-2)
@@ -2037,7 +2072,7 @@ mod tests {
             null_dacl: false,
         };
         let overlay = ShareTrusteeOverlay {
-            trustees: vec![PathTrustee {
+            trustees: vec![adpa_core::model::PathTrusteeEntry::Ace(PathTrustee {
                 sid: Sid("S-1-5-32-545".to_owned()),
                 display_name: Some("BUILTIN\\Users".to_owned()),
                 kind: AceKind::Allow,
@@ -2046,18 +2081,20 @@ mod tests {
                 inheritance_flags: 0,
                 propagation_flags: 0,
                 category: TrusteeCategory::Share,
-            }],
+            })],
         };
 
-        let combined = build_path_trustees_with_share(&fso, Some(&overlay));
+        let empty_map: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        let combined = build_path_trustees_with_share_and_names(&fso, Some(&overlay), &empty_map);
 
         let ntfs_count = combined
             .iter()
-            .filter(|t| matches!(t.category, TrusteeCategory::Ntfs))
+            .filter(|t| matches!(t.category(), TrusteeCategory::Ntfs))
             .count();
         let share_count = combined
             .iter()
-            .filter(|t| matches!(t.category, TrusteeCategory::Share))
+            .filter(|t| matches!(t.category(), TrusteeCategory::Share))
             .count();
         assert_eq!(ntfs_count, 1, "must contain the NTFS trustee");
         assert_eq!(
@@ -2092,11 +2129,13 @@ mod tests {
             unsupported_aces: vec![],
             null_dacl: false,
         };
-        let combined = build_path_trustees_with_share(&fso, None);
+        let empty_map: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        let combined = build_path_trustees_with_share_and_names(&fso, None, &empty_map);
         assert!(
             combined
                 .iter()
-                .all(|t| matches!(t.category, TrusteeCategory::Ntfs)),
+                .all(|t| matches!(t.category(), TrusteeCategory::Ntfs)),
             "no overlay → only NTFS trustees"
         );
     }

@@ -350,6 +350,73 @@ pub fn effective_smb_target(path: &str, explicit_smb_server: Option<&str>) -> Op
     parse_unc_components(path).map(|(server, _share)| server)
 }
 
+/// Typisierter SMB-Audit-Kontext: enthaelt **beide** Bausteine
+/// (`server`, `share`), die nötig sind, um eine Share-DACL zu lesen
+/// oder einen Share-Overlay zu bauen. Ein UNC-Pfad wie
+/// `\\fs01\data\foo\bar` liefert `("fs01", "data")`; ein lokaler Pfad
+/// ohne explizite SMB-Flags liefert `None`.
+///
+/// Eingefuehrt fuer Review-Runde 10 Finding 1: vorher hat die CLI an
+/// drei Stellen einzeln Server **oder** Share aus Pfad und Flags
+/// abgeleitet, das fuehrte dazu, dass `path_trustees` bei einem reinen
+/// UNC-Aufruf ohne `--smb-server`/`--share-name` die Share-Schicht
+/// stillschweigend wegliess, waehrend `share_status` sie korrekt
+/// auswertete. Mit diesem Typ haben CLI und GUI genau **eine** Quelle
+/// fuer die Ableitung.
+///
+/// Typed SMB audit context: holds **both** building blocks (`server`,
+/// `share`) needed to read a share DACL or build a share overlay. A
+/// UNC path like `\\fs01\data\foo\bar` yields `("fs01", "data")`; a
+/// local path without explicit SMB flags yields `None`.
+///
+/// Introduced for review round 10 finding 1: the CLI used to derive
+/// server **or** share from path and flags at three separate sites,
+/// which caused `path_trustees` to silently drop the share layer on a
+/// plain UNC call without `--smb-server`/`--share-name` while
+/// `share_status` evaluated it correctly. With this type CLI and GUI
+/// have exactly **one** source for the derivation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmbAuditContext {
+    pub server: String,
+    pub share: String,
+}
+
+impl SmbAuditContext {
+    /// Leitet den effektiven SMB-Kontext aus Pfad und optionalen
+    /// expliziten Flags ab. Prioritaet pro Feld: **explizit > UNC**.
+    ///
+    /// Wichtige Eigenschaft (vgl. Review-Runde 10 Finding 1): liefert
+    /// **immer beide** Felder oder `None`. Wenn explizit nur ein
+    /// Server angegeben ist (und der Pfad nicht UNC), reicht das
+    /// nicht — der Share-Name fehlt fuer den DACL-Lookup. Ergebnis:
+    /// `None`, der Aufrufer sieht klar „kein SMB-Kontext bestimmbar".
+    ///
+    /// Derives the effective SMB context from path and optional
+    /// explicit flags. Per-field priority: **explicit > UNC**.
+    ///
+    /// Important property (review round 10 finding 1): always
+    /// returns **both** fields or `None`. If only a server is given
+    /// explicitly (and the path is not UNC), the share name is
+    /// missing and a DACL lookup is impossible — result: `None`, so
+    /// the caller sees clearly "no SMB context derivable".
+    pub fn resolve(
+        path: &str,
+        explicit_smb_server: Option<&str>,
+        explicit_share_name: Option<&str>,
+    ) -> Option<Self> {
+        let unc = parse_unc_components(path);
+        let server = explicit_smb_server
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_owned())
+            .or_else(|| unc.as_ref().map(|(s, _)| s.clone()))?;
+        let share = explicit_share_name
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_owned())
+            .or_else(|| unc.map(|(_, n)| n))?;
+        Some(SmbAuditContext { server, share })
+    }
+}
+
 /// Entfernt das Long-Path-Präfix (`\\?\` bzw. `\\?\UNC\`) und liefert die
 /// menschenlesbare Form als Eigentümer-String zurück. Inverse zu
 /// [`to_windows_api_path`]; wird genutzt, um `FileSystemObject.path`
@@ -854,6 +921,90 @@ mod tests {
         // This is exactly what prevents the original `C:` as server bug.
         assert_eq!(effective_smb_target(r"C:\Windows\SYSVOL", None), None);
         assert_eq!(effective_smb_target(r"C:\Windows\SYSVOL", Some("")), None);
+    }
+
+    // --- SmbAuditContext: Review-Runde 10 Finding 1 ---
+
+    /// Reine UNC ohne explizite Flags → beide Komponenten aus dem Pfad.
+    /// Das war der Hauptfall, der vor der Round-10-Korrektur nicht in
+    /// `path_trustees` einfloss.
+    /// Bare UNC without explicit flags → both fields from the path.
+    /// This was the main case that didn't reach `path_trustees`
+    /// before the round-10 fix.
+    #[test]
+    fn smb_audit_context_from_unc_alone() {
+        let ctx = SmbAuditContext::resolve(r"\\fs01\data\folder\sub", None, None)
+            .expect("UNC alone must yield both server and share");
+        assert_eq!(ctx.server, "fs01");
+        assert_eq!(ctx.share, "data");
+    }
+
+    /// Explizite Flags ueberschreiben die UNC-Komponenten — wichtig
+    /// fuer Audit-Szenarien, in denen die Share-DACL auf einem anderen
+    /// Server liegt als der Pfad selbst.
+    /// Explicit flags override the UNC components — important for
+    /// audit scenarios where the share DACL lives on a server
+    /// different from the path itself.
+    #[test]
+    fn smb_audit_context_explicit_flags_override_unc() {
+        let ctx = SmbAuditContext::resolve(
+            r"\\fs01\data\folder",
+            Some("dr01.corp.local"),
+            Some("backup"),
+        )
+        .expect("explicit flags must yield a context");
+        assert_eq!(ctx.server, "dr01.corp.local");
+        assert_eq!(ctx.share, "backup");
+    }
+
+    /// Lokaler Pfad ohne Flags → kein SMB-Kontext (kein stillschweigendes
+    /// `("C", "Windows")` aus `C:\Windows\…`).
+    /// Local path without flags → no SMB context (no silent
+    /// `("C", "Windows")` derived from `C:\Windows\…`).
+    #[test]
+    fn smb_audit_context_local_path_yields_none() {
+        assert_eq!(
+            SmbAuditContext::resolve(r"C:\Windows\SYSVOL", None, None),
+            None
+        );
+    }
+
+    /// Nur Server explizit, Pfad lokal, kein Share → `None`. Vorher haetten
+    /// einzelne Helper an dieser Stelle einen Halb-Kontext gebaut, mit
+    /// dem dann `get_share_dacl` mit leerem Share-Namen aufgerufen worden
+    /// waere.
+    /// Server only explicit, path local, no share → `None`. Previously
+    /// individual helpers would have built a half-context here, leading
+    /// to `get_share_dacl` calls with an empty share name.
+    #[test]
+    fn smb_audit_context_server_without_share_yields_none() {
+        assert_eq!(
+            SmbAuditContext::resolve(r"C:\data", Some("fs01"), None),
+            None
+        );
+    }
+
+    /// Mischung: Server explizit, Share aus UNC.
+    /// Mix: server explicit, share from UNC.
+    #[test]
+    fn smb_audit_context_mixed_explicit_server_unc_share() {
+        let ctx = SmbAuditContext::resolve(r"\\fs01\data\x", Some("fs02"), None)
+            .expect("mix must yield a context");
+        assert_eq!(ctx.server, "fs02");
+        assert_eq!(ctx.share, "data");
+    }
+
+    /// Leere String-Flags zaehlen als „nicht gesetzt" — Defense gegen
+    /// CLI-Frontends, die `Option<String>` immer als `Some("")`
+    /// uebergeben statt `None`.
+    /// Empty string flags count as "not set" — defence against CLI
+    /// frontends that always hand over `Some("")` instead of `None`.
+    #[test]
+    fn smb_audit_context_empty_explicit_flags_are_treated_as_none() {
+        let ctx = SmbAuditContext::resolve(r"\\fs01\data\x", Some(""), Some(""))
+            .expect("empty explicit flags must fall back to UNC");
+        assert_eq!(ctx.server, "fs01");
+        assert_eq!(ctx.share, "data");
     }
 
     #[test]

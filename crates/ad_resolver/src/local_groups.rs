@@ -24,10 +24,11 @@ use adpa_core::{
     model::{GroupMembership, Identity, MembershipPath, MembershipPathSource, Sid},
 };
 use tracing::{debug, warn};
+use win_safe::netapi::NetApiBuffer;
 use windows_sys::Win32::Foundation::{LocalFree, ERROR_ACCESS_DENIED, FALSE, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
-    NetApiBufferFree, NetLocalGroupGetMembers, NetUserGetLocalGroups, LG_INCLUDE_INDIRECT,
-    LOCALGROUP_MEMBERS_INFO_2, LOCALGROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH,
+    NetLocalGroupGetMembers, NetUserGetLocalGroups, LG_INCLUDE_INDIRECT, LOCALGROUP_MEMBERS_INFO_2,
+    LOCALGROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH,
 };
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::LookupAccountNameW;
@@ -182,20 +183,22 @@ pub fn resolve_local_group_sids_strict(
     let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let account_w = to_wide_null(account);
 
-    let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+    // RAII-Guard: gibt den LOCALGROUP_USERS_INFO_0-Puffer in jedem Pfad frei.
+    // RAII guard: frees the LOCALGROUP_USERS_INFO_0 buffer in every path.
+    let mut buf: NetApiBuffer<LOCALGROUP_USERS_INFO_0> = NetApiBuffer::null();
     let mut entries_read: u32 = 0;
     let mut total_entries: u32 = 0;
 
     // SAFETY: server_ptr is either null or points to a valid null-terminated wide
-    // string; account_w is a valid null-terminated wide string. buf_ptr is an OUT
-    // pointer that NetApi allocates on success and we free below with NetApiBufferFree.
+    // string; account_w is a valid null-terminated wide string. NetApiBuffer
+    // owns the allocated buffer after this call.
     let status = unsafe {
         NetUserGetLocalGroups(
             server_ptr,
             account_w.as_ptr(),
             0, // level 0 = LOCALGROUP_USERS_INFO_0
             LG_INCLUDE_INDIRECT,
-            &mut buf_ptr,
+            buf.out_ptr().cast(),
             MAX_PREFERRED_LENGTH,
             &mut entries_read,
             &mut total_entries,
@@ -203,11 +206,6 @@ pub fn resolve_local_group_sids_strict(
     };
 
     if status != NO_ERROR {
-        if !buf_ptr.is_null() {
-            // SAFETY: buf_ptr may have been partially allocated; NetApiBufferFree
-            // accepts the pointer from NetApi.
-            unsafe { NetApiBufferFree(buf_ptr.cast()) };
-        }
         return match status {
             ERROR_ACCESS_DENIED => Err(CoreError::AccessDenied(format!(
                 "NetUserGetLocalGroups: access denied for '{account}' on {server:?}"
@@ -227,15 +225,10 @@ pub fn resolve_local_group_sids_strict(
     }
 
     let mut sids = Vec::with_capacity(entries_read as usize);
-    if !buf_ptr.is_null() && entries_read > 0 {
-        // SAFETY: buf_ptr points to `entries_read` consecutive LOCALGROUP_USERS_INFO_0
-        // entries allocated by NetApi.
-        let entries = unsafe {
-            std::slice::from_raw_parts(
-                buf_ptr as *const LOCALGROUP_USERS_INFO_0,
-                entries_read as usize,
-            )
-        };
+    if !buf.is_null() && entries_read > 0 {
+        // SAFETY: buf.as_ptr() points to `entries_read` consecutive
+        // LOCALGROUP_USERS_INFO_0 entries allocated by NetApi.
+        let entries = unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };
         for entry in entries {
             // SAFETY: lgrui0_name is a valid null-terminated wide string inside the buffer.
             let name = unsafe { wide_ptr_to_string(entry.lgrui0_name) };
@@ -252,12 +245,9 @@ pub fn resolve_local_group_sids_strict(
         }
     }
 
-    if !buf_ptr.is_null() {
-        // SAFETY: see above.
-        unsafe { NetApiBufferFree(buf_ptr.cast()) };
-    }
-
     Ok(LocalGroupLookupOutcome::WithGroups(sids))
+    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
+    // `buf` is dropped here, calling NetApiBufferFree.
 }
 
 /// Versucht, lokale Gruppen für die `identity` auf dem `server` aufzulösen,
@@ -367,21 +357,23 @@ pub fn resolve_local_groups(
     let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let account_w = to_wide_null(account);
 
-    let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+    // RAII-Guard analog zu resolve_local_group_sids.
+    // RAII guard analogous to resolve_local_group_sids.
+    let mut buf: NetApiBuffer<LOCALGROUP_USERS_INFO_0> = NetApiBuffer::null();
     let mut entries_read: u32 = 0;
     let mut total_entries: u32 = 0;
 
     // SAFETY: identisch zu resolve_local_group_sids — Pointer sind gültig oder
-    // null, NetApi befüllt buf_ptr und wir geben ihn unten frei.
+    // null, NetApi befüllt den Puffer und der Guard gibt ihn im Drop frei.
     // SAFETY: same as resolve_local_group_sids — pointers are valid or null,
-    // NetApi populates buf_ptr and we free it below.
+    // NetApi populates the buffer and the guard frees it on drop.
     let status = unsafe {
         NetUserGetLocalGroups(
             server_ptr,
             account_w.as_ptr(),
             0,
             LG_INCLUDE_INDIRECT,
-            &mut buf_ptr,
+            buf.out_ptr().cast(),
             MAX_PREFERRED_LENGTH,
             &mut entries_read,
             &mut total_entries,
@@ -389,9 +381,6 @@ pub fn resolve_local_groups(
     };
 
     if status != NO_ERROR {
-        if !buf_ptr.is_null() {
-            unsafe { NetApiBufferFree(buf_ptr.cast()) };
-        }
         return match status {
             ERROR_ACCESS_DENIED => Err(CoreError::AccessDenied(format!(
                 "NetUserGetLocalGroups: access denied for '{account}' on {server:?}"
@@ -407,14 +396,9 @@ pub fn resolve_local_groups(
     }
 
     let mut result = Vec::with_capacity(entries_read as usize);
-    if !buf_ptr.is_null() && entries_read > 0 {
+    if !buf.is_null() && entries_read > 0 {
         // SAFETY: see above
-        let entries = unsafe {
-            std::slice::from_raw_parts(
-                buf_ptr as *const LOCALGROUP_USERS_INFO_0,
-                entries_read as usize,
-            )
-        };
+        let entries = unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };
         for entry in entries {
             // SAFETY: lgrui0_name is a valid null-terminated wide string inside the buffer.
             let name = unsafe { wide_ptr_to_string(entry.lgrui0_name) };
@@ -430,10 +414,9 @@ pub fn resolve_local_groups(
         }
     }
 
-    if !buf_ptr.is_null() {
-        unsafe { NetApiBufferFree(buf_ptr.cast()) };
-    }
     Ok(result)
+    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
+    // `buf` is dropped here, calling NetApiBufferFree.
 }
 
 /// Listet die direkten Mitglieder einer lokalen Gruppe via
@@ -448,23 +431,25 @@ pub fn get_local_group_members(
     let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let group_w = to_wide_null(group_name);
 
-    let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+    // RAII-Guard fuer den NetLocalGroupGetMembers-Puffer.
+    // RAII guard for the NetLocalGroupGetMembers buffer.
+    let mut buf: NetApiBuffer<LOCALGROUP_MEMBERS_INFO_2> = NetApiBuffer::null();
     let mut entries_read: u32 = 0;
     let mut total_entries: u32 = 0;
     let mut resume: usize = 0;
 
     // SAFETY: server_ptr ist null oder eine gültige PCWSTR; group_w ist eine
-    // gültige null-terminierte UTF-16-Sequenz; buf_ptr ist OUT-Pointer, den
-    // wir mit NetApiBufferFree wieder freigeben.
-    // SAFETY: server_ptr is null or a valid PCWSTR; group_w is a valid null-
-    // terminated UTF-16 sequence; buf_ptr is an OUT pointer freed below via
-    // NetApiBufferFree.
+    // gültige null-terminierte UTF-16-Sequenz; NetApi befüllt den Puffer und
+    // der Guard gibt ihn im Drop frei.
+    // SAFETY: server_ptr is null or a valid PCWSTR; group_w is a valid
+    // null-terminated UTF-16 sequence; NetApi populates the buffer and the
+    // guard frees it on drop.
     let status = unsafe {
         NetLocalGroupGetMembers(
             server_ptr,
             group_w.as_ptr(),
             2,
-            &mut buf_ptr,
+            buf.out_ptr().cast(),
             MAX_PREFERRED_LENGTH,
             &mut entries_read,
             &mut total_entries,
@@ -473,9 +458,6 @@ pub fn get_local_group_members(
     };
 
     if status != NO_ERROR {
-        if !buf_ptr.is_null() {
-            unsafe { NetApiBufferFree(buf_ptr.cast()) };
-        }
         return match status {
             ERROR_ACCESS_DENIED => Err(CoreError::AccessDenied(format!(
                 "NetLocalGroupGetMembers: access denied for '{group_name}' on {server:?}"
@@ -487,15 +469,10 @@ pub fn get_local_group_members(
     }
 
     let mut members = Vec::with_capacity(entries_read as usize);
-    if !buf_ptr.is_null() && entries_read > 0 {
+    if !buf.is_null() && entries_read > 0 {
         // SAFETY: NetApi liefert genau entries_read konsekutive Strukturen.
         // SAFETY: NetApi returns exactly entries_read consecutive structs.
-        let entries = unsafe {
-            std::slice::from_raw_parts(
-                buf_ptr as *const LOCALGROUP_MEMBERS_INFO_2,
-                entries_read as usize,
-            )
-        };
+        let entries = unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };
         for e in entries {
             // SID via ConvertSidToStringSidW.
             let sid = if e.lgrmi2_sid.is_null() {
@@ -531,10 +508,9 @@ pub fn get_local_group_members(
         }
     }
 
-    if !buf_ptr.is_null() {
-        unsafe { NetApiBufferFree(buf_ptr.cast()) };
-    }
     Ok(members)
+    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
+    // `buf` is dropped here, calling NetApiBufferFree.
 }
 
 /// Rekonstruiert konkrete Mitgliedschafts-Ketten für jede lokale Gruppe,

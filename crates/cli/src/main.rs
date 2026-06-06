@@ -696,18 +696,31 @@ async fn run_analyze(
         let status = validate_export_path(&out_path)
             .map_err(|e| anyhow::anyhow!("Invalid export path: {e}"))?;
         check_overwrite_policy(&status, force)?;
-        // Review-Runde 9 Finding 1: CLI-Exports muessen jetzt auch die
-        // pfadzentrische Trustee-Liste mitliefern — vorher war
-        // path_trustees im CLI-Pfad immer leer und JSON/HTML-Audits
-        // sahen die zweite Audit-Frage "wer steht ueberhaupt auf der
-        // ACL?" nur in der GUI.
-        // Round-9 finding 1: CLI exports must now also carry the
-        // path-centric trustee list. Before that, path_trustees was
-        // always empty in the CLI path and JSON/HTML audits only saw
-        // the second audit question "who is on the ACL at all?" in
-        // the GUI.
-        let trustees =
-            exporter::build_path_trustees(&fso, smb_server.as_deref(), share_name.as_deref());
+        // Round-9 Finding 1: CLI-Exports muessen jetzt auch die
+        // pfadzentrische Trustee-Liste mitliefern.
+        // Round-10 Finding 1: die Ableitung von Server/Share laeuft jetzt
+        // ueber `SmbAuditContext::resolve` — dieselbe Quelle, die auch
+        // `resolve_scan_share_status` nutzt. Damit sieht die Trustee-
+        // Liste auch bei einem reinen UNC-Aufruf ohne `--smb-server`/
+        // `--share-name` die Share-Schicht, statt sie still wegzulassen.
+        // Round-9 finding 1: CLI exports must carry the path-centric
+        // trustee list.
+        // Round-10 finding 1: server/share derivation now goes through
+        // `SmbAuditContext::resolve` — the same source that
+        // `resolve_scan_share_status` uses. The trustee list now sees
+        // the share layer even on a bare UNC call without
+        // `--smb-server`/`--share-name`, instead of silently dropping
+        // it.
+        let smb_context = validation::path::SmbAuditContext::resolve(
+            &path,
+            smb_server.as_deref(),
+            share_name.as_deref(),
+        );
+        let trustees = exporter::build_path_trustees(
+            &fso,
+            smb_context.as_ref().map(|c| c.server.as_str()),
+            smb_context.as_ref().map(|c| c.share.as_str()),
+        );
         let analysis = AnalysisResult {
             permissions: vec![result.clone()],
             risk_findings: risk_findings.clone(),
@@ -927,26 +940,42 @@ async fn run_scan(
         Vec::with_capacity(walk.objects.len());
     let mut unsupported_ace_paths = 0usize;
 
-    // Review-Runde 9 Finding 1: Share-Overlay einmalig pro Scan lesen
-    // (analog zur GUI seit ADR 0038), damit jeder Pfad-Aufruf von
+    // Round-9 Finding 1: Share-Overlay einmalig pro Scan lesen (analog
+    // zur GUI seit ADR 0038), damit jeder Pfad-Aufruf von
     // build_path_trustees_with_share dieselbe Share-DACL anhaengt ohne
-    // sie pro Pfad neu lesen zu muessen. Auf Nicht-Windows-Plattformen
-    // ist read_share_overlay nicht aufrufbar — fuer den CI-Build setzen
-    // wir den Overlay dort konsequent auf None.
+    // sie pro Pfad neu lesen zu muessen.
+    // Round-10 Finding 1: die Server/Share-Ableitung kommt jetzt aus
+    // `SmbAuditContext::resolve` — dieselbe Quelle, die auch die CLI-
+    // analyze-Trustees und der `resolve_scan_share_status`-Helper
+    // benutzen. Damit verhaelt sich `\\fs01\data` ohne explizite Flags
+    // konsistent: alle drei Trustee-/Status-Wege sehen die Share-Schicht.
+    // Auf Nicht-Windows-Plattformen ist read_share_overlay nicht
+    // aufrufbar — fuer den CI-Build setzen wir den Overlay dort
+    // konsequent auf None.
     // Round-9 finding 1: read the share overlay once per scan (like the
     // GUI does since ADR 0038) so every build_path_trustees_with_share
     // call appends the same share DACL without re-reading it per path.
-    // On non-Windows platforms `read_share_overlay` is not callable —
-    // the CI build keeps the overlay None there.
+    // Round-10 finding 1: server/share derivation now comes from
+    // `SmbAuditContext::resolve` — the same source the CLI analyze
+    // trustees and the `resolve_scan_share_status` helper use. A bare
+    // `\\fs01\data` without explicit flags now behaves consistently:
+    // all three trustee/status paths see the share layer.
+    // On non-Windows `read_share_overlay` is not callable — the CI
+    // build keeps the overlay None there.
+    let scan_smb_context = validation::path::SmbAuditContext::resolve(
+        &path,
+        smb_server.as_deref(),
+        share_name.as_deref(),
+    );
     #[cfg(windows)]
-    let scan_share_overlay = match (smb_server.as_deref(), share_name.as_deref()) {
-        (Some(server), Some(name)) if !server.is_empty() && !name.is_empty() => {
-            Some(exporter::read_share_overlay(server, name))
-        }
-        _ => None,
-    };
+    let scan_share_overlay = scan_smb_context
+        .as_ref()
+        .map(|ctx| exporter::read_share_overlay(&ctx.server, &ctx.share));
     #[cfg(not(windows))]
-    let scan_share_overlay: Option<exporter::ShareTrusteeOverlay> = None;
+    let scan_share_overlay: Option<exporter::ShareTrusteeOverlay> = {
+        let _ = &scan_smb_context;
+        None
+    };
     // scan_local_group_sids wurde bereits oben (vor der Share-Maske) aufgelöst.
     // scan_local_group_sids was already resolved above (before the share mask).
     // scan_access_context wurde ebenfalls schon vor der Share-Maske abgeleitet.
@@ -957,27 +986,34 @@ async fn run_scan(
     // Authenticated Users …), deshalb sammeln wir die unique SIDs aller
     // DACLs vorab und führen nur einen LSA-Lookup pro SID statt einen pro
     // Pfad. Memberships sind ohnehin scan-weit konstant.
+    //
+    // Round-10 Finding 2: die Map deckt JETZT auch die ACE-SIDs des Share-
+    // Overlays ab (vorher nur NTFS-DACL-SIDs) UND wird zusaetzlich an die
+    // Trustee-Build-Funktion uebergeben, sodass `build_path_trustees_*`
+    // keine eigenen LSA-Aufrufe pro Pfad mehr macht.
+    //
     // Build the SID→name table once for the whole scan. Trustee SIDs
     // repeat across many paths (BUILTIN\Administrators,
     // Authenticated Users, …), so we collect the unique SIDs from every
     // DACL up front and perform one LSA lookup per SID instead of per
     // path. Memberships are scan-wide constant anyway.
+    //
+    // Round-10 finding 2: the map now also covers Share-overlay ACE SIDs
+    // (previously NTFS DACL only) AND is additionally handed to the
+    // trustee build function so `build_path_trustees_*` no longer makes
+    // per-path LSA calls.
     #[cfg(windows)]
     let scan_sid_names = {
         use std::collections::HashSet;
         let mut seen: HashSet<String> = HashSet::new();
-        let trustees: Vec<String> = walk
-            .objects
-            .iter()
-            .flat_map(|fso| fso.dacl.iter())
-            .filter_map(|ace| {
-                if seen.insert(ace.sid.0.clone()) {
-                    Some(ace.sid.0.clone())
-                } else {
-                    None
+        let mut trustees: Vec<String> = Vec::new();
+        for fso in &walk.objects {
+            for sid in exporter::collect_ace_sids_for_resolution(fso, scan_share_overlay.as_ref()) {
+                if seen.insert(sid.clone()) {
+                    trustees.push(sid);
                 }
-            })
-            .collect();
+            }
+        }
         ad_resolver::build_sid_name_map(&resolved.resolution.memberships, trustees)
     };
     #[cfg(not(windows))]
@@ -1014,10 +1050,19 @@ async fn run_scan(
         // identisch zur GUI seit ADR 0038. Der einmal gelesene
         // Share-Overlay wird hier nur referenziert, nicht erneut
         // angefragt.
+        // Round-10 Finding 2: die scan-weite SID→Name-Map wird
+        // mitgegeben, sodass die Trustee-Build-Funktion KEINEN
+        // LSA-Aufruf pro Pfad mehr macht.
         // Round-9 finding 1: collect trustees per path — identical to
         // the GUI since ADR 0038. The share overlay was read once and
         // is only referenced here.
-        let trustees = exporter::build_path_trustees_with_share(fso, scan_share_overlay.as_ref());
+        // Round-10 finding 2: hand the scan-wide SID→name map so the
+        // trustee build function does NOT make per-path LSA calls.
+        let trustees = exporter::build_path_trustees_with_share_and_names(
+            fso,
+            scan_share_overlay.as_ref(),
+            &scan_sid_names,
+        );
         all_path_trustees.push(adpa_core::model::PathTrustees {
             path: fso.path.clone(),
             trustees,
@@ -1129,7 +1174,7 @@ async fn run_scan(
 // UNC parsing now lives centrally in validation::path::parse_unc_components.
 // The old CLI-local variant accepted local paths as UNC (review finding 1) and
 // mis-split long-path UNC (review finding 4).
-use validation::path::{effective_smb_target, parse_unc_components};
+use validation::path::effective_smb_target;
 
 /// Sammelt alle SIDs des Benutzers (eigene + Gruppen-SIDs).
 /// Collects all SIDs for the user (own + group SIDs).
@@ -1149,26 +1194,21 @@ fn resolve_scan_share_status(
     access_context: AccessContext,
 ) -> (adpa_core::model::ShareMaskStatus, usize) {
     use adpa_core::model::ShareMaskStatus;
-    // Server-Wahl: expliziter `smb_server` schlägt UNC-Server (Finding 2).
-    // Share-Wahl: expliziter `share_name` schlägt UNC-Share. Ohne UNC und ohne
-    // expliziten Share landen wir bei NotApplicable — der Aufrufer wollte
-    // keinen SMB-Kontext.
-    // Server selection: explicit `smb_server` beats the UNC server (finding 2).
-    // Share selection: explicit `share_name` beats the UNC share. Without a UNC
-    // and without an explicit share we land in NotApplicable — the caller did
-    // not ask for an SMB context.
-    let path_components = parse_unc_components(path);
-    let server = match effective_smb_target(path, smb_server) {
-        Some(s) => s,
+    // Round-10 Finding 1: Server/Share-Ableitung geht ueber
+    // `SmbAuditContext::resolve` — dieselbe Quelle, die der Trustee-
+    // Overlay-Bau in analyze/scan und die GUI nutzen. Damit liefern
+    // effektive Share-Maske UND Trustee-Tabelle exakt denselben
+    // Server/Share.
+    // Round-10 finding 1: server/share derivation goes through
+    // `SmbAuditContext::resolve` — the same source the trustee overlay
+    // build in analyze/scan and the GUI use. Effective share mask AND
+    // trustee table now share the exact same server/share.
+    let smb_ctx = match validation::path::SmbAuditContext::resolve(path, smb_server, share_name) {
+        Some(c) => c,
         None => return (ShareMaskStatus::NotApplicable, 0),
     };
-    let share = match share_name {
-        Some(s) => s.to_owned(),
-        None => match path_components {
-            Some((_, share_from_path)) => share_from_path,
-            None => return (ShareMaskStatus::NotApplicable, 0),
-        },
-    };
+    let server = smb_ctx.server;
+    let share = smb_ctx.share;
 
     tracing::info!(server = %server, share = %share, "Resolving share mask");
 

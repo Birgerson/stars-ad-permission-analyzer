@@ -1,6 +1,6 @@
 # Stars — User Guide
 
-**Version:** v1.5.15 (2026-06-06)
+**Version:** v1.5.16 (2026-06-06)
 **Audience:** Windows / AD administrators who want to audit NTFS and
 SMB permissions **without changing anything**.
 
@@ -92,7 +92,7 @@ only — content overlaps with this English guide).
 
 Get the installer from the GitHub release page:
 [releases](https://github.com/Birgerson/stars-ad-permission-analyzer/releases).
-Currently recommended: `Stars-v1.5.15-Setup.exe`.
+Currently recommended: `Stars-v1.5.16-Setup.exe`.
 
 ### Installation
 

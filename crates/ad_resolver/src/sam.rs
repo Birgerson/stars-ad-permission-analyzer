@@ -52,10 +52,11 @@ use adpa_core::model::{
     GroupMembership, Identity, IdentityKind, MembershipPath, MembershipPathSource, Sid,
 };
 use tracing::{debug, warn};
+use win_safe::netapi::NetApiBuffer;
 use windows_sys::Win32::Foundation::{LocalFree, ERROR_ACCESS_DENIED, FALSE, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
-    NetApiBufferFree, NetUserGetGroups, NetUserGetInfo, GROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH,
-    UF_ACCOUNTDISABLE, USER_INFO_1,
+    NetUserGetGroups, NetUserGetInfo, GROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH, UF_ACCOUNTDISABLE,
+    USER_INFO_1,
 };
 use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
 use windows_sys::Win32::Security::{
@@ -194,19 +195,25 @@ pub fn user_global_group_names(
     let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let username_w = to_wide_null(username);
 
-    let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+    // RAII-Guard fuer den NetApi-Puffer: jeder Pfad — Erfolg, Status-Fehler,
+    // Slice-Lesen — gibt den Puffer im Drop frei. Vor Review-Runde 10 wurden
+    // die Free-Aufrufe manuell an drei Stellen verstreut.
+    // RAII guard for the NetApi buffer: every path — success, status error,
+    // slice read — frees the buffer in Drop. Before review round 10 the free
+    // calls were sprinkled across three manual sites.
+    let mut buf: NetApiBuffer<GROUP_USERS_INFO_0> = NetApiBuffer::null();
     let mut entries_read: u32 = 0;
     let mut total_entries: u32 = 0;
 
     // SAFETY: server_ptr is either null or points to a valid null-terminated
-    // wide string; username_w is null-terminated. buf_ptr is an OUT pointer
-    // that NetApi allocates on success and we free below.
+    // wide string; username_w is null-terminated. NetApiBuffer<GROUP_USERS_INFO_0>
+    // owns the allocated buffer after this call.
     let status = unsafe {
         NetUserGetGroups(
             server_ptr,
             username_w.as_ptr(),
             0, // level 0 = GROUP_USERS_INFO_0
-            &mut buf_ptr,
+            buf.out_ptr().cast(),
             MAX_PREFERRED_LENGTH,
             &mut entries_read,
             &mut total_entries,
@@ -214,10 +221,6 @@ pub fn user_global_group_names(
     };
 
     if status != NO_ERROR {
-        if !buf_ptr.is_null() {
-            // SAFETY: buf_ptr was allocated by NetApi.
-            unsafe { NetApiBufferFree(buf_ptr.cast()) };
-        }
         return match status {
             ERROR_ACCESS_DENIED => Err(CoreError::AccessDenied(format!(
                 "NetUserGetGroups: access denied for '{username}' on {server:?}"
@@ -233,12 +236,10 @@ pub fn user_global_group_names(
     }
 
     let mut groups = Vec::with_capacity(entries_read as usize);
-    if !buf_ptr.is_null() && entries_read > 0 {
-        // SAFETY: buf_ptr points to `entries_read` consecutive
+    if !buf.is_null() && entries_read > 0 {
+        // SAFETY: buf.as_ptr() points to `entries_read` consecutive
         // GROUP_USERS_INFO_0 records allocated by NetApi.
-        let entries = unsafe {
-            std::slice::from_raw_parts(buf_ptr as *const GROUP_USERS_INFO_0, entries_read as usize)
-        };
+        let entries = unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };
         for entry in entries {
             // SAFETY: grui0_name is a valid null-terminated wide string
             // inside the NetApi-allocated buffer.
@@ -249,12 +250,9 @@ pub fn user_global_group_names(
         }
     }
 
-    if !buf_ptr.is_null() {
-        // SAFETY: buf_ptr was allocated by NetApi.
-        unsafe { NetApiBufferFree(buf_ptr.cast()) };
-    }
-
     Ok(groups)
+    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
+    // `buf` is dropped here, calling NetApiBufferFree.
 }
 
 /// Schlägt einen Konto- oder Gruppennamen auf dem angegebenen System
@@ -361,24 +359,22 @@ pub fn user_account_disabled(
     let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let username_w = to_wide_null(username);
 
-    let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+    // RAII-Guard: gibt den USER_INFO_1-Puffer in jedem Pfad frei.
+    // RAII guard: frees the USER_INFO_1 buffer in every path.
+    let mut buf: NetApiBuffer<USER_INFO_1> = NetApiBuffer::null();
     // SAFETY: server_ptr is null or a valid null-terminated wide string;
-    // username_w is null-terminated. buf_ptr is an OUT parameter NetApi
-    // allocates and we release below.
+    // username_w is null-terminated. NetApiBuffer<USER_INFO_1> owns the
+    // allocated buffer after this call.
     let status = unsafe {
         NetUserGetInfo(
             server_ptr,
             username_w.as_ptr(),
             1, // level 1 → USER_INFO_1
-            &mut buf_ptr,
+            buf.out_ptr().cast(),
         )
     };
 
     if status != NO_ERROR {
-        if !buf_ptr.is_null() {
-            // SAFETY: buf_ptr was allocated by NetApi.
-            unsafe { NetApiBufferFree(buf_ptr.cast()) };
-        }
         return match status {
             ERROR_ACCESS_DENIED => {
                 debug!(
@@ -408,18 +404,17 @@ pub fn user_account_disabled(
         };
     }
 
-    if buf_ptr.is_null() {
+    if buf.is_null() {
         return Ok(None);
     }
 
-    // SAFETY: buf_ptr points to a USER_INFO_1 record allocated by NetApi.
-    let info = unsafe { &*(buf_ptr as *const USER_INFO_1) };
+    // SAFETY: buf.as_ptr() points to a USER_INFO_1 record allocated by NetApi.
+    let info = unsafe { &*buf.as_ptr() };
     let disabled = (info.usri1_flags & UF_ACCOUNTDISABLE) != 0;
 
-    // SAFETY: buf_ptr was allocated by NetApi.
-    unsafe { NetApiBufferFree(buf_ptr.cast()) };
-
     Ok(Some(disabled))
+    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
+    // `buf` is dropped here, calling NetApiBufferFree.
 }
 
 /// Convenience-Funktion, die `lookup_account_for_sid` +

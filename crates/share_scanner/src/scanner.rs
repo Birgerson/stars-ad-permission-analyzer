@@ -20,8 +20,8 @@ use adpa_core::{
 };
 use permission_engine::mask::expand_generic_rights;
 use tracing::{debug, info, warn};
+use win_safe::netapi::NetApiBuffer;
 use windows_sys::Win32::Foundation::{GetLastError, FALSE};
-use windows_sys::Win32::NetworkManagement::NetManagement::NetApiBufferFree;
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::{
     GetAce, GetAclInformation, GetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACCESS_DENIED_ACE,
@@ -238,7 +238,11 @@ pub fn scan_shares(server: &str) -> ShareScanResult {
 /// rights are already required to read share DACLs.
 pub fn enumerate_shares(server: &str) -> Result<Vec<Share>, CoreError> {
     let wide_server = to_wide_null(server);
-    let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+    // RAII-Guard fuer den NetApi-Puffer: jeder Pfad — Erfolg, Fehler,
+    // `?` aus einem Helper — gibt den Puffer im Drop frei.
+    // RAII guard for the NetApi buffer: every path — success, error,
+    // `?` from a helper — frees the buffer in Drop.
+    let mut buf: NetApiBuffer<SHARE_INFO_502> = NetApiBuffer::null();
     let mut entries_read: u32 = 0;
     let mut total_entries: u32 = 0;
     let mut resume_handle: u32 = 0;
@@ -246,12 +250,13 @@ pub fn enumerate_shares(server: &str) -> Result<Vec<Share>, CoreError> {
     info!(server, "Enumerating SMB shares (level 502)");
 
     // SAFETY: wide_server is a valid null-terminated UTF-16 string for the duration of the call.
-    // The OS allocates buf_ptr via NetApiBufferAllocate; we must free it with NetApiBufferFree.
+    // The OS allocates the buffer via NetApiBufferAllocate; NetApiBuffer<T> calls
+    // NetApiBufferFree on drop.
     let status = unsafe {
         NetShareEnum(
             wide_server.as_ptr(),
             502,
-            &mut buf_ptr,
+            buf.out_ptr().cast(),
             MAX_PREFERRED_LENGTH,
             &mut entries_read,
             &mut total_entries,
@@ -266,18 +271,14 @@ pub fn enumerate_shares(server: &str) -> Result<Vec<Share>, CoreError> {
         )));
     }
 
-    if buf_ptr.is_null() || entries_read == 0 {
-        // SAFETY: buf_ptr is null or there are no entries — nothing to free.
-        if !buf_ptr.is_null() {
-            unsafe { NetApiBufferFree(buf_ptr.cast()) };
-        }
+    if buf.is_null() || entries_read == 0 {
         return Ok(Vec::new());
     }
 
-    // SAFETY: buf_ptr points to an array of entries_read SHARE_INFO_502 structs
-    // allocated by NetShareEnum. Valid until NetApiBufferFree is called.
+    // SAFETY: buf.as_ptr() points to an array of entries_read SHARE_INFO_502
+    // structs allocated by NetShareEnum. Valid for the lifetime of `buf`.
     let entries = unsafe {
-        std::slice::from_raw_parts(buf_ptr as *const SHARE_INFO_502, entries_read as usize)
+        std::slice::from_raw_parts(buf.as_ptr() as *const SHARE_INFO_502, entries_read as usize)
     };
 
     // Bei leerem Servernamen erzeugen wir UNC-Pfade mit "localhost", damit kein
@@ -315,11 +316,10 @@ pub fn enumerate_shares(server: &str) -> Result<Vec<Share>, CoreError> {
         });
     }
 
-    // SAFETY: buf_ptr was allocated by NetApiBufferAllocate inside NetShareEnum.
-    unsafe { NetApiBufferFree(buf_ptr.cast()) };
-
     info!(server, count = shares.len(), "Share enumeration complete");
     Ok(shares)
+    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
+    // `buf` is dropped here, calling NetApiBufferFree.
 }
 
 /// Liest die Berechtigungen einer einzelnen Freigabe (Level 502).
@@ -359,14 +359,27 @@ pub fn get_share_permissions(
 pub fn get_share_dacl(server: &str, share_name: &str) -> Result<ShareDaclScan, CoreError> {
     let wide_server = to_wide_null(server);
     let wide_share = to_wide_null(share_name);
-    let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+    // RAII-Guard: das war frueher die Stelle, an der `parse_share_dacl(...)?`
+    // den Puffer leaken konnte (Review-Runde 10 Finding 3). Der Guard gibt
+    // den Puffer im Drop frei, egal ob der `?`-Pfad genommen wird oder
+    // nicht.
+    // RAII guard: this used to be where `parse_share_dacl(...)?` could leak
+    // the buffer (review round 10 finding 3). The guard frees the buffer in
+    // Drop, no matter whether the `?` path is taken or not.
+    let mut buf: NetApiBuffer<SHARE_INFO_502> = NetApiBuffer::null();
 
     debug!(server, share = share_name, "Reading share DACL");
 
     // SAFETY: wide_server and wide_share are valid null-terminated UTF-16 strings.
-    // buf_ptr is allocated by the OS and must be freed with NetApiBufferFree.
-    let status =
-        unsafe { NetShareGetInfo(wide_server.as_ptr(), wide_share.as_ptr(), 502, &mut buf_ptr) };
+    // NetApiBuffer<SHARE_INFO_502> owns the allocated buffer after this call.
+    let status = unsafe {
+        NetShareGetInfo(
+            wide_server.as_ptr(),
+            wide_share.as_ptr(),
+            502,
+            buf.out_ptr().cast(),
+        )
+    };
 
     if status != NERR_SUCCESS {
         warn!(
@@ -380,15 +393,16 @@ pub fn get_share_dacl(server: &str, share_name: &str) -> Result<ShareDaclScan, C
         )));
     }
 
-    if buf_ptr.is_null() {
+    if buf.is_null() {
         return Ok(ShareDaclScan {
             dacl: ShareDacl::NullDacl,
             unsupported_count: 0,
         });
     }
 
-    // SAFETY: buf_ptr points to a valid SHARE_INFO_502 struct until NetApiBufferFree.
-    let info = unsafe { &*(buf_ptr as *const SHARE_INFO_502) };
+    // SAFETY: buf.as_ptr() is a valid SHARE_INFO_502 struct for the lifetime
+    // of `buf`.
+    let info = unsafe { &*buf.as_ptr() };
 
     let (dacl, unsupported_count) = if info.shi502_security_descriptor.is_null() {
         // No security descriptor → treat as NULL DACL (full access)
@@ -399,7 +413,9 @@ pub fn get_share_dacl(server: &str, share_name: &str) -> Result<ShareDaclScan, C
         );
         (ShareDacl::NullDacl, 0usize)
     } else {
-        // SAFETY: shi502_security_descriptor is valid until NetApiBufferFree is called below.
+        // SAFETY: shi502_security_descriptor is valid for the lifetime of `buf`.
+        // If parse_share_dacl returns Err, the `?` propagates out and `buf`
+        // is dropped on the way out — NetApiBufferFree runs.
         match unsafe { parse_share_dacl(share_name, info.shi502_security_descriptor) }? {
             None => (ShareDacl::NullDacl, 0usize),
             Some((perms, unsupported)) => {
@@ -415,13 +431,12 @@ pub fn get_share_dacl(server: &str, share_name: &str) -> Result<ShareDaclScan, C
         }
     };
 
-    // SAFETY: buf_ptr was allocated by NetApiBufferAllocate inside NetShareGetInfo.
-    unsafe { NetApiBufferFree(buf_ptr.cast()) };
-
     Ok(ShareDaclScan {
         dacl,
         unsupported_count,
     })
+    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
+    // `buf` is dropped here, calling NetApiBufferFree.
 }
 
 /// Berechnet die effektive Share-Berechtigung eines Benutzers.

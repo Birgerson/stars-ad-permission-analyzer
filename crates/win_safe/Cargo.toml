@@ -1,0 +1,29 @@
+[package]
+name = "win_safe"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Konzept: dieser Crate kapselt Windows-API-Ressourcen mit RAII-Guards,
+# sodass jeder Erfolgs-Pfad UND jeder early-return-Pfad (insbesondere
+# `?`) die Ressource korrekt freigibt. Eingefuehrt fuer Review-Runde 10
+# Finding 3 (NetApi-Pufferleak bei DACL-Parse-Fehler), bewusst als
+# eigenstaendiger Crate damit zukuenftige Windows-Ressourcen (HANDLE,
+# LSA-Buffer, LocalAlloc, ...) konsistent ergaenzt werden koennen ohne
+# eine fachliche Crate zu verwaessern.
+#
+# Concept: this crate wraps Windows API resources in RAII guards so
+# every success path AND every early-return path (especially `?`)
+# returns the resource correctly. Introduced for review round 10
+# finding 3 (NetApi buffer leak on DACL parse failure); deliberately a
+# standalone crate so future Windows resources (HANDLE, LSA buffer,
+# LocalAlloc, ...) can be added consistently without polluting a
+# domain crate.
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
+[lib]
+name = "win_safe"
+path = "src/lib.rs"

@@ -6,6 +6,13 @@ authors.workspace = true
 
 [dependencies]
 adpa_core = { path = "../core" }
+# RAII-Guard fuer NetApi-Puffer (Review-Runde 10 Finding 3) — kapselt
+# NetApiBufferFree und verhindert Leaks bei `?`-Early-Returns in den
+# sam-, local_groups- und enumerate-Modulen.
+# RAII guard for NetApi buffers (review round 10 finding 3) — wraps
+# NetApiBufferFree and prevents leaks on `?` early returns in the
+# sam, local_groups, and enumerate modules.
+win_safe = { path = "../win_safe" }
 thiserror.workspace = true
 serde.workspace = true
 tracing.workspace = true

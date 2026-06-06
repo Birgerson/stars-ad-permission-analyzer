@@ -37,11 +37,11 @@ use std::os::windows::ffi::OsStrExt;
 use adpa_core::error::CoreError;
 use adpa_core::model::IdentityKind;
 use tracing::{debug, warn};
+use win_safe::netapi::NetApiBuffer;
 use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
-    NetApiBufferFree, NetGroupEnum, NetLocalGroupEnum, NetUserEnum, NetWkstaGetInfo,
-    FILTER_NORMAL_ACCOUNT, GROUP_INFO_1, LOCALGROUP_INFO_1, MAX_PREFERRED_LENGTH, USER_INFO_10,
-    WKSTA_INFO_100,
+    NetGroupEnum, NetLocalGroupEnum, NetUserEnum, NetWkstaGetInfo, FILTER_NORMAL_ACCOUNT,
+    GROUP_INFO_1, LOCALGROUP_INFO_1, MAX_PREFERRED_LENGTH, USER_INFO_10, WKSTA_INFO_100,
 };
 
 /// Eine einzelne Identität, wie sie im Suchvorschlag erscheint.
@@ -142,24 +142,24 @@ fn list_users(server: Option<&str>, domain: &str) -> Result<Vec<IdentitySnapshot
     let mut resume_handle: u32 = 0;
 
     loop {
-        let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+        // RAII-Guard pro Iteration — neue Variable, neue Lifetime, neuer Free.
+        // RAII guard per iteration — new variable, new lifetime, new Free.
+        let mut buf: NetApiBuffer<USER_INFO_10> = NetApiBuffer::null();
         let mut entries_read: u32 = 0;
         let mut total_entries: u32 = 0;
 
         // SAFETY: server_ptr ist entweder null oder zeigt auf eine gültige
-        // null-terminierte UTF-16-Sequenz. buf_ptr und die Counter sind
-        // OUT-Parameter, die von NetAPI gesetzt werden. Der NetApi-Puffer
-        // wird unten mit NetApiBufferFree freigegeben.
+        // null-terminierte UTF-16-Sequenz. NetApiBuffer<USER_INFO_10> owns
+        // the allocated buffer after this call.
         // SAFETY: server_ptr is either null or points to a valid null-
-        // terminated UTF-16 sequence. buf_ptr and counters are OUT
-        // parameters set by NetAPI. The NetApi buffer is freed below
-        // via NetApiBufferFree.
+        // terminated UTF-16 sequence. NetApiBuffer<USER_INFO_10> owns the
+        // allocated buffer after this call.
         let status = unsafe {
             NetUserEnum(
                 server_ptr,
                 10,                    // Level 10 = USER_INFO_10
                 FILTER_NORMAL_ACCOUNT, // nur "normale" User, keine Trust- oder Service-Konten
-                &mut buf_ptr,
+                buf.out_ptr().cast(),
                 MAX_PREFERRED_LENGTH,
                 &mut entries_read,
                 &mut total_entries,
@@ -167,14 +167,14 @@ fn list_users(server: Option<&str>, domain: &str) -> Result<Vec<IdentitySnapshot
             )
         };
 
-        if !buf_ptr.is_null() && entries_read > 0 {
-            // SAFETY: buf_ptr verweist auf `entries_read` aufeinanderfolgende
-            // USER_INFO_10-Strukturen, die von NetAPI allokiert wurden.
-            // SAFETY: buf_ptr references `entries_read` consecutive
+        if !buf.is_null() && entries_read > 0 {
+            // SAFETY: buf.as_ptr() verweist auf `entries_read`
+            // aufeinanderfolgende USER_INFO_10-Strukturen, die von NetAPI
+            // allokiert wurden.
+            // SAFETY: buf.as_ptr() references `entries_read` consecutive
             // USER_INFO_10 structs allocated by NetAPI.
-            let entries = unsafe {
-                std::slice::from_raw_parts(buf_ptr as *const USER_INFO_10, entries_read as usize)
-            };
+            let entries =
+                unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };
             for entry in entries {
                 // SAFETY: alle Felder sind null-terminierte UTF-16-Strings
                 // im NetApi-Puffer.
@@ -195,11 +195,10 @@ fn list_users(server: Option<&str>, domain: &str) -> Result<Vec<IdentitySnapshot
                 });
             }
         }
-        if !buf_ptr.is_null() {
-            // SAFETY: NetApi-Puffer freigeben.
-            // SAFETY: free the NetApi buffer.
-            unsafe { NetApiBufferFree(buf_ptr.cast()) };
-        }
+        // `buf` wird am Ende der Iteration gedroppt und ruft
+        // NetApiBufferFree — egal ob danach `break` oder ein neuer Loop.
+        // `buf` is dropped at the end of the iteration and calls
+        // NetApiBufferFree — regardless of subsequent break or new loop.
 
         if status == NO_ERROR {
             break;
@@ -230,17 +229,21 @@ fn list_global_groups(
     let mut resume_handle: usize = 0;
 
     loop {
-        let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+        // RAII-Guard pro Iteration.
+        // RAII guard per iteration.
+        let mut buf: NetApiBuffer<GROUP_INFO_1> = NetApiBuffer::null();
         let mut entries_read: u32 = 0;
         let mut total_entries: u32 = 0;
 
         // SAFETY: siehe oben. resume_handle wird von NetAPI fortgeschrieben.
+        // NetApiBuffer<GROUP_INFO_1> owns the allocated buffer.
         // SAFETY: as above. resume_handle is updated in-place by NetAPI.
+        // NetApiBuffer<GROUP_INFO_1> owns the allocated buffer.
         let status = unsafe {
             NetGroupEnum(
                 server_ptr,
                 1, // Level 1 = GROUP_INFO_1
-                &mut buf_ptr,
+                buf.out_ptr().cast(),
                 MAX_PREFERRED_LENGTH,
                 &mut entries_read,
                 &mut total_entries,
@@ -248,12 +251,11 @@ fn list_global_groups(
             )
         };
 
-        if !buf_ptr.is_null() && entries_read > 0 {
+        if !buf.is_null() && entries_read > 0 {
             // SAFETY: GROUP_INFO_1-Array aus NetApi-Puffer.
             // SAFETY: GROUP_INFO_1 array from NetApi buffer.
-            let entries = unsafe {
-                std::slice::from_raw_parts(buf_ptr as *const GROUP_INFO_1, entries_read as usize)
-            };
+            let entries =
+                unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };
             for entry in entries {
                 // SAFETY: null-terminierte UTF-16-Strings.
                 // SAFETY: null-terminated UTF-16 strings.
@@ -270,11 +272,8 @@ fn list_global_groups(
                 });
             }
         }
-        if !buf_ptr.is_null() {
-            // SAFETY: NetApi-Puffer freigeben.
-            // SAFETY: free the NetApi buffer.
-            unsafe { NetApiBufferFree(buf_ptr.cast()) };
-        }
+        // `buf` wird hier (am Iterations-Ende) gedroppt und ruft NetApiBufferFree.
+        // `buf` is dropped at the end of the iteration and calls NetApiBufferFree.
 
         if status == NO_ERROR {
             break;
@@ -300,16 +299,18 @@ fn list_local_groups(server: Option<&str>) -> Result<Vec<IdentitySnapshot>, Core
     let mut resume_handle: usize = 0;
 
     loop {
-        let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+        // RAII-Guard pro Iteration.
+        // RAII guard per iteration.
+        let mut buf: NetApiBuffer<LOCALGROUP_INFO_1> = NetApiBuffer::null();
         let mut entries_read: u32 = 0;
         let mut total_entries: u32 = 0;
 
-        // SAFETY: siehe oben.
+        // SAFETY: siehe oben. NetApiBuffer owns the allocated buffer.
         let status = unsafe {
             NetLocalGroupEnum(
                 server_ptr,
                 1, // Level 1 = LOCALGROUP_INFO_1
-                &mut buf_ptr,
+                buf.out_ptr().cast(),
                 MAX_PREFERRED_LENGTH,
                 &mut entries_read,
                 &mut total_entries,
@@ -317,14 +318,10 @@ fn list_local_groups(server: Option<&str>) -> Result<Vec<IdentitySnapshot>, Core
             )
         };
 
-        if !buf_ptr.is_null() && entries_read > 0 {
+        if !buf.is_null() && entries_read > 0 {
             // SAFETY: LOCALGROUP_INFO_1-Array.
-            let entries = unsafe {
-                std::slice::from_raw_parts(
-                    buf_ptr as *const LOCALGROUP_INFO_1,
-                    entries_read as usize,
-                )
-            };
+            let entries =
+                unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };
             for entry in entries {
                 // SAFETY: null-terminierte UTF-16-Strings.
                 let name = unsafe { wide_ptr_to_string(entry.lgrpi1_name) };
@@ -351,10 +348,8 @@ fn list_local_groups(server: Option<&str>) -> Result<Vec<IdentitySnapshot>, Core
                 });
             }
         }
-        if !buf_ptr.is_null() {
-            // SAFETY: NetApi-Puffer freigeben.
-            unsafe { NetApiBufferFree(buf_ptr.cast()) };
-        }
+        // `buf` wird am Iterations-Ende gedroppt und ruft NetApiBufferFree.
+        // `buf` is dropped at iteration end and calls NetApiBufferFree.
 
         if status == NO_ERROR {
             break;
@@ -453,31 +448,30 @@ fn well_known_table() -> Vec<IdentitySnapshot> {
 /// workgroup host this returns the computer name instead of a domain —
 /// either way is usable for our UX.
 fn local_netbios_domain() -> Option<String> {
-    let mut buf_ptr: *mut u8 = std::ptr::null_mut();
+    // RAII-Guard fuer WKSTA_INFO_100.
+    // RAII guard for WKSTA_INFO_100.
+    let mut buf: NetApiBuffer<WKSTA_INFO_100> = NetApiBuffer::null();
     // SAFETY: server-Parameter null = lokaler Host, level 100 ist gültig,
-    // buf_ptr ist OUT.
-    // SAFETY: null server = local host, level 100 is valid, buf_ptr is OUT.
-    let status = unsafe { NetWkstaGetInfo(std::ptr::null(), 100, &mut buf_ptr) };
-    if status != NO_ERROR || buf_ptr.is_null() {
-        if !buf_ptr.is_null() {
-            // SAFETY: NetApi-Puffer freigeben.
-            unsafe { NetApiBufferFree(buf_ptr.cast()) };
-        }
+    // NetApiBuffer<WKSTA_INFO_100> owns the allocated buffer.
+    // SAFETY: null server = local host, level 100 is valid,
+    // NetApiBuffer<WKSTA_INFO_100> owns the allocated buffer.
+    let status = unsafe { NetWkstaGetInfo(std::ptr::null(), 100, buf.out_ptr().cast()) };
+    if status != NO_ERROR || buf.is_null() {
         return None;
     }
-    // SAFETY: buf_ptr verweist auf eine WKSTA_INFO_100-Struktur.
-    // SAFETY: buf_ptr refers to a WKSTA_INFO_100 struct.
-    let info = unsafe { &*(buf_ptr as *const WKSTA_INFO_100) };
+    // SAFETY: buf.as_ptr() verweist auf eine WKSTA_INFO_100-Struktur.
+    // SAFETY: buf.as_ptr() refers to a WKSTA_INFO_100 struct.
+    let info = unsafe { &*buf.as_ptr() };
     // SAFETY: wki100_langroup ist ein null-terminierter UTF-16-String.
     // SAFETY: wki100_langroup is a null-terminated UTF-16 string.
     let name = unsafe { wide_ptr_to_string(info.wki100_langroup) };
-    // SAFETY: NetApi-Puffer freigeben.
-    unsafe { NetApiBufferFree(buf_ptr.cast()) };
     if name.is_empty() {
         None
     } else {
         Some(name)
     }
+    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
+    // `buf` is dropped here and calls NetApiBufferFree.
 }
 
 fn to_wide_null(s: &str) -> Vec<u16> {

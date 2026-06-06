@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/core",
+    "crates/win_safe",
     "crates/ad_resolver",
     "crates/fs_scanner",
     "crates/share_scanner",
@@ -16,7 +17,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.5.15"
+version = "1.5.16"
 edition = "2021"
 authors = ["Birger Labinsch — Fachinformatiker AE / Prompt Engineer <birger@labinsch.de>"]
 license = "AGPL-3.0-or-later"

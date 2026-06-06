@@ -13,7 +13,8 @@ pub use csv::{write_csv, CsvExporter};
 pub use html::{render_html, HtmlExporter};
 pub use json::JsonExporter;
 pub use trustees::{
-    build_path_trustees, build_path_trustees_with_share, read_share_overlay, ShareTrusteeOverlay,
+    build_path_trustees, build_path_trustees_with_share, build_path_trustees_with_share_and_names,
+    collect_ace_sids_for_resolution, read_share_overlay, ShareTrusteeOverlay,
 };
 
 /// Zentrale Overwrite-Policy fuer alle Datei-basierten Exporter.

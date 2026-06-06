@@ -31,10 +31,21 @@ use adpa_core::{
 use serde::Serialize;
 
 /// Versionsnummer des JSON-Schemas — bei strukturändernden Anpassungen erhöhen.
-/// Auf 2 erhoeht in Round-8-Folgereview Finding 2 (neues Feld `path_trustees`).
+/// * v2 (Round-8-Folge): neues Feld `path_trustees` ergaenzt.
+/// * v3 (Round-10 Finding 4): `path_trustees`-Eintraege sind jetzt eine
+///   tagged Union (`{"kind":"ace",...}` oder `{"kind":"diagnostic",...}`)
+///   statt einer flachen `PathTrustee`-Struct. Diagnose-Hinweise
+///   (Share-DACL nicht lesbar, NULL-DACL) sind damit eindeutig vom echten
+///   Allow/Deny-ACE unterscheidbar.
+///
 /// Version number of the JSON schema — bump it on structural changes.
-/// Raised to 2 in round-8 follow-up finding 2 (new `path_trustees` field).
-pub const JSON_SCHEMA_VERSION: u32 = 2;
+/// * v2 (round-8 follow-up): new `path_trustees` field added.
+/// * v3 (round-10 finding 4): `path_trustees` entries are now a tagged
+///   union (`{"kind":"ace",...}` or `{"kind":"diagnostic",...}`) rather
+///   than a flat `PathTrustee` struct. Diagnostic hints (share DACL not
+///   readable, NULL DACL) are unambiguously separable from real
+///   Allow/Deny ACEs.
+pub const JSON_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Serialize)]
 struct JsonReport<'a> {
@@ -209,48 +220,89 @@ mod tests {
         );
     }
 
-    /// Round-8-Folgereview Finding 2: das JSON-Schema enthaelt jetzt eine
-    /// `path_trustees`-Liste und die Schema-Version steht auf 2.
-    /// Round-8 follow-up finding 2: the JSON schema now contains a
-    /// `path_trustees` list and the schema version is bumped to 2.
+    /// Round-10 Finding 4: das JSON-Schema enthaelt eine `path_trustees`-Liste
+    /// als tagged Union (`{"kind":"ace",...}` / `{"kind":"diagnostic",...}`),
+    /// die Schema-Version steht auf 3, und der ehemals synthetische Allow-ACE
+    /// fuer Diagnose-Hinweise ist verschwunden.
+    /// Round-10 finding 4: the JSON schema carries `path_trustees` as a
+    /// tagged union (`{"kind":"ace",...}` / `{"kind":"diagnostic",...}`),
+    /// the schema version is bumped to 3, and the former synthetic Allow ACE
+    /// for diagnostic hints is gone.
     #[test]
-    fn export_includes_path_trustees_and_bumped_schema_version() {
-        use adpa_core::model::{AceKind, PathTrustee, PathTrustees, TrusteeCategory};
+    fn export_includes_path_trustees_with_typed_diagnostic() {
+        use adpa_core::model::{
+            AceKind, PathTrustee, PathTrusteeEntry, PathTrustees, TrusteeCategory,
+        };
         let result = AnalysisResult {
             permissions: vec![],
             risk_findings: vec![],
             path_trustees: vec![PathTrustees {
                 path: NormalizedPath(r"C:\Audit".to_owned()),
-                trustees: vec![PathTrustee {
-                    sid: Sid("S-1-5-32-544".to_owned()),
-                    display_name: Some("BUILTIN\\Administrators".to_owned()),
-                    kind: AceKind::Allow,
-                    mask: AccessMask(0x001F_01FF),
-                    inherited: true,
-                    inheritance_flags: 0,
-                    propagation_flags: 0,
-                    category: TrusteeCategory::Ntfs,
-                }],
+                trustees: vec![
+                    PathTrusteeEntry::Ace(PathTrustee {
+                        sid: Sid("S-1-5-32-544".to_owned()),
+                        display_name: Some("BUILTIN\\Administrators".to_owned()),
+                        kind: AceKind::Allow,
+                        mask: AccessMask(0x001F_01FF),
+                        inherited: true,
+                        inheritance_flags: 0,
+                        propagation_flags: 0,
+                        category: TrusteeCategory::Ntfs,
+                    }),
+                    PathTrusteeEntry::diagnostic(
+                        TrusteeCategory::Share,
+                        "Share-DACL nicht lesbar: timeout",
+                    ),
+                ],
             }],
         };
         let body = render(&result);
         let parsed: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
         assert_eq!(
-            parsed["version"], 2,
-            "schema version must be bumped to 2 for path_trustees field"
+            parsed["version"], 3,
+            "schema version must be bumped to 3 for tagged trustee union"
         );
         let trustees = parsed["path_trustees"]
             .as_array()
             .expect("path_trustees must be an array");
-        assert_eq!(trustees.len(), 1, "one path-trustee entry expected");
+        assert_eq!(trustees.len(), 1, "one path-trustee group expected");
         assert_eq!(trustees[0]["path"], r"C:\Audit");
-        assert_eq!(
-            trustees[0]["trustees"][0]["sid"], "S-1-5-32-544",
-            "trustee SID must propagate into JSON"
+
+        let entries = trustees[0]["trustees"]
+            .as_array()
+            .expect("trustees must be an array");
+        assert_eq!(entries.len(), 2);
+
+        // Ace-Variante — Tag heisst `entry_kind`, damit das innere
+        // PathTrustee-Feld `kind: AceKind` nicht ueberschrieben wird.
+        // Ace variant — tag is `entry_kind` to avoid colliding with the
+        // inner PathTrustee field `kind: AceKind`.
+        assert_eq!(entries[0]["entry_kind"], "ace");
+        assert_eq!(entries[0]["sid"], "S-1-5-32-544");
+        assert_eq!(entries[0]["display_name"], "BUILTIN\\Administrators");
+        // Der inner Allow/Deny-Wert bleibt als `kind` erhalten.
+        // The inner Allow/Deny value stays under `kind`.
+        assert_eq!(entries[0]["kind"], "Allow");
+
+        // Diagnostic-Variante: getrennt erkennbar, KEIN Allow-ACE getarnt.
+        // `entry_kind` ist snake_case (vom Enum-rename_all), `category`
+        // bleibt PascalCase ("Ntfs"/"Share") wie das bestehende
+        // TrusteeCategory-Schema seit v2.
+        // `entry_kind` is snake_case (from the enum rename_all),
+        // `category` stays PascalCase ("Ntfs"/"Share") as in the
+        // existing TrusteeCategory schema since v2.
+        assert_eq!(entries[1]["entry_kind"], "diagnostic");
+        assert_eq!(entries[1]["category"], "Share");
+        assert!(
+            entries[1]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("nicht lesbar"),
+            "diagnostic message must carry the reason text"
         );
-        assert_eq!(
-            trustees[0]["trustees"][0]["display_name"], "BUILTIN\\Administrators",
-            "trustee display_name must propagate"
+        assert!(
+            entries[1].get("sid").is_none(),
+            "diagnostic must NOT carry a fake SID field (round-10 finding 4)"
         );
     }
 

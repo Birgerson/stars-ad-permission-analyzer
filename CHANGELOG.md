@@ -12,6 +12,113 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ---
 
+## [1.5.16] — 2026-06-06
+
+**Round-10-Architektur-Release.** Vier strukturelle Findings aus
+ChatGPTs v1.5.15-Review umgesetzt — keine Symptom-Fixes, sondern
+saubere Lösungen mit Typ-Sicherheit, RAII-Garantien und ehrlicher
+Layering-Trennung.
+
+### Finding 3 (Medium) — `win_safe`-Crate mit RAII-Guard
+
+`get_share_dacl` konnte den NetAPI-Puffer leaken, wenn
+`parse_share_dacl(...)?` einen `Err` lieferte — das `?` sprang aus
+der Funktion, bevor `NetApiBufferFree` lief. Das gleiche Risiko-
+Muster gab es an mindestens 11 weiteren Stellen.
+
+- Neuer Workspace-Crate **`crates/win_safe/`** für sichere Windows-
+  Ressourcen-Wrapper.
+- Neuer Typ **`NetApiBuffer<T>`** mit `Drop`-Garantie: jeder Pfad —
+  Erfolg, `return`, `?`, Panic — gibt den Puffer korrekt frei.
+- 11 NetAPI-Aufrufstellen in `share_scanner` und `ad_resolver` auf
+  den Guard umgestellt — kein manuelles `NetApiBufferFree` mehr im
+  fachlichen Code.
+- ADR 0045 dokumentiert das Pattern und die Layering-Entscheidung.
+
+### Finding 4 (Low) — `PathTrusteeEntry`-Enum: ACE und Diagnose typisiert getrennt
+
+Share-DACL-Lesefehler und NULL-DACL wurden als synthetische
+`PathTrustee`-Records mit leerer SID und `kind: Allow` modelliert —
+JSON-Konsumenten konnten sie nicht von echten ACEs unterscheiden.
+
+- Neues Enum **`PathTrusteeEntry::Ace(PathTrustee)`** /
+  **`Diagnostic { category, message }`** in `adpa_core::model`.
+- **JSON_SCHEMA_VERSION 2 → 3** (Breaking Change für JSON-Konsumenten).
+  Discriminator `entry_kind: "ace"` / `"diagnostic"` — bewusst NICHT
+  `kind`, weil der innere `PathTrustee.kind: AceKind` (Allow/Deny)
+  dort kollidiert hätte.
+- HTML-Renderer zeigt Diagnose-Zeilen visuell anders (gelblicher
+  Hintergrund, ⚠-Symbol, kursiv, kein Allow/Deny-Label).
+- GUI-Renderer rendert sie als „Diagnose"-Zeile mit em-dash-Strichen
+  in den ACE-spezifischen Spalten.
+- ADR 0046 dokumentiert die Modellierung inkl. der `entry_kind`-vs.-
+  `kind`-Begründung.
+
+### Finding 1 (Medium) — `SmbAuditContext`: einzige Quelle für Server/Share
+
+CLI analyze und scan leiteten Server/Share für den Trustee-Overlay
+**nur aus expliziten Flags** ab. Ein UNC-Aufruf
+`adpa scan --path \\fs01\data` ohne `--smb-server`/`--share-name`
+lieferte korrekten `share_status` (`resolve_scan_share_status`
+nutzte UNC-Fallback) aber leeren Share-Teil in `path_trustees` —
+stille Daten-Asymmetrie im selben Report.
+
+- Neuer typisierter Wrapper **`SmbAuditContext { server, share }`**
+  in `validation::path`.
+- **`SmbAuditContext::resolve(path, explicit_server, explicit_share)
+  -> Option<Self>`** ist die einzige Quelle der Wahrheit. Pro Feld:
+  explizit > UNC. Beide Felder oder `None` (halbe Information führte
+  vorher zu `get_share_dacl`-Calls mit leerem Share-Namen).
+- Alle 5 Aufrufstellen (CLI analyze + scan Trustees,
+  `resolve_scan_share_status`, GUI Scan-Trustees, GUI Mask-Compute)
+  nutzen denselben Helper.
+- 6 neue Unit-Tests (UNC alone, explicit override, local path,
+  server-without-share, mixed, empty-string flags).
+- ADR 0047 dokumentiert die Designentscheidung.
+
+### Finding 2 (Medium) — SID-Map als Caller-Verantwortung
+
+`build_path_trustees_with_share` machte einen LSA-`LookupAccountSid`
+**pro Pfad** — bei 50.000 Pfaden mit denselben BUILTIN-SIDs
+tausendfach derselbe Lookup. CLI und GUI bauten parallel bereits
+eine scanweite SID→Name-Map (für den Engine-Erklärungspfad), die
+das Trustee-Modul aber nicht nutzen konnte.
+
+- Neue Funktion **`build_path_trustees_with_share_and_names(fso,
+  overlay, sid_names)`** nimmt eine vorab gebaute Map entgegen.
+- Helper **`collect_ace_sids_for_resolution(fso, overlay)`** sammelt
+  alle relevanten SIDs aus NTFS-DACL UND Share-Overlay
+  (Diagnose-Einträge übersprungen).
+- Bestehende Funktionen `build_path_trustees` /
+  `build_path_trustees_with_share` delegieren intern an die Map-
+  Variante mit per-Aufruf gebauter Map — **keine Code-Duplikation**.
+- CLI Scan und GUI Scan nutzen jetzt die scanweite Map; **ein**
+  LSA-Lookup pro Scan statt N × M.
+- Map deckt jetzt auch Share-Overlay-SIDs ab (vorher nur
+  NTFS-DACL-SIDs).
+- 3 neue Unit-Tests verifizieren Map-Anwendung, Diagnose-Schutz,
+  Helper-Vollständigkeit.
+- ADR 0048 dokumentiert das Layering.
+
+### Tests
+
+- **519 Tests bestehen** (+16 gegenüber v1.5.15: +6 SmbAuditContext,
+  +4 PathTrusteeEntry, +2 NetApiBuffer, +3 SID-Map, +1 weitere
+  Spec-Verbreiterung).
+- `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo test --workspace` alle grün.
+
+### Doku
+
+- ADRs 0045, 0046, 0047, 0048 neu.
+- Versionshinweise in `README.md`,
+  `docs/anwender-handbuch.md`, `docs/user-guide.md`,
+  `docs/technische-dokumentation.md`,
+  `docs/technical-documentation.md` und
+  `docs/known-limitations.md` auf `v1.5.16`.
+
+---
+
 ## [1.5.15] — 2026-06-06
 
 **Pflichtangaben-in-der-App-Release.** Neuer **„Info"-Tab** in der GUI

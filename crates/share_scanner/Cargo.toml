@@ -7,6 +7,13 @@ authors.workspace = true
 [dependencies]
 adpa_core = { path = "../core" }
 permission_engine = { path = "../permission_engine" }
+# RAII-Guard fuer NetApi-Puffer (Review-Runde 10 Finding 3). Damit gibt
+# jeder Pfad in get_share_dacl/get_share_enum den Puffer korrekt frei,
+# auch wenn `?` ein Err propagiert.
+# RAII guard for NetApi buffers (review round 10 finding 3). Every
+# path in get_share_dacl/get_share_enum frees the buffer correctly,
+# even when `?` propagates an Err.
+win_safe = { path = "../win_safe" }
 thiserror.workspace = true
 serde.workspace = true
 tracing.workspace = true
