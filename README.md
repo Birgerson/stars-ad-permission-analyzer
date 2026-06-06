@@ -27,7 +27,7 @@ Das Tool zeigt für jeden Benutzer, welche effektiven Zugriffsrechte er tatsäch
 - ein Tool brauchst, das **nichts** an AD, NTFS oder SMB verändert — auch nicht „nur zur Reparatur"
 - einen Berechtigungs-Snapshot eines Ordnerbaums (z. B. 5000 Verzeichnisse) als CSV / JSON / HTML brauchst
 
-**❌ Stars ist *nicht* das richtige Tool, wenn du brauchst:**
+**❌ Stars ist *nicht* das richtige Tool für:**
 
 | Bedarf | Stattdessen |
 |---|---|
@@ -419,7 +419,7 @@ For every user, the tool shows the effective access rights that actually apply t
 - use a tool that changes **nothing** in AD, NTFS, or SMB — not even “just to fix it”
 - snapshot a directory tree (e.g. 5000 folders) as CSV / JSON / HTML
 
-**❌ Stars is *not* the right tool when you need:**
+**❌ Stars is *not* the right tool for:**
 
 | Need | Use instead |
 |---|---|
