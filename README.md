@@ -54,8 +54,7 @@ Den aktuellen Windows-Installer gibt es auf der **[Releases-Seite](https://githu
 
 Systemvoraussetzungen: Windows 10, Windows 11 oder Windows Server. Keine weitere Laufzeitumgebung nötig.
 
-> **Getestete Plattform:** Stars ist gegen **Windows Server 2022 Standard** getestet.
-> **Windows Server 2025 wurde bisher nicht geprüft.**
+> **Getestete Plattformen:** Stars ist gegen **Windows Server 2022 Standard** **und Windows Server 2025 Standard** verifiziert (3-Forest-Lab, 1000 Test-User, 5000 Verzeichnisse mit ACL-Mix aus Modify / Protected Inheritance / Deny).
 >
 > **Haftungsausschluss:** Die Nutzung von Stars erfolgt **immer auf eigene Verantwortung** — auf allen Plattformen, auch auf den getesteten. Birger Labinsch übernimmt **keine Haftung** für Schäden, Datenverluste, falsche Audit-Ergebnisse oder Folgen aus der Nutzung dieser Software. **Vor jeder Nutzung in einer produktiven Umgebung ist ein vollständiges, getestetes Backup der betroffenen Systeme verpflichtend** — auch wenn Stars architektonisch ausschließlich lesend arbeitet. Siehe Abschnitt „Haftungsausschluss" am Ende dieses Dokuments.
 
@@ -130,8 +129,8 @@ Für Entwickler und CI-Builds können die `.exe`-Dateien aus `target/release/` (
 
 | Plattform | Status |
 |---|---|
-| Windows Server 2022 Standard | ✅ getestet — Nutzung trotzdem auf eigene Verantwortung |
-| Windows Server 2025 | ⚠ noch nicht geprüft — Nutzung auf eigene Verantwortung |
+| Windows Server 2022 Standard | ✅ verifiziert — Nutzung trotzdem auf eigene Verantwortung |
+| Windows Server 2025 Standard | ✅ verifiziert (Lab-Smoke-Test am 2026-06-07) — Nutzung auf eigene Verantwortung |
 | Windows 10 / 11, ältere Server-Versionen | Implementierungsziel, nicht systematisch verifiziert — Nutzung auf eigene Verantwortung |
 
 > Der Vermerk „getestet" bedeutet, dass die Audit-Funktionen auf dieser Plattform durchlaufen wurden — er ist **keine Garantie** auf Korrektheit, Vollständigkeit oder Eignung für einen bestimmten Zweck. Vollständiger Haftungsausschluss am Ende des Dokuments.
@@ -446,8 +445,7 @@ Get the current Windows installer from the **[Releases page](https://github.com/
 
 System requirements: Windows 10, Windows 11, or Windows Server. No additional runtime needed.
 
-> **Tested platform:** Stars is verified against **Windows Server 2022 Standard**.
-> **Windows Server 2025 has not been verified yet.**
+> **Tested platforms:** Stars is verified against **Windows Server 2022 Standard** **and Windows Server 2025 Standard** (3-forest lab, 1000 test users, 5000 directories with an ACL mix of Modify / Protected Inheritance / Deny).
 >
 > **Disclaimer:** Use of Stars is **always at your own risk** — on all platforms, including the tested ones. Birger Labinsch assumes **no liability** for damages, data loss, incorrect audit results, or any consequences arising from the use of this software. **A complete, tested backup of all affected systems is mandatory before each use in any production environment** — even though Stars per its architecture only reads. See the "Disclaimer" section at the end of this document.
 
@@ -522,8 +520,8 @@ Developers and CI builds may also run the `.exe` files from `target/release/` (`
 
 | Platform | Status |
 |---|---|
-| Windows Server 2022 Standard | ✅ tested — use at your own responsibility nonetheless |
-| Windows Server 2025 | ⚠ not yet verified — use at your own responsibility |
+| Windows Server 2022 Standard | ✅ verified — use at your own responsibility nonetheless |
+| Windows Server 2025 Standard | ✅ verified (lab smoke test 2026-06-07) — use at your own responsibility |
 | Windows 10 / 11, older Server versions | Implementation target, not systematically verified — use at your own responsibility |
 
 > "Tested" means the audit functions were exercised on that platform — it is **not a guarantee** of correctness, completeness, or fitness for any particular purpose. The full disclaimer is at the end of the document.

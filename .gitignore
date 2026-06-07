@@ -32,3 +32,7 @@ desktop.ini
 *.sqlite
 *.sqlite-journal
 scan-output.csv
+
+# Proxmox VM-Setup-Screenshots (lokal, nicht im Repo)
+9025-*.png
+9025-*.ppm

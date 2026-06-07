@@ -1842,7 +1842,7 @@ slint::slint! {
                                         wrap: word-wrap;
                                     }
                                     Text {
-                                        text: "Build verified against Windows Server 2022 Standard. Windows Server 2025 has not been verified yet.";
+                                        text: "Build verified against Windows Server 2022 Standard and Windows Server 2025 Standard (3-forest lab smoke test, 2026-06-07).";
                                         color: Theme.text-secondary;
                                         font-size: Theme.font-sm;
                                         wrap: word-wrap;
@@ -1958,7 +1958,7 @@ slint::slint! {
                                         wrap: word-wrap;
                                     }
                                     Text {
-                                        text: "Build verifiziert gegen Windows Server 2022 Standard. Windows Server 2025 ist noch nicht geprueft.";
+                                        text: "Build verifiziert gegen Windows Server 2022 Standard und Windows Server 2025 Standard (3-Forest-Lab-Smoke-Test, 2026-06-07).";
                                         color: Theme.text-secondary;
                                         font-size: Theme.font-sm;
                                         wrap: word-wrap;

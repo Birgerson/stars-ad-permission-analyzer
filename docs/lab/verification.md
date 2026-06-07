@@ -1,6 +1,6 @@
 # Verifikation des Lab-Aufbaus und der Stars-Software
 
-> **Letzter Update-Stand:** v1.5.9 (2026-06-05). Die Datei wächst pro Release um den jeweils neuen Verifikations-Block; ältere Blöcke bleiben unverändert als historischer Beleg.
+> **Letzter Update-Stand:** v1.5.16 (2026-06-07). Die Datei wächst pro Release um den jeweils neuen Verifikations-Block; ältere Blöcke bleiben unverändert als historischer Beleg.
 > Jeder Verifikations-Block notiert seine eigene Stars-Version (z. B. „Block C — v1.5.8"). Die Lab-Topologie selbst stammt aus dem ersten Aufbau (siehe Commit-Zeitstempel von [`forest-topology.md`](forest-topology.md)).
 
 Diese Datei dokumentiert *was* verifiziert wurde, *wie* es geprüft wurde, und *was* Stars dabei tatsächlich ausgegeben hat. Reproduzieren mit den Skripten unter [`scripts/`](scripts/).
@@ -14,6 +14,7 @@ Diese Datei dokumentiert *was* verifiziert wurde, *wie* es geprüft wurde, und *
 | E — Block B | v1.5.7 | GUI-Boot-Smoke auf VirtIO-GPU |
 | F — Block C | v1.5.8 | Skalierung — 1000 User, 5000 Dirs |
 | G — Block D | v1.5.9 | NETWORK-SID bei lokalem Pfad + explizitem SMB-Kontext (Round-7 Finding 1) |
+| H — Server 2025 | v1.5.16 | Plattform-Smoke auf Windows Server 2025 Standard (3 Forests, 1000 User, 5000 Dirs) |
 
 ## Teil A — Lab-Infrastruktur
 
@@ -615,3 +616,112 @@ Plus fünf Tests für die Helfer-Funktion `AccessContext::for_path_with_smb` in 
 | Finding 2 — GUI HTML-Export Overwrite-Schutz | ✓ Worker-Test verifiziert: bestehende Datei wird abgelehnt, Inhalt bleibt unverändert |
 | Finding 3 — `--bind-password` deprecate | ✓ Help-Text + Runtime-Warnung als DEPRECATED |
 | Finding 4 — verification.md aufgeräumt | ✓ Header-Stand auf v1.5.9, Block-Übersicht mit Version pro Block |
+
+---
+
+## Block H — Plattform-Smoke auf Windows Server 2025 Standard
+
+**Stars-Version:** v1.5.16
+**Datum:** 2026-06-07
+**Plattform-Wechsel:** Windows Server 2022 Standard → **Windows Server 2025 Standard** (`SERVER_EVAL_x64_2025_FRE_de-de.iso`)
+
+### H.1 — Hardware-Profil (alle 3 DCs identisch)
+
+| Setting | Wert |
+|---|---|
+| Machine-Type | `pc-q35-10.1` |
+| BIOS | OVMF (UEFI) mit pre-enrolled Microsoft-Keys |
+| TPM | v2.0 (swtpm) |
+| CPU | 1 Socket × 8 Kerne, `x86-64-v2-AES` |
+| RAM | 16 GiB ohne Ballooning |
+| Disk | 50 GiB VirtIO Block, `qcow2`, Cache `directsync`, IO-Thread |
+| Grafik | VirtIO (`vga: virtio`) |
+| OS-Type | `win11` (Server 2022/2025/Win11) |
+| Network | VirtIO, vmbr0, Firewall on |
+
+Hintergrund: Erste Setup-Versuche mit `pc-i440fx-10.1` + alter VGA scheiterten am Disk-Driver-Loading im WinPE. Mit `q35` + VirtIO und einer Autounattend.xml-Sektion `PnpCustomizationsWinPE` (lädt `viostor`/`vioscsi`/`NetKVM` aus dem virtio-win-ISO) läuft das Setup vollautomatisch durch.
+
+### H.2 — Forest-Topologie
+
+3 Forests `tier0.lab` / `tier1.lab` / `tier2.lab` mit NetBIOS `T0LAB` / `T1LAB` / `T2LAB`. Forest-Mode pro Forest:
+
+```text
+tier0.lab — Windows2025Forest
+tier1.lab — Windows2025Forest
+tier2.lab — Windows2025Forest
+```
+
+(2022-Lab hatte `Windows2016Forest` — der neue Wert ist der Default auf Server 2025.)
+
+Drei bidirektionale Forest-Trusts (vollvermascht), erstellt via `[System.DirectoryServices.ActiveDirectory.Forest]::CreateTrustRelationship`:
+
+```text
+tier0.lab ↔ tier1.lab  Bidirectional / Forest
+tier1.lab ↔ tier2.lab  Bidirectional / Forest
+tier0.lab ↔ tier2.lab  Bidirectional / Forest
+```
+
+Plus 6 Conditional DNS Forwarder (jeder DC hält CFs auf die jeweils anderen beiden Domain-Roots), `ReplicationScope: Forest`.
+
+### H.3 — Test-Datenbestand
+
+| DC | User-Range | Anzahl | Verteilung |
+|---|---|---|---|
+| tier0 | `mm0001`..`mm0500` | 500 | 5 Departments × 3 Sub-Teams + Nesting |
+| tier1 | `mm0501`..`mm0800` | 300 | dito |
+| tier2 | `mm0801`..`mm1000` | 200 | dito |
+
+Plus auf tier0 `C:\Data\<Dept>\Project01..20\Folder01..50` = **5000 Folder + 100 Project-ACLs** mit drei ACL-Varianten:
+
+- Project01..15 (75 Projekte): explicit Modify für Department-Sub-Team
+- Project16..18 (15 Projekte): Protected Inheritance + nur SYSTEM/Administrators
+- Project19..20 (10 Projekte): Allow Modify + zusätzlich Deny ReadAndExecute für `<Dept>-Gamma`
+
+### H.4 — Stars Smoke-Tests (`adpa.exe analyze` v1.5.16)
+
+Drei semantisch unterschiedliche Pfade gegen User `T0LAB\mm0001` (Mitglied in `Sales-Alpha`).
+
+**Test 1 — `C:\Data\Sales\Project01` (Modify via Sales-Alpha):**
+
+| Feld | Erwartung | Ergebnis |
+|---|---|---|
+| Effective | Modify (0x001301BF) | ✅ exakt |
+| Matching ACEs | Sales-Alpha Modify explicit, BUILTIN\Users inherited Read | ✅ exakt |
+| Risk Findings | WRITE_ACCESS (HIGH), DELETE_RIGHT (MEDIUM) | ✅ erkannt |
+| Explanation Path | 10 Schritte: User → Sales-Alpha → ACE → NTFS effective | ✅ vollständig |
+
+**Test 2 — `C:\Data\Sales\Project16` (Protected Inheritance, kein Zugriff):**
+
+| Feld | Erwartung | Ergebnis |
+|---|---|---|
+| Effective | Special (0x00000000) = kein Zugriff | ✅ |
+| Inheritance | „Protected (inheritance disabled)" | ✅ erkannt |
+| Matching ACEs | `(none)` — Sales-Alpha-ACE existiert nicht, da Inheritance protected | ✅ |
+| Risk Findings | (none) | ✅ |
+
+**Test 3 — `C:\Data\Sales\Project19` (Deny Sales-Gamma, mm0001 in Sales-Alpha):**
+
+| Feld | Erwartung | Ergebnis |
+|---|---|---|
+| Effective | Read & Execute via BUILTIN\Users (Gamma-Deny greift nicht für Alpha-User) | ✅ Read & Execute (0x001200AF) |
+| DACL-Anzeige | DENY-ACE für Sales-Gamma SID sichtbar | ✅ |
+| Matching ACEs | 3 inherited Allow-ACEs für BUILTIN\Users — kein Deny-Match (mm0001 ≠ Gamma) | ✅ |
+
+Diagnose-Marker waren erwartungsgemäß aktiv: „No AD connection — group memberships not resolved" und „Group resolution ran through SAM/LSA fallback" (Smoke-Test ohne `--server`/`--base-dn`).
+
+### H.5 — Was Block H verifiziert
+
+| Bereich | Ergebnis |
+|---|---|
+| Setup-Automation auf Server 2025 (Autounattend + VirtIO-Treiber) | ✅ läuft durch ohne manuelle Interaktion |
+| `Windows2025Forest`-Mode | ✅ automatisch gewählt, keine Anpassung am `Install-ADDSForest`-Skript nötig |
+| Cross-Forest-Trusts auf Server 2025 | ✅ `CreateTrustRelationship` baut bidirektionale Forest-Trusts unverändert |
+| Stars v1.5.16 (Round-10-Architektur) auf Server 2025 | ✅ Effective Rights + Explanation Path + Diagnose-Marker + Risk Findings korrekt |
+| Round-10-Findings 1–4 (Trustees-Enum, SmbAuditContext, SID-Map, win_safe-Crate) | ✅ keine Regression — alle 3 Tests sauber durchlaufen |
+
+### H.6 — Nicht geprüft in Block H
+
+- HTML-/JSON-Export auf Server 2025 (deckt v1.5.16 schon über Round-10-Tests + 2022-Lab-Verifikation ab).
+- GUI auf Server 2025 (`adpa-gui.exe` ist auf tier0 deployed, aber kein manueller Walkthrough wie in Block E).
+- 5000-Pfad-Performance-Vergleich Server 2022 vs. 2025 (Round-10-Optimierung „SID-Map Caller-Owned" reduziert LSA-Last; quantitativer Vergleich nicht gemessen).
+- Cross-Forest-Tests (T2 mit FSP, T3 ohne ACE) auf Server 2025 — die Trust-Topologie ist gleich; die Stars-Logik hängt nicht am Forest-Mode.
