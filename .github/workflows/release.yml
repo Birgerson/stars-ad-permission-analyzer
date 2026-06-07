@@ -74,6 +74,27 @@ jobs:
           $tag = "${{ github.ref_name }}"
           Move-Item installer-build\Stars-Setup.exe "Stars-${tag}-Setup.exe"
 
+      - name: Compute SHA256 checksum
+        # Stars hat (Stand jetzt) kein Code-Signing-Zertifikat —
+        # der Installer triggert SmartScreen "Unknown publisher". Damit
+        # Anwender die Datei wenigstens auf Integritaet pruefen koennen,
+        # legen wir einen SHA256-Hash als `<exe>.sha256` daneben. Format
+        # ist sha256sum-kompatibel: "<hash>  <dateiname>".
+        # Stars currently has no code-signing certificate — the installer
+        # triggers SmartScreen "Unknown publisher". To let users at least
+        # verify file integrity we drop a SHA256 hash next to the binary
+        # as `<exe>.sha256`. Format is sha256sum-compatible:
+        # "<hash>  <filename>".
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $exe = "Stars-${tag}-Setup.exe"
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          # Doppel-Leerzeichen ist das sha256sum(1)-Format.
+          # Double space is the sha256sum(1) format.
+          "$hash  $exe" | Out-File -FilePath "$exe.sha256" -Encoding ascii -NoNewline
+          Write-Host "Computed: $hash"
+          Write-Host "Wrote: $exe.sha256"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -86,8 +107,34 @@ jobs:
 
             ### Installation
             1. Download **Stars-${{ github.ref_name }}-Setup.exe** below.
-            2. Doppelklick auf den Installer — keine Administratorrechte erforderlich.
-            3. Ein **Stars**-Symbol erscheint auf dem Desktop.
+            2. **Empfohlen:** zusätzlich `.sha256`-Datei laden und Integrität verifizieren (siehe unten).
+            3. Doppelklick auf den Installer — keine Administratorrechte erforderlich.
+            4. Ein **Stars**-Symbol erscheint auf dem Desktop.
+
+            ### Integrität verifizieren (SHA256)
+
+            Stars hat aktuell **kein Code-Signing-Zertifikat** — Windows SmartScreen warnt
+            entsprechend („unbekannter Herausgeber"). Damit du trotzdem prüfen kannst, dass
+            die heruntergeladene Datei mit dem auf GitHub freigegebenen Build identisch ist:
+
+            **PowerShell:**
+            ```powershell
+            $exe = "Stars-${{ github.ref_name }}-Setup.exe"
+            $expected = (Get-Content "$exe.sha256").Split("  ")[0]
+            $actual = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+            if ($actual -eq $expected) { "OK — Datei stimmt" } else { "MISMATCH — NICHT verwenden" }
+            ```
+
+            **bash / WSL / macOS:**
+            ```bash
+            sha256sum -c Stars-${{ github.ref_name }}-Setup.exe.sha256
+            ```
+
+            Gibt das Skript `OK` bzw. `Stars-…-Setup.exe: OK` aus, ist die Datei bit-genau
+            der Build, den dieser GitHub-Actions-Lauf erzeugt hat — kein Man-in-the-Middle,
+            keine veränderte Kopie. Das ersetzt **kein** Code-Signing (die Echtheit der Quelle
+            verifizierst du über das GitHub-Repo selbst), schützt aber gegen verfälschte
+            Downloads.
 
             ### Systemvoraussetzungen
             - Windows 10 / Windows 11 / Windows Server 2016 oder neuer
@@ -96,11 +143,13 @@ jobs:
             ### Features
             - NTFS-ACL-Analyse mit vollständigem Berechtigungspfad
             - Rekursiver Baum-Scan mit Live-Ergebnistabelle
-            - Risikoanalyse (5 Regeln: Full Control, Write Access, Broad Group, Direct ACE, Sensitive Path)
-            - HTML-Berichtsexport (eigenständig, Dark Theme)
+            - Risikoanalyse (6 Regeln: Full Control, Write Access, Admin Rights, Broad Group, Direct User ACE, Sensitive Path)
+            - HTML-/JSON-/CSV-Berichtsexport
             - Delta-Vergleich zwischen zwei Scan-Läufen
             - Optionale LDAP / Active Directory Identitätsauflösung
             - Optionale SMB-Share-Berechtigungsüberlagerung
-            - SQLite-Scan-Historie neben der EXE
-          files: "Stars-${{ github.ref_name }}-Setup.exe"
+            - SQLite-Scan-Historie pro Benutzerprofil
+          files: |
+            Stars-${{ github.ref_name }}-Setup.exe
+            Stars-${{ github.ref_name }}-Setup.exe.sha256
           generate_release_notes: false

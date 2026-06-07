@@ -66,10 +66,26 @@ Genau diese Schritt-für-Schritt-Erklärung — inklusive Diagnose-Markern, wenn
 Den aktuellen Windows-Installer gibt es auf der **[Releases-Seite](https://github.com/Birgerson/stars-ad-permission-analyzer/releases)**.
 
 1. Auf den neuesten Release klicken (oben in der Liste).
-2. `Stars-vX.Y.Z-Setup.exe` unter *Assets* herunterladen.
-3. Doppelklick — keine Administratorrechte erforderlich. Ein **Stars**-Symbol erscheint auf dem Desktop.
+2. `Stars-vX.Y.Z-Setup.exe` **und** `Stars-vX.Y.Z-Setup.exe.sha256` unter *Assets* herunterladen.
+3. **Empfohlen:** Integrität verifizieren (siehe unten) — Stars hat aktuell kein Code-Signing.
+4. Doppelklick auf den Installer — keine Administratorrechte erforderlich. Ein **Stars**-Symbol erscheint auf dem Desktop.
 
 Systemvoraussetzungen: Windows 10, Windows 11 oder Windows Server. Keine weitere Laufzeitumgebung nötig.
+
+#### Integrität verifizieren (SHA256)
+
+Damit du prüfen kannst, dass dein Download mit dem in GitHub Actions gebauten Build bit-genau übereinstimmt:
+
+```powershell
+$exe = "Stars-v1.5.16-Setup.exe"  # an deine Version anpassen
+$expected = (Get-Content "$exe.sha256").Split("  ")[0]
+$actual   = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+if ($actual -eq $expected) { "OK — Datei stimmt" } else { "MISMATCH — NICHT verwenden" }
+```
+
+Auf WSL / Linux / macOS reicht `sha256sum -c Stars-v1.5.16-Setup.exe.sha256`.
+
+> **Was das Hash-File leistet — und was nicht:** Der Hash schützt gegen verfälschte Downloads (Mirror-Modifikation, Mitm). Er ersetzt **kein** Code-Signing — die Echtheit der Quelle verifizierst du über das GitHub-Repo selbst, nicht über den Hash. Code-Signing ist eingeplant; siehe [`docs/codesigning.md`](docs/codesigning.md) für den Stand.
 
 > **Getestete Plattformen:** Stars ist gegen **Windows Server 2022 Standard** und **Windows Server 2025 Standard** verifiziert (3-Forest-Lab, 1000 Test-User, 5000 Verzeichnisse).
 >
@@ -446,10 +462,26 @@ You get this step-by-step chain — including diagnostic markers when something 
 Get the current Windows installer from the **[Releases page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases)**.
 
 1. Click the latest release at the top of the list.
-2. Download `Stars-vX.Y.Z-Setup.exe` from *Assets*.
-3. Double-click — no administrator rights required. A **Stars** icon appears on the desktop.
+2. Download `Stars-vX.Y.Z-Setup.exe` **and** `Stars-vX.Y.Z-Setup.exe.sha256` from *Assets*.
+3. **Recommended:** verify integrity (see below) — Stars currently has no code-signing certificate.
+4. Double-click the installer — no administrator rights required. A **Stars** icon appears on the desktop.
 
 System requirements: Windows 10, Windows 11, or Windows Server. No additional runtime needed.
+
+#### Verify integrity (SHA256)
+
+So you can confirm your download is bit-for-bit identical to the build produced by GitHub Actions:
+
+```powershell
+$exe = "Stars-v1.5.16-Setup.exe"  # adapt to your version
+$expected = (Get-Content "$exe.sha256").Split("  ")[0]
+$actual   = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+if ($actual -eq $expected) { "OK — file matches" } else { "MISMATCH — do NOT use" }
+```
+
+On WSL / Linux / macOS, `sha256sum -c Stars-v1.5.16-Setup.exe.sha256` works directly.
+
+> **What the hash file gives you — and what it doesn't:** The hash protects against tampered downloads (mirror modification, MITM). It does **not** replace code signing — you verify the authenticity of the source through the GitHub repo itself, not through the hash. Code signing is planned; see [`docs/codesigning.md`](docs/codesigning.md) for status.
 
 > **Tested platforms:** Stars is verified against **Windows Server 2022 Standard** and **Windows Server 2025 Standard** (3-forest lab, 1000 test users, 5000 directories).
 >
