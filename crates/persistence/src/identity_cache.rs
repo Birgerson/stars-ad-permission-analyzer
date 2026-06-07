@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! SQLite-Cache für Identitäten und Gruppenmitgliedschaften.
 //! SQLite cache for identities and group memberships.
 
 use adpa_core::{
@@ -19,7 +18,6 @@ impl<'a> IdentityCache<'a> {
         Self { conn }
     }
 
-    /// Speichert oder aktualisiert eine Identität im Cache.
     /// Stores or updates an identity in the cache.
     pub fn upsert(&self, identity: &Identity) -> Result<(), CoreError> {
         self.conn
@@ -43,7 +41,6 @@ impl<'a> IdentityCache<'a> {
         Ok(())
     }
 
-    /// Sucht eine Identität anhand der SID.
     /// Looks up an identity by SID.
     pub fn lookup(&self, sid: &Sid) -> Result<Option<Identity>, CoreError> {
         let result = self.conn.query_row(
@@ -58,7 +55,6 @@ impl<'a> IdentityCache<'a> {
         }
     }
 
-    /// Speichert Gruppenmitgliedschaften. Bereits vorhandene Einträge werden übersprungen.
     /// Stores group memberships. Existing entries are skipped.
     pub fn upsert_memberships(&self, memberships: &[GroupMembership]) -> Result<(), CoreError> {
         for m in memberships {
@@ -75,7 +71,6 @@ impl<'a> IdentityCache<'a> {
         Ok(())
     }
 
-    /// Gibt alle gespeicherten Gruppenmitgliedschaften für eine SID zurück.
     /// Returns all stored group memberships for a SID.
     pub fn lookup_memberships(&self, sid: &Sid) -> Result<Vec<GroupMembership>, CoreError> {
         let mut stmt = self
@@ -93,9 +88,6 @@ impl<'a> IdentityCache<'a> {
                     member_sid: Sid(row.get(0)?),
                     group_sid: Sid(row.get(1)?),
                     direct: row.get::<_, i32>(2)? != 0,
-                    // Der Cache speichert bewusst keine Namen — die kommen
-                    // vom Live-Resolver (LDAP/SAM) bei der nächsten
-                    // Auswertung; der Cache deckt nur die Mitgliedschafts-
                     // Topologie ab.
                     // The cache deliberately does not store names — they
                     // come from the live resolver (LDAP/SAM) at the next
@@ -103,7 +95,6 @@ impl<'a> IdentityCache<'a> {
                     // topology.
                     group_name: None,
                     // Wie group_name auch: konkrete Mitgliedschafts-Pfade
-                    // sind eine Live-Auswertung und werden hier nicht
                     // persistiert, weil sie pro Lauf neu rekonstruiert
                     // werden.
                     // Like group_name: concrete membership paths are a
@@ -152,7 +143,6 @@ fn row_to_identity(row: &rusqlite::Row<'_>) -> rusqlite::Result<Identity> {
         domain: row.get(2)?,
         kind: kind_from_str(&kind_str),
         disabled: row.get::<_, i32>(4)? != 0,
-        // UPN wird im Identity-Cache nicht persistiert (siehe scan_store).
         // UPN is not persisted in the identity cache (see scan_store).
         user_principal_name: None,
     })

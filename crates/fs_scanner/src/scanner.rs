@@ -12,8 +12,6 @@ use crate::acl;
 pub struct NtfsScanner;
 
 impl Scanner for NtfsScanner {
-    /// Liest DACL und Attribute des Zielpfades und liefert sie als
-    /// `FileSystemObject` zurück. Berechtigungsauswertung erfolgt im
     /// `permission_engine`-Crate auf Basis dieses Ergebnisses.
     /// Reads the DACL and attributes of the target path and returns them as a
     /// `FileSystemObject`. Permission evaluation runs on this result in the
@@ -27,7 +25,6 @@ impl Scanner for NtfsScanner {
     }
 }
 
-/// Liest ein Dateisystemobjekt mit Owner-SID, DACL-Einträgen und Attributen.
 /// Reads a file system object with owner SID, DACL entries and attributes.
 pub fn read_fso(path: &str) -> Result<FileSystemObject, CoreError> {
     acl::read_file_system_object(path)
@@ -40,7 +37,6 @@ mod tests {
 
     #[test]
     fn scan_returns_target_object() {
-        // F5-Regression: Ein erfolgreicher Scan muss das gelesene FSO liefern,
         // statt eine leere Liste.
         // F5 regression: a successful scan must return the read FSO instead of
         // an empty list.

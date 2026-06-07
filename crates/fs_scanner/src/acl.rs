@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Windows-DACL- und ACE-Lese-Logik über native Windows-APIs.
 //! Windows DACL and ACE reading logic via native Windows APIs.
 //!
-//! Kapselt alle unsafe-Blöcke. Aufrufer erhalten typisierte Rust-Modelle.
 //! Encapsulates all unsafe blocks. Callers receive typed Rust models.
 
 use std::ffi::OsStr;
@@ -23,7 +21,6 @@ use windows_sys::Win32::Security::{
     DACL_SECURITY_INFORMATION, INHERITED_ACE, OWNER_SECURITY_INFORMATION, SE_DACL_PROTECTED,
 };
 
-// Nicht von windows-sys 0.59 als Konstante exportiert — Rohwerte aus WinNT.h
 // Not exported as constants in windows-sys 0.59 — raw values from WinNT.h
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const ACCESS_DENIED_ACE_TYPE: u8 = 1;
@@ -42,19 +39,14 @@ fn to_wide_null(s: &str) -> Vec<u16> {
         .collect()
 }
 
-// Roh-AceFlags-Bits, ohne von windows-sys abhängig zu sein.
 // Raw AceFlags bits, decoupled from windows-sys.
 const OBJECT_INHERIT_ACE: u8 = 0x01;
 const CONTAINER_INHERIT_ACE: u8 = 0x02;
 const NO_PROPAGATE_INHERIT_ACE: u8 = 0x04;
 const INHERIT_ONLY_ACE: u8 = 0x08;
 
-/// Zerlegt `ACE_HEADER::AceFlags` in die .NET-äquivalenten Felder
 /// `inheritance_flags` (OI|CI — welche Kinder erben) und
 /// `propagation_flags` (NP|IO — wie/ob es weiterpropagiert).
-/// Der INHERITED-Bit (0x10) bleibt im separaten `inherited`-Bool und fließt
-/// hier nicht ein. Die Audit-/Erfolg-Bits (0x40/0x80) interessieren uns
-/// für DACLs nicht.
 ///
 /// Splits `ACE_HEADER::AceFlags` into the .NET-equivalent fields
 /// `inheritance_flags` (OI|CI — which children inherit) and
@@ -67,11 +59,9 @@ fn split_ace_flags(ace_flags: u8) -> (u32, u32) {
     (inheritance as u32, propagation as u32)
 }
 
-/// Konvertiert einen SID-Zeiger in den kanonischen S-R-I-... String.
 /// Converts a SID pointer to the canonical S-R-I-... string.
 ///
 /// # Safety
-/// `sid` muss ein gültiger PSID-Zeiger sein, der für die Dauer des Aufrufs gültig bleibt.
 /// `sid` must be a valid PSID pointer that remains valid for the duration of the call.
 unsafe fn sid_ptr_to_string(sid: *const core::ffi::c_void) -> Result<String, CoreError> {
     let mut str_ptr: *mut u16 = std::ptr::null_mut();
@@ -94,11 +84,7 @@ unsafe fn sid_ptr_to_string(sid: *const core::ffi::c_void) -> Result<String, Cor
 /// Liest Attribute, Owner-SID und DACL eines Pfades.
 /// Reads attributes, owner SID and DACL for a path.
 ///
-/// Der Eingabepfad wird vor allen Win32-Aufrufen in die Long-Path-Form
 /// (`\\?\C:\…` bzw. `\\?\UNC\server\share\…`) umgewandelt, damit Pfade
-/// jenseits von `MAX_PATH` (260 Zeichen) zuverlässig gelesen werden können.
-/// Der im resultierenden `FileSystemObject` gespeicherte Pfad bleibt die
-/// ursprüngliche Eingabeform (ohne Präfix), damit Reports lesbar bleiben.
 ///
 /// The input path is converted into long-path form (`\\?\C:\…` or
 /// `\\?\UNC\server\share\…`) before any Win32 call, so paths longer than
@@ -218,10 +204,6 @@ pub fn read_file_system_object(path: &str) -> Result<FileSystemObject, CoreError
         inheritance_disabled,
         "FSO read successfully"
     );
-    // Den im FSO gespeicherten Pfad ohne Long-Path-Präfix führen, damit
-    // Reports/CSV/HTML lesbar bleiben. Wenn der Aufrufer (Walker) bereits
-    // einen präfixierten Pfad weiterreicht (geerbt von `DirEntry::path()`),
-    // wird das Präfix hier wieder entfernt.
     // Store the FSO path without the long-path prefix so reports/CSV/HTML
     // stay readable. If the caller (walker) passed in a prefixed path
     // (inherited from `DirEntry::path()`), strip it back here.
@@ -241,12 +223,9 @@ pub fn read_file_system_object(path: &str) -> Result<FileSystemObject, CoreError
 /// Ergebnis eines einzelnen ACE-Parse-Versuchs.
 /// Result of a single ACE parse attempt.
 enum ParseAceOutcome {
-    /// ACE wurde vollständig geparst. / ACE was fully parsed.
     Entry(AceEntry),
-    /// ACE-Typ wird nicht unterstützt — Diagnosedaten gespeichert.
     /// ACE type is not supported — diagnostic data saved.
     Unsupported(UnsupportedAce),
-    /// SID konnte nicht gelesen werden — ACE wird übersprungen.
     /// SID could not be read — ACE is skipped.
     Skip,
 }
@@ -254,11 +233,9 @@ enum ParseAceOutcome {
 /// Liest alle ACEs aus einem DACL.
 /// Reads all ACEs from a DACL.
 ///
-/// Gibt `(unterstützte ACEs, nicht unterstützte ACEs)` zurück.
 /// Returns `(supported ACEs, unsupported ACEs)`.
 ///
 /// # Safety
-/// `dacl` muss ein gültiger, nicht-null DACL-Zeiger sein.
 /// `dacl` must be a valid, non-null DACL pointer.
 unsafe fn parse_dacl(dacl: *const ACL) -> (Vec<AceEntry>, Vec<UnsupportedAce>) {
     let mut acl_info = ACL_SIZE_INFORMATION {
@@ -310,7 +287,6 @@ unsafe fn parse_dacl(dacl: *const ACL) -> (Vec<AceEntry>, Vec<UnsupportedAce>) {
 /// Parses a single ACE pointer.
 ///
 /// # Safety
-/// `ace_ptr` muss ein gültiger ACE-Zeiger aus GetAce sein.
 /// `ace_ptr` must be a valid ACE pointer obtained from GetAce.
 unsafe fn parse_ace(ace_ptr: *mut core::ffi::c_void) -> ParseAceOutcome {
     // SAFETY: ace_ptr points to a valid ACE structure returned by GetAce.
@@ -442,7 +418,6 @@ mod tests {
     #[test]
     fn split_ace_flags_isolates_inheritance_and_propagation() {
         // OI | CI | IO | INHERITED → inheritance = OI|CI, propagation = IO
-        // (INHERITED bleibt im inherited-Bool, nicht in den Flag-Feldern.)
         let (inh, prop) = split_ace_flags(0x01 | 0x02 | 0x08 | 0x10);
         assert_eq!(inh, 0x03, "inheritance_flags must contain OI | CI");
         assert_eq!(prop, 0x08, "propagation_flags must contain IO");
@@ -465,14 +440,12 @@ mod tests {
     #[test]
     fn split_ace_flags_ignores_audit_bits() {
         // SUCCESSFUL_ACCESS_ACE_FLAG (0x40) / FAILED_ACCESS_ACE_FLAG (0x80)
-        // sind Audit-Bits und gehören weder in inheritance noch in propagation.
         let (inh, prop) = split_ace_flags(0x40 | 0x80);
         assert_eq!(inh, 0);
         assert_eq!(prop, 0);
     }
 
     /// Synthetischer Test: ein ACE mit unbekanntem Typ (z.B. SYSTEM_AUDIT_ACE_TYPE = 2)
-    /// wird als UnsupportedAce mit ACE-Typ und Maske gespeichert, nicht verworfen.
     ///
     /// Synthetic test: an ACE with an unknown type (e.g. SYSTEM_AUDIT_ACE_TYPE = 2)
     /// is recorded as UnsupportedAce with type and mask, not silently dropped.

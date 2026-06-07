@@ -4,13 +4,8 @@
 //! Rekursiver Verzeichnis-Walker mit Fehlertoleranz.
 //! Recursive directory walker with error tolerance.
 //!
-//! Reparse Points (Symlinks, Junctions) werden standardmäßig weiterverfolgt,
-//! mit Loop-Detection über das kanonisierte Ziel. Wo eine Schleife erkannt
-//! wird oder das Ziel nicht aufgelöst werden kann, schreibt der Walker einen
-//! sichtbaren `WalkError` in das Ergebnis — niemals stille Skips. Damit ist
 //! ein typischer SYSVOL-Junction-Pfad
 //! (`C:\Windows\SYSVOL\sysvol\<domain>` → `C:\Windows\SYSVOL\domain`)
-//! vollständig auswertbar, ohne dass der Bediener Insiderwissen über
 //! Junctions braucht.
 //!
 //! Reparse points (symlinks, junctions) are followed by default with
@@ -30,7 +25,6 @@ use tracing::{debug, info, warn};
 use crate::acl::read_file_system_object;
 use crate::cancel::CancellationToken;
 
-/// Konfiguration für den Walker.
 /// Configuration for the walker.
 pub struct WalkConfig {
     /// Maximale Rekursionstiefe. `None` = unbegrenzt. / Maximum recursion depth. `None` = unlimited.
@@ -39,7 +33,6 @@ pub struct WalkConfig {
     pub max_depth: Option<u32>,
 }
 
-/// Fehler beim Lesen eines Pfades während des Walks.
 /// Error reading a path during the walk.
 pub struct WalkError {
     pub path: String,
@@ -51,18 +44,13 @@ pub struct WalkError {
 pub struct WalkResult {
     pub objects: Vec<FileSystemObject>,
     pub errors: Vec<WalkError>,
-    /// true wenn der Walk durch ein Abbruch-Token vorzeitig beendet wurde.
     /// true if the walk was ended early by a cancellation token.
     pub cancelled: bool,
 }
 
-/// Liest ein Verzeichnis-Teilbaum rekursiv und sammelt FSOs und Fehler getrennt.
 /// Reads a directory subtree recursively, collecting FSOs and errors separately.
 ///
-/// - Zugriff-verweigert-Fehler auf einzelne Pfade werden protokolliert; der Scan läuft weiter.
 /// - Access-denied errors on individual paths are recorded; the scan continues.
-/// - Reparse Points werden standardmäßig verfolgt, mit Loop-Detection über
-///   kanonisierte Ziele. Schleifen oder nicht auflösbare Ziele führen zu einem
 ///   sichtbaren Eintrag in `errors` — keine stillen Skips.
 /// - Reparse points are followed by default with loop detection via
 ///   canonicalized targets. Cycles or unresolvable targets produce a visible
@@ -76,9 +64,6 @@ pub fn walk_tree(root: &str, config: &WalkConfig, cancel: &CancellationToken) ->
     let mut objects = Vec::new();
     let mut errors = Vec::new();
     let mut visited_canonical: HashSet<String> = HashSet::new();
-    // Root vorab kanonisieren — wird als erstes Element in das visited-Set
-    // gelegt, damit Reparse-Points, die auf den Scan-Wurzel zurückzeigen,
-    // direkt als Schleife erkannt werden.
     // Canonicalize the root up front and seed the visited set with it so
     // that reparse points pointing back to the scan root are detected as a
     // cycle right away.
@@ -109,10 +94,6 @@ pub fn walk_tree(root: &str, config: &WalkConfig, cancel: &CancellationToken) ->
     }
 }
 
-/// Kanonisiert einen Pfad zu seiner aufgelösten Ziel-Form (Long-Path-präfixiert
-/// auf Windows). Bei einem Reparse Point wird das *Ziel* zurückgegeben — genau
-/// das, was wir für die Loop-Detection brauchen. Liefert `None`, wenn die
-/// Auflösung fehlschlägt (z. B. defekter Link).
 ///
 /// Canonicalizes a path to its resolved target form (long-path prefixed on
 /// Windows). For a reparse point this returns the *target* — exactly what we
@@ -152,12 +133,8 @@ fn walk_dir(
             debug!(path, is_dir, is_reparse, depth = current_depth, "Read FSO");
             objects.push(fso);
 
-            // Bei einem Reparse Point versuchen wir, das kanonische Ziel zu
-            // bestimmen. Ist es schon Teil des aktuellen Walks, würde ein
             // weiteres Hineinlaufen eine Schleife erzeugen — wir markieren
-            // das als sichtbaren Fehler und brechen die Rekursion an dieser
             // Stelle ab. Misslingt die Kanonisierung komplett, geben wir
-            // dem Bediener ebenfalls eine erklärende Fehlermeldung.
             // For a reparse point we try to determine the canonical target.
             // If it is already part of the current walk, descending further
             // would create a cycle — we surface that as a visible error and
@@ -198,11 +175,6 @@ fn walk_dir(
 
             let depth_ok = config.max_depth.is_none_or(|max| current_depth < max);
             if is_dir && depth_ok {
-                // Long-Path-Präfix vor `read_dir` ansetzen, damit
-                // Verzeichnisse mit Pfaden > MAX_PATH zuverlässig enumeriert
-                // werden können. Die `entry.path()`-Rückgaben tragen das
-                // Präfix dann mit — `to_windows_api_path` erkennt das beim
-                // nächsten Rekursionsschritt (Idempotenz) und prefixt nicht
                 // doppelt.
                 // Apply the long-path prefix before `read_dir` so that
                 // directories with paths > MAX_PATH can be enumerated
@@ -222,7 +194,6 @@ fn walk_dir(
                     }
                     Ok(entries) => {
                         for entry_result in entries {
-                            // Abbruch zwischen Geschwister-Einträgen prüfen.
                             // Check for cancellation between sibling entries.
                             if cancel.is_cancelled() {
                                 return;
@@ -271,7 +242,6 @@ mod tests {
         WalkConfig { max_depth: Some(n) }
     }
 
-    /// Walk-Helfer mit frischem, nicht abgebrochenem Token.
     /// Walk helper with a fresh, non-cancelled token.
     fn walk(root: &str, config: &WalkConfig) -> WalkResult {
         walk_tree(root, config, &CancellationToken::new())
@@ -349,13 +319,9 @@ mod tests {
         assert!(!result.cancelled);
     }
 
-    // --- Finding 5: Long-Path-Unterstützung ---
     // --- Finding 5: long path support ---
 
     /// Baut unter TEMP eine Verzeichniskette, deren Gesamtpfad sicher
-    /// jenseits von MAX_PATH (260) liegt, scannt sie und prüft, dass der
-    /// Walker das Blattverzeichnis tatsächlich erreicht. Vor Finding 5
-    /// wäre der `GetFileAttributesW`-Aufruf in `read_file_system_object`
     /// auf langen Pfaden fehlgeschlagen.
     ///
     /// Builds a directory chain under TEMP whose full path is clearly
@@ -366,8 +332,6 @@ mod tests {
     fn walk_reaches_paths_longer_than_max_path() {
         use std::path::PathBuf;
 
-        // 12 × 30 = 360 Zeichen Segmenttiefe + TEMP-Präfix ⇒ klar > 260.
-        // Wir nutzen UUID-ähnliche Namen, damit parallele Testläufe nicht
         // kollidieren.
         // 12 × 30 = 360 chars of segment depth + TEMP prefix ⇒ clearly > 260.
         let stamp = format!(
@@ -381,13 +345,9 @@ mod tests {
         let root: PathBuf = std::env::temp_dir().join(format!("adpa-longpath-{stamp}"));
         let segment: String = "a".repeat(30);
 
-        // Vorhandene Reste aus früheren Läufen entfernen.
         // Clean up leftovers from prior runs.
         let _ = std::fs::remove_dir_all(&root);
 
-        // Mit dem `\\?\`-Präfix anlegen, damit `create_dir_all` selbst nicht
-        // an MAX_PATH scheitert. Der Test prüft anschließend den Scanner
-        // *ohne* Präfix — der muss intern korrekt normalisieren.
         // Create via the `\\?\` prefix so that `create_dir_all` itself does
         // not hit MAX_PATH. The test then scans *without* the prefix —
         // the scanner has to normalise internally.
@@ -409,8 +369,6 @@ mod tests {
 
         let result = walk(&root_str, &unlimited());
 
-        // Cleanup zuerst — auch wenn Asserts unten fehlschlagen. Über das
-        // präfixierte Root, sonst kann remove_dir_all selbst MAX_PATH
         // reissen.
         // Cleanup first — even if asserts fail. Via the prefixed root so
         // that remove_dir_all itself does not trip over MAX_PATH.
@@ -433,14 +391,12 @@ mod tests {
             result.objects.len()
         );
 
-        // Der tiefste Pfad muss > MAX_PATH lang sein.
         let max_len = result.objects.iter().map(|o| o.path.0.len()).max().unwrap();
         assert!(
             max_len > 260,
             "Tiefster Pfad muss > 260 sein, war: {max_len}"
         );
 
-        // Die gespeicherten Pfade dürfen das `\\?\`-Präfix NICHT tragen —
         // Reports sollen menschenlesbar bleiben (siehe acl.rs).
         for obj in &result.objects {
             assert!(
@@ -455,9 +411,6 @@ mod tests {
     // Reparse-Point-Verhalten / reparse point behaviour
     // ----------------------------------------------------------------
 
-    /// Legt unter TEMP eine kleine Struktur an, in der `link → target` eine
-    /// Verzeichnis-Junction ist. Der Walker muss `link` ENTERN und das
-    /// Kind unter `target` finden — das ist die SYSVOL-Situation.
     /// Creates a small structure under TEMP where `link → target` is a
     /// directory junction. The walker must follow `link` and find the
     /// child under `target` — this is the SYSVOL situation.
@@ -491,9 +444,6 @@ mod tests {
             .status()
             .expect("spawn mklink");
         if !status.success() {
-            // Junction-Erstellung kann auf manchen CI-Hosts scheitern (z. B.
-            // ohne Schreibrechte unter TEMP). In dem Fall überspringen wir den
-            // Test bewusst, damit er nicht falsch fehlschlägt.
             // Junction creation may fail on some CI hosts (e.g. without write
             // permission under TEMP). Skip the test deliberately in that case
             // so it does not fail spuriously.
@@ -519,8 +469,6 @@ mod tests {
         );
     }
 
-    /// Legt eine zirkuläre Junction-Struktur an (`b → a`) und stellt sicher,
-    /// dass der Walker die Schleife erkennt und einen *sichtbaren* Fehler
     /// im Ergebnis erzeugt — kein stilles Skippen, kein Stack-Overflow.
     /// Creates a circular junction structure (`b → a`) and verifies that the
     /// walker detects the cycle and surfaces a *visible* error in the result
@@ -543,8 +491,6 @@ mod tests {
         let b = a.join("b");
 
         std::fs::create_dir_all(&a).expect("create a");
-        // `b` ist eine Junction zurück auf `root` — sobald der Walker `b`
-        // betritt, würde er ohne Loop-Detection wieder von `root` aus
         // starten.
         // `b` is a junction back to `root` — once the walker enters `b`,
         // without loop detection it would start over from `root`.

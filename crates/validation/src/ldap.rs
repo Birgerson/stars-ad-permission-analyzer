@@ -3,12 +3,10 @@
 
 use adpa_core::error::CoreError;
 
-/// Validierter LDAP-Filter — verhindert Injection durch ungeprüfte Nutzereingaben
 /// Validated LDAP filter — prevents injection from unchecked user input
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedLdapFilter(pub String);
 
-/// Verbotene Zeichen, die auf Injection-Versuche hindeuten
 const FORBIDDEN_CHARS: &[char] = &['(', ')', '*', '\\', '\0'];
 
 pub fn validate_ldap_filter(input: &str) -> Result<ValidatedLdapFilter, CoreError> {

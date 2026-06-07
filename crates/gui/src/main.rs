@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! adpa-gui — Grafische Oberfläche für den AD Permission Analyzer (Slint).
 //! adpa-gui — Graphical interface for the AD Permission Analyzer (Slint).
 //!
 //! Logfile, Panic-Hook und MessageBox-Fallback bleiben aus den eframe-
-//! Vorgängern erhalten — sie sind unabhängig vom GUI-Toolkit und decken
-//! Startprobleme auf einem nackten Server zuverlässig auf.
 //! Logfile, panic hook and MessageBox fallback are kept from the eframe
 //! predecessors — they are independent of the GUI toolkit and reliably
 //! surface startup problems on a bare server.
@@ -31,8 +28,6 @@ use crate::worker::{
     TrusteeRow, WorkerEvent, WorkerRequest,
 };
 
-// Slint-UI inline. Definiert ViewModels für Scan-Zeilen, Scan-Fehler,
-// Risikobefunde, Scan-Läufe und Delta-Zeilen sowie das MainWindow mit
 // drei voll funktionalen Tabs (Analyze, Scan Tree, Delta).
 // Slint UI inline. Defines view models for scan rows, scan errors, risk
 // findings, scan runs and delta rows, plus the MainWindow with three
@@ -48,7 +43,6 @@ slint::slint! {
     // Theme — globale Designsprache mit Light/Dark-Umschaltung.
     // Theme — global design language with light/dark toggle.
     // ============================================================
-    // Alle Farben, Abstaende und Schriftgroessen werden hier zentral
     // gepflegt. Komponenten referenzieren `Theme.bg-app`, `Theme.accent`,
     // `Theme.spacing-md` usw. statt Hardcoded-Hex-Werten.
     // All colors, spacings and font sizes live here. Components
@@ -62,7 +56,6 @@ slint::slint! {
         // Neutraler, sehr leicht abgesetzter App-Hintergrund, damit
         // Slint-Standard-Widgets (GroupBox-Titel, LineEdit-Text) mit
         // ihren systemnahen Default-Farben gut lesbar bleiben.
-        // Vorherige Versuche mit kraeftigerem Hintergrund liessen die
         // blassen System-Texte verschwinden — siehe ChatGPT-Feedback.
         // Neutral, only slightly off-white app background so Slint
         // default widgets stay legible with their system-default text.
@@ -80,7 +73,6 @@ slint::slint! {
         out property <color> text-inverse:   #ffffff;
 
         // --- Borders ---
-        // Etwas dunklere Standard-Border, damit Karten und
         // Eingabefelder sich vom hellen Hintergrund klar abheben.
         // Slightly darker default border so cards and inputs stand out
         // clearly against the light background.
@@ -89,9 +81,7 @@ slint::slint! {
 
         // --- Accent (Stars-Blau) ---
         // Hex-Werte vermeiden bewusst das Muster „Ziffer(n) direkt vor
-        // e/E", weil der Rust-Tokenizer das als Float-Exponent
         // interpretiert (`#2563EB` bricht ab — `2563E` erwartet
-        // Exponent-Digits). Stattdessen werden Hex-Werte gewählt, bei
         // denen nach einer Ziffer ein Buchstabe ≠ e/E kommt.
         // Hex values deliberately avoid "digit(s) directly followed by
         // e/E", which Rust's tokenizer parses as a float exponent.
@@ -132,8 +122,6 @@ slint::slint! {
     // PrimaryButton — accent background, white text. For main actions.
     //
     // Wichtig: `horizontal-stretch: 0; vertical-stretch: 0` plus
-    // `preferred-*` und `max-height` verhindern, dass das umgebende
-    // Layout den Button auf die volle Container-Hoehe/Breite aufblaeht.
     // Important: pinning stretch + max-height keeps the parent layout
     // from inflating the button to fill the available space.
     component PrimaryButton inherits Rectangle {
@@ -216,10 +204,7 @@ slint::slint! {
 
     // ThemeToggle — Sun/Mond-Umschalter fuer Light/Dark.
     // ThemeToggle — sun/moon switcher for light/dark.
-    // Theme-Umschalter — bewusst mit Text-Label statt nur Unicode-Glyph,
-    // weil das Slint-Software-Backend auf Windows Server (Default-Font)
     // Glyphen wie U+263E (☾) / U+2600 (☀) nicht zuverlaessig rendert.
-    // Mit Border + Hintergrund + Text sieht der Anwender direkt eine
     // klickbare Schaltflaeche.
     // Theme toggle — deliberately uses a text label instead of a sole
     // Unicode glyph, because Slint's software backend on Windows Server
@@ -331,9 +316,6 @@ slint::slint! {
 
     // Wiederverwendbares ⓘ-Help-Icon. Bei Hover erscheint ein kleiner
     // dunkler Tooltip-Kasten mit Erklaerungstext direkt rechts neben
-    // dem Icon. Tooltip wird nur eingeblendet, ueberlappt Nachbarn
-    // (Slint zeichnet Kinder ueber Geschwister) und verschwindet, sobald
-    // die Maus weg ist.
     // Reusable ⓘ help icon. On hover a small dark tooltip box appears
     // right next to the icon. The tooltip is only shown while hovered,
     // overlays its neighbors (Slint renders children over siblings)
@@ -377,9 +359,6 @@ slint::slint! {
         }
     }
 
-    // Eine Zeile in der Trustee-Sicht — vor ScanRowVm deklariert, weil
-    // ScanRowVm das Modell als Feld trägt und der Slint-Parser
-    // Vorwärtsdeklarationen verlangt.
     // One row in the trustee view — declared ahead of ScanRowVm because
     // ScanRowVm carries the model as a field and Slint's parser requires
     // forward declarations.
@@ -402,8 +381,6 @@ slint::slint! {
         rights_label: string,
         mask_hex: string,
         steps: [string],
-        // Pfadzentrierte Trustee-Liste (alle ACEs aufgelöst). Wird im
-        // aufgeklappten Zustand zusätzlich zum identitätsbasierten
         // Berechtigungspfad angezeigt.
         // Path-centric trustee list (every ACE resolved). Shown in the
         // expanded state alongside the identity-based explanation path.
@@ -412,7 +389,6 @@ slint::slint! {
         has_diagnostic: bool,
     }
 
-    // Ein Scan-Fehler (Pfad konnte nicht ausgewertet werden).
     // A scan error (a path could not be evaluated).
     export struct ScanErrorVm {
         path: string,
@@ -430,7 +406,6 @@ slint::slint! {
         incomplete: bool,
     }
 
-    // Ein persistierter Scan-Lauf in der Delta-Tab-Liste.
     // A persisted scan run in the Delta tab's list.
     export struct ScanRunVm {
         id: string,
@@ -439,7 +414,6 @@ slint::slint! {
         selected_as_new: bool,
     }
 
-    // Eine Delta-Zeile (Hinzugefügt / Entfernt / Geändert).
     // A delta row (Added / Removed / Changed).
     export struct DeltaRowVm {
         path: string,
@@ -449,7 +423,6 @@ slint::slint! {
         new_rights: string,
     }
 
-    // Ein Vorschlag in der Live-Suche unter dem Namensfeld.
     // A suggestion in the live search below the name field.
     export struct IdentitySuggestionVm {
         name: string,
@@ -466,8 +439,6 @@ slint::slint! {
         min-height: 560px;
         background: Theme.bg-app;
         // Stars laeuft ausschliesslich auf Windows-Server-Systemen
-        // (siehe AGENTS.md). Arial ist dort garantiert verfuegbar und
-        // liefert gleichmaessige Glyphbreiten — kein Fallback auf eine
         // System-Schrift, die je nach Edition unterschiedlich aussieht.
         // Stars only runs on Windows Server hosts (see AGENTS.md).
         // Arial is guaranteed and renders consistently across editions.
@@ -475,7 +446,6 @@ slint::slint! {
 
         // Slint-Standard-Widgets (GroupBox-Titel, LineEdit-Text,
         // ComboBox-Inhalt …) leiten ihre Schriftfarbe per Default vom
-        // System-Theme ab. Auf einem Windows-Host im Dark-Mode wuerde
         // Slint dadurch helle Schrift auf unserem hellen App-Hintergrund
         // rendern — unlesbar. Wir koppeln die Slint-Palette-Color-Scheme
         // hart an unseren Theme-Toggle: dunkle Schrift auf hellem
@@ -491,9 +461,6 @@ slint::slint! {
             Palette.color-scheme = self._palette-scheme;
         }
 
-        // Versions-/Branding-Anzeige im HeaderBar — wird von main.rs
-        // beim Setup gesetzt, damit die GUI nicht selbst entscheiden
-        // muss, was sie als Versionsstring zeigt.
         // Version / branding text for the HeaderBar — set by main.rs at
         // setup so the UI does not need to decide what to render.
         in property <string> app-version: "";
@@ -501,11 +468,7 @@ slint::slint! {
         // ============================================================
         // Analyze-Tab Properties / Analyze tab properties
         // ============================================================
-        // Vorauswahl auf das SYSVOL-Verzeichnis: existiert auf jeder
-        // standardmäßig installierten Windows-Server-DC, ist
         // audit-relevant (Group Policy Templates, Login-Skripte) und
-        // erspart den ersten Tippvorgang. Der User kann den Pfad
-        // jederzeit überschreiben — die Property ist `in-out`.
         // Pre-fill the SYSVOL directory: exists on every default
         // Windows Server DC install, is audit-relevant (Group Policy
         // templates, login scripts) and saves the first keystroke. The
@@ -513,9 +476,6 @@ slint::slint! {
         // `in-out`.
         in-out property <string> a-path: "C:\\Windows\\SYSVOL\\sysvol";
         // Benutzer-/Gruppen-Name als komfortable Alternative zur SID-
-        // Eingabe. Über `resolve-name-clicked` wird der Name via LSA in
-        // die SID übersetzt, die dann im SID-Feld landet. Der User kann
-        // weiterhin direkt eine SID in das SID-Feld eintippen.
         // User/group name as a convenient alternative to typing a SID
         // directly. `resolve-name-clicked` translates the name via LSA
         // into the SID and writes it to the SID field. The user can
@@ -549,7 +509,6 @@ slint::slint! {
         in property <string> a-share-line;
         in property <[string]> a-explanation;
         // Trustee-Sicht: pfadzentrierte Auflistung aller ACEs ohne
-        // vorgegebene Identität.
         // Trustee view: path-centric listing of all ACEs without a fixed
         // identity.
         in property <[TrusteeRowVm]> a-trustees;
@@ -635,16 +594,11 @@ slint::slint! {
         callback delta-pick-old(string);
         callback delta-pick-new(string);
         callback delta-compare-clicked();
-        // Anfrage zum Löschen eines Scan-Laufs. Die GUI fragt erst über den
-        // d-pending-delete-Dialog nach, der Worker bekommt die Anfrage erst
-        // nach Bestätigung.
         // Request to delete a scan run. The GUI prompts via the
         // d-pending-delete dialog first; the worker only sees the request
         // after confirmation.
         callback delta-delete-confirmed(string);
 
-        // ID des Scan-Laufs, für den der Bestätigungsdialog gerade
-        // sichtbar sein soll. Leer = kein Dialog offen.
         // ID of the scan run for which the confirmation dialog should be
         // visible. Empty = no dialog open.
         in-out property <string> d-pending-delete-id;
@@ -659,8 +613,6 @@ slint::slint! {
                 version-text: root.app-version;
             }
 
-            // Inhalts-Bereich mit gleichmaessigem Padding um das
-            // TabWidget; das TabWidget selbst behaelt seinen Slint-
             // Standard-Look, bekommt aber etwas Atemraum.
             // Content area with consistent padding around the TabWidget;
             // the TabWidget keeps its Slint default look but gets some air.
@@ -699,7 +651,7 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Benutzer/Gruppe:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: "User/group:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "DOMAIN\\user  oder  user@domain.lab  oder  S-1-5-21-...  (Domain-User vollstaendig eintippen)";
                                                 text <=> root.a-name;
@@ -723,7 +675,7 @@ slint::slint! {
                                                 spacing: Theme.spacing-sm;
                                                 padding: 0px;
                                                 Button {
-                                                    text: "🔍 SID auflösen";
+                                                    text: "🔍 Resolve SID";
                                                     clicked => { root.resolve-name-clicked(); }
                                                 }
                                             }
@@ -739,7 +691,7 @@ slint::slint! {
                                                     padding: 4px;
                                                     spacing: 0px;
                                                     Text {
-                                                        text: "[L] = lokale Identität dieser Maschine";
+                                                        text: "[L] = local identity of this machine";
                                                         color: Theme.text-muted;
                                                         font-size: 11px;
                                                     }
@@ -778,7 +730,7 @@ slint::slint! {
                                         Row {
                                             Text { text: "Benutzer-SID:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "S-1-5-21-...   (entweder direkt eintippen oder oben auflösen lassen)";
+                                                placeholder-text: "S-1-5-21-...   (type directly or resolve above)";
                                                 text <=> root.a-sid;
                                             }
                                         }
@@ -792,7 +744,7 @@ slint::slint! {
                             }
 
                             GroupBox {
-                                title: "Identitätsauflösung";
+                                title: "Identity resolution";
                                 VerticalBox {
                                     spacing: Theme.spacing-sm;
                                     HorizontalBox {
@@ -868,7 +820,7 @@ slint::slint! {
                                 VerticalBox {
                                     spacing: Theme.spacing-sm;
                                     CheckBox {
-                                        text: "Share-Maske berücksichtigen";
+                                        text: "Include share mask";
                                         checked <=> root.a-smb-enabled;
                                     }
                                     if root.a-smb-enabled: GridBox {
@@ -900,7 +852,6 @@ slint::slint! {
                                     clicked => { root.analyze-clicked(); }
                                 }
                                 // Zweite Audit-Frage: pfadzentrierte
-                                // Trustee-Sicht. Benötigt keine Identität,
                                 // weil sie alle ACEs des Pfads zeigt.
                                 // Second audit question: path-centric
                                 // trustee view. Needs no identity because
@@ -919,7 +870,7 @@ slint::slint! {
                             }
 
                             Text {
-                                text: "Hinweis: jede Analyse wird automatisch in der Scan-Historie gespeichert und ist anschließend im Delta-Tab vergleichbar.";
+                                text: "Note: every analysis is stored automatically in the scan history and becomes comparable in the Delta tab.";
                                 color: Theme.text-muted;
                                 font-size: 12px;
                                 wrap: word-wrap;
@@ -953,8 +904,6 @@ slint::slint! {
                             }
 
                             // Trustee-Sicht: zeigt alle ACEs auf dem Pfad,
-                            // unabhängig vom Identitäts-Token. Komplement zur
-                            // identitätsbasierten Effektiv-Analyse oben.
                             // Trustee view: shows every ACE on the path,
                             // independent of any identity token. Complement
                             // to the identity-based effective analysis above.
@@ -1038,7 +987,7 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Benutzer/Gruppe:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: "User/group:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "DOMAIN\\user  oder  user@domain.lab  oder  S-1-5-21-...  (Domain-User vollstaendig eintippen)";
                                                 text <=> root.s-name;
@@ -1062,7 +1011,7 @@ slint::slint! {
                                                 spacing: Theme.spacing-sm;
                                                 padding: 0px;
                                                 Button {
-                                                    text: "🔍 SID auflösen";
+                                                    text: "🔍 Resolve SID";
                                                     clicked => { root.resolve-scan-name-clicked(); }
                                                 }
                                             }
@@ -1078,7 +1027,7 @@ slint::slint! {
                                                     padding: 4px;
                                                     spacing: 0px;
                                                     Text {
-                                                        text: "[L] = lokale Identität dieser Maschine";
+                                                        text: "[L] = local identity of this machine";
                                                         color: Theme.text-muted;
                                                         font-size: 11px;
                                                     }
@@ -1117,16 +1066,13 @@ slint::slint! {
                                         Row {
                                             Text { text: "Benutzer-SID:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "S-1-5-21-...   (entweder direkt eintippen oder oben auflösen lassen)";
+                                                placeholder-text: "S-1-5-21-...   (type directly or resolve above)";
                                                 text <=> root.s-sid;
                                             }
                                         }
                                         // Tiefe-Begrenzen-Reihe als regulaere
                                         // GridBox-Row. Die HorizontalLayout
                                         // bekommt `horizontal-stretch: 1`,
-                                        // damit sie die 2. Spalte gleich wie
-                                        // die LineEdits darüber ausfuellt und
-                                        // die Label-Spalte nicht aufweitet.
                                         // Depth limit row stretches its
                                         // second-column container so the
                                         // label column stays aligned with
@@ -1156,9 +1102,7 @@ slint::slint! {
                                                         height: 30px;
                                                     }
                                                 }
-                                                // Spacer rechts, damit die
                                                 // Inhalte links-buendig stehen
-                                                // ohne die HorizontalLayout zu
                                                 // verbreitern.
                                                 // Spacer to keep contents left-
                                                 // aligned without inflating.
@@ -1175,7 +1119,7 @@ slint::slint! {
                             }
 
                             GroupBox {
-                                title: "Identitätsauflösung";
+                                title: "Identity resolution";
                                 VerticalBox {
                                     spacing: Theme.spacing-sm;
                                     HorizontalBox {
@@ -1251,7 +1195,7 @@ slint::slint! {
                                 VerticalBox {
                                     spacing: Theme.spacing-sm;
                                     CheckBox {
-                                        text: "Share-Maske berücksichtigen";
+                                        text: "Include share mask";
                                         checked <=> root.s-smb-enabled;
                                     }
                                     if root.s-smb-enabled: GridBox {
@@ -1283,7 +1227,7 @@ slint::slint! {
                                     clicked => { root.scan-clicked(); }
                                 }
                                 DangerButton {
-                                    text: "■  Abbrechen";
+                                    text: "■  Cancel";
                                     enabled: root.s-is-running;
                                     clicked => { root.scan-cancel-clicked(); }
                                 }
@@ -1352,9 +1296,6 @@ slint::slint! {
                                             }
 
                                             // Pfadzentrierte Trustee-Tabelle —
-                                            // die zweite Audit-Frage „wer kann
-                                            // überhaupt auf diesen Pfad?"
-                                            // direkt in der Scan-Zeile.
                                             // Path-centric trustee table —
                                             // the second audit question "who
                                             // can access this path at all?"
@@ -1460,7 +1401,7 @@ slint::slint! {
                                             text <=> root.s-export-path;
                                         }
                                         PrimaryButton {
-                                            text: "💾  Exportieren";
+                                            text: "💾  Export";
                                             clicked => { root.export-clicked(); }
                                         }
                                     }
@@ -1487,7 +1428,7 @@ slint::slint! {
                             spacing: Theme.spacing-sm;
 
                             Text {
-                                text: "Vergleich zweier Scan-Läufe — zeige Pfade, "
+                                text: "Compare two scan runs — show paths "
                                     + "die hinzugekommen, entfernt oder mit anderen "
                                     + "Rechten gespeichert sind.";
                                 wrap: word-wrap;
@@ -1511,7 +1452,7 @@ slint::slint! {
                             }
 
                             if root.d-scan-runs.length > 0: GroupBox {
-                                title: "Verfügbare Scan-Läufe (älteste zuerst auswählen für 'Alt')";
+                                title: "Available scan runs (select the older one as 'Old')";
                                 VerticalBox {
                                     spacing: 4px;
                                     HorizontalBox {
@@ -1552,10 +1493,6 @@ slint::slint! {
                                             overflow: elide;
                                             wrap: no-wrap;
                                         }
-                                        // Mülleimer-Button — öffnet den
-                                        // Bestätigungsdialog, ohne sofort zu
-                                        // löschen. Die eigentliche Aktion
-                                        // läuft erst über die Bestätigung.
                                         // Trash button — opens the
                                         // confirmation dialog, no instant
                                         // delete. The actual action runs
@@ -1576,15 +1513,11 @@ slint::slint! {
                                 alignment: start;
                                 spacing: Theme.spacing-sm;
                                 PrimaryButton {
-                                    text: "⟳  Vergleichen";
+                                    text: "⟳  Compare";
                                     clicked => { root.delta-compare-clicked(); }
                                 }
                             }
 
-                            // Bestätigungsdialog — keine separates Popup-Fenster
-                            // sondern eine sichtbare Inline-Box, damit ein
-                            // unbeabsichtigter Klick auf den Mülleimer nicht
-                            // bereits löscht.
                             // Confirmation dialog — not a separate popup but an
                             // inline visible box so a stray trash click does
                             // not delete immediately.
@@ -1607,7 +1540,7 @@ slint::slint! {
                                         wrap: word-wrap;
                                     }
                                     Text {
-                                        text: "Diese Aktion kann nicht rückgängig gemacht werden. Alle in diesem Lauf gespeicherten Berechtigungen und Scan-Fehler werden mit gelöscht.";
+                                        text: "This action cannot be undone. All permissions and scan errors stored for this run will be deleted along with it.";
                                         color: #5c4500;
                                         wrap: word-wrap;
                                         font-size: 12px;
@@ -1623,7 +1556,7 @@ slint::slint! {
                                             }
                                         }
                                         Button {
-                                            text: "Endgültig löschen";
+                                            text: "Delete permanently";
                                             clicked => {
                                                 root.delta-delete-confirmed(root.d-pending-delete-id);
                                                 root.d-pending-delete-id = "";
@@ -1663,14 +1596,11 @@ slint::slint! {
                                             width: 180px;
                                         }
                                     }
-                                    // Leeres Delta: ausdrücklich sagen, dass der Vergleich
-                                    // gelaufen ist und nichts gefunden hat — sonst sieht der
-                                    // Nutzer eine leere Tabelle und denkt, der Klick sei verloren.
                                     // Empty delta: explicitly state that the comparison ran and
                                     // found nothing — otherwise the user sees an empty table and
                                     // thinks the click was lost.
                                     if root.d-rows.length == 0: Text {
-                                        text: "Keine Unterschiede zwischen den beiden Scans gefunden. Beide Läufe enthalten dieselben Pfade mit identischen effektiven Berechtigungen.";
+                                        text: "No differences found between the two scans. Both runs contain the same paths with identical effective permissions.";
                                         color: Theme.text-primary;
                                         wrap: word-wrap;
                                     }
@@ -1708,11 +1638,6 @@ slint::slint! {
 
                 // ============================================================
                 // Tab: Info / Pflichtangaben
-                // Wer hat die Software gemacht, unter welcher Lizenz, wo
-                // ist der Quellcode, und was muss man wissen, bevor man sie
-                // in einer produktiven Umgebung einsetzt. Dieser Tab muss
-                // in der App selbst stehen — wer das Setup.exe weitergibt,
-                // soll dem Empfaenger nicht die Spur zum Repo nehmen.
                 // ============================================================
                 Tab {
                     title: "Info";
@@ -1836,7 +1761,7 @@ slint::slint! {
                                         wrap: word-wrap;
                                     }
                                     Text {
-                                        text: "Decision guide before use: docs/can-stars-help-you.md in the repo (DE + EN).";
+                                        text: "Decision guide before use: docs/can-stars-help-you.md in the repo.";
                                         color: Theme.text-secondary;
                                         font-size: Theme.font-sm;
                                         wrap: word-wrap;
@@ -2033,19 +1958,11 @@ fn main() {
     );
 
     std::env::set_var("SLINT_BACKEND", "winit-software");
-    // Slint-Style explizit auf "fluent" fixieren — sonst kann der
     // Default je nach System-Theme blasse Standard-Texte produzieren.
     // Force fluent style so default widget text colors stay legible
     // regardless of the host system theme.
     std::env::set_var("SLINT_STYLE", "fluent");
-    // Slint leitet das Color-Scheme der Standard-Widget-Palette per
-    // Default aus dem System-Theme ab. Auf Windows-Server-DCs ohne
-    // explizites Light-Theme bekommt man darüber eine dunkle Palette
-    // — die hellgraue Schrift verschwindet dann auf unserem hellen
     // App-Hintergrund. SLINT_COLOR_SCHEME fixiert den Wert hart auf
-    // "light", damit die GroupBox-Titel und Labels dunkel gerendert
-    // werden. Die Theme-Umschaltung (Mond-Icon) wirkt auf unsere
-    // eigenen Komponenten unabhängig davon.
     // Slint normally derives the std-widget color scheme from the OS
     // theme. On Windows Server hosts that yields a dark palette and
     // light grey text disappears on our light background. Pin it.
@@ -2063,9 +1980,6 @@ fn main() {
     }
 }
 
-/// Sammelt alle Scan-Zwischenstände, die nicht direkt in eine Slint-Property
-/// passen — der ungefilterte Originalbestand der Zeilen (für den Filter)
-/// und die ausgeklappten Zeilen, beides reine UI-Hilfsdaten.
 /// Aggregates all scan intermediates that don't fit directly into a Slint
 /// property — the unfiltered raw rows (for the filter) and the expanded
 /// row state, both pure UI-side bookkeeping.
@@ -2076,10 +1990,6 @@ struct ScanUiState {
     all_risks: Vec<RiskItemVm>,
 }
 
-/// Backing-Store für den Delta-Tab. Die Slint-Properties sind die
-/// View-Darstellung; den „Wahrheits"-Stand der Auswahl halten wir hier,
-/// damit das exklusive Anhaken („Alt" und „Neu" sind je genau einer der
-/// Läufe) ohne Slint-Bookkeeping läuft.
 /// Backing store for the Delta tab. Slint properties hold the view; the
 /// "source of truth" for selection lives here so the exclusive checkbox
 /// behaviour (exactly one "old" and one "new" pick) does not need
@@ -2099,18 +2009,12 @@ struct ScanRunSummaryUi {
 
 thread_local! {
     static EVENT_RX: RefCell<Option<Receiver<WorkerEvent>>> = const { RefCell::new(None) };
-    /// Worker-Sender für Folge-Aktionen aus Event-Handlern (z. B. nach einer
-    /// Löschung erneut die Scan-Historie laden). Wird in `run_ui` direkt nach
-    /// `spawn_worker` befüllt.
     /// Worker sender for follow-up actions inside event handlers (e.g.
     /// re-load the scan history after a deletion). Populated in `run_ui`
     /// right after `spawn_worker`.
     static REQ_TX: RefCell<Option<Sender<WorkerRequest>>> = const { RefCell::new(None) };
     static SCAN_STATE: RefCell<ScanUiState> = RefCell::new(ScanUiState::default());
     static DELTA_STATE: RefCell<DeltaUiState> = RefCell::new(DeltaUiState::default());
-    /// Vorab geladene Identitäts­liste für die Live-Suche. Wird einmalig
-    /// nach App-Start gefüllt; die Tastendruck-Filter läuft rein lokal
-    /// gegen diesen Cache und braucht keinen Worker-Roundtrip.
     /// Pre-loaded identity list for the live search. Filled once after
     /// app start; keystroke filtering runs purely locally against this
     /// cache without a worker round-trip.
@@ -2121,7 +2025,6 @@ fn run_ui(_log_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>>
     let ui = MainWindow::new()?;
 
     // App-Version aus Cargo-Metadaten an die GUI durchreichen. Slint
-    // braucht das fuer das Versions-Badge in der HeaderBar — ohne diesen
     // Aufruf bleibt das Badge per `if version-text != ""` ausgeblendet.
     // App version from Cargo metadata into the GUI. Without this the
     // HeaderBar version badge stays hidden behind its `if != ""` guard.
@@ -2129,7 +2032,6 @@ fn run_ui(_log_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>>
 
     // notify-Callback: weckt den GUI-Thread, sobald der Worker ein Event
     // gesendet hat. Slints `invoke_from_event_loop` darf aus jedem Thread
-    // gerufen werden und führt die Closure im UI-Thread aus.
     // notify callback: wakes the GUI thread once the worker has sent an
     // event. Slint's `invoke_from_event_loop` is callable from any thread
     // and runs the closure on the UI thread.
@@ -2154,15 +2056,10 @@ fn run_ui(_log_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>>
     wire_scan_tab(&ui, req_tx.clone(), cancel);
     wire_delta_tab(&ui, req_tx.clone());
 
-    // Identitäts­liste einmal vorab anfordern, damit die Live-Suche im
-    // Namensfeld ab dem ersten Tastendruck Vorschläge zeigen kann. Wenn
-    // der Aufruf fehlschlägt, läuft das GUI ohne Vorschläge weiter — die
-    // SID-Eingabe und der „🔍 SID auflösen"-Button funktionieren auch
     // ohne Cache.
     // Pre-load the identity list once so the live search can show
     // suggestions from the first keystroke. If the call fails the GUI
     // keeps running without suggestions — SID input and the
-    // "🔍 SID auflösen" button work without the cache too.
     let _ = req_tx.send(WorkerRequest::ListIdentities);
 
     ui.run()?;
@@ -2175,7 +2072,6 @@ fn run_ui(_log_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>>
 
 fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest>) {
     // Name → SID: LSA-Lookup direkt im UI-Thread (LookupAccountNameW ist
-    // sub-millisekunden­schnell, kein Worker-Roundtrip nötig).
     // Name → SID: LSA lookup directly on the UI thread (LookupAccountNameW
     // is sub-millisecond, no worker round-trip needed).
     {
@@ -2192,7 +2088,6 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
     }
 
     // Live-Suche: bei jedem Tastendruck im Namensfeld die Cache-Liste
-    // filtern und an die Slint-Property weiterreichen. Bei leerer Eingabe
     // verschwindet die Vorschlagsliste automatisch (length == 0).
     // Live search: filter the cache on every keystroke and push the result
     // to the Slint property. An empty query auto-hides the suggestion
@@ -2205,8 +2100,6 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         });
     }
 
-    // Klick auf einen Vorschlag: Name übernehmen, Liste schließen, SID
-    // direkt mit auflösen — so muss der User nicht zweimal klicken.
     // Click on a suggestion: take the name, close the list, immediately
     // resolve the SID — saves the user a second click.
     {
@@ -2379,8 +2272,6 @@ fn apply_analyze_result(
                 .map(|s| slint::SharedString::from(s.as_str()))
                 .collect();
             ui.set_a_explanation(slint::ModelRc::new(slint::VecModel::from(steps)));
-            // Status spiegelt jetzt auch wider, ob die Auswertung in die
-            // Scan-Historie geschrieben wurde — Voraussetzung dafür, dass
             // sie im Delta-Tab vergleichbar ist.
             // Status now also reflects whether the evaluation was written to
             // the scan history — required for it to be comparable in the
@@ -2527,7 +2418,6 @@ fn wire_scan_tab(
                 (None, None)
             };
 
-            // Zustand für einen neuen Lauf zurücksetzen.
             // Reset state for a fresh run.
             SCAN_STATE.with(|s| {
                 let mut s = s.borrow_mut();
@@ -2573,8 +2463,6 @@ fn wire_scan_tab(
         });
     }
 
-    // scan-row-toggle: schaltet die expanded-Spalte einer Zeile um. Wir
-    // halten die Master-Liste in SCAN_STATE und rendern danach den
     // gefilterten View neu.
     // scan-row-toggle: flips the expanded column of a row. The master
     // list lives in SCAN_STATE; we re-render the filtered view
@@ -2625,8 +2513,6 @@ fn wire_scan_tab(
     }
 }
 
-/// Übersetzt einen Index aus dem gefilterten View zurück in den Index der
-/// ungefilterten Master-Liste, indem der `nth` Treffer gesucht wird.
 /// Translates an index from the filtered view back to the index in the
 /// unfiltered master list by walking to the `nth` match.
 fn nth_matching_index(all: &[ScanRowVm], filter: &str, n: usize) -> Option<usize> {
@@ -2662,8 +2548,6 @@ fn refresh_rows(ui: &MainWindow) {
 
 fn handle_scan_item(ui: &MainWindow, row: ScanRow) {
     let mask_hex = format!("0x{:08X}", row.mask_raw);
-    // Trustee-Liste in das slint-Modell konvertieren — gleiche Farb-Logik
-    // wie im Analyze-Tab (Allow grün, Deny rot, sonstiges grau).
     // Convert the trustee list to the slint model — same colour logic as the
     // Analyze tab (Allow green, Deny red, anything else grey).
     let trustee_vms: Vec<TrusteeRowVm> = row
@@ -2798,7 +2682,6 @@ fn severity_visual(severity: &RiskSeverity) -> (&'static str, slint::Color) {
 // ---------------------------------------------------------------------------
 
 fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest>) {
-    // delta-load-runs-clicked: bittet den Worker die Scan-Historie zu
     // liefern. Antwort kommt asynchron als WorkerEvent::ScanRunsLoaded.
     // delta-load-runs-clicked: asks the worker for the scan history. The
     // answer arrives asynchronously as WorkerEvent::ScanRunsLoaded.
@@ -2818,10 +2701,6 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
         });
     }
 
-    // delta-pick-old / delta-pick-new: exklusiv toggeln — Klick auf eine
-    // Zeile setzt diesen Lauf als „Alt" bzw. „Neu" und löscht die
-    // entsprechende Markierung auf allen anderen Zeilen. Wenn dieselbe
-    // Zeile erneut geklickt wird, wird die Auswahl entfernt.
     // delta-pick-old / delta-pick-new: exclusive toggle — clicking a row
     // sets that run as "old" or "new" and clears the corresponding flag
     // on every other row. Clicking the same row again clears the
@@ -2895,12 +2774,8 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
         });
     }
 
-    // delta-delete-confirmed: vom Bestätigungsdialog ausgelöst, nachdem der
-    // Anwender „Endgültig löschen" geklickt hat. Schickt die Anfrage an den
     // Worker — die Folge­aktionen (Selektion bereinigen, Liste neu laden)
-    // übernimmt der Event-Handler nach Empfang von WorkerEvent::ScanRunDeleted.
     // delta-delete-confirmed: fired by the confirmation dialog after the
-    // user clicked "Endgültig löschen". Sends the request to the worker —
     // follow-up actions (clearing selection, reloading the list) are
     // handled by the event handler on WorkerEvent::ScanRunDeleted.
     {
@@ -2965,8 +2840,6 @@ fn handle_scan_runs_loaded(ui: &MainWindow, result: Result<Vec<ScanRunSummary>, 
                         ),
                     })
                     .collect();
-                // Selektionen, die auf nicht mehr existierende Läufe zeigen,
-                // ausräumen.
                 // Drop selections that point at runs which no longer exist.
                 let ids: std::collections::HashSet<String> =
                     s.runs.iter().map(|r| r.id.clone()).collect();
@@ -2991,9 +2864,6 @@ fn handle_scan_runs_loaded(ui: &MainWindow, result: Result<Vec<ScanRunSummary>, 
     }
 }
 
-/// Reagiert auf eine vom Worker abgeschlossene Scan-Lauf-Löschung. Aktualisiert
-/// die Statuszeile, räumt lokale Selektionen auf und triggert ein erneutes
-/// Laden der Historie — damit ist die Liste sofort frisch ohne Klick auf
 /// „Scan-Historie laden".
 /// Reacts to a worker-completed scan-run deletion. Updates the status line,
 /// clears local selection state and triggers a fresh history reload so the
@@ -3015,14 +2885,10 @@ fn handle_scan_run_deleted(ui: &MainWindow, run_id: &str, result: Result<(), Str
             refresh_delta_runs(ui);
             ui.set_d_status("Scan-Lauf entfernt.".into());
             ui.set_d_status_is_error(false);
-            // Wenn das Delta-Ergebnis im Frame noch sichtbar war, kann es
-            // sich auf den eben gelöschten Lauf beziehen — vorsichtshalber
             // ausblenden.
             // If a delta result was still visible in the frame, it might
             // refer to the just-deleted run — hide it to be safe.
             ui.set_d_has_result(false);
-            // Liste frisch nachladen (Background), damit der GUI-State
-            // garantiert mit der DB übereinstimmt.
             // Reload the list in background so the GUI state is guaranteed
             // to match the DB.
             REQ_TX.with(|cell| {
@@ -3120,7 +2986,6 @@ fn pump_worker_events(ui: &MainWindow) {
                 }
                 WorkerEvent::IdentitiesLoaded(result) => handle_identities_loaded(ui, result),
                 WorkerEvent::TrusteesDone(result) => handle_trustees_done(ui, result),
-                // SearchResults (Identitäts-Picker) bleibt für eine spätere
                 // Phase reserviert.
                 // SearchResults (identity picker) stays reserved for a
                 // later phase.
@@ -3160,11 +3025,6 @@ fn empty_suggestion_model() -> slint::ModelRc<IdentitySuggestionVm> {
     >::new()))
 }
 
-/// Filtert die im `IDENTITY_CACHE` liegende Liste gegen den Suchstring
-/// und liefert ein Slint-ModelRc zurück, das direkt in eine
-/// `[IdentitySuggestionVm]`-Property fließen kann. Maximal `MAX_SUGGESTIONS`
-/// Einträge, damit die Liste übersichtlich bleibt — wer mehr will, tippt
-/// präziser.
 /// Filters the list cached in `IDENTITY_CACHE` against the query string
 /// and returns a Slint ModelRc that can be assigned directly to a
 /// `[IdentitySuggestionVm]` property. At most `MAX_SUGGESTIONS` entries so
@@ -3204,21 +3064,13 @@ fn handle_identities_loaded(_ui: &MainWindow, result: Result<Vec<IdentitySuggest
         }
         Err(e) => {
             // Cache bleibt leer; Live-Suche zeigt einfach keine
-            // Vorschläge. Der „🔍 SID auflösen"-Button funktioniert
-            // weiterhin, weil er nur LookupAccountNameW braucht.
             // Cache stays empty; the live search just shows no
-            // suggestions. The "🔍 SID auflösen" button keeps working
             // because it only uses LookupAccountNameW.
             tracing::warn!(target: "stars-gui", error = %e, "identity enumeration failed — live search disabled");
         }
     }
 }
 
-/// Übersetzt einen Benutzer-/Gruppennamen in eine SID über die lokale LSA
-/// (`LookupAccountNameW`). Erfolg ruft `on_sid` mit der aufgelösten SID,
-/// Fehler ruft `on_error` mit einer kurzen lokalisierten Meldung. Leere
-/// Eingaben gelten als Fehler („Bitte Namen eingeben"). Auf nicht-Windows
-/// existiert die Funktion bewusst nicht — der gesamte SAM-Pfad ist
 /// Windows-only.
 /// Translates a user/group name to a SID via the local LSA
 /// (`LookupAccountNameW`). Success calls `on_sid` with the resolved SID,
@@ -3278,8 +3130,6 @@ fn show_fatal_dialog(title: &str, message: &str) {
 
     let title_w = to_wide(title);
     let msg_w = to_wide(message);
-    // SAFETY: Beide Zeiger zeigen auf gültige, null-terminierte UTF-16-Puffer,
-    // die bis zum Ende des Aufrufs leben. `hwnd` = 0 ist erlaubt.
     // SAFETY: Both pointers reference valid, null-terminated UTF-16 buffers
     // that live until the call returns. `hwnd` = 0 is allowed.
     unsafe {

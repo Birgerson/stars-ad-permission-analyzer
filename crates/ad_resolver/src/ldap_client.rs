@@ -17,15 +17,12 @@ use ldap3::adapters::{Adapter, EntriesOnly, PagedResults};
 use ldap3::{Ldap, LdapConnAsync, Scope, SearchEntry};
 use tracing::{debug, warn};
 
-/// Standard-Seitengröße für AD-Paged-Search.
-/// 1000 entspricht dem AD-Default für `MaxPageSize` und ist ein guter
 /// Kompromiss aus Round-Trip-Zahl und Server-Last.
 ///
 /// Default page size for AD paged search. 1000 matches the AD default
 /// `MaxPageSize` and balances round-trip count against server load.
 const DEFAULT_PAGE_SIZE: i32 = 1000;
 
-/// OID der AD-Matching-Rule „in chain" für transitive Gruppenauflösung
 /// (`LDAP_MATCHING_RULE_IN_CHAIN`).
 /// OID for AD's `LDAP_MATCHING_RULE_IN_CHAIN` extended matching rule —
 /// resolves group transitivity server-side.
@@ -35,7 +32,6 @@ use adpa_core::error::CoreError;
 
 use crate::config::LdapConfig;
 
-/// Wickelt eine LDAP-Operation in einen `tokio::time::timeout` ein. Schliesst
 /// Review-Befund 5: `LdapConfig::timeout_secs` war zwar konfigurierbar, wurde
 /// aber an keiner Stelle wirklich angewendet — produktiv konnte ein
 /// unerreichbarer DC die Analyse beliebig lange blockieren.
@@ -57,7 +53,6 @@ where
 }
 
 /// Bequemer Konvertierer: aus den Sekunden in `LdapConfig` ein
-/// `Duration`-Objekt für die Timeout-Wrapper bauen.
 /// Convenience: build a `Duration` for the timeout wrappers from the
 /// seconds field on `LdapConfig`.
 pub fn ldap_timeout(config: &LdapConfig) -> Duration {
@@ -65,12 +60,7 @@ pub fn ldap_timeout(config: &LdapConfig) -> Duration {
 }
 use crate::sid_util::sid_str_to_ldap_filter;
 
-/// Attribute, die bei Identitäts-Suchen gelesen werden.
 ///
-/// `memberOf` ist hier enthalten, weil der Resolver es als „direkt"-Marker
-/// für die Mitgliedschaftsauflösung verwendet (siehe ADR 0014). Auf großen
-/// Tokens kann AD diese Liste range-trunkieren — die maßgebliche Liste
-/// kommt jedoch aus der transitiven Suche; `memberOf` dient hier nur zur
 /// Klassifikation direkt vs. transitiv.
 ///
 /// Attributes read during identity searches. `memberOf` is included so the
@@ -91,7 +81,6 @@ const IDENTITY_ATTRS: &[&str] = &[
     "memberOf",
 ];
 
-/// Attribute, die bei Gruppen-Suchen gelesen werden.
 /// Attributes read during group searches.
 const MEMBERSHIP_ATTRS: &[&str] = &[
     "objectSid",
@@ -119,48 +108,39 @@ impl RawEntry {
         }
     }
 
-    /// Gibt den ersten String-Wert eines Attributs zurück.
     /// Returns the first string value of an attribute.
     pub fn first_attr(&self, name: &str) -> Option<&str> {
         self.attrs.get(name)?.first().map(String::as_str)
     }
 
-    /// Gibt die Binärdaten eines Attributs zurück (z.B. objectSid).
     /// Returns the binary data of an attribute (e.g. objectSid).
     pub fn first_bin_attr(&self, name: &str) -> Option<&[u8]> {
         self.bin_attrs.get(name)?.first().map(Vec::as_slice)
     }
 
-    /// Gibt alle Werte eines String-Attributs zurück (z.B. memberOf).
     /// Returns all values of a string attribute (e.g. memberOf).
     pub fn all_attr(&self, name: &str) -> &[String] {
         self.attrs.get(name).map(Vec::as_slice).unwrap_or(&[])
     }
 }
 
-/// Baut eine authentifizierte LDAP-Verbindung auf.
 /// Establishes an authenticated LDAP connection.
 ///
 /// TLS-Modus / TLS mode:
 /// - `Ldaps` (Standard): ldaps://server:636 — TLS ab dem ersten Byte, empfohlen.
 ///   `Ldaps` (default): ldaps://server:636 — TLS from the first byte, recommended.
-/// - `Insecure`: ldap://server:389 — Passwort im Klartext, nur für Testumgebungen.
 ///   `Insecure`: ldap://server:389 — password in plaintext, test environments only.
 pub async fn connect(config: &LdapConfig) -> Result<Ldap, CoreError> {
     let url = config.url();
-    debug!(url, tls_mode = ?config.tls_mode, "LDAP verbinden / connecting");
+    debug!(url, tls_mode = ?config.tls_mode, "LDAP connecting");
 
-    // TCP/TLS-Aufbau einklammern — sonst kann ein nicht erreichbarer DC
-    // hier beliebig lange hängen (Review-Befund 5).
     // Wrap TCP/TLS setup — otherwise an unreachable DC can hang here
     // indefinitely (review finding 5).
     let url_owned = url.clone();
     let (conn, mut ldap) = with_timeout("connect", ldap_timeout(config), async move {
-        LdapConnAsync::new(&url_owned).await.map_err(|e| {
-            CoreError::AdConnection(format!(
-                "LDAP-Verbindung fehlgeschlagen / connection failed: {e}"
-            ))
-        })
+        LdapConnAsync::new(&url_owned)
+            .await
+            .map_err(|e| CoreError::AdConnection(format!("LDAP connection failed: {e}")))
     })
     .await?;
 
@@ -172,25 +152,19 @@ pub async fn connect(config: &LdapConfig) -> Result<Ldap, CoreError> {
         }
     });
 
-    // Bind ebenfalls einklammern — falsche Credentials hängen normalerweise
-    // nicht, aber ein Server mit langsamer LSA-Antwort schon.
     // Wrap the bind as well — wrong credentials usually don't hang, but a
     // server with a slow LSA reply can.
     with_timeout("bind", ldap_timeout(config), async {
         ldap.simple_bind(&config.bind_dn, &config.bind_password)
             .await
-            .map_err(|e| {
-                CoreError::AdConnection(format!("LDAP-Bind fehlgeschlagen / bind failed: {e}"))
-            })?
+            .map_err(|e| CoreError::AdConnection(format!("LDAP bind failed: {e}")))?
             .success()
-            .map_err(|e| {
-                CoreError::AdConnection(format!("LDAP-Bind abgelehnt / bind rejected: {e}"))
-            })?;
+            .map_err(|e| CoreError::AdConnection(format!("LDAP bind rejected: {e}")))?;
         Ok(())
     })
     .await?;
 
-    debug!("LDAP verbunden / connected as: {}", config.bind_dn);
+    debug!("LDAP connected as: {}", config.bind_dn);
     Ok(ldap)
 }
 
@@ -204,16 +178,14 @@ pub async fn search_by_sid(
     let escaped = sid_str_to_ldap_filter(sid_str)?;
     let filter = format!("(objectSid={escaped})");
 
-    debug!("LDAP-Suche / search: base={base_dn} filter={filter}");
+    debug!("LDAP search: base={base_dn} filter={filter}");
 
     let (rs, _res) = ldap
         .search(base_dn, Scope::Subtree, &filter, IDENTITY_ATTRS)
         .await
-        .map_err(|e| CoreError::LdapQuery(format!("Suche fehlgeschlagen / search failed: {e}")))?
+        .map_err(|e| CoreError::LdapQuery(format!("search failed: {e}")))?
         .success()
-        .map_err(|e| {
-            CoreError::LdapQuery(format!("Suchergebnis-Fehler / search result error: {e}"))
-        })?;
+        .map_err(|e| CoreError::LdapQuery(format!("search result error: {e}")))?;
 
     Ok(rs.into_iter().next().map(RawEntry::from_search_entry))
 }
@@ -230,27 +202,19 @@ pub async fn search_by_dn(
     let escaped_dn = escape_dn_for_filter(dn);
     let filter = format!("(distinguishedName={escaped_dn})");
 
-    debug!("LDAP-Suche nach DN / search by DN: {dn}");
+    debug!("LDAP search by DN: {dn}");
 
     let (rs, _res) = ldap
         .search(base_dn, Scope::Subtree, &filter, MEMBERSHIP_ATTRS)
         .await
-        .map_err(|e| {
-            CoreError::LdapQuery(format!("DN-Suche fehlgeschlagen / DN search failed: {e}"))
-        })?
+        .map_err(|e| CoreError::LdapQuery(format!("DN search failed: {e}")))?
         .success()
-        .map_err(|e| {
-            CoreError::LdapQuery(format!(
-                "DN-Suchergebnis-Fehler / DN search result error: {e}"
-            ))
-        })?;
+        .map_err(|e| CoreError::LdapQuery(format!("DN search result error: {e}")))?;
 
     Ok(rs.into_iter().next().map(RawEntry::from_search_entry))
 }
 
 /// Sucht Gruppenmitglieder anhand des sAMAccountName. Liefert nur den ersten
-/// Treffer — historische API, durch `search_all_by_samaccount` für die
-/// Eindeutigkeits-Prüfung ergänzt (Review-Befund 3).
 /// Searches for group members by sAMAccountName. Returns only the first hit —
 /// historic API, complemented by `search_all_by_samaccount` for the
 /// uniqueness check (review finding 3).
@@ -263,11 +227,7 @@ pub async fn search_by_samaccount(
     Ok(all.into_iter().next())
 }
 
-/// Sucht **alle** AD-Einträge mit einem gegebenen sAMAccountName und gibt sie
-/// als Vektor zurück. Aufrufer können auf Mehrfachtreffer prüfen und einen
 /// Eindeutigkeitsfehler ausgeben — schliesst Review-Befund 3 (`DOMAIN\user`
-/// wurde akzeptiert, der Domainteil aber ignoriert, Mehrfachtreffer wurden
-/// stillschweigend per `next()` aufgelöst).
 /// Searches for **all** AD entries with a given sAMAccountName and returns
 /// them as a vector. Callers can detect multi-match and surface a uniqueness
 /// error — closes review finding 3 (`DOMAIN\user` was accepted but the
@@ -280,27 +240,19 @@ pub async fn search_all_by_samaccount(
 ) -> Result<Vec<RawEntry>, CoreError> {
     let filter = format!("(sAMAccountName={})", escape_filter_value(sam));
 
-    debug!("LDAP-Suche nach sAMAccountName / search by sAMAccountName: {sam}");
+    debug!("LDAP search by sAMAccountName: {sam}");
 
     let (rs, _res) = ldap
         .search(base_dn, Scope::Subtree, &filter, IDENTITY_ATTRS)
         .await
-        .map_err(|e| {
-            CoreError::LdapQuery(format!("sAM-Suche fehlgeschlagen / sAM search failed: {e}"))
-        })?
+        .map_err(|e| CoreError::LdapQuery(format!("sAM search failed: {e}")))?
         .success()
-        .map_err(|e| {
-            CoreError::LdapQuery(format!(
-                "sAM-Suchergebnis-Fehler / sAM search result error: {e}"
-            ))
-        })?;
+        .map_err(|e| CoreError::LdapQuery(format!("sAM search result error: {e}")))?;
 
     Ok(rs.into_iter().map(RawEntry::from_search_entry).collect())
 }
 
 /// Sucht ein AD-Objekt anhand seines `userPrincipalName` (UPN, Form
-/// `user@domain.tld`). UPNs sind forestweit eindeutig — verhindert die
-/// Ambiguität, die `sAMAccountName` in Multi-Domain-Forests hat
 /// (Review-Befund 3).
 /// Searches for an AD object by its `userPrincipalName` (UPN, form
 /// `user@domain.tld`). UPNs are unique forest-wide — prevents the
@@ -313,20 +265,14 @@ pub async fn search_by_upn(
 ) -> Result<Option<RawEntry>, CoreError> {
     let filter = format!("(userPrincipalName={})", escape_filter_value(upn));
 
-    debug!("LDAP-Suche nach UPN / search by UPN: {upn}");
+    debug!("LDAP search by UPN: {upn}");
 
     let (rs, _res) = ldap
         .search(base_dn, Scope::Subtree, &filter, IDENTITY_ATTRS)
         .await
-        .map_err(|e| {
-            CoreError::LdapQuery(format!("UPN-Suche fehlgeschlagen / UPN search failed: {e}"))
-        })?
+        .map_err(|e| CoreError::LdapQuery(format!("UPN search failed: {e}")))?
         .success()
-        .map_err(|e| {
-            CoreError::LdapQuery(format!(
-                "UPN-Suchergebnis-Fehler / UPN search result error: {e}"
-            ))
-        })?;
+        .map_err(|e| CoreError::LdapQuery(format!("UPN search result error: {e}")))?;
 
     Ok(rs.into_iter().next().map(RawEntry::from_search_entry))
 }
@@ -334,11 +280,7 @@ pub async fn search_by_upn(
 /// Sucht Benutzer und Gruppen anhand eines Teilstring-Suchbegriffs (max. 50 Treffer).
 /// Searches users and groups by a partial name substring (max 50 results).
 ///
-/// Durchsucht sAMAccountName, displayName und cn. Nutzt Paged Search, damit
-/// auch in großen Verzeichnissen keine Serverseitige Begrenzung
 /// (`MaxPageSize`, Standard 1000) das Ergebnis stillschweigend abschneidet.
-/// Die Client-Begrenzung auf 50 bleibt erhalten — sobald 50 Treffer
-/// vorliegen, wird die Suche abgebrochen.
 ///
 /// Searches sAMAccountName, displayName, and cn. Uses paged search so that
 /// the server-side `MaxPageSize` (default 1000) cannot silently truncate
@@ -357,21 +299,14 @@ pub async fn search_by_query(
          (|(sAMAccountName=*{escaped}*)(displayName=*{escaped}*)(cn=*{escaped}*)))"
     );
 
-    debug!("LDAP-Namenssuche / name search: base={base_dn} query={query}");
+    debug!("LDAP name search: base={base_dn} query={query}");
 
     search_paged_with_limit(ldap, base_dn, &filter, IDENTITY_ATTRS, Some(50)).await
 }
 
-/// Sucht transitiv alle Gruppen, in denen `member_dn` (direkt oder über
 /// verschachtelte Gruppen) Mitglied ist. Nutzt AD-spezifisches
 /// `LDAP_MATCHING_RULE_IN_CHAIN` (OID `1.2.840.113556.1.4.1941`) — der
-/// Domain Controller löst die Transitivität in einem einzigen Roundtrip
-/// auf, statt dass der Client `memberOf` rekursiv nachfragen muss. Damit
-/// entfällt das Range-Retrieval-Problem (mehr als ~1500 `memberOf`-Werte
-/// werden vom AD-Server abgeschnitten) und der N+1-Lookup pro Hierarchieebene.
 ///
-/// Wichtig: Die Primärgruppe (`primaryGroupID`) ist nicht über
-/// `member`-Beziehungen modelliert und muss vom Aufrufer separat behandelt
 /// werden.
 ///
 /// Transitively finds all groups in which `member_dn` is a member (directly
@@ -391,15 +326,11 @@ pub async fn search_transitive_groups_for_member(
     let escaped = escape_filter_value(member_dn);
     let filter = format!("(&(objectClass=group)(member:{LDAP_MATCHING_RULE_IN_CHAIN}:={escaped}))");
 
-    debug!("LDAP-Transitivsuche / transitive group search: base={base_dn} member={member_dn}");
+    debug!("LDAP transitive group search: base={base_dn} member={member_dn}");
 
     search_paged_with_limit(ldap, base_dn, &filter, MEMBERSHIP_ATTRS, None).await
 }
 
-/// Paged-Search-Wrapper: führt die LDAP-Suche mit dem Paged-Results-Control
-/// aus, damit Ergebnisse > `MaxPageSize` nicht stillschweigend
-/// abgeschnitten werden. Optionales `client_limit` bricht ab, sobald die
-/// gewünschte Anzahl Treffer erreicht ist — der Server wird informiert
 /// (Cookie wird verworfen).
 ///
 /// Paged-search wrapper: runs the LDAP search with the paged-results
@@ -421,11 +352,7 @@ async fn search_paged_with_limit(
     let mut stream = ldap
         .streaming_search_with(adapters, base_dn, Scope::Subtree, filter, attrs.to_vec())
         .await
-        .map_err(|e| {
-            CoreError::LdapQuery(format!(
-                "Paged-Suche fehlgeschlagen / paged search failed: {e}"
-            ))
-        })?;
+        .map_err(|e| CoreError::LdapQuery(format!("paged search failed: {e}")))?;
 
     let mut entries = Vec::new();
     loop {
@@ -442,23 +369,19 @@ async fn search_paged_with_limit(
             Err(e) => {
                 let _ = stream.finish().await;
                 return Err(CoreError::LdapQuery(format!(
-                    "Paged-Suche-Fehler / paged search stream error: {e}"
+                    "paged search stream error: {e}"
                 )));
             }
         }
     }
-    // finish() consumes the stream — Ergebnis trotzdem prüfen.
     // finish() consumes the stream — still check the result.
     let result = stream.finish().await;
-    result.success().map_err(|e| {
-        CoreError::LdapQuery(format!(
-            "Paged-Suche-Endstatus / paged search final status: {e}"
-        ))
-    })?;
+    result
+        .success()
+        .map_err(|e| CoreError::LdapQuery(format!("paged search final status: {e}")))?;
     Ok(entries)
 }
 
-/// Trennt die LDAP-Verbindung ordnungsgemäß.
 /// Terminates the LDAP connection properly.
 pub async fn disconnect(mut ldap: Ldap) {
     if let Err(e) = ldap.unbind().await {
@@ -466,7 +389,6 @@ pub async fn disconnect(mut ldap: Ldap) {
     }
 }
 
-/// Escaped Sonderzeichen in LDAP-Filterwerten gemäß RFC 4515.
 /// Escapes special characters in LDAP filter values according to RFC 4515.
 fn escape_filter_value(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -483,10 +405,8 @@ fn escape_filter_value(value: &str) -> String {
     out
 }
 
-/// Escaped Sonderzeichen in DN-Werten für LDAP-Filter.
 /// Escapes special characters in DN values for LDAP filters.
 fn escape_dn_for_filter(dn: &str) -> String {
-    // Im Filter müssen Komma und Gleich nicht escaped werden, aber Klammern schon
     // In a filter, commas and equals don't need escaping, but parentheses do
     escape_filter_value(dn)
 }

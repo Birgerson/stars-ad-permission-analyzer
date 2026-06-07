@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Kooperatives Abbruch-Token für lange Scans.
 //! Cooperative cancellation token for long-running scans.
 //!
-//! Der Walker prüft das Token an Rekursionsgrenzen. Aufrufer (CLI, GUI) halten
-//! einen Klon und können `cancel()` aus einem anderen Thread aufrufen.
 //! The walker checks the token at recursion boundaries. Callers (CLI, GUI) hold
 //! a clone and may call `cancel()` from another thread.
 
@@ -15,7 +12,6 @@ use std::sync::Arc;
 /// Thread-sicheres, klonbares Abbruch-Token.
 /// Thread-safe, cloneable cancellation token.
 ///
-/// Alle Klone teilen dasselbe Flag — `cancel()` auf einem Klon wirkt auf alle.
 /// All clones share the same flag — `cancel()` on one clone affects all of them.
 #[derive(Clone, Default)]
 pub struct CancellationToken {
@@ -35,13 +31,11 @@ impl CancellationToken {
         self.flag.store(true, Ordering::Relaxed);
     }
 
-    /// Setzt das Token zurück, damit es für einen neuen Lauf wiederverwendet werden kann.
     /// Resets the token so it can be reused for a new run.
     pub fn reset(&self) {
         self.flag.store(false, Ordering::Relaxed);
     }
 
-    /// Prüft, ob ein Abbruch angefordert wurde.
     /// Checks whether cancellation was requested.
     pub fn is_cancelled(&self) -> bool {
         self.flag.load(Ordering::Relaxed)

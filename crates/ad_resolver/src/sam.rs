@@ -1,28 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Identitäts- und Gruppenauflösung über die lokalen Windows-LSA/SAM-APIs.
 //! Identity and group resolution via the local Windows LSA/SAM APIs.
-//!
-//! Auf einem Domain Controller (und in der Regel auch auf domänen-
-//! eingebundenen Mitgliedern, sofern der Cache aktuell ist) liefert
-//! Windows die vollständige Identitäts- und Gruppenmitgliedschaft eines
-//! Benutzers über die SAM/LSA-Schnittstellen — ganz ohne LDAP-Bind. Genau
-//! das ist der Pfad, den Windows beim Login intern auch geht.
-//!
-//! Dieses Modul bietet die Bausteine und einen Convenience-Aufruf
-//! [`resolve_identity_via_sam`], der eine SID in ein vollständiges
-//! `(Identity, Vec<GroupMembership>)`-Paar überführt:
-//!   * `LookupAccountSidW` → Name, Domäne, Kind,
-//!   * `NetUserGetGroups` → globale (Domänen-)Gruppen,
-//!   * `NetUserGetLocalGroups` (über `local_groups`) → lokale Gruppen
-//!     des Zielsystems,
-//!   * `LookupAccountNameW` → SID je Gruppenname.
-//!
-//! Mit dieser Auflösung sieht das `permission_engine` denselben Token-
-//! SID-Satz, den Windows beim echten Zugriff aufbauen würde — und
-//! `BUILTIN\Administrators` taucht für den Administrator auch ohne
-//! LDAP-Verbindung im Token auf.
 //!
 //! On a domain controller (and usually on domain-joined members with a
 //! current cache) Windows can supply the full identity and group
@@ -64,10 +43,6 @@ use windows_sys::Win32::Security::{
     SidTypeGroup, SidTypeInvalid, SidTypeUnknown, SidTypeUser, SidTypeWellKnownGroup,
 };
 
-// resolve_local_group_sids bleibt in der Public-API für externe Aufrufer
-// (z. B. GUI-Worker). Der SAM-Resolver nutzt jetzt die reichere
-// resolve_local_group_chains-Variante; der reine SID-Fallback ist hier nicht
-// mehr nötig.
 // resolve_local_group_sids stays in the public API for external callers
 // (e.g. the GUI worker). The SAM resolver now uses the richer
 // resolve_local_group_chains variant; the pure-SID fallback is no longer
@@ -76,28 +51,19 @@ use windows_sys::Win32::Security::{
 /// User-Not-Found-Statuscode aus lmerr.h / NERR_UserNotFound from lmerr.h.
 const NERR_USER_NOT_FOUND: u32 = 2221;
 
-/// Auflösungsergebnis von `LookupAccountSidW`.
 /// Resolution result of `LookupAccountSidW`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountInfo {
-    /// Kontoname ohne Domänenpräfix, z. B. `Administrator`.
     /// Account name without domain prefix, e.g. `Administrator`.
     pub name: String,
-    /// Authority-/Domänenname, z. B. `EXAMPLE` oder `BUILTIN`. Kann leer
-    /// sein, wenn der SID-Typ keine Domäne hat (`SidTypeWellKnownGroup`
-    /// in Sonderfällen).
     /// Authority/domain name, e.g. `EXAMPLE` or `BUILTIN`. May be empty
     /// when the SID type has no domain (rare `SidTypeWellKnownGroup`
     /// cases).
     pub domain: String,
-    /// Kategorisiert das SID-Use-Feld aus der LSA-Antwort.
     /// Classifies the SID-Use field from the LSA response.
     pub kind: IdentityKind,
 }
 
-/// Schlägt einen SID-String über die lokale LSA nach und liefert Name,
-/// Domäne und Kontotyp. Verwendet `ConvertStringSidToSidW` für die
-/// String→Bytes-Konvertierung und `LookupAccountSidW` zur Auflösung.
 /// Looks up a SID string via the local LSA and returns name, domain and
 /// account kind. Uses `ConvertStringSidToSidW` for string-to-bytes
 /// conversion and `LookupAccountSidW` for the lookup.
@@ -127,8 +93,6 @@ fn lookup_account_for_sid_ptr(sid_ptr: *mut std::ffi::c_void) -> Result<AccountI
     let mut domain_size: u32 = 0;
     let mut sid_use: i32 = 0;
 
-    // Zwei-Schritt-Pattern: erst Größen ermitteln (Aufruf liefert
-    // ERROR_INSUFFICIENT_BUFFER und setzt die nötigen Größen).
     // Two-call pattern: query required sizes first (the call returns
     // ERROR_INSUFFICIENT_BUFFER and writes the sizes).
     // SAFETY: sid_ptr is a valid SID buffer; output pointers may be null
@@ -179,10 +143,7 @@ fn lookup_account_for_sid_ptr(sid_ptr: *mut std::ffi::c_void) -> Result<AccountI
     })
 }
 
-/// Liefert die globalen (Domänen-)Gruppen, in denen `username` direktes
-/// Mitglied ist. `NetUserGetGroups` ist die Domänen-Variante zu
 /// `NetUserGetLocalGroups` und liefert keine geerbten Mitgliedschaften
-/// (die deckt der LSA-Token-Bau separat ab).
 /// Returns the global (domain) groups `username` is a direct member of.
 /// `NetUserGetGroups` is the domain counterpart to
 /// `NetUserGetLocalGroups` and does not include nested memberships
@@ -251,12 +212,9 @@ pub fn user_global_group_names(
     }
 
     Ok(groups)
-    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
-/// Schlägt einen Konto- oder Gruppennamen auf dem angegebenen System
-/// nach und gibt die SID als kanonischen S-R-I-...-String zurück.
 /// Looks up an account or group name on the given system and returns
 /// its SID as the canonical S-R-I-... string.
 pub fn lookup_sid_for_account(system: Option<&str>, name: &str) -> Result<Sid, CoreError> {
@@ -321,20 +279,15 @@ pub fn lookup_sid_for_account(system: Option<&str>, name: &str) -> Result<Sid, C
     Ok(Sid(s))
 }
 
-/// Liest den `disabled`-Status eines Benutzers über
-/// `NetUserGetInfo` Level 1 und prüft das `UF_ACCOUNTDISABLE`-Flag.
 ///
 /// `Ok(Some(true))`  → Konto ist deaktiviert (`UF_ACCOUNTDISABLE` gesetzt).
 /// `Ok(Some(false))` → Konto ist aktiv.
-/// `Ok(None)`        → Status nicht zuverlässig bestimmbar (User nicht
 ///                      gefunden, Access Denied oder anderer Fehler beim
 ///                      NetAPI-Aufruf). Aufrufer setzen dann den Marker
 ///                      `PermissionDiagnostic::IdentityDisabledStatusUnknown`.
 /// `Err`             → unerwarteter Bibliotheksfehler.
 ///
-/// Schließt Review 2026-06-04 Runde 2 Finding 5 — vorher hat der
 /// SAM-Pfad `disabled` pauschal auf `false` gesetzt, was deaktivierte
-/// Konten silently als aktiv ausgewiesen hat.
 ///
 /// Reads the `disabled` status of a user via `NetUserGetInfo` level 1 and
 /// checks the `UF_ACCOUNTDISABLE` flag.
@@ -413,19 +366,11 @@ pub fn user_account_disabled(
     let disabled = (info.usri1_flags & UF_ACCOUNTDISABLE) != 0;
 
     Ok(Some(disabled))
-    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
 /// Convenience-Funktion, die `lookup_account_for_sid` +
-/// `user_global_group_names` + `resolve_local_group_sids` kombiniert und das
-/// Ergebnis in den fachlichen Typen `Identity` und `GroupMembership`
-/// zurückgibt.
 ///
-/// Auf einem Domain Controller ergibt das genau die Token-SID-Liste, die
-/// Windows beim Aufbau eines Access Tokens für den Benutzer auch zusammenstellt
-/// — inklusive `BUILTIN\Administrators`, wenn der Benutzer (direkt oder über
-/// eine Domänengruppe) in dieser lokalen Gruppe ist.
 ///
 /// Convenience wrapper combining `lookup_account_for_sid` +
 /// `user_global_group_names` + `resolve_local_group_sids`, returning the
@@ -439,11 +384,7 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
     let account = lookup_account_for_sid(sid_str)?;
     let account_kind = account.kind.clone();
 
-    // Schließt Review 2026-06-04 Runde 2 Finding 5: für User-Konten
-    // versuchen wir den `disabled`-Status über `NetUserGetInfo` Level 1
-    // zu lesen. Gelingt das nicht (z. B. Access Denied auf einem nicht-
     // privilegierten Konto), markieren wir den Status explizit als
-    // unbekannt, statt ihn pauschal auf `false` zu setzen.
     // Closes review 2026-06-04 round 2 finding 5: for user accounts we
     // try to read the `disabled` flag via `NetUserGetInfo` level 1. If
     // that fails (e.g. access denied for a non-privileged caller) we
@@ -463,7 +404,6 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
             }
         }
     } else {
-        // Gruppen, Computer und Well-Known SIDs haben keinen
         // `disabled`-Status — sie sind per Definition aktiv.
         // Groups, computers, and well-known SIDs have no `disabled`
         // flag — by definition they are active.
@@ -483,7 +423,6 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
         user_principal_name: None,
     };
 
-    // Globale Gruppen nur sinnvoll für User-Konten.
     // Global groups only meaningful for user accounts.
     let mut memberships: Vec<GroupMembership> = Vec::new();
     if matches!(account_kind, IdentityKind::User) {
@@ -503,11 +442,8 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
                                 // we pass it through verbatim.
                                 group_name: Some(group_name.clone()),
                                 // SAM/NetAPI liefert eine flache Liste —
-                                // wir kennen nur Benutzer → Gruppe als
                                 // direkte Kante; verschachtelte Beziehungen
-                                // (nested groups) sind über diese API nicht
                                 // sichtbar. Pfad bleibt zwei SIDs lang und
-                                // gilt als vollständig für die direkte
                                 // Kante.
                                 // SAM/NetAPI returns a flat list — only the
                                 // user → group direct edge is visible;
@@ -541,8 +477,6 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
         }
 
         // Lokale Gruppen-Ketten via NetLocalGroupGetMembers rekonstruieren.
-        // Die schon aufgelösten Domain-Gruppen werden als Token-SIDs an
-        // resolve_local_group_chains übergeben — damit kann die Funktion
         // den Vermittler-Schritt (z. B. „Domain Admins → BUILTIN\Administrators")
         // konkret beschriften.
         // Reconstruct local group chains via NetLocalGroupGetMembers. The
@@ -570,8 +504,6 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
                         member_sid: Sid(sid_str.to_owned()),
                         group_sid,
                         // direct == path.nodes.len() == 2 → echte direkte
-                        // Mitgliedschaft auf der lokalen Gruppe; sonst
-                        // (Vermittler über Domain-Gruppe) transitiv.
                         // direct == path.nodes.len() == 2 → real direct
                         // membership on the local group; otherwise
                         // (mediated via domain group) transitive.
@@ -595,11 +527,7 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
     })
 }
 
-/// Ergebnis von [`resolve_identity_via_sam`]. Der `disabled_known`-Flag
-/// erlaubt Aufrufern zu unterscheiden, ob `Identity.disabled` einen
-/// echten Wert trägt oder ein konservativer Default ist — und so den
 /// Diagnose-Marker `IdentityDisabledStatusUnknown` zu setzen, falls
-/// nötig. Closes review 2026-06-04 round 2 finding 5.
 ///
 /// Result of [`resolve_identity_via_sam`]. The `disabled_known` flag
 /// lets callers distinguish a real value of `Identity.disabled` from a
@@ -612,17 +540,8 @@ pub struct SamResolution {
     pub disabled_known: bool,
 }
 
-/// Baut eine SID → Name-Übersetzungstabelle für die in `memberships`
-/// enthaltenen Gruppen-SIDs und alle zusätzlich übergebenen SIDs auf
 /// (z. B. ACE-Trustees aus der DACL des Zielobjekts).
 ///
-/// Memberships, die selbst schon ein `group_name` tragen (vom LDAP- oder
-/// SAM-Resolver gesetzt), übernehmen ihren Namen 1:1. Für alle übrigen
-/// SIDs ruft die Funktion einmalig `lookup_account_for_sid` auf und
-/// schreibt das Ergebnis als `DOMAIN\Name` (oder nur `Name`, wenn die
-/// Authority leer ist) in die Tabelle. Nicht auflösbare SIDs erscheinen
-/// nicht in der Map — die Engine fällt für sie auf die SID-Anzeige zurück
-/// und schreibt nichts Erfundenes in den Erklärungstext.
 ///
 /// Builds a SID → name lookup table for the group SIDs in `memberships`
 /// plus any extra SIDs supplied (e.g. ACE trustees from the target's
@@ -645,7 +564,6 @@ where
     let mut map: BTreeMap<String, String> = BTreeMap::new();
     let mut tried: HashSet<String> = HashSet::new();
 
-    // Memberships mit gesetztem Namen direkt übernehmen.
     // Memberships with a pre-set name go in verbatim.
     for m in memberships {
         if let Some(name) = m.group_name.as_deref().filter(|s| !s.is_empty()) {
@@ -654,7 +572,6 @@ where
         }
     }
 
-    // Restliche SIDs (Memberships ohne Namen + Extras) über LSA auflösen.
     // Resolve remaining SIDs (memberships without name + extras) via LSA.
     let candidates = memberships
         .iter()
@@ -680,7 +597,6 @@ where
     map
 }
 
-/// Klassifiziert das `SID_NAME_USE`-Feld der LSA-Antwort.
 /// Classifies the `SID_NAME_USE` field of the LSA response.
 fn sid_use_to_kind(use_code: i32) -> IdentityKind {
     match use_code {
@@ -696,7 +612,6 @@ fn sid_use_to_kind(use_code: i32) -> IdentityKind {
     }
 }
 
-/// Konvertiert einen Rust-String in eine null-terminierte UTF-16-Sequenz.
 /// Converts a Rust string to a null-terminated UTF-16 sequence.
 fn to_wide_null(s: &str) -> Vec<u16> {
     OsStr::new(s)
@@ -706,8 +621,6 @@ fn to_wide_null(s: &str) -> Vec<u16> {
 }
 
 /// # Safety
-/// `p` muss ein gültiger Zeiger auf eine null-terminierte UTF-16-Sequenz
-/// sein oder null.
 /// `p` must be a valid pointer to a null-terminated UTF-16 sequence, or
 /// null.
 unsafe fn wide_ptr_to_string(p: *const u16) -> String {
@@ -718,7 +631,6 @@ unsafe fn wide_ptr_to_string(p: *const u16) -> String {
     String::from_utf16_lossy(std::slice::from_raw_parts(p, len))
 }
 
-/// Stripped die abschließenden Nullen aus einem festen Puffer und liefert
 /// den dekodierten String.
 /// Strips trailing nulls from a fixed buffer and returns the decoded
 /// string.
@@ -733,10 +645,6 @@ mod tests {
 
     /// Well-Known: `S-1-5-32-544` (auf en-US `BUILTIN\Administrators`,
     /// auf de-DE `VORDEFINIERT\Administratoren`). Beide Felder name +
-    /// domain werden auf deutschen Systemen lokalisiert übersetzt —
-    /// deshalb prüfen wir locale-unabhängig: Lookup gelingt, beide
-    /// Strings sind nicht leer, Kind ist Group/WellKnown, und der
-    /// Roundtrip `domain\name → SID` liefert die ursprüngliche SID.
     /// Well-known: `S-1-5-32-544` (on en-US `BUILTIN\Administrators`,
     /// on de-DE `VORDEFINIERT\Administratoren`). Both the name and the
     /// domain are localized on German installs — so the test asserts
@@ -760,10 +668,7 @@ mod tests {
         assert_eq!(sid_again.0, "S-1-5-32-544");
     }
 
-    /// Well-Known: `S-1-5-18` (auf en-US `NT AUTHORITY\SYSTEM`, auf
-    /// de-DE `NT-AUTORITÄT\SYSTEM`). Wieder locale-unabhängige Asserts.
     /// Well-known: `S-1-5-18` (en-US `NT AUTHORITY\SYSTEM`, de-DE
-    /// `NT-AUTORITÄT\SYSTEM`). Locale-independent assertions again.
     #[test]
     fn lookup_well_known_system() {
         let info = lookup_account_for_sid("S-1-5-18")
@@ -784,7 +689,6 @@ mod tests {
         assert_eq!(sid_again.0, "S-1-5-18");
     }
 
-    /// Ungültige SID-Syntax muss einen `SidResolution`-Fehler ergeben,
     /// nicht panic'en.
     /// Invalid SID syntax must yield a `SidResolution` error, not a
     /// panic.
@@ -797,12 +701,9 @@ mod tests {
         }
     }
 
-    /// SID, die zwar syntaktisch korrekt ist, auf diesem System aber
-    /// keinem Konto zugeordnet werden kann.
     /// Syntactically correct SID that has no account on this system.
     #[test]
     fn unmapped_but_valid_sid_returns_resolution_error() {
-        // Fiktive SID in einer Domäne, die dieses System nicht kennt.
         // Fictional SID in a domain unknown to this system.
         let result = lookup_account_for_sid("S-1-5-21-9999999999-9999999999-9999999999-1234");
         assert!(
@@ -811,11 +712,6 @@ mod tests {
         );
     }
 
-    /// DC-Test: liefert eine SAM-Auflösung des lokal eingebauten
-    /// `Administrator`-Kontos überhaupt eine User-Identity inkl.
-    /// mindestens einer Gruppenmitgliedschaft? `#[ignore]` weil das
-    /// auf GitHub-Windows-Runnern (kein DC, Built-in-Administrator
-    /// oft deaktiviert) nicht zuverlässig läuft.
     /// DC test: does SAM resolution of the built-in `Administrator`
     /// account yield a user identity with at least one group
     /// membership? `#[ignore]` because GitHub Windows runners (no DC,

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Speicherung und Abfrage von Scan-Läufen, Berechtigungen und Scan-Fehlern.
 //! Storage and retrieval of scan runs, permissions, and scan errors.
 
 use adpa_core::{
@@ -54,11 +53,6 @@ impl<'a> ScanStore<'a> {
         Ok(())
     }
 
-    /// Löscht einen Scan-Lauf vollständig samt allen abhängigen Datensätzen
-    /// (Berechtigungen und Scan-Fehlern). Wird in einer Transaktion ausgeführt:
-    /// entweder verschwindet alles oder nichts. SQLite-Foreign-Keys sind in
-    /// dieser Codebasis nicht über `PRAGMA foreign_keys = ON` aktiviert, daher
-    /// löschen wir die abhängigen Zeilen explizit.
     ///
     /// Deletes a scan run completely along with all dependent records
     /// (permissions and scan errors). Runs in a transaction: either
@@ -66,15 +60,11 @@ impl<'a> ScanStore<'a> {
     /// via `PRAGMA foreign_keys = ON` in this codebase, so we explicitly
     /// delete the dependent rows.
     ///
-    /// Gibt die Anzahl entfernter Scan-Lauf-Zeilen zurück (0, wenn die ID
     /// nicht existiert; 1 bei Erfolg).
     /// Returns the number of removed scan-run rows (0 if the ID does not
     /// exist; 1 on success).
     pub fn delete_scan_run(&self, id: &Uuid) -> Result<usize, CoreError> {
         let id_str = id.to_string();
-        // Manuelle Transaktion über die geliehene Connection — der mutable
-        // Borrow für `Connection::transaction()` würde unsere `&Connection`
-        // brechen. BEGIN/COMMIT sind hier semantisch äquivalent.
         // Manual transaction over the borrowed connection — the mutable
         // borrow required by `Connection::transaction()` would conflict with
         // our `&Connection`. BEGIN/COMMIT are semantically equivalent here.
@@ -112,8 +102,6 @@ impl<'a> ScanStore<'a> {
                 Ok(removed)
             }
             Err(e) => {
-                // Rollback explizit; Fehler hier bewusst schlucken, der
-                // ursprüngliche Grund ist wichtiger.
                 // Explicit rollback; swallow the secondary error here — the
                 // original cause matters more.
                 let _ = self.conn.execute_batch("ROLLBACK");
@@ -122,14 +110,12 @@ impl<'a> ScanStore<'a> {
         }
     }
 
-    /// Speichert eine effektive Berechtigung und upserted die zugehörige Identität.
     /// Stores an effective permission and upserts the associated identity.
     pub fn insert_permission(
         &self,
         scan_run_id: &Uuid,
         perm: &EffectivePermission,
     ) -> Result<(), CoreError> {
-        // Identität mitpersistieren / also persist the identity
         self.conn
             .execute(
                 "INSERT INTO identities (sid, name, domain, kind, disabled)
@@ -168,7 +154,6 @@ impl<'a> ScanStore<'a> {
             ShareEvalStatus::ReadFailed(msg) => ("ReadFailed", Some(msg.as_str())),
         };
 
-        // Analog für LocalGroupEvalStatus.
         // Same for LocalGroupEvalStatus.
         let (local_group_status, local_group_error): (&str, Option<&str>) =
             match &perm.local_group_status {
@@ -180,11 +165,8 @@ impl<'a> ScanStore<'a> {
             };
 
         // Code Review 2026-06-07 Finding 1: Identity-Snapshot pro
-        // Permission-Zeile. Vorher wurde die Identity (Name/Domain/
-        // Kind/Disabled) nur in der globalen `identities`-Tabelle
         // gehalten und beim Lesen per JOIN aufgeloest — d.h. ein
         // spaeterer Upsert konnte alte Runs rueckwirkend anders aussehen
-        // lassen. Die Snapshot-Spalten machen die Permission-Zeile
         // unveraenderlich gegenueber spaeteren Identity-Updates.
         // Code review 2026-06-07 finding 1: identity snapshot per
         // permission row. Previously the identity (name/domain/kind/
@@ -246,8 +228,6 @@ impl<'a> ScanStore<'a> {
         Ok(())
     }
 
-    /// Liest alle gespeicherten Scan-Fehler für einen Lauf in der ursprünglichen
-    /// Einfüge-Reihenfolge (per rowid).
     /// Returns all stored scan errors for a run in insertion order (by rowid).
     pub fn list_errors_for(&self, scan_run_id: &Uuid) -> Result<Vec<ScanError>, CoreError> {
         let mut stmt = self
@@ -276,7 +256,6 @@ impl<'a> ScanStore<'a> {
         Ok(errors)
     }
 
-    /// Gibt alle gespeicherten Scan-Läufe zurück (neueste zuerst).
     /// Returns all stored scan runs (newest first).
     pub fn list_scan_runs(&self) -> Result<Vec<ScanRun>, CoreError> {
         let mut stmt = self
@@ -325,21 +304,15 @@ impl<'a> ScanStore<'a> {
         Ok(result)
     }
 
-    /// Gibt alle gespeicherten Berechtigungen für einen Scan-Lauf zurück.
     /// Returns all stored permissions for a scan run.
     pub fn get_permissions(
         &self,
         scan_run_id: &Uuid,
     ) -> Result<Vec<EffectivePermission>, CoreError> {
         // Code Review 2026-06-07 Finding 1: Identity ausschliesslich aus
-        // dem Snapshot pro Permission-Zeile lesen — kein JOIN gegen die
-        // globale `identities`-Tabelle mehr. Damit ist die Historie
         // wirklich unveraenderlich: ein spaeterer Scan, der dieselbe
-        // SID mit anderen Identity-Werten upsertet, kann die alten Runs
         // beim Re-Read nicht mehr veraendern. Backfill-Faelle (alte
         // v1..v6-Zeilen ohne identities-Eintrag zum Backfill-Zeitpunkt)
-        // erscheinen mit name=NULL/domain=NULL/kind='Unknown'; das ist
-        // die ehrliche Antwort "wir wissen es nicht mehr", statt einen
         // potenziell veraenderten Wert zu zeigen.
         // Code review 2026-06-07 finding 1: read identity exclusively
         // from the per-permission snapshot — no more JOIN against the
@@ -399,7 +372,6 @@ impl<'a> ScanStore<'a> {
                     serde_json::from_str(&contributing_json).unwrap_or_default();
                 let matched_aces: Vec<AceEntry> =
                     serde_json::from_str(&matched_aces_json).unwrap_or_default();
-                // diagnostics ist neu (Folge-Befund 3); ältere Zeilen ohne
                 // Spaltenwert geben NULL → leere Liste.
                 // diagnostics is new (follow-up finding 3); older rows
                 // without a column value return NULL → empty list.
@@ -411,7 +383,6 @@ impl<'a> ScanStore<'a> {
                     "Applied" => ShareEvalStatus::Applied,
                     "Unrestricted" => ShareEvalStatus::Unrestricted,
                     "ReadFailed" => ShareEvalStatus::ReadFailed(share_error.unwrap_or_default()),
-                    // Unbekannte/ältere Werte konservativ als NotApplicable behandeln.
                     // Treat unknown/legacy values conservatively as NotApplicable.
                     _ => ShareEvalStatus::NotApplicable,
                 };
@@ -431,8 +402,6 @@ impl<'a> ScanStore<'a> {
                         domain,
                         kind,
                         disabled: disabled != 0,
-                        // UPN wird derzeit nicht persistiert; er ist nur für
-                        // Live-AD-/NetAPI-Aufrufe relevant, nicht für historische Reports.
                         // UPN is not persisted today; it's only relevant for live AD/NetAPI
                         // calls, not for historical reports.
                         user_principal_name: None,
@@ -460,7 +429,6 @@ impl<'a> ScanStore<'a> {
     }
 }
 
-/// Lädt alle Berechtigungen für einen Scan-Lauf (freie Funktion für delta-Modul).
 /// Loads all permissions for a scan run (free function for the delta module).
 pub fn load_permissions_for_run(
     conn: &Connection,
@@ -604,7 +572,6 @@ mod tests {
         let removed = store.delete_scan_run(&run.id).unwrap();
         assert_eq!(removed, 1, "exactly one scan_run row must be removed");
 
-        // Lauf weg, abhängige Daten auch.
         // Run gone, dependent data gone too.
         assert!(store.list_scan_runs().unwrap().is_empty());
         assert!(store.get_permissions(&run.id).unwrap().is_empty());
@@ -976,14 +943,9 @@ mod tests {
     }
 
     /// Code Review 2026-06-07 Finding 1: Historische Scan-Daten muessen
-    /// gegen spaetere Identity-Upserts immun sein. Vor v7 hat
     /// `insert_permission` `identities` per Upsert ueberschrieben, und
-    /// `get_permissions` jointe gegen die aktuelle `identities`-Zeile —
     /// d.h. Run A zeigte beim Re-Read den Identity-Stand zum Zeitpunkt
     /// des SPAETEREN Run B, nicht den eigenen Stand zum Scan-Zeitpunkt.
-    /// Mit den v7-Snapshot-Spalten muss Run A unveraendert bleiben,
-    /// auch nachdem Run B dieselbe SID mit anderem Namen/Disabled-Status
-    /// gespeichert hat. Ohne diesen Test ist die Audit-Integritaet nicht
     /// geschuetzt.
     /// Code review 2026-06-07 finding 1: historical scan data must be
     /// immune against later identity upserts. Before v7,

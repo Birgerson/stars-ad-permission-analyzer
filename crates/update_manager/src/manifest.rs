@@ -1,15 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Manifest-Schema für signierte Update-Pakete.
 //! Manifest schema for signed update packages.
 //!
-//! Ein Manifest beschreibt ein Update vollständig: Zielversion, Kanal,
-//! Plattform-Constraint, Liste der enthaltenen Dateien mit SHA-256-Hash
-//! und eine getrennt gespeicherte Signatur (Base64) über das kanonisierte
 //! Manifest. Die eigentliche Krypto-Backend-Wahl (Ed25519 / RSA-PSS / …)
-//! steckt im `SignatureVerifier`-Trait und nicht im Manifest selbst — so
-//! kann der Verifier ausgetauscht werden, ohne das Schema zu brechen.
 //!
 //! A manifest fully describes an update: target version, channel, platform
 //! constraint, file list with SHA-256 hashes, and a separately stored Base64
@@ -23,15 +17,11 @@ use serde::{Deserialize, Serialize};
 use crate::UpdateChannel;
 
 /// In Windows-Pfadkomponenten verbotene Zeichen — gleicher Satz wie in
-/// [`validation::path`], damit Manifest-Pfade nicht laxer akzeptiert
-/// werden als Benutzerpfade.
 /// Characters forbidden inside Windows path components — same set as in
 /// [`validation::path`] so manifest paths are not accepted more leniently
 /// than user-supplied paths.
 const FORBIDDEN_PATH_CHARS: &[char] = &['<', '>', '"', '|', '?', '*'];
 
-/// Reservierte Windows-Gerätenamen (case-insensitive). Ein Segment, dessen
-/// Stamm einem dieser Namen entspricht, ist unzulässig — egal mit welcher
 /// Endung.
 /// Reserved Windows device names (case-insensitive). A segment whose stem
 /// matches one of these is invalid regardless of its extension.
@@ -40,24 +30,16 @@ const RESERVED_DEVICE_NAMES: &[&str] = &[
     "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
-/// Validiert einen relativen Manifest-Zielpfad gegen Windows-spezifische
 /// Pfadangriffe.
 ///
 /// Akzeptiert: `bin/stars.exe`, `bin\stars.exe`, `docs/de/handbuch.html`.
 ///
 /// Lehnt ab:
 /// - leere Pfade
-/// - absolute Pfade mit Laufwerksbuchstaben (`C:\…`, `c:foo` — durch das
-///   Verbot von `:` in Segmenten)
-/// - UNC-Präfixe (`\\…`, `//…`) und Long-Path-Präfixe (`\\?\…`)
-/// - `.` und `..` als Segmente (Traversal)
 /// - leere Segmente (`a//b`, `a\\\\b`) — verhindert UNC-Spoofing
-/// - reservierte Windows-Gerätenamen (`NUL`, `CON`, `COM1`, …)
-/// - ADS-Notation (`file.txt:ads`) — gleicher `:`-Filter wie für Laufwerke
 /// - Zeichen aus [`FORBIDDEN_PATH_CHARS`] und Steuerzeichen
 /// - Null-Bytes
 ///
-/// Schließt ChatGPT-Code-Review 2026-05-31 Finding 6.
 ///
 /// Validates a relative manifest target path against Windows-specific
 /// path-shape attacks.
@@ -86,21 +68,18 @@ pub fn validate_manifest_relative_path(path: &str) -> Result<(), CoreError> {
             "file path '{path}' must not contain null bytes"
         )));
     }
-    // Long-Path-Präfix vorab abfangen, bevor der `\`-Split greift.
     // Catch the long-path prefix before the `\`-split kicks in.
     if path.starts_with(r"\\?\") || path.starts_with("//?/") {
         return Err(CoreError::Validation(format!(
             "file path '{path}' must be relative (Windows long-path prefix not allowed)"
         )));
     }
-    // UNC-Präfix.
     // UNC prefix.
     if path.starts_with(r"\\") || path.starts_with("//") {
         return Err(CoreError::Validation(format!(
             "file path '{path}' must be relative (UNC prefix not allowed)"
         )));
     }
-    // Führende Separatoren — Pfad würde sonst aus dem Installationsbaum
     // zeigen.
     // Leading separators — path would otherwise point outside the
     // install tree.
@@ -109,9 +88,6 @@ pub fn validate_manifest_relative_path(path: &str) -> Result<(), CoreError> {
             "file path '{path}' must be relative (leading separator not allowed)"
         )));
     }
-    // Segment für Segment prüfen — wir akzeptieren sowohl `\` als auch
-    // `/` als Trenner, weil Manifeste plattform-neutral geschrieben
-    // werden können (die Installation läuft trotzdem auf Windows).
     // Check each segment — we accept both `\` and `/` as separators
     // because manifests may be written platform-neutrally (installation
     // still runs on Windows).
@@ -144,8 +120,6 @@ fn check_manifest_segment(segment: &str, full_path: &str) -> Result<(), CoreErro
             "file path '{full_path}' segment '{segment}' contains a forbidden character '{bad}'"
         )));
     }
-    // `:` deckt sowohl Laufwerksbuchstaben (`C:`) als auch ADS-Notation
-    // (`file.txt:ads`) ab — beides ist im Manifest unerwünscht.
     // `:` covers both drive letters (`C:`) and ADS notation
     // (`file.txt:ads`) — neither is acceptable in a manifest.
     if segment.contains(':') {
@@ -153,7 +127,6 @@ fn check_manifest_segment(segment: &str, full_path: &str) -> Result<(), CoreErro
             "file path '{full_path}' segment '{segment}' must not contain ':'"
         )));
     }
-    // Reservierter Windows-Gerätename — Stamm ohne Endung prüfen.
     // Reserved Windows device name — check the stem without extension.
     let stem = segment.split('.').next().unwrap_or(segment);
     if RESERVED_DEVICE_NAMES
@@ -167,7 +140,6 @@ fn check_manifest_segment(segment: &str, full_path: &str) -> Result<(), CoreErro
     Ok(())
 }
 
-/// Erlaubte Zielplattformen — entspricht der Read-only-Constraint von Windows.
 /// Allowed target platforms — matches the Windows-only read-only constraint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetPlatform {
@@ -187,33 +159,25 @@ pub struct ManifestFile {
     /// SHA-256 als lowercase-Hex-String (64 Zeichen).
     /// SHA-256 as a lowercase hex string (64 characters).
     pub sha256: String,
-    /// Dateigröße in Byte — zusätzlicher Sanity-Check gegen abgeschnittene
-    /// Downloads, bevor überhaupt gehasht wird.
     /// File size in bytes — additional sanity check against truncated
     /// downloads before any hashing happens.
     pub size_bytes: u64,
 }
 
-/// Vollständiges, validierbares Update-Manifest.
 /// Complete, validatable update manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateManifest {
     /// Schemaversion des Manifests selbst — entkoppelt von Anwendungsversion.
     /// Manifest schema version itself — decoupled from app version.
     pub manifest_version: u32,
-    /// Zielversion der Anwendung (SemVer-Empfehlung, nicht erzwungen).
     /// Target application version (SemVer recommended, not enforced).
     pub app_version: String,
     pub channel: UpdateChannel,
     pub platform: TargetPlatform,
-    /// ISO-8601-Zeitstempel des Manifests. Wird im Verifier gegen die System-
-    /// uhr und gegen ggf. anti-rollback-Marker geprüft.
     /// ISO-8601 timestamp of the manifest. The verifier checks it against
     /// the system clock and optional anti-rollback markers.
     pub issued_at: String,
     pub files: Vec<ManifestFile>,
-    /// Base64-kodierte Signatur über den kanonisierten Manifest-Body
-    /// (alles ohne das Feld `signature` selbst).
     /// Base64-encoded signature over the canonicalized manifest body
     /// (everything without the `signature` field itself).
     pub signature: String,
@@ -232,7 +196,6 @@ impl UpdateManifest {
     /// Strukturelle Validierung — vor jeder weiteren Verarbeitung.
     /// Structural validation — runs before any further processing.
     ///
-    /// Reine Schema-Prüfung; Signatur und Datei-Hashes prüft der Verifier.
     /// Pure schema check; signature and file hashes are the verifier's job.
     pub fn validate_schema(&self) -> Result<(), CoreError> {
         if self.manifest_version == 0 {
@@ -259,9 +222,6 @@ impl UpdateManifest {
             ));
         }
         for f in &self.files {
-            // Windows-sichere Pfadprüfung: blockiert absolute Pfade,
-            // Laufwerksbuchstaben, UNC-/Long-Path-Präfixe, `.`/`..`,
-            // leere Segmente, `:` (Drive/ADS), reservierte Geräte­namen
             // und verbotene Zeichen.
             // Windows-safe path validation: blocks absolute paths, drive
             // letters, UNC/long-path prefixes, `.`/`..`, empty segments,
@@ -285,11 +245,7 @@ impl UpdateManifest {
         Ok(())
     }
 
-    /// Kanonisierte JSON-Repräsentation des signierbaren Manifest-Body.
     ///
-    /// Wir entfernen das Feld `signature` und serialisieren die übrigen
-    /// Felder deterministisch. Das ist die Eingabe, gegen die der
-    /// `SignatureVerifier` die Base64-Signatur prüft.
     ///
     /// Canonical JSON representation of the signable manifest body.
     ///
@@ -300,7 +256,6 @@ impl UpdateManifest {
         let mut clone = self.clone();
         clone.signature = String::new();
         // serde_json schreibt Felder in Struktur-Reihenfolge — bei festen
-        // Strukturen ist das deterministisch genug für unsere Zwecke.
         // serde_json writes fields in struct order — for fixed structs that
         // is deterministic enough for our purposes.
         serde_json::to_vec(&clone)
@@ -365,7 +320,6 @@ mod tests {
         let json = valid_manifest_json().replace("stars.exe", "../etc/payload.exe");
         let err = UpdateManifest::from_json(&json).unwrap_err();
         // Neue Fehlermeldung aus validate_manifest_relative_path; Inhalt ist
-        // strenger formuliert als der alte „path traversal"-Substring.
         // New error message from validate_manifest_relative_path; phrased
         // more precisely than the old "path traversal" substring.
         assert!(format!("{err}").contains("traversal"));
@@ -412,7 +366,6 @@ mod tests {
     #[test]
     fn relative_path_rejects_drive_relative_with_colon() {
         // `C:evil.exe` ist Windows-„drive-relative": kein klassischer
-        // absoluter Pfad, aber auch nicht relativ zum Installations­ziel.
         // `C:evil.exe` is Windows "drive-relative": not absolute in the
         // classic sense, but also not relative to the install target.
         for bad in &["C:evil.exe", "c:foo", "Z:weird"] {
@@ -457,7 +410,6 @@ mod tests {
 
     #[test]
     fn relative_path_rejects_ads_notation() {
-        // Alternate Data Streams: `file.txt:ads` würde NTFS-seitig in einen
         // versteckten Stream schreiben — im Manifest ein klares Nein.
         // Alternate Data Streams: `file.txt:ads` would write to a hidden
         // NTFS stream — clear no in a manifest.
@@ -539,7 +491,6 @@ mod tests {
         let m = UpdateManifest::from_json(&valid_manifest_json()).unwrap();
         let bytes = m.signable_bytes().unwrap();
         let as_str = String::from_utf8(bytes).unwrap();
-        // Das Feld `signature` muss leer im signable body sein —
         // sonst signiert man sich selbst.
         // The `signature` field must be empty in the signable body —
         // otherwise the signature would cover itself.

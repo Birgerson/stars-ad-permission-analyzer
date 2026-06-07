@@ -3,12 +3,10 @@
 
 use adpa_core::error::CoreError;
 
-/// Scan-Tiefe mit definiertem Minimal- und Maximalwert
 /// Scan depth with defined minimum and maximum values
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScanDepth(pub u32);
 
-/// Thread-Limit mit definiertem Minimal- und Maximalwert
 /// Thread limit with defined minimum and maximum values
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ThreadLimit(pub u16);
@@ -26,11 +24,7 @@ pub fn validate_scan_depth(value: u32) -> Result<ScanDepth, CoreError> {
     Ok(ScanDepth(value))
 }
 
-/// Wie [`validate_scan_depth`], aber für `Option<u32>` — `None` bleibt
-/// `None` (= unbegrenzte Tiefe), `Some(d)` läuft durch den Validator.
 ///
-/// Wird von CLI und GUI-Worker am Eingangs-Boundary verwendet, damit die
-/// Scan-Tiefe nicht ungeprüft in `WalkConfig` wandert (AGENTS.md DoD-Punkt
 /// 11: Eingaben validieren).
 ///
 /// Like [`validate_scan_depth`], but for `Option<u32>` — `None` stays
@@ -93,7 +87,6 @@ mod tests {
 
     #[test]
     fn optional_scan_depth_none_passes_through() {
-        // None = „unbegrenzt" muss vom Validator akzeptiert werden.
         // None = "unbounded" must be accepted by the validator.
         let result = validate_optional_scan_depth(None).unwrap();
         assert!(result.is_none());
@@ -114,8 +107,6 @@ mod tests {
     #[test]
     fn optional_scan_depth_some_above_limit_rejected() {
         assert!(validate_optional_scan_depth(Some(MAX_SCAN_DEPTH + 1)).is_err());
-        // Auch sehr große Werte werden hart abgewiesen, nicht stillschweigend
-        // auf MAX gedeckelt — der Aufrufer soll den Fehler bemerken.
         // Very large values are rejected hard, not silently clamped — the
         // caller is meant to notice the error.
         assert!(validate_optional_scan_depth(Some(u32::MAX)).is_err());

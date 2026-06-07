@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Haupt-Datenbankzugang — öffnet die SQLite-Verbindung und führt Migrationen aus.
 //! Main database entry point — opens the SQLite connection and runs migrations.
 
 use adpa_core::{error::CoreError, model::ScanRun};
@@ -18,7 +17,6 @@ pub struct Database {
 }
 
 impl Database {
-    /// Öffnet oder erstellt eine SQLite-Datenbank am angegebenen Pfad und
     /// wendet alle ausstehenden Migrationen an.
     /// Opens or creates a SQLite database at the given path and applies
     /// all pending migrations.
@@ -30,7 +28,6 @@ impl Database {
         Ok(db)
     }
 
-    /// Erstellt eine In-Memory-Datenbank — nur für Tests.
     /// Creates an in-memory database — for tests only.
     pub fn open_in_memory() -> Result<Self, CoreError> {
         let conn = Connection::open_in_memory()
@@ -44,27 +41,21 @@ impl Database {
         run_migrations(&self.conn)
     }
 
-    /// Gibt einen ScanStore zurück, der die Verbindung dieser Datenbank nutzt.
     /// Returns a ScanStore backed by this database's connection.
     pub fn scan_store(&self) -> ScanStore<'_> {
         ScanStore::new(&self.conn)
     }
 
-    /// Gibt einen IdentityCache zurück, der die Verbindung dieser Datenbank nutzt.
     /// Returns an IdentityCache backed by this database's connection.
     pub fn identity_cache(&self) -> IdentityCache<'_> {
         IdentityCache::new(&self.conn)
     }
 
-    /// Listet alle gespeicherten Scan-Läufe auf (neueste zuerst).
     /// Lists all stored scan runs (newest first).
     pub fn list_scan_runs(&self) -> Result<Vec<ScanRun>, CoreError> {
         self.scan_store().list_scan_runs()
     }
 
-    /// Löscht einen Scan-Lauf inklusive aller abhängigen Daten
-    /// (Berechtigungen und Scan-Fehler). Liefert die Anzahl entfernter
-    /// Scan-Lauf-Zeilen (0 wenn die ID nicht existierte, 1 bei Erfolg).
     /// Deletes a scan run including all dependent data (permissions and
     /// scan errors). Returns the number of removed scan-run rows (0 if
     /// the ID did not exist, 1 on success).
@@ -72,7 +63,6 @@ impl Database {
         self.scan_store().delete_scan_run(id)
     }
 
-    /// Vergleicht zwei Scan-Läufe und gibt alle Änderungen zurück.
     /// Compares two scan runs and returns all changes.
     pub fn compare_scans(
         &self,

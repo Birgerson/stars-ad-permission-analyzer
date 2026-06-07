@@ -1,26 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! RAII-Guard fuer von `NetApi*`-Funktionen allozierte Puffer.
 //!
 //! Hintergrund: viele `NetApi*`-Funktionen (zum Beispiel
 //! [`NetShareEnum`], [`NetShareGetInfo`], [`NetUserEnum`],
 //! [`NetLocalGroupGetMembers`]) allozieren bei Erfolg einen Puffer
-//! intern und uebergeben dem Aufrufer einen Out-Pointer. Der Aufrufer
-//! ist verpflichtet, diesen Puffer mit [`NetApiBufferFree`] wieder
 //! freizugeben.
 //!
-//! Wenn dazwischen ein `?` aus der Funktion herausspringt (oder eine
-//! `return`-Statement, ein `panic`-resistenter Pfad oder eine andere
-//! Form von Early-Return), wird `NetApiBufferFree` nicht erreicht und
-//! der Puffer leakt. Genau das hatte Review-Runde 10 Finding 3
 //! identifiziert: `get_share_dacl` ruft `parse_share_dacl(...)?` auf,
-//! bevor der Puffer freigegeben wird — ein `Err` aus dem Parser
 //! leakte.
 //!
 //! Loesung: dieser Typ kapselt den Puffer und ruft `NetApiBufferFree`
 //! im `Drop`. Damit gibt jeder Pfad — Erfolg, `?`, `return`, Panic —
-//! die Ressource korrekt frei. Plus: der Code wird lesbarer, weil das
 //! manuelle `NetApiBufferFree(buf.cast())` am Ende jedes Pfads
 //! entfaellt.
 //!
@@ -51,12 +42,9 @@ use std::marker::PhantomData;
 use std::ptr;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetApiBufferFree;
 
-/// RAII-Guard fuer einen von einer `NetApi*`-Funktion allozierten
-/// Puffer. Der Typ-Parameter `T` ist der konkrete Struktur-Typ, den
 /// der Out-Pointer adressiert (zum Beispiel `SHARE_INFO_502`).
 ///
 /// Konstruktion erfolgt ueber [`NetApiBuffer::from_raw`] **erst nach**
-/// dem erfolgreichen NetApi-Call. Ein Null-Pointer ist erlaubt und
 /// loest keinen Free aus (Modell „kein Puffer allokiert", was bei
 /// fehlgeschlagenen Calls vorkommen kann).
 ///
@@ -74,18 +62,14 @@ pub struct NetApiBuffer<T> {
 }
 
 impl<T> NetApiBuffer<T> {
-    /// Uebernimmt die Verantwortung fuer einen von einer
     /// `NetApi*`-Funktion gelieferten Puffer-Pointer.
     ///
     /// # Safety
     ///
     /// `ptr` muss entweder
     ///
-    /// * `null` sein, oder
     /// * ein Pointer, den eine `NetApi*`-Funktion erfolgreich
-    ///   alloziert hat und dessen Free-Verantwortung auf `NetApiBuffer`
     ///   uebergeht. Insbesondere darf derselbe Pointer nicht
-    ///   gleichzeitig von einer anderen Stelle freigegeben werden
     ///   („double free" waere ein UB).
     ///
     /// Takes ownership of a buffer pointer returned by a `NetApi*`
@@ -107,10 +91,6 @@ impl<T> NetApiBuffer<T> {
         }
     }
 
-    /// Konstruktion ueber einen Out-Pointer-Helper: gibt einen
-    /// `*mut *mut T`-Slot zurueck, in den eine `NetApi*`-Funktion
-    /// ihren Puffer schreiben kann. Sobald die Funktion zurueckkehrt,
-    /// wird der gespeicherte Pointer als verwaltet betrachtet.
     ///
     /// Convenience constructor via out-pointer slot: returns a
     /// `*mut *mut T` that a `NetApi*` function can write its buffer
@@ -123,9 +103,6 @@ impl<T> NetApiBuffer<T> {
         }
     }
 
-    /// Liefert den Raw-Pointer aus. Lebt nur so lange wie der Guard.
-    /// Wenn der Guard fallen gelassen wird, wird der Puffer
-    /// freigegeben — der Aufrufer darf den Pointer danach nicht mehr
     /// dereferenzieren.
     ///
     /// Returns the raw pointer. Valid only as long as the guard
@@ -135,7 +112,6 @@ impl<T> NetApiBuffer<T> {
         self.ptr
     }
 
-    /// Liefert den Out-Pointer-Slot zum direkten Einsetzen in eine
     /// `NetApi*`-Signatur: `&mut buf.out_ptr()`. Der Pointer im Slot
     /// wird beim Drop des Guards freigegeben.
     ///
@@ -146,7 +122,6 @@ impl<T> NetApiBuffer<T> {
         &mut self.ptr
     }
 
-    /// Pruefen, ob der Guard tatsaechlich einen Puffer haelt.
     /// Whether the guard actually holds a buffer.
     pub fn is_null(&self) -> bool {
         self.ptr.is_null()
@@ -156,8 +131,6 @@ impl<T> NetApiBuffer<T> {
 impl<T> Drop for NetApiBuffer<T> {
     fn drop(&mut self) {
         if !self.ptr.is_null() {
-            // SAFETY: nur ein erfolgreicher NetApi-Call setzt einen
-            // Non-Null-Pointer. Die Free-Verantwortung wurde per
             // `from_raw` an den Guard uebergeben. Doppel-Free ist
             // durch Aliasing-Vermeidung des Aufrufers ausgeschlossen.
             // SAFETY: only a successful NetApi call sets a non-null
@@ -172,10 +145,6 @@ impl<T> Drop for NetApiBuffer<T> {
     }
 }
 
-// `NetApiBuffer` haelt einen Raw-Pointer — bewusst weder `Send` noch
-// `Sync`, weil die NetApi-Allocator-Semantik thread-lokal abgesichert
-// werden soll. Aufrufer muessen den Guard im selben Thread droppen,
-// in dem sie ihn erzeugt haben.
 // `NetApiBuffer` holds a raw pointer — deliberately neither `Send`
 // nor `Sync` because NetApi allocator semantics should be ensured per
 // thread. Callers must drop the guard on the same thread that
@@ -186,7 +155,6 @@ mod tests {
     use super::*;
 
     /// Sanity-Test: ein Null-Pointer fuehrt zu keinem Free-Aufruf
-    /// (Drop ist no-op). Verifiziert die NetApiBufferFree-Bedingung
     /// `ptr != null`.
     /// Sanity test: a null pointer leads to no Free call (Drop is a
     /// no-op). Verifies the NetApiBufferFree precondition `ptr != null`.
@@ -197,7 +165,6 @@ mod tests {
         drop(guard); // darf nicht panicken / abstuerzen
     }
 
-    /// Sanity-Test: `out_ptr` liefert einen schreibbaren Slot, der
     /// nach dem Schreiben einen Non-Null-Pointer enthaelt.
     /// Sanity test: `out_ptr` returns a writable slot that holds a
     /// non-null pointer after writing.
@@ -205,10 +172,6 @@ mod tests {
     fn out_ptr_can_be_written_and_read_back() {
         let mut guard: NetApiBuffer<u8> = NetApiBuffer::null();
         let slot = guard.out_ptr();
-        // Wir schreiben hier KEINEN echten NetApi-Pointer rein, weil
-        // wir den nicht freigeben koennen ohne den echten Allocator.
-        // Wir simulieren nur, dass `slot` schreibbar ist — und setzen
-        // ihn anschliessend wieder auf null, damit Drop kein
         // ungueltiges Free macht.
         // We don't write a real NetApi pointer here because we can't
         // free it without the real allocator. We only verify `slot`

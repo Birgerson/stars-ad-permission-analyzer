@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Formatierte Konsolenausgabe für den Analyze-Befehl.
 //! Formatted console output for the analyze command.
 
 use adpa_core::model::{
@@ -34,11 +33,8 @@ fn section(title: &str) {
     println!("  {}", light_line().chars().take(W - 2).collect::<String>());
 }
 
-/// Liefert die Klartext-Beschreibung des DACL-Zustands für die Konsolenanzeige.
 ///
-/// - `null_dacl == true` → unbeschränkter Vollzugriff (NULL-DACL)
 /// - sonst leere DACL → kein Zugriff
-/// - sonst → `None`, der Aufrufer rendert die einzelnen ACEs.
 ///
 /// Returns the plain-text description of the DACL state for console display.
 ///
@@ -65,7 +61,6 @@ pub fn print_report(
     println!();
     header("AD Permission Analyzer  \u{00B7}  Effective Rights Report");
 
-    // --- Identität / Identity ---
     section("Identity");
     println!("  Path      : {}", fso.path.0);
     let user_name = result.identity.name.as_deref().unwrap_or(user_input);
@@ -122,7 +117,6 @@ pub fn print_report(
     // Alle ACEs anzeigen / show all ACEs
     //
     // Wichtig: NULL-DACL ≠ leere DACL. NULL-DACL bedeutet "kein Zugriffsschutz"
-    // (Vollzugriff für alle), eine leere DACL bedeutet "kein Zugriff für niemanden".
     // Important: NULL DACL ≠ empty DACL. NULL DACL means "no access control"
     // (full access for everyone), an empty DACL means "no access for anyone".
     if let Some(label) = dacl_state_label(fso.null_dacl, fso.dacl.is_empty()) {
@@ -152,9 +146,6 @@ pub fn print_report(
         }
     }
 
-    // --- Nicht unterstützte ACEs / unsupported ACEs ---
-    // Diagnose: ACE-Typen, die der Parser nicht auswerten konnte. Ihr Vorhandensein
-    // bedeutet, dass die DACL-Auswertung möglicherweise unvollständig ist.
     // Diagnostic: ACE types the parser could not evaluate. Their presence means
     // the DACL evaluation is potentially incomplete.
     if !fso.unsupported_aces.is_empty() {
@@ -176,9 +167,7 @@ pub fn print_report(
     }
 
     // --- Strukturierte Diagnose-Marker (ADR 0021 + 0024) ---
-    // Bisher waren diese nur in JSON/CSV/HTML/GUI sichtbar; im CLI-Output
     // fehlten sie. Damit ein CLI-Auditor dieselbe Information bekommt wie
-    // die Export-Formate, listen wir die diagnostics-Variants hier auf.
     //
     // Structured diagnostic markers (ADR 0021 + 0024). Previously these
     // were only visible in JSON/CSV/HTML/GUI; the CLI output omitted them.
@@ -239,9 +228,6 @@ pub fn print_report(
     }
 
     // --- Zutreffende ACEs / matching ACEs ---
-    // Aus der Engine übernommen statt aus build_token_sids rekonstruiert —
-    // sonst würden lokale Server-Gruppen-SIDs (die nur in der Engine im Token
-    // landen) hier fehlen und ein lokaler-Gruppen-ACE wäre für den Benutzer
     // unsichtbar, obwohl er zum Ergebnis beigetragen hat.
     // Taken from the engine instead of rebuilding via build_token_sids —
     // otherwise local server group SIDs (which only the engine adds to the
@@ -285,7 +271,6 @@ pub fn print_report(
     }
     println!("  Result  : {}", eff);
 
-    // --- Erklärungspfad / Explanation path ---
     section("Explanation Path");
     for (i, step) in result.path_explanation.steps.iter().enumerate() {
         println!("  {}. {step}", i + 1);
@@ -296,7 +281,6 @@ pub fn print_report(
     println!();
 }
 
-/// Kurzname einer Risikostufe für die Konsolenausgabe.
 /// Short name of a risk severity for console output.
 fn severity_label(sev: &RiskSeverity) -> &'static str {
     match sev {
@@ -308,7 +292,6 @@ fn severity_label(sev: &RiskSeverity) -> &'static str {
     }
 }
 
-/// Gibt die Risikobefunde eines Laufs formatiert auf der Konsole aus.
 /// Prints the risk findings of a run to the console in a formatted block.
 pub fn print_risk_findings(findings: &[RiskFinding]) {
     section(&format!("Risk Findings ({})", findings.len()));
@@ -322,7 +305,6 @@ pub fn print_risk_findings(findings: &[RiskFinding]) {
             .as_ref()
             .map(|p| p.0.as_str())
             .unwrap_or("(no path)");
-        // Incomplete-Befunde sind explizit zu markieren — sonst wirkt ein
         // Critical aus unvollstaendiger Berechnung wie ein bestaetigter Befund.
         // Incomplete findings must be flagged — otherwise a Critical derived
         // from an incomplete computation looks like a confirmed finding.
@@ -343,7 +325,6 @@ mod tests {
 
     #[test]
     fn null_dacl_is_full_control() {
-        // null_dacl ist Vollzugriff, auch wenn die DACL-Liste zufällig leer ist.
         // null_dacl means full access, even when the DACL list is incidentally empty.
         assert_eq!(
             dacl_state_label(true, true),
@@ -357,7 +338,6 @@ mod tests {
 
     #[test]
     fn empty_dacl_is_deny_all_only_without_null() {
-        // Leere DACL ist nur dann Deny-All, wenn kein NULL-DACL-Marker gesetzt ist.
         // An empty DACL means deny-all only when the NULL DACL marker is not set.
         assert_eq!(
             dacl_state_label(false, true),

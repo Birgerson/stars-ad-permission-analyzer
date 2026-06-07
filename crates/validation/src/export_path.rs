@@ -9,10 +9,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedExportPath(pub PathBuf);
 
-/// Zulässige Dateiendungen für Exporte / Allowed file extensions for exports
 const ALLOWED_EXTENSIONS: &[&str] = &["csv", "html", "json"];
 
-/// Ergebnis der Exportpfad-Validierung — unterscheidet neue von bereits vorhandenen Dateien.
 /// Result of export path validation — distinguishes new from already-existing files.
 #[derive(Debug)]
 pub enum ExportPathStatus {

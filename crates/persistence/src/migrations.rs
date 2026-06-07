@@ -64,7 +64,6 @@ mod tests {
     fn migration_adds_diagnostic_columns() {
         let conn = in_memory();
         run_migrations(&conn).unwrap();
-        // Die neuen Spalten aus v2–v7 müssen abfragbar sein.
         // The new columns from v2–v7 must be queryable.
         conn.query_row(
             "SELECT share_status, share_error, contributing_sids, unsupported_ace_count,
@@ -114,10 +113,6 @@ mod tests {
         assert_eq!(v, 7);
     }
 
-    /// Schrittweise Migration: v1-Daten überleben das Upgrade auf v7
-    /// und alle neuen Spalten erhalten ihre Default-Werte. Ohne diesen
-    /// Test wäre nicht garantiert, dass ein in-place-Upgrade einer alten
-    /// Datenbank ohne Datenverlust läuft.
     ///
     /// Step-wise migration: v1 data survives the upgrade to v7 and all new
     /// columns receive their default values. Without this test, an in-place
@@ -127,9 +122,6 @@ mod tests {
     fn v1_data_survives_full_migration_to_v7() {
         let conn = in_memory();
 
-        // Schritt 1: nur v1-Schema anwenden und PRAGMA user_version=1 setzen,
-        // sodass die nachfolgende run_migrations-Schleife exakt die v2..v6-
-        // Wege durchläuft, die ein produktives Upgrade auch nimmt.
         // Step 1: apply v1 schema only and set PRAGMA user_version=1 so that
         // the subsequent run_migrations loop walks exactly the v2..v6 path a
         // production upgrade would take.
@@ -139,7 +131,6 @@ mod tests {
         ))
         .unwrap();
 
-        // Schritt 2: v1-typische Datensätze einfügen — nur Spalten, die in
         // v1 existieren.
         // Step 2: insert v1-typical rows — only columns that exist in v1.
         conn.execute(
@@ -162,7 +153,6 @@ mod tests {
         )
         .unwrap();
 
-        // Schritt 3: vollständige Migration anwenden.
         // Step 3: apply full migration.
         run_migrations(&conn).unwrap();
 
@@ -171,7 +161,6 @@ mod tests {
             .unwrap();
         assert_eq!(v, 7, "migration must end at v7");
 
-        // Schritt 4: v1-Werte überleben unverändert.
         // Step 4: v1 values survive unchanged.
         let v1_row: (String, String, i64, i64) = conn
             .query_row(
@@ -186,7 +175,6 @@ mod tests {
         assert_eq!(v1_row.2, 131241);
         assert_eq!(v1_row.3, 131241);
 
-        // Schritt 5: v2..v6-Defaults greifen für die Altzeile.
         // Step 5: v2..v6 defaults apply to the legacy row.
         let defaults: (
             String,
@@ -228,8 +216,6 @@ mod tests {
 
         // Schritt 6 (Code Review 2026-06-07, Finding 1): v7-Backfill aus
         // identities-Tabelle. Die Legacy-Identitaet (legacy.user,
-        // OLDCORP, User, disabled=false) muss in den neuen Snapshot-
-        // Spalten landen, damit die historische Permission ohne JOIN
         // gegen identities lesbar bleibt.
         // Step 6 (code review 2026-06-07, finding 1): v7 backfill from
         // the identities table. The legacy identity (legacy.user,

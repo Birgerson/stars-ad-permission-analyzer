@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! CSV-Export für EffectivePermission-Ergebnisse.
 //! CSV export for EffectivePermission results.
 
 use std::io::Write;
@@ -13,7 +12,6 @@ use adpa_core::{
 };
 use permission_engine::NormalizedRights;
 
-/// Spaltenköpfe der CSV-Ausgabe / CSV column headers
 const HEADERS: &[&str] = &[
     "path",
     "user_sid",
@@ -28,28 +26,21 @@ const HEADERS: &[&str] = &[
     "effective_mask_hex",
     "effective_rights",
     "explanation",
-    // Diagnose: Anzahl nicht ausgewerteter ACE-Typen auf diesem Pfad (0 = vollständig).
     // Diagnostic: count of unevaluated ACE types on this path (0 = complete).
     "unsupported_aces",
     // Status der Share-Auswertung: not_applicable / applied / unrestricted / read_failed:<grund>.
     // Share evaluation status: not_applicable / applied / unrestricted / read_failed:<reason>.
     "share_status",
-    // Status der lokalen-Gruppen-Auflösung — markiert das Ergebnis als
-    // unvollständig, wenn der Zielserver nicht angefragt werden konnte.
     // Local group resolution status — flags the result as incomplete when
     // the target server could not be queried.
     "local_group_status",
-    // Begründung bei local_group_status = not_available (sonst leer).
     // Reason when local_group_status = not_available (otherwise empty).
     "local_group_error",
-    // Kompakte JSON-Liste aller ACEs, die zum Token gehören (sid, kind,
-    // mask, inherited). Für strukturierte Audit-Pipelines, die nicht den
     // vollen JSON-Export nutzen wollen.
     // Compact JSON list of all ACEs matching the token (sid, kind, mask,
     // inherited). For structured audit pipelines that don't want the
     // full JSON export.
     "matched_aces_json",
-    // Kompakte JSON-Liste der ACEs, die tatsächlich zum NTFS-Ergebnis
     // beigetragen haben (sid, beigetragene Maske).
     // Compact JSON list of ACEs that actually contributed to the NTFS
     // result (sid, contributed mask).
@@ -71,11 +62,8 @@ impl Exporter for CsvExporter {
     }
 }
 
-/// Schreibt Berechtigungsergebnisse als CSV in einen beliebigen Writer.
 /// Writes permission results as CSV to any writer.
 ///
-/// Trennt Felder mit Komma, umschließt Felder mit Sonderzeichen automatisch mit
-/// Anführungszeichen (wird von der `csv`-Crate übernommen).
 /// Fields are comma-separated; fields containing special characters are automatically
 /// quoted (handled by the `csv` crate).
 pub fn write_csv<W: Write>(writer: W, permissions: &[EffectivePermission]) -> csv::Result<()> {
@@ -129,7 +117,6 @@ fn record_for(p: &EffectivePermission) -> [String; 20] {
     ]
 }
 
-/// Maschinenlesbares Label für die CSV-Spalte share_status.
 /// Machine-readable label for the share_status CSV column.
 fn share_status_label(status: &ShareEvalStatus) -> String {
     match status {
@@ -140,9 +127,6 @@ fn share_status_label(status: &ShareEvalStatus) -> String {
     }
 }
 
-/// Zerlegt `LocalGroupEvalStatus` in zwei CSV-Spalten: Statuslabel und
-/// Fehlertext (leer wenn kein Fehler). Damit bleibt der Status mit `grep`/
-/// Excel-Filter ansprechbar, ohne dass der Fehlertext den Status-Wert
 /// kontaminiert (wie z. B. bei `read_failed:<lange Meldung>`).
 /// Splits `LocalGroupEvalStatus` into two CSV columns: status label and
 /// error text (empty when no error). Keeps the status grep-/Excel-filter
@@ -156,7 +140,6 @@ fn local_group_status_fields(status: &LocalGroupEvalStatus) -> (String, String) 
 }
 
 /// Serialisiert `matched_aces` als kompaktes JSON-Array. Audit-Pipelines,
-/// die alle Treffer-ACEs strukturiert brauchen, können das Feld direkt
 /// parsen — wer den vollen Detailbaum will, nutzt den JSON-Export.
 /// Serializes `matched_aces` as a compact JSON array. Audit pipelines
 /// needing structured access to the matched ACEs can parse this field
@@ -184,8 +167,6 @@ fn matched_aces_to_json(aces: &[adpa_core::model::AceEntry]) -> String {
     serde_json::to_string(&compact).unwrap_or_else(|_| "[]".to_owned())
 }
 
-/// Serialisiert `contributing_sids` als kompaktes JSON-Array. Enthält pro
-/// SID nur die Bits, die tatsächlich zum NTFS-Ergebnis beigetragen haben.
 /// Serializes `contributing_sids` as a compact JSON array. Per SID it
 /// contains only the bits that actually contributed to the NTFS result.
 fn contributing_sids_to_json(sids: &[adpa_core::model::ContributingAce]) -> String {
@@ -490,8 +471,6 @@ mod tests {
 
     #[test]
     fn local_group_status_not_available_records_reason_separately() {
-        // Finding 9: Audit-Nutzer müssen den unvollständigen Token sehen können,
-        // ohne JSON öffnen zu müssen. Status und Begründung sind getrennt, damit
         // Filter auf den Status weiterhin funktionieren.
         let mut perm = make_perm(
             "C:\\Share",
@@ -584,9 +563,6 @@ mod tests {
 
     #[test]
     fn diagnostics_serialized_as_tagged_json() {
-        // Folge-Befund 3: NonCanonicalDaclOrder muss strukturiert in der
-        // CSV-Spalte landen — und der Tag muss exakt mit dem Engine-Marker
-        // matchen, damit Auditoren mit jq filtern können.
         // Follow-up finding 3: NonCanonicalDaclOrder must land structured in
         // the CSV column — and its tag must match the engine marker so
         // auditors can filter with jq.
@@ -630,8 +606,6 @@ mod tests {
 
     #[test]
     fn empty_matched_aces_and_contributing_sids_yield_empty_json_arrays() {
-        // Ein leerer Wert muss als "[]" auftauchen, nicht als leere Zelle —
-        // damit Konsumenten die Spalte immer als JSON parsen können.
         // An empty value must surface as "[]", not as a blank cell — so
         // consumers can always parse the column as JSON.
         let perm = make_perm(
@@ -665,7 +639,6 @@ mod tests {
     }
 
     /// Round-8-Folgereview Finding 1: CSV-Exporter darf eine existierende
-    /// Datei mit `ExportTarget::File` nicht ueberschreiben.
     /// Round-8 follow-up finding 1: CSV exporter must not overwrite an
     /// existing target file when called with `ExportTarget::File`.
     #[test]

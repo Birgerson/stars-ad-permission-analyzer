@@ -4,7 +4,6 @@
 //! NTFS-Zugriffsmasken-Normalisierung.
 //! NTFS access mask normalization.
 //!
-//! Übersetzt rohe Windows-AccessMask-Werte (u32) in benannte NTFS-Rechte.
 //! Translates raw Windows AccessMask values (u32) into named NTFS rights.
 //!
 //! Bit-Quellen / Bit sources: WinNT.h, MSDN "File Security and Access Rights"
@@ -21,15 +20,12 @@ use serde::{Deserialize, Serialize};
 pub const FILE_READ_DATA: u32 = 0x0000_0001;
 /// Datei schreiben / Datei in Verzeichnis anlegen
 pub const FILE_WRITE_DATA: u32 = 0x0000_0002;
-/// Datei anhängen / Unterverzeichnis anlegen
 pub const FILE_APPEND_DATA: u32 = 0x0000_0004;
 /// Erweiterte Attribute lesen
 pub const FILE_READ_EA: u32 = 0x0000_0008;
 /// Erweiterte Attribute schreiben
 pub const FILE_WRITE_EA: u32 = 0x0000_0010;
-/// Datei ausführen / Verzeichnis durchqueren
 pub const FILE_EXECUTE: u32 = 0x0000_0020;
-/// Unterelemente löschen (nur Verzeichnisse / directories only)
 pub const FILE_DELETE_CHILD: u32 = 0x0000_0040;
 /// Basis-Attribute lesen
 pub const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
@@ -41,13 +37,10 @@ pub const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
 // Standard rights (bits 16–20) — from WinNT.h
 // ---------------------------------------------------------------------------
 
-/// Objekt löschen
 pub const FILE_DELETE: u32 = 0x0001_0000;
 /// Security-Descriptor lesen (READ_CONTROL)
 pub const FILE_READ_CONTROL: u32 = 0x0002_0000;
-/// DACL ändern (WRITE_DAC)
 pub const FILE_WRITE_DAC: u32 = 0x0004_0000;
-/// Besitzer ändern (WRITE_OWNER)
 pub const FILE_WRITE_OWNER: u32 = 0x0008_0000;
 /// Synchronisationspunkt (SYNCHRONIZE)
 pub const FILE_SYNCHRONIZE: u32 = 0x0010_0000;
@@ -73,7 +66,6 @@ pub const FILE_GENERIC_WRITE: u32 = 0x0012_0116;
 pub const FILE_GENERIC_EXECUTE: u32 = 0x0012_00A0;
 
 // ---------------------------------------------------------------------------
-// ACE-Flag-Bits (WinNT.h) — werden vom Scanner in inheritance_flags
 // (OI|CI) bzw. propagation_flags (NP|IO) abgelegt.
 // ACE flag bits (WinNT.h) — the scanner places them into inheritance_flags
 // (OI|CI) and propagation_flags (NP|IO).
@@ -83,22 +75,14 @@ pub const FILE_GENERIC_EXECUTE: u32 = 0x0012_00A0;
 pub const OBJECT_INHERIT_ACE: u32 = 0x01;
 /// CI — Sub-Verzeichnisse erben diesen ACE.
 pub const CONTAINER_INHERIT_ACE: u32 = 0x02;
-/// NP — Vererbung wird nicht weiter propagiert (nur direkte Kinder).
 pub const NO_PROPAGATE_INHERIT_ACE: u32 = 0x04;
-/// IO — ACE gilt nur für Kinder, nicht für das aktuelle Objekt.
 pub const INHERIT_ONLY_ACE: u32 = 0x08;
-/// INHERITED — ACE wurde vom Parent geerbt (kennzeichnet die Herkunft).
 pub const INHERITED_ACE: u32 = 0x10;
 
-/// Bits, die zu `AceEntry::inheritance_flags` gehören (WHAT inherits).
 pub const INHERITANCE_FLAGS_MASK: u32 = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
-/// Bits, die zu `AceEntry::propagation_flags` gehören (HOW it propagates).
 pub const PROPAGATION_FLAGS_MASK: u32 = NO_PROPAGATE_INHERIT_ACE | INHERIT_ONLY_ACE;
 
-/// Expandiert generische Rechtebits (GENERIC_READ/WRITE/EXECUTE/ALL) in die
 /// spezifischen Datei-Bits. Muss vor jeder Allow-/Deny-Auswertung erfolgen,
-/// sonst „verschwinden" generische ACEs aus der Berechnung (Bits 28–31 sind
-/// nicht Teil der spezifischen Datei-Bits, mit denen die Engine arbeitet).
 ///
 /// Expands generic rights bits (GENERIC_READ/WRITE/EXECUTE/ALL) into the
 /// specific file bits. Must be applied before any allow/deny evaluation;
@@ -122,14 +106,12 @@ pub fn expand_generic_rights(mask: u32) -> u32 {
 }
 
 // ---------------------------------------------------------------------------
-// Bekannte zusammengesetzte Masken (Windows-Benutzeroberfläche / icacls)
 // Well-known composite masks (Windows UI / icacls)
 // ---------------------------------------------------------------------------
 
 /// F — Full Control (FILE_ALL_ACCESS = STANDARD_RIGHTS_ALL | SYNCHRONIZE | 0x1FF)
 pub const MASK_FULL_CONTROL: u32 = 0x001F_01FF;
 
-/// M — Modify (alle Bits außer WRITE_DAC, WRITE_OWNER, FILE_DELETE_CHILD)
 pub const MASK_MODIFY: u32 = 0x0013_01BF;
 
 /// RX — Read & Execute (FILE_GENERIC_READ + FILE_EXECUTE)
@@ -145,7 +127,6 @@ pub const MASK_WRITE: u32 = 0x0012_0116;
 // NormalizedRights
 // ---------------------------------------------------------------------------
 
-/// Normalisierte Darstellung einer Windows-Zugriffsmaske für NTFS-Objekte.
 /// Normalized representation of a Windows access mask for NTFS objects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NormalizedRights {
@@ -157,7 +138,6 @@ impl NormalizedRights {
         Self { raw }
     }
 
-    /// Gibt den Roh-u32-Wert zurück.
     /// Returns the raw u32 value.
     pub fn raw(&self) -> u32 {
         self.raw
@@ -211,45 +191,36 @@ impl NormalizedRights {
         self.has(FILE_SYNCHRONIZE)
     }
 
-    // --- Zusammengesetzte Prüfungen / composite checks ---
-
-    /// Prüft ob alle Full-Control-Bits gesetzt sind (icacls: F).
     /// Checks whether all Full Control bits are set (icacls: F).
     pub fn is_full_control(&self) -> bool {
         self.raw & MASK_FULL_CONTROL == MASK_FULL_CONTROL
     }
 
-    /// Prüft ob mindestens alle Modify-Bits gesetzt sind (icacls: M).
     /// Checks whether at least all Modify bits are set (icacls: M).
     pub fn is_modify(&self) -> bool {
         self.raw & MASK_MODIFY == MASK_MODIFY
     }
 
-    /// Prüft ob mindestens alle Read-&-Execute-Bits gesetzt sind (icacls: RX).
     /// Checks whether at least all Read & Execute bits are set (icacls: RX).
     pub fn is_read_execute(&self) -> bool {
         self.raw & MASK_READ_EXECUTE == MASK_READ_EXECUTE
     }
 
-    /// Prüft ob mindestens alle Read-Bits gesetzt sind (icacls: R).
     /// Checks whether at least all Read bits are set (icacls: R).
     pub fn is_read(&self) -> bool {
         self.raw & MASK_READ == MASK_READ
     }
 
-    /// Prüft ob mindestens alle Write-Bits gesetzt sind (icacls: W).
     /// Checks whether at least all Write bits are set (icacls: W).
     pub fn is_write(&self) -> bool {
         self.raw & MASK_WRITE == MASK_WRITE
     }
 
-    /// Enthält generische Rechte (nicht auf spezifische Rechte abgebildet).
     /// Contains generic rights (not yet mapped to specific rights).
     pub fn has_generic(&self) -> bool {
         self.raw & (GENERIC_ALL | GENERIC_EXECUTE | GENERIC_WRITE | GENERIC_READ) != 0
     }
 
-    /// Gibt den höchsten zutreffenden icacls-Kurznamen zurück.
     /// Returns the highest matching icacls short name.
     ///
     /// Reihenfolge: F > M > RX > R, W > (special)
@@ -272,7 +243,6 @@ impl NormalizedRights {
         }
     }
 
-    /// Gibt eine lesbare Langform zurück (für Berichte / CLI).
     /// Returns a human-readable long form (for reports / CLI).
     pub fn display_name(&self) -> &'static str {
         if self.is_full_control() {
@@ -545,7 +515,6 @@ mod tests {
 
     #[test]
     fn expand_preserves_specific_bits() {
-        // Spezifische Bits dürfen durch die Expansion nicht verloren gehen.
         // Specific bits must not be lost when expansion runs.
         let mask = FILE_DELETE | GENERIC_READ;
         let expanded = expand_generic_rights(mask);

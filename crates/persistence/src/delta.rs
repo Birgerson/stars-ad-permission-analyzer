@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Delta-Vergleich zwischen zwei Scan-Läufen.
 //! Delta comparison between two scan runs.
 
 use adpa_core::{
@@ -40,9 +39,6 @@ pub struct PermissionSignature {
     pub diagnostics: Vec<PermissionDiagnostic>,
 }
 
-/// Vergleichbarer Status-Tag fuer `ShareEvalStatus` — der String im
-/// `ReadFailed`-Fall wird absichtlich mitverglichen, weil sich der
-/// Fehler ueber Scans hinweg auch in der Begruendung aendern kann.
 /// Comparable status tag for `ShareEvalStatus` — the string in
 /// `ReadFailed` is included on purpose because the reason can shift
 /// between scans, not just the variant.
@@ -65,7 +61,6 @@ impl From<&ShareEvalStatus> for ShareStatusTag {
     }
 }
 
-/// Analog zu `ShareStatusTag` fuer den lokalen Gruppen-Status.
 /// Counterpart to `ShareStatusTag` for the local-group status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalGroupStatusTag {
@@ -101,8 +96,6 @@ impl PermissionSignature {
 }
 
 /// Konkrete Aenderungsursache zwischen zwei Permissions. Mehrere
-/// Gruende koennen gleichzeitig vorliegen — z.B. wenn die NTFS-
-/// Maske aenderbar war ohne die effektive Maske zu drehen.
 /// Concrete reason for a change between two permissions. Multiple
 /// reasons can co-occur — e.g. an NTFS mask shift that does not flip
 /// the effective mask.
@@ -131,7 +124,6 @@ impl DeltaReason {
     }
 }
 
-/// Vergleicht zwei Signaturen und liefert alle Gruende fuer eine
 /// erkannte Aenderung. Leeres Vec = identisch.
 /// Compares two signatures and yields every reason for a detected
 /// change. Empty vec = identical.
@@ -161,17 +153,14 @@ fn signature_diff(old: &PermissionSignature, new: &PermissionSignature) -> Vec<D
     reasons
 }
 
-/// Art der Änderung zwischen zwei Scans.
 /// Type of change between two scans.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeltaKind {
     /// Pfad neu — war im alten Scan nicht vorhanden.
     /// Path is new — was not present in the old scan.
     Added,
-    /// Pfad entfernt — ist im neuen Scan nicht mehr vorhanden.
     /// Path removed — no longer present in the new scan.
     Removed,
-    /// Berechtigung hat sich geändert. `old_mask`/`new_mask` bleiben
     /// fuer Kompatibilitaet erhalten; `reasons` listet ab dem
     /// 2026-06-07-Patch alle erkannten Aenderungsursachen.
     /// Permission changed. `old_mask`/`new_mask` are kept for backwards
@@ -184,7 +173,6 @@ pub enum DeltaKind {
     },
 }
 
-/// Eine einzelne Änderungszeile im Delta-Bericht.
 /// A single change row in the delta report.
 #[derive(Debug, Clone)]
 pub struct DeltaEntry {
@@ -194,7 +182,6 @@ pub struct DeltaEntry {
     pub new_perm: Option<EffectivePermission>,
 }
 
-/// Vergleicht zwei Scan-Läufe und gibt alle Änderungen zurück.
 /// Compares two scan runs and returns all changes.
 pub fn compare_scans(
     conn: &Connection,
@@ -207,7 +194,6 @@ pub fn compare_scans(
     Ok(diff_permission_lists(old_perms, new_perms))
 }
 
-/// Reine Diff-Logik auf zwei Permission-Listen — fuer Tests ohne DB.
 /// Pure diff logic on two permission lists — for tests without a DB.
 pub fn diff_permission_lists(
     old: Vec<EffectivePermission>,
@@ -358,10 +344,8 @@ mod tests {
     }
 
     /// Code Review 2026-06-07 Finding 3: gleiche `effective_mask`, aber
-    /// andere NTFS- bzw. Share-Maske muss als Changed gemeldet werden.
     /// Beispiel: alt NTFS=Modify, Share=Read, Effective=Read; neu
     /// NTFS=Read, Share=Full, Effective=Read. Effektiver Zugriff
-    /// gleich, aber Ursache und Verantwortlichkeit komplett anders.
     /// Code review 2026-06-07 finding 3: identical `effective_mask` but
     /// different NTFS or share mask must be reported as Changed. Example:
     /// old NTFS=Modify, Share=Read, Effective=Read; new NTFS=Read,
@@ -397,8 +381,6 @@ mod tests {
     }
 
     /// Code Review 2026-06-07 Finding 3: `share_status` wechselt von
-    /// `Applied` zu `ReadFailed`. Die Engine haelt dann
-    /// `Effective = NTFS` und setzt Diagnose/Incompleteness. Wenn die
     /// Maske zufaellig gleich bleibt, meldet altes Delta nichts.
     /// Code review 2026-06-07 finding 3: `share_status` flips from
     /// `Applied` to `ReadFailed`. The engine then keeps
@@ -424,9 +406,6 @@ mod tests {
     }
 
     /// Code Review 2026-06-07 Finding 3: neue `PermissionDiagnostic`
-    /// (z.B. `NonCanonicalDaclOrder`) muss als Changed gemeldet werden,
-    /// auch wenn die Endmaske gleich bleibt — solche Marker sind
-    /// Audit-Ereignisse, die nicht still verschwinden duerfen.
     /// Code review 2026-06-07 finding 3: a new `PermissionDiagnostic`
     /// (e.g. `NonCanonicalDaclOrder`) must be reported as Changed even
     /// when the final mask stays equal — such markers are audit events
@@ -450,7 +429,6 @@ mod tests {
     }
 
     /// Code Review 2026-06-07 Finding 3: `local_group_status` wechselt
-    /// von `Applied` zu `NotAvailable` — relevant fuer das Audit, weil
     /// es eine Vollstaendigkeits-Aussage betrifft.
     /// Code review 2026-06-07 finding 3: `local_group_status` flips
     /// from `Applied` to `NotAvailable` — relevant for audit because it

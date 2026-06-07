@@ -4,11 +4,6 @@
 //! Lokale Gruppenmitgliedschaften eines Benutzers auf einem Zielserver.
 //! Local group memberships for a user on a target server.
 //!
-//! Auf einem Windows-Access-Token sind neben den AD-Gruppen-SIDs auch die SIDs
-//! der lokalen Gruppen des Zielservers enthalten, in denen der Benutzer direkt
-//! oder transitiv Mitglied ist (z. B. `BUILTIN\Administrators`, in dem oft eine
-//! Domaenengruppe liegt). Ohne diese SIDs fehlen NTFS-/Share-ACEs, die ueber
-//! lokale Gruppen wirken — die effektiven Rechte werden dann zu niedrig.
 //!
 //! On a Windows access token, alongside the AD group SIDs, are the SIDs of the
 //! target server's local groups in which the user is a direct or transitive
@@ -38,9 +33,6 @@ const NERR_USER_NOT_FOUND: u32 = 2221;
 
 /// Heuristik: tragt der Domain-String wie ein DNS-Suffix aussehende
 /// Bestandteile (mindestens ein `.`)? In Trust-/Multi-Domain-Szenarien
-/// liefert LSA üblicherweise den NetBIOS-Namen (`TRUSTED`), und das
-/// `name@TRUSTED`-Format ist KEINE gültige Accountreferenz für
-/// `NetUserGetLocalGroups`. Nur DNS-artige Suffixe (`corp.local`) sind
 /// als UPN-Suffix valide.
 /// Heuristic: does the domain string look like a DNS suffix (contains a
 /// dot)? In trust / multi-domain scenarios LSA usually returns the NetBIOS
@@ -51,23 +43,11 @@ fn looks_like_dns_domain(domain: &str) -> bool {
     domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
 }
 
-/// Liefert eine **Kandidatenliste** von Accountnamen für
-/// `NetUserGetLocalGroups`, in Präferenzreihenfolge. Der Aufrufer
-/// probiert die Liste durch, bis eine Form vom Zielserver erkannt
-/// wird (siehe [`resolve_local_group_sids_for_identity`]).
 ///
-/// Schließt Review 2026-06-04 Runde 5 Finding 1: vorher baute Stars
 /// blind `name@domain`, was bei NetBIOS-Domains (`alice@TRUSTED` statt
-/// `TRUSTED\alice`) regelmäßig zu `NERR_USER_NOT_FOUND` führte — und
-/// dieser Fall wurde stillschweigend als „keine lokalen Gruppen"
-/// gewertet, nicht als Lücke.
 ///
 /// Reihenfolge:
-/// 1. `userPrincipalName` (echter UPN, wenn AD ihn gesetzt hat).
-/// 2. `DOMAIN\name` (funktioniert sowohl für NetBIOS- als auch
 ///    DNS-Domains — der robusteste klassische NetAPI-Form).
-/// 3. `name@domain` — nur wenn `domain` wie ein DNS-Suffix aussieht
-///    (Punkt enthalten). Bei NetBIOS-Namen würde diese Form irreführend
 ///    konstruiert.
 /// 4. `name` (rein) — lokale Konten ohne Domain.
 ///
@@ -94,7 +74,6 @@ pub fn format_account_candidates_for_local_groups(identity: &Identity) -> Vec<St
         if !candidates.contains(&domain_backslash_name) {
             candidates.push(domain_backslash_name);
         }
-        // Nur als UPN-Konstruktion wenn das Domain-Feld DNS-artig aussieht.
         // Only as UPN construction when the domain looks DNS-style.
         if looks_like_dns_domain(domain) {
             let upn_form = format!("{name}@{domain}");
@@ -110,9 +89,6 @@ pub fn format_account_candidates_for_local_groups(identity: &Identity) -> Vec<St
 }
 
 /// Convenience-Wrapper, der den **ersten** Kandidaten aus
-/// [`format_account_candidates_for_local_groups`] zurückgibt. Behält
-/// die alte API für Aufrufer, die nur einen Namen wollen. Neue
-/// Aufrufer sollten die Kandidatenliste verwenden, damit Trust-/
 /// NetBIOS-Identities nicht still durchfallen.
 /// Convenience wrapper returning the **first** candidate.
 pub fn format_account_for_local_groups(identity: &Identity) -> Option<String> {
@@ -122,27 +98,19 @@ pub fn format_account_for_local_groups(identity: &Identity) -> Option<String> {
 }
 
 /// Ergebnis eines `NetUserGetLocalGroups`-Aufrufs — trennt explizit
-/// **„User nicht gefunden"** von **„User gefunden, aber in keinen
-/// Gruppen"**. Der Unterschied ist für die Trust-/LSA-Pfade kritisch
 /// (Review Runde 5 Finding 1).
 /// `NetUserGetLocalGroups` outcome — separates **"user not found"**
 /// from **"user found but has no group memberships"**.
 #[derive(Debug, Clone)]
 pub enum LocalGroupLookupOutcome {
-    /// `NetUserGetLocalGroups` hat den Account gefunden und seine
-    /// (möglicherweise leere) Gruppenliste zurückgegeben.
     /// Account was found; the returned vector is the actual group set.
     WithGroups(Vec<Sid>),
-    /// `NetUserGetLocalGroups` hat den Account auf dem Zielserver nicht
     /// gefunden (`NERR_USER_NOT_FOUND`). Aufrufer entscheidet, ob das
-    /// als Konfigurationsfehler (alle Kandidaten erschöpft) oder als
     /// Hinweis (anderen Kandidaten probieren) gewertet wird.
     /// Account was not known on the target server.
     UserNotFoundOnServer,
 }
 
-/// Liefert die SIDs aller lokalen Gruppen auf `server`, in denen `account` direkt
-/// oder transitiv Mitglied ist (`LG_INCLUDE_INDIRECT`).
 ///
 /// `server`: Zielserver (Hostname oder IP). `None` = lokaler Rechner.
 /// `account`: typischerweise `DOMAIN\username` oder `username@domain`.
@@ -156,12 +124,6 @@ pub fn resolve_local_group_sids(
     server: Option<&str>,
     account: &str,
 ) -> Result<Vec<Sid>, CoreError> {
-    // Backward-Compat-Wrapper über die strict-Variante: NERR_USER_NOT_FOUND
-    // wird hier weiterhin als leere Liste interpretiert. Neue Aufrufer
-    // sollten `resolve_local_group_sids_for_identity` verwenden, das die
-    // Kandidaten-Liste durchprobiert und einen echten Fehler liefert,
-    // wenn keiner erkannt wurde. Schließt Runde 5 Finding 1 in der
-    // Tiefe — bewahrt aber die alte API für externe Konsumenten.
     // Backward-compatible wrapper around the strict variant.
     match resolve_local_group_sids_strict(server, account)? {
         LocalGroupLookupOutcome::WithGroups(v) => Ok(v),
@@ -169,7 +131,6 @@ pub fn resolve_local_group_sids(
     }
 }
 
-/// Strict-Variante: trennt **„User nicht gefunden"** explizit von
 /// **„User gefunden, leere Gruppenliste"**. Aufrufer (z. B.
 /// [`resolve_local_group_sids_for_identity`]) brauchen diese
 /// Unterscheidung, um Kandidatenlisten durchzuprobieren ohne stille
@@ -246,29 +207,19 @@ pub fn resolve_local_group_sids_strict(
     }
 
     Ok(LocalGroupLookupOutcome::WithGroups(sids))
-    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
-/// Versucht, lokale Gruppen für die `identity` auf dem `server` aufzulösen,
 /// und probiert dabei mehrere Account-Namensformen
 /// ([`format_account_candidates_for_local_groups`]) durch.
 ///
-/// **Rückgabe:**
 /// - `Ok(Vec<Sid>)` bei mindestens einem erkannten Kandidaten — der erste
-///   `WithGroups`-Treffer gewinnt (auch wenn die Gruppenliste leer ist;
-///   das bedeutet dann ehrlich: Account ist auf dem Server bekannt, hat aber
 ///   keine lokalen Gruppen).
 /// - `Err(CoreError::Validation(reason))`, wenn **kein** Kandidat erkannt
 ///   wurde (alle `UserNotFoundOnServer`). Aufrufer setzen dann
-///   `LocalGroupEvalStatus::NotAvailable(reason)` — das treibt die
-///   `incomplete = true`-Logik in der Risk-Engine.
 /// - `Err(...)` bei anderen technischen Fehlern (Access Denied, NetAPI-
 ///   Fehler) — sofort propagiert, kein Weiterprobieren.
 ///
-/// Schließt Review 2026-06-04 Runde 5 Finding 1: vorher landete eine
-/// LSA-/Trust-Identity oft im NERR_USER_NOT_FOUND-Pfad und wurde still
-/// als `LocalGroupEvalStatus::Applied(0)` ausgewiesen — ACEs auf lokale
 /// Servergruppen blieben unsichtbar ohne Incomplete-Marker.
 ///
 /// Tries to resolve local groups for `identity` on `server`, iterating
@@ -314,9 +265,6 @@ pub fn resolve_local_group_sids_for_identity(
     )))
 }
 
-/// Eintrag in der `NetUserGetLocalGroups`-Antwort mit Name *und* SID. Die
-/// reine `resolve_local_group_sids`-Variante wirft den Namen weg; für die
-/// Ketten-Rekonstruktion brauchen wir aber beides, weil
 /// `NetLocalGroupGetMembers` den Namen erwartet.
 /// Entry in the `NetUserGetLocalGroups` response with both name and SID. The
 /// plain `resolve_local_group_sids` variant discards the name; for chain
@@ -328,25 +276,19 @@ pub struct LocalGroupInfo {
     pub sid: Sid,
 }
 
-/// Ein Mitglied einer lokalen Gruppe in der Antwort von
 /// `NetLocalGroupGetMembers` Level 2.
 /// A member of a local group from `NetLocalGroupGetMembers` level 2.
 #[derive(Debug, Clone)]
 pub struct LocalGroupMember {
-    /// SID des Mitglieds (None nur wenn die Konvertierung fehlschlug —
-    /// sollte praktisch nicht vorkommen).
     /// Member SID (None only when conversion failed — should be vanishingly
     /// rare).
     pub sid: Option<Sid>,
     /// `DOMAIN\Name`-Darstellung wie von Windows geliefert; bei lokalen
-    /// Konten ohne Domäne kann das einfach `Name` sein.
     /// `DOMAIN\name` form as returned by Windows; for local accounts without
     /// a domain it may just be `Name`.
     pub display_name: Option<String>,
 }
 
-/// Variante von [`resolve_local_group_sids`], die zusätzlich den Gruppen-
-/// Namen mitliefert. Notwendig für die Ketten-Rekonstruktion.
 /// Variant of [`resolve_local_group_sids`] that also returns the group
 /// name. Required for chain reconstruction.
 pub fn resolve_local_groups(
@@ -363,8 +305,6 @@ pub fn resolve_local_groups(
     let mut entries_read: u32 = 0;
     let mut total_entries: u32 = 0;
 
-    // SAFETY: identisch zu resolve_local_group_sids — Pointer sind gültig oder
-    // null, NetApi befüllt den Puffer und der Guard gibt ihn im Drop frei.
     // SAFETY: same as resolve_local_group_sids — pointers are valid or null,
     // NetApi populates the buffer and the guard frees it on drop.
     let status = unsafe {
@@ -415,11 +355,9 @@ pub fn resolve_local_groups(
     }
 
     Ok(result)
-    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
-/// Listet die direkten Mitglieder einer lokalen Gruppe via
 /// `NetLocalGroupGetMembers` Level 2. Liefert pro Mitglied SID + Anzeige­name.
 /// Lists the direct members of a local group via `NetLocalGroupGetMembers`
 /// level 2. Returns SID + display name per member.
@@ -438,8 +376,6 @@ pub fn get_local_group_members(
     let mut total_entries: u32 = 0;
     let mut resume: usize = 0;
 
-    // SAFETY: server_ptr ist null oder eine gültige PCWSTR; group_w ist eine
-    // gültige null-terminierte UTF-16-Sequenz; NetApi befüllt den Puffer und
     // der Guard gibt ihn im Drop frei.
     // SAFETY: server_ptr is null or a valid PCWSTR; group_w is a valid
     // null-terminated UTF-16 sequence; NetApi populates the buffer and the
@@ -479,14 +415,11 @@ pub fn get_local_group_members(
                 None
             } else {
                 let mut sid_str_ptr: *mut u16 = std::ptr::null_mut();
-                // SAFETY: lgrmi2_sid ist eine gültige PSID aus dem NetApi-Buffer.
                 // SAFETY: lgrmi2_sid is a valid PSID from the NetApi buffer.
                 let ok = unsafe { ConvertSidToStringSidW(e.lgrmi2_sid, &mut sid_str_ptr) };
                 if ok == FALSE || sid_str_ptr.is_null() {
                     None
                 } else {
-                    // SAFETY: sid_str_ptr ist eine null-terminierte UTF-16-Sequenz, von
-                    // LocalAlloc allokiert; wir geben sie unten mit LocalFree frei.
                     // SAFETY: sid_str_ptr is a null-terminated UTF-16 sequence allocated
                     // via LocalAlloc; freed below with LocalFree.
                     let s = unsafe { wide_ptr_to_string(sid_str_ptr) };
@@ -498,7 +431,6 @@ pub fn get_local_group_members(
                     }
                 }
             };
-            // SAFETY: lgrmi2_domainandname ist eine null-terminierte
             // UTF-16-Sequenz im NetApi-Buffer (oder null).
             // SAFETY: lgrmi2_domainandname is a null-terminated UTF-16
             // sequence inside the NetApi buffer (or null).
@@ -509,28 +441,18 @@ pub fn get_local_group_members(
     }
 
     Ok(members)
-    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
-/// Rekonstruiert konkrete Mitgliedschafts-Ketten für jede lokale Gruppe,
-/// in der `user_sid` direkt oder transitiv enthalten ist.
 ///
 /// Vorgehen pro lokaler Gruppe `L`:
 /// 1. Mitglieder von `L` via [`get_local_group_members`] holen.
-/// 2. Ist die eigene `user_sid` als Mitglied gelistet → Kette `[user → L]`,
 ///    `complete = true`, Quelle `LocalGroup`.
-/// 3. Ist ein bekannter Token-SID (Eigen-SID oder eine vom Aufrufer
 ///    gelieferte Domain-Gruppe) als Mitglied gelistet → Kette
 ///    `[user → vermittler → L]`, `complete = true`.
 /// 4. Sonst Kette `[user, L]`, `complete = false` mit Quelle `LocalGroup`
-///    (es ist über eine weitere lokale Gruppe verschachtelt; das auflösen
-///    wir in einer späteren Ausbaustufe).
 ///
-/// `known_member_sids_to_names` enthält die Domain-Gruppen, die der
-/// Aufrufer aus `NetUserGetGroups` bereits aufgelöst hat, in der Form
 /// `SID-String → Anzeigename`. Wird genutzt, um den Vermittler-Schritt 3
-/// mit menschenlesbarem Namen zu beschriften.
 ///
 /// Reconstructs concrete membership chains for every local group in which
 /// `user_sid` is a direct or transitive member.
@@ -564,9 +486,6 @@ pub fn resolve_local_group_chains(
         let members = match get_local_group_members(server, &lg.name) {
             Ok(m) => m,
             Err(e) => {
-                // Wenn wir die Member nicht lesen koennen, bleibt die
-                // Mitgliedschaft als bestaetigt (NetUserGetLocalGroups hat
-                // sie ja geliefert) aber ohne konkreten Pfad — eine
                 // sichtbare Annotation statt stillem Wegwerfen.
                 // If we cannot read the members, the membership stays
                 // confirmed (NetUserGetLocalGroups gave it to us) but
@@ -587,9 +506,7 @@ pub fn resolve_local_group_chains(
             }
         };
 
-        // Kandidaten-Member-SIDs nach Reihenfolge der Präferenz:
         //   1. user_sid direkt → Kette mit 2 Knoten
-        //   2. eine bekannte Token-SID (Eigene oder Domain-Gruppe) →
         //      Kette mit 3 Knoten (user → vermittler → L)
         // Candidate member SIDs in order of preference:
         //   1. user_sid directly → 2-node chain
@@ -629,7 +546,6 @@ pub fn resolve_local_group_chains(
                 complete: true,
             }
         } else {
-            // Vermutlich ueber eine andere lokale Gruppe verschachtelt —
             // ehrlich als incomplete kennzeichnen.
             // Likely nested via another local group — honestly flag as
             // incomplete.
@@ -646,17 +562,11 @@ pub fn resolve_local_group_chains(
     Ok(out)
 }
 
-/// Identity-Variante von [`resolve_local_group_chains`] mit
 /// Kandidaten-Loop analog zu [`resolve_local_group_sids_for_identity`].
 /// Liefert `Vec<GroupMembership>` mit `MembershipPathSource::LocalGroup`,
-/// damit der Berechtigungspfad jede lokale Servergruppe als Schritt
 /// `Member of BUILTIN\\Administrators [source: LocalGroup]` ausweisen
 /// kann.
 ///
-/// Schließt Review 2026-06-05 Runde 6 Finding 1: die alte
-/// `_sids_for_identity`-Variante lieferte nur SIDs für den Token-Bau —
-/// damit war die Berechtigungsberechnung korrekt, aber der
-/// Erklärungspfad lückenhaft. Aufrufer sehen jetzt zusätzlich die
 /// Pfade.
 ///
 /// Identity-aware variant of [`resolve_local_group_chains`] using the
@@ -681,16 +591,12 @@ pub fn resolve_local_group_chains_for_identity(
     let mut last_err: Option<CoreError> = None;
     for candidate in &candidates {
         tried.push(candidate.clone());
-        // Erst kurz pruefen ob der Account ueberhaupt auf dem Server
-        // bekannt ist — wir nutzen die strict-Variante, die NERR_USER_
         // NOT_FOUND klar von "gefunden, keine Gruppen" trennt.
         // Probe via the strict variant first to separate
         // UserNotFoundOnServer from "found, no groups".
         match resolve_local_group_sids_strict(server, candidate) {
             Ok(LocalGroupLookupOutcome::UserNotFoundOnServer) => continue,
             Ok(LocalGroupLookupOutcome::WithGroups(_)) => {
-                // Account bekannt — jetzt die Ketten mit demselben Namen
-                // bauen, damit Mitgliederrekonstruktion ueber denselben
                 // Account-Bezug laeuft.
                 // Account known — reconstruct chains with the same name.
                 match resolve_local_group_chains(
@@ -706,8 +612,6 @@ pub fn resolve_local_group_chains_for_identity(
                             .map(|(group_sid, group_name, path)| GroupMembership {
                                 member_sid: identity.sid.clone(),
                                 group_sid,
-                                // direct = path über 2 Knoten + complete:
-                                // direkte Mitgliedschaft auf der lokalen
                                 // Gruppe; bei Mediator-Pfad (3 Knoten) ist
                                 // sie transitiv.
                                 // direct = 2-node complete path; mediator
@@ -721,11 +625,8 @@ pub fn resolve_local_group_chains_for_identity(
                     }
                     Err(e) => {
                         last_err = Some(e);
-                        // resolve_local_group_chains hat fuer diesen
                         // Kandidaten technisch gescheitert (z. B.
                         // NetLocalGroupGetMembers-Fehler). Wir versuchen
-                        // den naechsten Kandidaten — vielleicht wird der
-                        // Account dort mit anderem Namen gefunden.
                         // chains call failed for this candidate (e.g.
                         // NetLocalGroupGetMembers error); try next.
                         continue;
@@ -738,7 +639,6 @@ pub fn resolve_local_group_chains_for_identity(
             }
         }
     }
-    // Kein Kandidat erkannt — wenn wir unterwegs einen technischen
     // Fehler hatten, geben wir den weiter; sonst Validation.
     // No candidate matched — propagate technical error if any.
     if let Some(e) = last_err {
@@ -752,8 +652,6 @@ pub fn resolve_local_group_chains_for_identity(
     )))
 }
 
-/// Liefert die `DOMAIN\Name`-Darstellung einer SID per LookupAccountSidW —
-/// kleine Variante speziell für den Anzeige­namen der lokalen Gruppe.
 /// Returns the `DOMAIN\name` form of a SID via LookupAccountSidW — small
 /// variant just for the local group's display label.
 fn lookup_account_for_sid_display(sid_str: &str) -> Option<String> {
@@ -766,7 +664,6 @@ fn lookup_account_for_sid_display(sid_str: &str) -> Option<String> {
     }
 }
 
-/// Konvertiert einen Rust-String in eine null-terminierte UTF-16-Sequenz.
 /// Converts a Rust string into a null-terminated UTF-16 sequence.
 fn to_wide_null(s: &str) -> Vec<u16> {
     OsStr::new(s)
@@ -776,7 +673,6 @@ fn to_wide_null(s: &str) -> Vec<u16> {
 }
 
 /// # Safety
-/// `p` muss ein gueltiger Zeiger auf eine null-terminierte UTF-16-Sequenz sein
 /// oder null.
 /// `p` must be a valid pointer to a null-terminated UTF-16 sequence, or null.
 unsafe fn wide_ptr_to_string(p: *const u16) -> String {
@@ -787,7 +683,6 @@ unsafe fn wide_ptr_to_string(p: *const u16) -> String {
     String::from_utf16_lossy(std::slice::from_raw_parts(p, len))
 }
 
-/// Schlaegt einen Kontonamen auf dem angegebenen System nach und gibt die SID
 /// als kanonischen S-R-I-...-String zurueck.
 /// Looks up an account name on the given system and returns its SID as the
 /// canonical S-R-I-... string.
@@ -852,15 +747,9 @@ fn lookup_account_sid(system: Option<&str>, name: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// Lokaler Sanity-Check: Der eingebaute `Administrator` ist Mitglied der
     /// lokalen Gruppe `Administrators` (`BUILTIN\Administrators`, SID
     /// `S-1-5-32-544`).
     ///
-    /// `#[ignore]` weil GitHub-Actions-Runner einen anderen Admin-Account-
-    /// Layout haben (built-in `Administrator` ist oft deaktiviert oder
-    /// existiert gar nicht; der CI-User heißt `runneradmin`). Auf einem
-    /// normalen Windows lokal läuft der Test grün — explizit per
-    /// `cargo test -- --ignored` auslösbar.
     ///
     /// Local sanity check: the built-in `Administrator` is a member of the
     /// local `Administrators` group (`BUILTIN\Administrators`, SID
@@ -882,7 +771,6 @@ mod tests {
         );
     }
 
-    /// Unbekannter Benutzer liefert eine leere Liste ohne Fehler.
     /// Unknown user returns an empty list without an error.
     #[test]
     fn unknown_user_returns_empty() {
@@ -917,9 +805,6 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 Runde 5 Finding 1: ohne UPN ist `DOMAIN\name`
-    /// die erste Wahl (statt `name@domain`). Für eine DNS-artige Domain
-    /// muss aber `name@dns` weiterhin als Fallback in der Kandidatenliste
     /// auftauchen.
     /// Round 5 finding 1: without UPN, prefer `DOMAIN\name`; DNS suffixes
     /// still get a UPN-style fallback in the candidate list.
@@ -940,8 +825,6 @@ mod tests {
     }
 
     /// Review 2026-06-04 Runde 5 Finding 1: bei einem NetBIOS-Domainnamen
-    /// **darf** der `name@domain`-Fallback NICHT in der Kandidatenliste
-    /// auftauchen — `alice@TRUSTED` ist kein gültiger UPN und führte
     /// produktiv zu stillen NERR_USER_NOT_FOUND.
     /// Round 5 finding 1: NetBIOS domain must NOT produce a `name@domain`
     /// candidate — that exact form was the production bug.
@@ -980,7 +863,6 @@ mod tests {
     #[test]
     fn format_ignores_empty_upn() {
         let id = identity_with(Some("Administrator"), Some("testdomain.local"), Some(""));
-        // Empty UPN ist übersprungen, DOMAIN\name kommt zuerst (Round 5).
         // Empty UPN is skipped; DOMAIN\name comes first.
         assert_eq!(
             format_account_for_local_groups(&id).as_deref(),
@@ -988,7 +870,6 @@ mod tests {
         );
     }
 
-    /// Heuristik: NetBIOS-Namen sind ohne Punkt, DNS-Suffixe haben Punkte.
     /// Heuristic: NetBIOS names have no dot; DNS suffixes do.
     #[test]
     fn looks_like_dns_domain_distinguishes_netbios_and_dns() {
@@ -1001,8 +882,6 @@ mod tests {
         assert!(!looks_like_dns_domain(""));
     }
 
-    /// UPN-Eintrag hat absolute Priorität — auch wenn das Domain-Feld
-    /// auf NetBIOS oder DNS gesetzt ist.
     /// UPN takes absolute priority.
     #[test]
     fn format_upn_wins_over_domain_form() {

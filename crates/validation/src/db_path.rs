@@ -4,7 +4,6 @@
 //! Validierung von Datenbank-Zielpfaden.
 //! Validation of database target paths.
 //!
-//! Der Datenbankpfad ist ein Schreibziel und unterliegt damit demselben
 //! Policy-Anspruch wie Exportpfade: absoluter Pfad, bekannte Endung,
 //! existierendes Zielverzeichnis.
 //! The database path is a write target and therefore subject to the same
@@ -19,14 +18,12 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedDbPath(pub PathBuf);
 
-/// Zulässige Dateiendungen für SQLite-Datenbanken.
 /// Allowed file extensions for SQLite databases.
 const ALLOWED_EXTENSIONS: &[&str] = &["db", "sqlite", "sqlite3"];
 
 /// Validiert einen vom Benutzer angegebenen Datenbankpfad.
 /// Validates a user-supplied database path.
 ///
-/// Prüfungen / checks:
 /// - nicht leer, keine Null-Bytes / not empty, no null bytes
 /// - absoluter Pfad (Laufwerksbuchstabe oder UNC) / absolute path (drive letter or UNC)
 /// - bekannte Endung (.db, .sqlite, .sqlite3) / recognized extension

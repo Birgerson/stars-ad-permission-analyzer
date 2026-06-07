@@ -2,9 +2,6 @@
 // Copyright (c) 2026 Birger Labinsch
 
 //! Aufbau der pfadzentrischen Trustee-Listen (`PathTrustee` /
-//! `PathTrustees`) fuer Auditberichte. Beantwortet die zweite Audit-
-//! Frage „wer steht ueberhaupt in der DACL?" identitaetsfrei und ist
-//! damit das Pendant zur identitaetsbezogenen
 //! `EffectivePermission`-Berechnung.
 //!
 //! Builds the path-centric trustee lists (`PathTrustee` / `PathTrustees`)
@@ -12,12 +9,6 @@
 //! DACL at all?" without an identity context and is the counterpart to
 //! the identity-bound `EffectivePermission` computation.
 //!
-//! Das Modul wurde fuer Review Runde 9 Finding 1 aus
-//! `crates/gui/src/worker.rs` extrahiert: die GUI baut die Trustees
-//! seit ADR 0038 korrekt, die CLI hatte aber bisher keinen Zugriff auf
-//! diese Logik und schickte den Exportern leere `path_trustees`. Jetzt
-//! teilen GUI und CLI denselben Helper, ohne dass eine der beiden
-//! eine Abhaengigkeit auf die jeweils andere bekommt.
 //!
 //! Extracted from `crates/gui/src/worker.rs` for round-9 finding 1: the
 //! GUI has been building trustees correctly since ADR 0038, but the CLI
@@ -28,12 +19,7 @@
 use adpa_core::model::{PathTrustee, PathTrusteeEntry, TrusteeCategory};
 use share_scanner::get_share_dacl;
 
-/// Optionaler Share-Overlay, der einmal pro Share gelesen und an alle
 /// Pfade unterhalb dieses Shares angehaengt wird. Schliesst Review
-/// Runde 3 Finding 3 (kein stiller Skip der Share-DACL). Mit Review-
-/// Runde 10 Finding 4 sind Eintraege jetzt `PathTrusteeEntry`, sodass
-/// Lesefehler und NULL-DACL eindeutig als Diagnose-Variante getragen
-/// werden und nicht mehr als synthetisches Allow-ACE getarnt sind.
 ///
 /// Optional share overlay, read once per share and attached to every
 /// path below that share. Closes round-3 finding 3 (no silent skips of
@@ -46,11 +32,7 @@ pub struct ShareTrusteeOverlay {
     pub trustees: Vec<PathTrusteeEntry>,
 }
 
-/// Liest die Share-DACL einmal und produziert eine
-/// [`ShareTrusteeOverlay`]. Bei NULL-DACL wird eine eigenstaendige
 /// `PathTrusteeEntry::Diagnostic`-Variante angefuegt; bei einem
-/// Lesefehler ebenfalls — der Renderer und JSON-Konsumenten koennen
-/// damit eindeutig zwischen "echter ACE" und "Diagnose" unterscheiden.
 ///
 /// Reads the share DACL once and produces a [`ShareTrusteeOverlay`].
 /// A NULL DACL yields a dedicated `PathTrusteeEntry::Diagnostic`
@@ -93,10 +75,6 @@ pub fn read_share_overlay(server: &str, share_name: &str) -> ShareTrusteeOverlay
 }
 
 /// Baut die rohe Trustee-Liste aus einem bereits gelesenen
-/// [`FileSystemObject`]. Bei vorhandenem SMB-Kontext wird die Share-
-/// DACL pro Aufruf neu gelesen — fuer Scans, die viele Pfade pro Share
-/// haben, sollte stattdessen einmal [`read_share_overlay`] aufgerufen
-/// und das Ergebnis ueber [`build_path_trustees_with_share`] weitergegeben
 /// werden.
 ///
 /// Builds the raw trustee list from an already-loaded `FileSystemObject`.
@@ -108,7 +86,6 @@ pub fn read_share_overlay(server: &str, share_name: &str) -> ShareTrusteeOverlay
 /// Diese Variante macht **selbst** eine SID→Name-Aufloesung pro Aufruf —
 /// sinnvoll fuer den Analyze-Pfad (genau ein Objekt). Scan-Pfade
 /// sollten stattdessen [`build_path_trustees_with_share_and_names`]
-/// nutzen und die SID→Name-Map einmal pro Scan bauen.
 ///
 /// This variant performs SID→name resolution **itself** per call —
 /// appropriate for the analyze path (exactly one object). Scan paths
@@ -126,10 +103,6 @@ pub fn build_path_trustees(
     build_path_trustees_with_share(fso, share_overlay.as_ref())
 }
 
-/// Wie [`build_path_trustees`], aber mit bereits gelesenem Share-
-/// Overlay. Macht selbst eine SID→Name-Aufloesung — siehe
-/// [`build_path_trustees_with_share_and_names`] fuer die Scan-Variante,
-/// die eine vorab gebaute Map akzeptiert.
 ///
 /// Like [`build_path_trustees`] but with a pre-read share overlay.
 /// Performs SID→name resolution itself — see
@@ -139,10 +112,6 @@ pub fn build_path_trustees_with_share(
     fso: &adpa_core::model::FileSystemObject,
     share_overlay: Option<&ShareTrusteeOverlay>,
 ) -> Vec<PathTrusteeEntry> {
-    // Round-10 Finding 2: die einfache Variante ruft jetzt die Caller-
-    // owned-Map-Variante mit einer **leeren** Map auf — keine Code-
-    // Duplikation. Damit die `with_share`-Form weiterhin selbst LSA
-    // aufloest, machen wir den Lookup hier und uebergeben die
     // resultierende Map. So bleibt die alte Schnittstelle erhalten.
     // Round-10 finding 2: the simple form now delegates to the
     // caller-owned-map variant with an **empty** map — no duplication.
@@ -161,11 +130,7 @@ pub fn build_path_trustees_with_share(
     build_path_trustees_with_share_and_names(fso, share_overlay, &sid_names)
 }
 
-/// Sammelt alle ACE-SIDs aus FSO-DACL und Share-Overlay, die einer
-/// LSA-Aufloesung beduerfen. Diagnose-Eintraege haben keine SID und
 /// werden uebersprungen. Leere SIDs (z. B. aus historischen
-/// Diagnose-Pseudo-Zeilen) ebenso. Pub im Crate, damit der Scan-Pfad
-/// dieselbe Sammelregel nutzen kann wie die per-Pfad-Form.
 ///
 /// Collects all ACE SIDs from FSO DACL and share overlay that need an
 /// LSA lookup. Diagnostic entries carry no SID and are skipped. Empty
@@ -196,17 +161,11 @@ pub fn collect_ace_sids_for_resolution(
     out
 }
 
-/// Wie [`build_path_trustees_with_share`], aber mit einer **vorab
-/// gebauten** SID→Name-Map. Das ist die Scan-Variante: der Aufrufer
 /// sammelt einmal pro Scan alle SIDs (siehe
 /// [`collect_ace_sids_for_resolution`]), ruft **einmal**
-/// `ad_resolver::build_sid_name_map(...)` und uebergibt die Map an
 /// jeden Pfad-Aufruf.
 ///
 /// Hintergrund (Review-Runde 10 Finding 2): die einfache Form macht
-/// einen LSA-Lookup pro Pfad — bei 50.000 Pfaden mit denselben
-/// BUILTIN-SIDs ist das tausendfach derselbe Lookup. Die Caller-owned-
-/// Map ersetzt das durch **einen** Lookup pro Scan.
 ///
 /// Like [`build_path_trustees_with_share`] but with a **pre-built**
 /// SID→name map. This is the scan variant: the caller collects all
@@ -250,13 +209,11 @@ pub fn build_path_trustees_with_share_and_names(
         }
     }
 
-    // Share-Overlay anhaengen — wenn der Aufrufer einen SMB-Kontext hat.
     if let Some(overlay) = share_overlay {
         out.extend(overlay.trustees.iter().cloned());
     }
 
     // Round-10 Finding 2: ACE-Display-Names aus der vorgegebenen Map
-    // setzen — KEIN LSA-Aufruf pro Pfad. Diagnose-Eintraege werden NICHT
     // angefasst — sie tragen die Begruendung selbst.
     // Round-10 finding 2: set ACE display names from the supplied map —
     // NO LSA call per path. Diagnostic entries are NOT touched — they
@@ -303,8 +260,6 @@ mod tests {
     }
 
     /// Round-9 Finding 1: build_path_trustees_with_share schreibt fuer
-    /// die GUI und CLI dasselbe Ergebnis. Hier ohne Share-Overlay: nur
-    /// die NTFS-DACL fliesst in die Trustees, beide Kategorien werden
     /// nicht vermischt.
     /// Round-9 finding 1: build_path_trustees_with_share emits the same
     /// list for GUI and CLI. Here without share overlay — only NTFS DACL
@@ -337,7 +292,6 @@ mod tests {
         );
     }
 
-    /// Round-10 Finding 4: NULL-DACL ist jetzt eine eigenstaendige
     /// Diagnose-Variante, nicht mehr ein synthetisches Allow-ACE.
     /// Round-10 finding 4: NULL DACL is now a dedicated diagnostic
     /// variant, no longer a synthetic Allow ACE.
@@ -437,8 +391,6 @@ mod tests {
         }
     }
 
-    /// Round-10 Finding 2: Diagnose-Eintraege haben keine SID und werden
-    /// NICHT mit Display-Namen ueberschrieben.
     /// Round-10 finding 2: diagnostic entries have no SID and are NOT
     /// overwritten with display names.
     #[test]
@@ -471,7 +423,6 @@ mod tests {
     }
 
     /// Round-10 Finding 2: die Helper-Funktion sammelt SIDs aus FSO-DACL
-    /// UND Share-Overlay zusammen — das ist genau die Liste, die der
     /// Scan-Pfad an `build_sid_name_map` weitergibt.
     /// Round-10 finding 2: the helper collects SIDs from FSO DACL AND
     /// share overlay together — exactly the list the scan path hands
@@ -509,8 +460,6 @@ mod tests {
     }
 
     /// Round-10 Finding 4: JSON-Serialisierung trennt eindeutig
-    /// zwischen `kind: "ace"` und `kind: "diagnostic"`. Damit koennen
-    /// JSON-Konsumenten das nicht mehr verwechseln.
     /// Round-10 finding 4: JSON serialization unambiguously separates
     /// `kind: "ace"` and `kind: "diagnostic"`. JSON consumers can no
     /// longer confuse the two.

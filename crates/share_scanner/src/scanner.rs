@@ -6,9 +6,7 @@
 //!
 //! - `enumerate_shares` listet alle Freigaben eines Servers.
 //! - `enumerate_shares` lists all shares on a server.
-//! - `get_share_permissions` liest die Berechtigungen einer einzelnen Freigabe.
 //! - `get_share_permissions` reads permissions for a single share.
-//! - `scan_shares` ist der kombinierte Einstiegspunkt.
 //! - `scan_shares` is the combined entry point.
 
 use std::ffi::OsStr;
@@ -50,10 +48,6 @@ const ACCESS_DENIED_ACE_TYPE: u8 = 1;
 /// DACL-Status einer Freigabe.
 /// DACL status of a share.
 ///
-/// `NullDacl` und `Acl(vec![])` haben fachlich entgegengesetzte Wirkung:
-/// NULL bedeutet „keine Zugriffseinschränkung" (Vollzugriff für alle),
-/// während eine vorhandene leere DACL „kein Zugriff" bedeutet. Beide
-/// Fälle müssen für Audits unterscheidbar bleiben.
 ///
 /// `NullDacl` and `Acl(vec![])` have opposite real-world meaning: NULL
 /// means "no access restriction" (full access for everyone), while a
@@ -61,7 +55,6 @@ const ACCESS_DENIED_ACE_TYPE: u8 = 1;
 /// distinguishable for audits.
 #[derive(Debug, Clone)]
 pub enum ShareDacl {
-    /// NULL DACL — keine Zugriffseinschränkungen; entspricht Vollzugriff für alle.
     /// NULL DACL — no access restrictions; equivalent to full control for everyone.
     NullDacl,
     /// DACL vorhanden mit den aufgelisteten ACEs.
@@ -69,17 +62,9 @@ pub enum ShareDacl {
     Acl(Vec<SharePermission>),
 }
 
-/// Ergebnis eines Share-DACL-Reads inklusive Audit-Diagnose über
 /// nicht ausgewertete Share-ACE-Typen.
 ///
-/// `unsupported_count` zählt Share-ACEs, deren Typ vom Parser nicht
-/// interpretiert wurde (Object-, Callback-, Conditional- oder vendor-
-/// spezifische ACEs). Wenn > 0, ist die Share-Maske potenziell
-/// unvollständig — Aufrufer sollten den Wert in
 /// `PermissionEvaluationInput.unsupported_share_ace_count` durchreichen,
-/// damit die Engine einen `PermissionDiagnostic::UnsupportedShareAces`
-/// in `EffectivePermission.diagnostics` setzt und Risk-Findings
-/// dieser Berechtigung als `incomplete` markiert werden
 /// (Folge-Befund 2 aus Review 2026-05-25).
 ///
 /// Result of a share DACL read including audit diagnostic for share
@@ -101,10 +86,7 @@ pub struct ShareDaclScan {
 /// Result of an SMB share scan.
 pub struct ShareScanResult {
     pub shares: Vec<Share>,
-    /// Flach aggregierte ACE-Liste aller Freigaben — Konvenienz für
-    /// Aufrufer, die keine pro-Share-Auflösung brauchen. Für Audits,
     /// in denen `NullDacl` vs. `Acl(vec![])` unterscheidbar bleiben
-    /// muss, ist `share_dacls` die maßgebliche Quelle.
     /// Flattened aggregate ACE list across all shares — a convenience
     /// for callers that don't need per-share resolution. For audits
     /// where `NullDacl` vs. `Acl(vec![])` must stay distinguishable,
@@ -112,13 +94,7 @@ pub struct ShareScanResult {
     pub permissions: Vec<SharePermission>,
     pub errors: Vec<ShareScanError>,
     /// DACL-Status je Freigabe in Enumerationsreihenfolge inkl. Audit-
-    /// Diagnose. Erhalten bleibt damit zweierlei: erstens die fachliche
-    /// Unterscheidung zwischen `NullDacl` und einer vorhandenen-aber-
     /// leeren `Acl(vec![])` (Finding 7); zweitens der `unsupported_count`
-    /// pro Share, damit Konsumenten pro-Share entscheiden können, welche
-    /// Freigabe wegen nicht ausgewerteter ACE-Typen als `incomplete`
-    /// gilt (Folge-Befund 2 aus Review 2026-05-25). Vorher wurde der
-    /// Count nur als Log-Aggregat geführt und beim Push in dieses Feld
     /// verworfen.
     ///
     /// Per-share DACL status in enumeration order including audit
@@ -143,11 +119,8 @@ pub struct ShareScanError {
 // Public API
 // ───────────────────────────────────────────────────────────────────────────
 
-/// Kombinierter Scan: Freigaben und Berechtigungen für einen Server.
 /// Combined scan: shares and permissions for one server.
 ///
-/// Fehler beim Lesen einzelner Freigaben werden protokolliert und gesammelt;
-/// der Scan läuft weiter.
 /// Errors reading individual shares are recorded; the scan continues.
 pub fn scan_shares(server: &str) -> ShareScanResult {
     info!(server, "Starting SMB share scan");
@@ -171,10 +144,7 @@ pub fn scan_shares(server: &str) -> ShareScanResult {
         Ok(s) => s,
     };
 
-    // Pro Freigabe direkt `get_share_dacl` aufrufen, damit der
     // `NullDacl`-Fall strukturiert weitergereicht wird (Finding 7).
-    // Das flache `permissions`-Feld bleibt als Konvenienz erhalten —
-    // es enthält die ACE-Listen aus `Acl(_)`, NULL-DACLs tragen
     // (korrekterweise) nichts dazu bei.
     // Call `get_share_dacl` per share so the `NullDacl` case flows
     // through structured (Finding 7). The flat `permissions` field
@@ -199,8 +169,6 @@ pub fn scan_shares(server: &str) -> ShareScanResult {
                 }
                 unsupported_share_aces_total += scan.unsupported_count;
                 // Vorher: nur scan.dacl gepusht, unsupported_count ging
-                // verloren. Jetzt: der ganze Scan, damit Konsumenten
-                // pro-Share entscheiden können (Folge-Befund 2).
                 // Previously: only scan.dacl was pushed, unsupported_count
                 // was lost. Now: the whole scan, so consumers can decide
                 // per share (follow-up finding 2).
@@ -225,15 +193,11 @@ pub fn scan_shares(server: &str) -> ShareScanResult {
 /// Listet alle Freigaben auf einem Server (Level 502 — Name, Typ, lokaler Pfad).
 /// Lists all shares on a server (Level 502 — name, type, local path).
 ///
-/// `server` ist der NetBIOS- oder DNS-Name des Servers; ein leerer String
-/// bedeutet localhost. Für die UNC-Darstellung wird in diesem Fall
-/// `localhost` eingesetzt, damit kein UNC-Pfad mit leerem Serveranteil entsteht.
 /// `server` is the NetBIOS or DNS name; an empty string means localhost. In
 /// that case `localhost` is used for the UNC representation to avoid a UNC
 /// path with an empty server component.
 ///
 /// Level 502 erfordert administrative Rechte auf dem Zielserver — dieselben
-/// Rechte sind bereits für das Lesen der Share-DACLs nötig.
 /// Level 502 requires administrative rights on the target server — the same
 /// rights are already required to read share DACLs.
 pub fn enumerate_shares(server: &str) -> Result<Vec<Share>, CoreError> {
@@ -281,7 +245,6 @@ pub fn enumerate_shares(server: &str) -> Result<Vec<Share>, CoreError> {
         std::slice::from_raw_parts(buf.as_ptr() as *const SHARE_INFO_502, entries_read as usize)
     };
 
-    // Bei leerem Servernamen erzeugen wir UNC-Pfade mit "localhost", damit kein
     // \\\share entsteht.
     // For empty server names produce UNC paths with "localhost" to avoid \\\share.
     let server_for_unc = if server.is_empty() {
@@ -318,16 +281,12 @@ pub fn enumerate_shares(server: &str) -> Result<Vec<Share>, CoreError> {
 
     info!(server, count = shares.len(), "Share enumeration complete");
     Ok(shares)
-    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
-/// Liest die Berechtigungen einer einzelnen Freigabe (Level 502).
 /// Reads permissions for a single share (Level 502).
 ///
-/// Bei NULL DACL (keine Zugriffseinschränkung) wird eine leere Liste zurückgegeben.
 /// For NULL DACL (no access restriction) an empty list is returned.
-/// Verwende `get_share_dacl` wenn NULL und leer unterschieden werden müssen.
 /// Use `get_share_dacl` when NULL vs empty DACL must be distinguished.
 pub fn get_share_permissions(
     server: &str,
@@ -339,17 +298,11 @@ pub fn get_share_permissions(
     }
 }
 
-/// Liest den DACL-Status einer Freigabe und unterscheidet NULL DACL von leerem DACL.
 /// Reads the DACL status of a share, distinguishing NULL DACL from empty DACL.
 ///
-/// - `ShareDacl::NullDacl` → keine Einschränkungen (Vollzugriff für alle)
 /// - `ShareDacl::NullDacl` → no restrictions (full control for everyone)
-/// - `ShareDacl::Acl(perms)` → DACL vorhanden, `perms` enthält alle ACEs
 /// - `ShareDacl::Acl(perms)` → DACL present, `perms` contains all ACEs
 ///
-/// Liefert zusätzlich `unsupported_count` (Folge-Befund 2): Anzahl
-/// Share-ACEs, deren Typ vom Parser nicht ausgewertet wurde. Aufrufer
-/// reichen den Wert an die Engine durch, damit ein
 /// `PermissionDiagnostic::UnsupportedShareAces` im Ergebnis landet.
 ///
 /// Additionally returns `unsupported_count` (follow-up finding 2): the
@@ -359,9 +312,7 @@ pub fn get_share_permissions(
 pub fn get_share_dacl(server: &str, share_name: &str) -> Result<ShareDaclScan, CoreError> {
     let wide_server = to_wide_null(server);
     let wide_share = to_wide_null(share_name);
-    // RAII-Guard: das war frueher die Stelle, an der `parse_share_dacl(...)?`
     // den Puffer leaken konnte (Review-Runde 10 Finding 3). Der Guard gibt
-    // den Puffer im Drop frei, egal ob der `?`-Pfad genommen wird oder
     // nicht.
     // RAII guard: this used to be where `parse_share_dacl(...)?` could leak
     // the buffer (review round 10 finding 3). The guard frees the buffer in
@@ -435,29 +386,18 @@ pub fn get_share_dacl(server: &str, share_name: &str) -> Result<ShareDaclScan, C
         dacl,
         unsupported_count,
     })
-    // `buf` wird hier gedroppt und ruft NetApiBufferFree.
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
 /// Berechnet die effektive Share-Berechtigung eines Benutzers.
 /// Computes the effective share permission for a user.
 ///
-/// Wertet die Share-DACL in **gespeicherter ACE-Reihenfolge** aus —
 /// erste Entscheidung pro Bit gewinnt (analog zum Windows-`AccessCheck`
-/// und symmetrisch zur NTFS-Engine, siehe ADR 0012). Generische Rechte
-/// werden vor der Auswertung expandiert. Eine nicht-kanonische DACL
-/// wird über `tracing::warn!` als Diagnose protokolliert; die Auswertung
-/// folgt trotzdem dem Stored Order — das entspricht dem realen
 /// Windows-Verhalten (Folge-Befund 1 aus dem Review 2026-05-25).
 ///
 /// Vor diesem Fix arbeitete `effective_share_mask` mit einem
-/// Bucket-Modell (`allow & !deny`), das nicht-kanonische DACLs falsch
 /// auswertete — Beispiel: Allow-Everyone-Read gefolgt von Deny-
-/// Everyone-Read wurde als „kein Read" interpretiert, während Windows
-/// (und damit die NTFS-Engine) korrekt „Read gewährt" liefert.
 ///
-/// Gibt `None` zurück wenn der DACL NULL ist (keine Einschränkung durch
-/// die Freigabe). `user_sids` muss die eigene SID des Benutzers und
 /// alle Gruppen-SIDs enthalten.
 ///
 /// Evaluates the share DACL in **stored ACE order** — first decision per
@@ -487,8 +427,6 @@ pub fn effective_share_mask(
         );
     }
 
-    // Stored-Order-Walk: für jedes Bit gewinnt die erste passende
-    // Entscheidung; bereits entschiedene Bits sind „immun" gegen spätere
     // ACEs. Symmetrisch zu permission_engine::engine::evaluate_dacl_ordered.
     // Stored-order walk: per bit the first matching decision wins; bits
     // already decided are "immune" to later ACEs. Symmetric to
@@ -519,9 +457,6 @@ pub fn effective_share_mask(
 /// Phase-Monotonie verletzt.
 ///
 /// Hinweis: Share-DACLs tragen technisch nie ein INHERITED-Flag (es
-/// gibt keine Vererbung zwischen Shares), daher fallen in der Praxis
-/// nur die Phasen 0/1 ins Gewicht. Die Funktion behält trotzdem das
-/// 4-Phasen-Modell für strukturelle Konsistenz mit dem NTFS-Detektor
 /// in `permission_engine::engine`.
 ///
 /// Canonical share DACL order mirroring the NTFS convention: 0 =
@@ -536,9 +471,6 @@ pub fn effective_share_mask(
 fn first_non_canonical_position(perms: &[SharePermission]) -> Option<usize> {
     let mut max_phase = 0u8;
     for (i, p) in perms.iter().enumerate() {
-        // SharePermission trägt keine `inherited`-Information — wir gehen
-        // von „nicht inherited" aus (Realität bei SMB-Shares). Damit
-        // reduziert sich der Phasenraum auf 0 (Deny) und 1 (Allow).
         // SharePermission carries no `inherited` info — assume false
         // (the case for real SMB shares). Phase space reduces to
         // 0 (Deny) and 1 (Allow).
@@ -565,11 +497,9 @@ fn to_wide_null(s: &str) -> Vec<u16> {
         .collect()
 }
 
-/// Wandelt einen null-terminierten UTF-16-Zeiger in einen String um.
 /// Converts a null-terminated UTF-16 pointer to a String.
 ///
 /// # Safety
-/// `ptr` muss ein gültiger, null-terminierter UTF-16-Zeiger sein.
 /// `ptr` must be a valid null-terminated UTF-16 pointer.
 unsafe fn wide_ptr_to_string(ptr: *const u16) -> String {
     if ptr.is_null() {
@@ -580,11 +510,9 @@ unsafe fn wide_ptr_to_string(ptr: *const u16) -> String {
     String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len))
 }
 
-/// Konvertiert einen SID-Zeiger in den kanonischen S-R-I-...-String.
 /// Converts a SID pointer to the canonical S-R-I-... string.
 ///
 /// # Safety
-/// `sid` muss ein gültiger PSID-Zeiger sein, der für die Dauer des Aufrufs gültig bleibt.
 /// `sid` must be a valid PSID pointer valid for the duration of this call.
 unsafe fn sid_to_string(sid: *const core::ffi::c_void) -> Result<String, CoreError> {
     let mut str_ptr: *mut u16 = std::ptr::null_mut();
@@ -602,20 +530,15 @@ unsafe fn sid_to_string(sid: *const core::ffi::c_void) -> Result<String, CoreErr
     Ok(s)
 }
 
-/// Parst den DACL eines Share-Security-Descriptors in SharePermission-Einträge.
 /// Parses the DACL from a share security descriptor into SharePermission entries.
 ///
 /// # Safety
-/// `sd` muss ein gültiger Security-Descriptor-Zeiger sein.
 /// `sd` must be a valid security descriptor pointer.
-/// Gibt `None` zurück wenn der DACL NULL ist (keine Zugriffseinschränkung).
 /// Returns `None` when the DACL is NULL (no access restriction).
 ///
 /// # Safety
-/// `sd` muss ein gültiger Security-Descriptor-Zeiger sein.
 /// `sd` must be a valid security descriptor pointer.
 /// Reine Klassifikation des DACL-Zustands eines Security Descriptors,
-/// unabhängig von Win32-Pointern. Damit ist der Bug-anfällige Teil der
 /// Share-DACL-Auswertung isoliert testbar.
 ///
 /// Pure classification of a security descriptor's DACL state, independent
@@ -624,7 +547,6 @@ unsafe fn sid_to_string(sid: *const core::ffi::c_void) -> Result<String, CoreErr
 ///
 /// Semantik (`GetSecurityDescriptorDacl` per MSDN):
 ///   `present` ist `lpbDaclPresent`, `ptr_is_null` ob `pDacl == NULL`.
-///   `ace_count` ist nur relevant, wenn `pDacl != NULL` ist.
 ///
 /// Semantics (`GetSecurityDescriptorDacl` per MSDN):
 ///   `present` is `lpbDaclPresent`, `ptr_is_null` whether `pDacl == NULL`.
@@ -638,9 +560,6 @@ unsafe fn sid_to_string(sid: *const core::ffi::c_void) -> Result<String, CoreErr
 /// | true      | false         | > 0         | `Normal`             |
 ///
 /// Folge-Befund 1 (Review 2026-05-25): Vorher behandelte `parse_share_dacl`
-/// den `present=TRUE, pDacl=NULL`-Fall fälschlich als `Empty` (deny-all),
-/// was eine unrestricted NULL-DACL zu einem apparenten „no SMB access"
-/// gemacht hat — direkte Falsch-Negativ-Quelle für Audit-Reports.
 ///
 /// Follow-up finding 1 (review 2026-05-25): previously `parse_share_dacl`
 /// treated `present=TRUE, pDacl=NULL` as `Empty` (deny-all), turning an
@@ -648,7 +567,6 @@ unsafe fn sid_to_string(sid: *const core::ffi::c_void) -> Result<String, CoreErr
 /// source of false-negative audit reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DaclClassification {
-    /// NULL DACL — keine Zugriffseinschränkung auf DACL-Ebene.
     /// NULL DACL — no DACL-level access restriction.
     Null,
     /// Vorhandene DACL ohne ACEs — deny all.
@@ -687,9 +605,6 @@ unsafe fn parse_share_dacl(
         )));
     }
 
-    // AceCount nur lesen wenn pDacl non-null ist — sonst ist ein
-    // `GetAclInformation(NULL, ...)` undefined behavior, und die
-    // Klassifikation ist sowieso `Null` (siehe `classify_dacl`).
     // Read AceCount only when pDacl is non-null — otherwise
     // `GetAclInformation(NULL, ...)` is UB, and the classification is
     // `Null` anyway (see `classify_dacl`).
@@ -751,8 +666,6 @@ unsafe fn parse_share_dacl(
                 (AceKind::Deny, ace.Mask, sid)
             }
             other => {
-                // Folge-Befund 2: zählen + warnen (statt nur debug-loggen),
-                // damit die unvollständige Auswertung downstream sichtbar wird.
                 // Follow-up finding 2: count + warn (instead of debug-only)
                 // so the incomplete evaluation surfaces downstream.
                 unsupported_count += 1;
@@ -807,7 +720,6 @@ mod tests {
                         share.unc_path.starts_with("\\\\"),
                         "UNC path must start with \\\\"
                     );
-                    // F8-Regression: leerer Servername darf nie zu \\\share führen.
                     // F8 regression: an empty server name must never produce \\\share.
                     assert!(
                         !share.unc_path.starts_with("\\\\\\"),
@@ -832,7 +744,6 @@ mod tests {
 
     #[test]
     fn enumerate_shares_local_path_populated_for_admin_share() {
-        // Wenn die Enumeration durchgeht und C$ vorhanden ist, muss local_path
         // gesetzt sein (Level 502 liefert shi502_path).
         // If enumeration succeeds and C$ exists, local_path must be set
         // (level 502 provides shi502_path).
@@ -875,10 +786,6 @@ mod tests {
 
     // --- Finding 7: NULL-DACL-Semantik im kombinierten Scan ---
 
-    /// Jeder erfolgreich gelesene Share muss als `(name, ShareDacl)` in
-    /// `share_dacls` auftauchen — egal ob NULL-DACL oder mit ACEs. Damit
-    /// kann ein Audit-Konsument für jeden Share entscheiden, ob es
-    /// Zugriffsschutz gibt oder nicht.
     /// Every successfully read share must appear in `share_dacls` as
     /// `(name, ShareDacl)` — NULL DACL or not. Audit consumers can then
     /// decide per share whether access protection exists.
@@ -906,8 +813,6 @@ mod tests {
     }
 
     /// `permissions` darf nichts enthalten, was nicht aus einem `Acl(_)`-
-    /// Eintrag von `share_dacls` stammt. NULL-DACL-Shares dürfen die
-    /// flache Liste nicht aufblähen.
     /// `permissions` must contain nothing that does not stem from an
     /// `Acl(_)` entry of `share_dacls`. NULL-DACL shares must not
     /// inflate the flat list.
@@ -928,9 +833,6 @@ mod tests {
     }
 
     /// Pure data test: konstruiert ein `ShareScanResult` mit beiden
-    /// Sonderfällen und prüft, dass sie strukturell unterscheidbar bleiben.
-    /// Vorher hätte `permissions = vec![]` beide Fälle ununterscheidbar
-    /// zusammengefasst — `share_dacls` löst genau das.
     /// Pure data test: construct a `ShareScanResult` with both edge
     /// cases and check they remain structurally distinguishable. Before,
     /// `permissions = vec![]` collapsed both into the same shape —
@@ -994,7 +896,6 @@ mod tests {
             "deny-all share must carry Acl(vec![]) status"
         );
         // Sicherheits-Roundtrip durch effective_share_mask:
-        //   NullDacl  → None  (keine Einschränkung — NTFS bleibt maßgeblich)
         //   Acl([])   → Some(0) (kein Zugriff)
         // Safety roundtrip via effective_share_mask:
         //   NullDacl → None  (no restriction — NTFS stays authoritative)
@@ -1055,10 +956,6 @@ mod tests {
     #[test]
     fn deny_overrides_allow() {
         // Kanonische Reihenfolge (Deny vor Allow). Vor Folge-Befund 1
-        // (Stored-Order-Umstellung) prüfte der Test [Allow, Deny] und
-        // verließ sich auf die alte Bucket-Semantik. Mit Stored Order
-        // gewinnt die erste Entscheidung pro Bit — die ursprüngliche
-        // Aussage „Deny blockiert die überlappenden Bits" gilt nur,
         // wenn Deny zuerst steht (= Windows-kanonische Reihenfolge).
         // Canonical order (deny before allow). Before follow-up finding 1
         // (stored-order switch) the test used [Allow, Deny] and relied
@@ -1072,7 +969,6 @@ mod tests {
         ];
         let mask = effective_share_mask(&ShareDacl::Acl(perms), &sids(&["S-1-1-0"]));
         // Stored Order: deny zuerst → diese Bits sind „denied"; allow
-        // gewährt nur die undecided Bits (alles in 0x1F01FF AUSSER 0x0001FF).
         assert_eq!(mask.map(|m| m.0), Some(0x1F01FF & !0x0001FFu32));
     }
 
@@ -1152,7 +1048,6 @@ mod tests {
     fn generic_read_deny_blocks_file_read_bits() {
         // GENERIC_READ deny must block the file-read bits, not just the
         // generic bit itself. Auf kanonische Reihenfolge umgestellt
-        // (Deny zuerst), siehe deny_overrides_allow für die Begründung.
         // Switched to canonical order (deny first); see deny_overrides_allow
         // for the reasoning.
         let perms = vec![
@@ -1168,11 +1063,7 @@ mod tests {
         );
     }
 
-    // --- Follow-up Finding 1: NETWORK-ACEs auf der Share müssen bei SMB greifen ---
-
     /// S-1-5-2 = NETWORK (Well-Known-SID, die Windows beim SMB-Logon im Token
-    /// hinterlegt). Vor der Folge-Befund-1-Reparatur wurden Share-ACEs auf
-    /// NETWORK in CLI/GUI ignoriert, weil der Share-Token immer mit
     /// `Unspecified` gebaut wurde.
     /// S-1-5-2 = NETWORK (well-known SID Windows includes in the token on
     /// SMB logon). Before the follow-up finding 1 fix, share ACEs targeting
@@ -1184,7 +1075,6 @@ mod tests {
 
     #[test]
     fn deny_network_share_ace_does_nothing_without_network_in_token() {
-        // Regression-Bezug: alter Build-Token-Pfad (Unspecified) → Token enthält
         // NETWORK nicht → Deny-NETWORK matcht keinen SID → wirkungslos.
         // Regression baseline: old token-build path (Unspecified) → token has
         // no NETWORK → Deny-NETWORK matches no SID → no effect.
@@ -1206,7 +1096,6 @@ mod tests {
     #[test]
     fn deny_network_share_ace_blocks_read_when_network_in_token() {
         // Korrektes Verhalten: NETWORK ist nach Folge-Befund 1 im SMB-Token
-        // → Deny-NETWORK Read überstimmt Allow-Everyone Read → effektiv 0.
         // Correct behaviour: NETWORK is in the SMB token after follow-up
         // finding 1 → Deny-NETWORK Read overrides Allow-Everyone Read →
         // effective 0.
@@ -1246,13 +1135,10 @@ mod tests {
 
     // --- Folge-Befund 1 (Review 2026-05-25): Stored-Order Share-Eval ---
     //
-    // Symmetrie zur NTFS-Engine: Share-DACL wird jetzt in gespeicherter
     // ACE-Reihenfolge ausgewertet (erste Entscheidung pro Bit gewinnt),
-    // nicht mehr als Bucket-OR (`allow & !deny`).
 
     /// Direkte Reviewer-Vorlage. Vorher: Bucket → 0 (Deny gewinnt
     /// aggregiert). Jetzt: Stored Order → Read (Allow zuerst gewinnt).
-    /// Damit ist der NTFS- und Share-Pfad endlich semantisch identisch.
     /// Direct reviewer example. Before: bucket → 0. Now: stored order
     /// → Read. NTFS and share paths now share the same semantics.
     #[test]
@@ -1272,10 +1158,6 @@ mod tests {
         );
     }
 
-    /// Kanonischer Fall — Deny vor Allow. Hier muss Deny gewinnen, weil
-    /// es die erste Entscheidung pro Bit ist. Vorher hätte das Bucket-
-    /// Modell zufällig dasselbe geliefert; jetzt ist es semantisch
-    /// korrekt begründet.
     /// Canonical case — deny before allow. Deny wins because it is the
     /// first decision per bit. The bucket model happened to give the
     /// same result; now the result is semantically correct.
@@ -1293,8 +1175,6 @@ mod tests {
     }
 
     /// Disjunkte Bits: Deny SYNCHRONIZE (0x100000), dann Allow Read
-    /// (0x0012_0089). Im Stored Order werden die Read-Bits zuerst
-    /// allowed (außer SYNCHRONIZE, das schon denied ist), das Ergebnis
     /// = 0x0002_0089 (Read MINUS SYNCHRONIZE).
     /// Disjoint bits: Deny SYNCHRONIZE then Allow Read. Stored order
     /// allows the read bits except SYNCHRONIZE which is already denied.
@@ -1334,12 +1214,7 @@ mod tests {
         assert_eq!(super::first_non_canonical_position(&perms), None);
     }
 
-    // --- Folge-Befund 2 (Review 2026-05-25): ShareDaclScan trägt unsupported_count ---
-
     /// Strukturierter Konstruktions-Test: ShareDaclScan kann beide Felder
-    /// transportieren. Lebensechte Erzeugung läuft über `get_share_dacl`
-    /// gegen einen echten Share-DACL, was im Unit-Test nicht möglich ist —
-    /// dieser Test deckt das Datenmodell ab. Die Plumbing-Logik
     /// (Engine pusht Diagnostic, Risk-Engine markiert incomplete) wird
     /// in den jeweiligen Crates getestet.
     /// Pure data test: ShareDaclScan can carry both fields. Live creation
@@ -1371,8 +1246,6 @@ mod tests {
     // --- Folge-Befund 1 (Review 2026-05-25): NULL-DACL-Klassifikation ---
 
     /// Per MSDN: `GetSecurityDescriptorDacl` liefert `bDaclPresent = FALSE`,
-    /// wenn der SD gar keinen DACL-Eintrag hat. Das ist eine NULL DACL —
-    /// unrestricted. `ptr` und `ace_count` sind in diesem Fall egal.
     /// Per MSDN: `GetSecurityDescriptorDacl` returns `bDaclPresent = FALSE`
     /// when the SD has no DACL entry at all. That is a NULL DACL —
     /// unrestricted. `ptr` and `ace_count` are irrelevant in this case.
@@ -1388,11 +1261,7 @@ mod tests {
         );
     }
 
-    /// **Der Kern-Fix für Folge-Befund 1:** `bDaclPresent = TRUE` mit
-    /// `pDacl == NULL` ist eine explizit gesetzte NULL DACL und bedeutet
     /// unrestricted access. Vorher behandelte `parse_share_dacl` diesen
-    /// Fall als `Empty` (deny-all) — das war eine direkte Falsch-Negativ-
-    /// Quelle für Share-Audits.
     /// **The core fix for follow-up finding 1:** `bDaclPresent = TRUE` with
     /// `pDacl == NULL` is an explicit NULL DACL and means unrestricted
     /// access. Previously `parse_share_dacl` mapped this to `Empty`
@@ -1405,8 +1274,6 @@ mod tests {
             "present=TRUE, pDacl=NULL MUST classify as Null (unrestricted), \
              not Empty (deny-all) — this was the Folge-Befund-1 bug"
         );
-        // ace_count ist in diesem Fall ohnehin nicht von GetAclInformation
-        // gefüllt; selbst ein Müll-Wert darf das Ergebnis nicht ändern.
         // ace_count cannot be filled by GetAclInformation in this case; a
         // garbage value must not change the result.
         assert_eq!(
@@ -1437,12 +1304,7 @@ mod tests {
         );
     }
 
-    // --- Folge-Befund 2 (Review 2026-05-25): share_dacls trägt ShareDaclScan ---
-
     /// Strukturelle Regression: vorher war `share_dacls: Vec<(String,
-    /// ShareDacl)>` und der unsupported_count ging beim Push verloren.
-    /// Jetzt ist es `Vec<(String, ShareDaclScan)>` — der pro-Share-Count
-    /// ist für Audit-Konsumenten zugreifbar.
     /// Structural regression: previously `share_dacls: Vec<(String,
     /// ShareDacl)>` and the unsupported_count was lost on push. Now it
     /// is `Vec<(String, ShareDaclScan)>` — the per-share count is

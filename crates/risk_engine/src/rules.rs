@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Risikoregeln für NTFS- und Share-Berechtigungsanalyse.
 //! Risk rules for NTFS and share permission analysis.
 
 use adpa_core::{
@@ -12,16 +11,8 @@ use adpa_core::{
     traits::{RiskContext, RiskRule},
 };
 
-/// Markiert ein Finding als unvollstaendig, wenn die zugrundeliegende
-/// Auswertung Lücken hat — eine der folgenden Quellen:
-/// - Share-DACL konnte nicht gelesen werden (effective_mask ist nur eine
 ///   NTFS-Untergrenze),
-/// - die DACL enthielt ACE-Typen, die der Parser nicht auswerten konnte
-///   (Object-/Callback-/Conditional-ACEs); ein dort versteckter Deny könnte
 ///   den berechneten Wert kippen, oder
-/// - die lokalen Server-Gruppen konnten nicht aufgelöst werden; ACEs auf
-///   lokale Gruppen (z. B. lokale Administrators) sind dann unsichtbar und
-///   die effektiven Rechte können zu niedrig sein.
 ///
 /// Marks a finding as incomplete when the underlying evaluation has gaps —
 /// any of:
@@ -38,19 +29,11 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
         || p.unsupported_ace_count > 0
         || matches!(p.local_group_status, LocalGroupEvalStatus::NotAvailable(_))
         // Folge-Befund 2: unsupported Share-ACEs landen als strukturierter
-        // Marker in diagnostics — Risk-Findings dieser Berechtigung müssen
-        // ebenfalls als incomplete markiert werden.
         // Follow-up finding 2: unsupported share ACEs surface as a
         // structured marker in diagnostics — risk findings for this
         // permission must also be flagged incomplete.
         //
         // Review 2026-06-04 Runde 2, Finding 4: SAM-Fallback ohne LDAP
-        // bedeutet keine rekursive Domain-Gruppen-Auflösung. ADR 0033
-        // verlangt, dass Risk-Findings für solche Berechtigungen als
-        // `incomplete = true` markiert werden — dieselbe Logik wie für
-        // die anderen Quellen unvollständiger Auswertung. Die Risk-Engine
-        // hatte den Marker bisher nicht beachtet; das war eine
-        // Diskrepanz zwischen ADR und Code.
         //
         // Review 2026-06-04 round 2, finding 4: SAM fallback without LDAP
         // means no recursive domain group resolution. ADR 0033 requires
@@ -60,12 +43,10 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
         // marker before; that was a discrepancy between ADR and code.
         // Review 2026-06-04 Runde 2 Finding 1: Identitaet aus fremder
         // Domain — LDAP-base indexiert sie nicht, Domain-Gruppen-
-        // Rekursion ist damit luekenhaft (semantisch wie SAM-Fallback).
         // Review 2026-06-04 round 2 finding 1: identity from a foreign
         // domain — LDAP base does not index it, domain group recursion is
         // incomplete (semantically same as SAM fallback).
         // Review 2026-06-04 Runde 4 Finding 1: technische LDAP-/Gruppen-
-        // Fehler in der Principal-Pipeline sind genauso Incompleteness wie
         // Share-DACL-ReadFailed oder SAM-Fallback. Bevor diese Marker
         // hinzukamen, konnte ein leerer Token "sauber" aussehen.
         // Review 2026-06-04 round 4 finding 1: technical LDAP / group
@@ -86,8 +67,6 @@ use permission_engine::mask::{
     MASK_MODIFY, MASK_READ, MASK_WRITE,
 };
 
-/// Bits die ausschließlich Schreibfähigkeit signalisieren — ohne READ_CONTROL und SYNCHRONIZE,
-/// die sowohl in MASK_READ als auch MASK_WRITE enthalten sind.
 /// Bits that signal write capability exclusively — excluding READ_CONTROL and SYNCHRONIZE,
 /// which are present in both MASK_READ and MASK_WRITE.
 const WRITE_SPECIFIC_BITS: u32 = MASK_WRITE & !MASK_READ;
@@ -101,7 +80,6 @@ const SID_AUTHENTICATED_USERS: &str = "S-1-5-11";
 const SID_ANONYMOUS_LOGON: &str = "S-1-5-7";
 const SID_NETWORK: &str = "S-1-5-2";
 
-/// Pfad-Schlüsselwörter die auf sensible Daten hindeuten.
 /// Path keywords that indicate sensitive data.
 const SENSITIVE_KEYWORDS: &[&str] = &[
     "password",
@@ -126,7 +104,6 @@ const SENSITIVE_KEYWORDS: &[&str] = &[
 // RuleRegistry
 // ---------------------------------------------------------------------------
 
-/// Verwaltet und führt alle registrierten Risikoregeln aus.
 /// Manages and executes all registered risk rules.
 #[derive(Default)]
 pub struct RuleRegistry {
@@ -138,7 +115,6 @@ impl RuleRegistry {
         Self { rules: Vec::new() }
     }
 
-    /// Erstellt eine Registry mit allen eingebauten Standardregeln.
     /// Creates a registry with all built-in default rules.
     pub fn with_defaults() -> Self {
         let mut r = Self::new();
@@ -167,7 +143,6 @@ impl RuleRegistry {
 // Regel 1: Full Control — CRITICAL
 // ---------------------------------------------------------------------------
 
-/// Meldet Pfade, auf denen der Benutzer Full Control hat.
 /// Reports paths where the user has Full Control.
 pub struct FullControlRule;
 
@@ -198,7 +173,6 @@ impl RiskRule for FullControlRule {
 // Regel 2: Write-Zugriff — HIGH
 // ---------------------------------------------------------------------------
 
-/// Meldet Pfade mit Schreibzugriff (Modify oder Write, aber nicht Full Control).
 /// Reports paths with write access (Modify or Write, but not Full Control).
 pub struct WriteAccessRule;
 
@@ -238,12 +212,7 @@ impl RiskRule for WriteAccessRule {
 // Regel 2b: Destruktive und administrative Einzelrechte
 // ---------------------------------------------------------------------------
 
-/// Meldet einzelne destruktive oder administrative Rechte, die nicht
-/// zwangsläufig in den zusammengesetzten Modify-/Write-Masken enthalten sind.
 ///
-/// `WRITE_DAC` und `WRITE_OWNER` liegen außerhalb von Modify und Write — ein
-/// Principal mit nur diesen Bits würde sonst gar nicht als Risiko erscheinen,
-/// obwohl er Berechtigungen oder den Besitzer ändern kann.
 ///
 /// Reports individual destructive or administrative rights that are not
 /// necessarily covered by the composite Modify/Write masks.
@@ -258,8 +227,6 @@ impl RiskRule for AdminRightsRule {
         let mut out = Vec::new();
         for p in &context.findings {
             let m = p.effective_mask.0;
-            // Full Control wird bereits von FullControlRule als CRITICAL gemeldet —
-            // hier nicht erneut aufschlüsseln, um Doppelmeldungen zu vermeiden.
             // Full Control is already reported as CRITICAL by FullControlRule — do
             // not break it down again here to avoid duplicate findings.
             if m & MASK_FULL_CONTROL == MASK_FULL_CONTROL {
@@ -317,11 +284,8 @@ impl RiskRule for AdminRightsRule {
 }
 
 // ---------------------------------------------------------------------------
-// Regel 3: Breit gefächerte Gruppe mit Schreibzugriff — CRITICAL
 // ---------------------------------------------------------------------------
 
-/// Meldet wenn Schreibzugriff über eine breit gefächerte Gruppe (Everyone, Authenticated Users
-/// usw.) entstand — auch dann, wenn der Benutzer selbst kein breiter Principal ist.
 /// Reports when write access originated from a broad-group ACE (Everyone, Authenticated Users,
 /// etc.) — even when the queried identity is a regular user.
 pub struct BroadGroupWriteRule;
@@ -378,14 +342,10 @@ impl RiskRule for BroadGroupWriteRule {
 }
 
 // ---------------------------------------------------------------------------
-// Regel 4: Direkter Benutzer-ACE (nicht über Gruppe) — LOW
 // ---------------------------------------------------------------------------
 
-/// Meldet wenn ein Benutzer eine direkte explizite ACE hat (Best Practice: nur Gruppen).
 /// Reports when a user has a direct explicit ACE (best practice: groups only).
 ///
-/// Stützt sich auf die strukturierten `matched_aces` des Ergebnisses statt auf
-/// den Erklärungstext — robust gegen Lokalisierung und Formatänderungen. Erfasst
 /// direkte Allow- *und* Deny-ACEs, da beide den Best-Practice-Grundsatz verletzen.
 /// Relies on the result's structured `matched_aces` instead of the explanation
 /// text — robust against localization and format changes. Catches direct Allow
@@ -413,10 +373,6 @@ impl RiskRule for DirectUserAceRule {
                     ),
                     affected_path: Some(p.path.clone()),
                     affected_identity: Some(p.identity.sid.clone()),
-                    // Die direkte ACE existiert auf NTFS-Ebene unabhängig vom
-                    // Share-Status. Wenn aber die Auswertung anderswo (z.B.
-                    // Share-DACL nicht lesbar) Lücken hatte, ist der Befund
-                    // genauso `incomplete` wie alle anderen Befunde für dieselbe
                     // Permission — konsistent mit `is_incomplete`.
                     // The direct ACE itself exists on the NTFS layer
                     // independent of share status. But when the evaluation had
@@ -445,8 +401,6 @@ impl RiskRule for SensitivePathRule {
             .iter()
             .filter(|p| {
                 // Folge-Befund 3 (Review 2026-05-25): die Regel meldet
-                // „hat Zugriff" — also nur dann ein Finding, wenn die
-                // Identität auch tatsächlich Zugriff hat. Sonst wird ein
                 // deny-all-Ergebnis als positives Risiko fehlgemeldet.
                 // Follow-up finding 3 (review 2026-05-25): the rule
                 // claims "has access" — so only emit a finding when the
@@ -473,13 +427,6 @@ impl RiskRule for SensitivePathRule {
                     ),
                     affected_path: Some(p.path.clone()),
                     affected_identity: Some(p.identity.sid.clone()),
-                    // Pfadname ist eine NTFS-Eigenschaft, aber die Aussage
-                    // 'hat Zugriff' lehnt sich an `effective_mask` an. Wenn die
-                    // Share-DACL nicht lesbar war, fiel `effective_mask` auf
-                    // NTFS zurück — der reale SMB-Zugriff könnte restriktiver
-                    // sein. Deshalb muss der Befund wie alle anderen Risiken
-                    // dieser Permission als `incomplete` markiert werden, wenn
-                    // die Auswertung Lücken hatte.
                     // The path name is an NTFS property, but the "has access"
                     // claim relies on `effective_mask`. When the share DACL
                     // was not readable, `effective_mask` falls back to NTFS —
@@ -557,7 +504,6 @@ mod tests {
         }
     }
 
-    /// Baut einen ACE-Eintrag für die DirectUserAceRule-Tests.
     /// Builds an ACE entry for the DirectUserAceRule tests.
     fn ace_entry(sid: &str, kind: AceKind, inherited: bool) -> AceEntry {
         AceEntry {
@@ -578,8 +524,6 @@ mod tests {
 
     #[test]
     fn unsupported_aces_mark_finding_incomplete() {
-        // F2: ACE-Typen, die der Parser nicht ausgewertet hat, machen das
-        // Ergebnis potenziell unzuverlässig — Risk Engine markiert das.
         let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
         p.unsupported_ace_count = 1;
         let r = FullControlRule.evaluate(&ctx(vec![p]));
@@ -590,9 +534,7 @@ mod tests {
         );
     }
 
-    /// Folge-Befund 2: dieselbe Logik für die Share-Seite. Wenn
     /// `EffectivePermission.diagnostics` einen `UnsupportedShareAces`-
-    /// Marker trägt, muss das Finding ebenfalls als incomplete erscheinen.
     /// Follow-up finding 2: same logic for the share side. If
     /// `EffectivePermission.diagnostics` carries an `UnsupportedShareAces`
     /// marker, the finding must also be flagged incomplete.
@@ -610,9 +552,7 @@ mod tests {
 
     #[test]
     fn non_canonical_dacl_diagnostic_alone_does_not_mark_incomplete() {
-        // Wichtig: NonCanonicalDaclOrder ist eine Audit-Information, kein
         // Korrektheitsproblem (die Engine wertet ja Stored-Order korrekt aus).
-        // Risk-Findings für solche Pfade müssen weiter als confirmed gelten.
         // Important: NonCanonicalDaclOrder is audit info, not a correctness
         // issue (the engine still evaluates stored-order correctly). Risk
         // findings on such paths must remain "confirmed".
@@ -628,7 +568,6 @@ mod tests {
 
     #[test]
     fn finding_complete_when_no_share_or_unsupported_issue() {
-        // Regression: ohne ReadFailed und ohne unsupported ACEs bleibt incomplete=false.
         let p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
         let r = FullControlRule.evaluate(&ctx(vec![p]));
         assert_eq!(r.len(), 1);
@@ -716,7 +655,6 @@ mod tests {
     #[test]
     fn write_dac_not_part_of_modify_or_write_masks() {
         // Sicherstellt, dass WriteAccessRule WRITE_DAC alleine NICHT erfasst —
-        // genau die Lücke, die AdminRightsRule schließt.
         assert!(WriteAccessRule
             .evaluate(&ctx(vec![perm(USER_SID, FILE_WRITE_DAC, r"C:\d", vec![])]))
             .is_empty());
@@ -724,7 +662,6 @@ mod tests {
 
     #[test]
     fn admin_rule_skips_full_control_to_avoid_double_report() {
-        // Full Control wird von FullControlRule abgedeckt — AdminRightsRule schweigt.
         let r = AdminRightsRule.evaluate(&ctx(vec![perm(
             USER_SID,
             MASK_FULL_CONTROL,
@@ -743,7 +680,6 @@ mod tests {
 
     #[test]
     fn admin_rule_reports_delete_for_modify_mask() {
-        // Modify enthält DELETE, aber nicht WRITE_DAC/WRITE_OWNER/DELETE_CHILD.
         let r =
             AdminRightsRule.evaluate(&ctx(vec![perm(USER_SID, MASK_MODIFY, r"C:\data", vec![])]));
         assert_eq!(r.len(), 1, "Modify exposes exactly the DELETE right");
@@ -784,8 +720,6 @@ mod tests {
         assert_eq!(r[0].rule_id, "BROAD_GROUP_WRITE");
     }
 
-    /// Regression: normaler Benutzer erhält Schreibzugriff über einen Everyone-ACE.
-    /// Die Regel muss feuern, auch wenn die Identity-SID kein breiter Principal ist.
     /// Regression: normal user gets write access via an Everyone ACE.
     /// The rule must fire even when the identity SID is not itself a broad principal.
     #[test]
@@ -811,7 +745,6 @@ mod tests {
         );
     }
 
-    /// Schreibzugriff über eine spezifische Gruppe (keine breite SID) darf nicht feuern.
     /// Write access via a specific group (no broad SID) must not fire.
     #[test]
     fn write_via_specific_group_not_flagged() {
@@ -826,8 +759,6 @@ mod tests {
             .is_empty());
     }
 
-    /// Regression-Test für den gemeldeten False-Positive-Fall:
-    /// Everyone trägt nur Read bei, Modify kommt von einer spezifischen Gruppe.
     /// BroadGroupWriteRule darf NICHT feuern.
     ///
     /// Regression test for the reported false positive:
@@ -853,12 +784,8 @@ mod tests {
         );
     }
 
-    /// ChatGPT-Review 2026-06-04 Runde 2, Finding 4: Wenn die Engine
     /// `PermissionDiagnostic::DomainGroupRecursionIncomplete` setzt
-    /// (SAM/LSA-Fallback ohne LDAP), müssen Risk-Findings für diese
     /// Berechtigung `incomplete = true` tragen — sonst kann ein
-    /// FULL_CONTROL-Befund als confirmed erscheinen, obwohl die
-    /// Domain-Gruppen-Rekursion lückenhaft war. ADR 0033 verlangt das
     /// explizit; vor diesem Test war Code und ADR inkonsistent.
     /// ChatGPT review 2026-06-04 round 2, finding 4: when the engine
     /// sets `PermissionDiagnostic::DomainGroupRecursionIncomplete`
@@ -882,9 +809,6 @@ mod tests {
     }
 
     /// Review 2026-06-04 Runde 2 Finding 1: `IdentityNotInConfiguredLdapBase`
-    /// bedeutet, dass LSA die SID aufgelöst hat, das LDAP-`base_dn` sie
-    /// aber nicht indexiert. Cross-Domain-Gruppenrekursion ist damit
-    /// lückenhaft — Risk-Findings müssen analog zum SAM-Fallback als
     /// `incomplete` markiert sein.
     /// Review 2026-06-04 round 2 finding 1: `IdentityNotInConfiguredLdapBase`
     /// means LSA resolved the SID but the LDAP `base_dn` does not index
@@ -905,10 +829,6 @@ mod tests {
     }
 
     /// Review 2026-06-04 Runde 2 Finding 5:
-    /// `IdentityDisabledStatusUnknown` ist nur informationell — er
-    /// signalisiert „`disabled` nicht ermittelbar", aber die ACL-
-    /// Auswertung selbst ist vollständig. Risk-Findings dürfen
-    /// **nicht** allein wegen dieses Markers `incomplete = true`
     /// tragen.
     /// Review 2026-06-04 round 2 finding 5: `IdentityDisabledStatusUnknown`
     /// is informational only — it signals "`disabled` could not be
@@ -930,8 +850,6 @@ mod tests {
     }
 
     /// Review 2026-06-04 Runde 4 Finding 1: `IdentityLookupFailed`
-    /// (technischer LDAP-Fehler) muss als incomplete durchschlagen,
-    /// damit ein Befund mit leerem Token nicht "sauber" erscheint.
     /// Round 4 finding 1: IdentityLookupFailed → incomplete.
     #[test]
     fn full_control_marks_finding_incomplete_on_identity_lookup_failed() {
@@ -950,7 +868,6 @@ mod tests {
     }
 
     /// Review 2026-06-04 Runde 4 Finding 1: `GroupResolutionFailed`
-    /// (Gruppenauflösung gescheitert oder bewusst übersprungen) muss
     /// als incomplete durchschlagen.
     /// Round 4 finding 1: GroupResolutionFailed → incomplete.
     #[test]
@@ -970,8 +887,6 @@ mod tests {
     }
 
     /// ChatGPT-Review 2026-05-31 Finding 4: DirectUserAceRule muss bei
-    /// `ShareEvalStatus::ReadFailed` ebenfalls als `incomplete` melden,
-    /// damit das Confidence-Modell zwischen allen Risikoregeln
     /// konsistent ist.
     /// ChatGPT review 2026-05-31 finding 4: DirectUserAceRule must also
     /// mark `incomplete` on `ShareEvalStatus::ReadFailed` so the
@@ -1012,7 +927,6 @@ mod tests {
 
     #[test]
     fn group_ace_not_flagged_as_direct() {
-        // Expliziter ACE auf eine Gruppen-SID, nicht auf die eigene Benutzer-SID.
         assert!(DirectUserAceRule
             .evaluate(&ctx(vec![perm_ma(
                 USER_SID,
@@ -1027,7 +941,6 @@ mod tests {
 
     #[test]
     fn direct_user_deny_ace_flagged() {
-        // Auch ein direkter expliziter Deny-ACE verletzt die Best Practice.
         let r = DirectUserAceRule.evaluate(&ctx(vec![perm_ma(
             USER_SID,
             MASK_READ,
@@ -1056,8 +969,6 @@ mod tests {
 
     #[test]
     fn direct_user_ace_independent_of_explanation_text() {
-        // Regression: Die Regel darf nicht vom Erklärungstext abhängen. Selbst mit
-        // leeren/lokalisierten Steps muss der strukturierte ACE genügen.
         // Regression: the rule must not depend on the explanation text. Even with
         // empty/localized steps the structured ACE must suffice.
         let r = DirectUserAceRule.evaluate(&ctx(vec![perm_ma(
@@ -1073,17 +984,12 @@ mod tests {
 
     #[test]
     fn no_matched_aces_means_no_direct_finding() {
-        // Ohne strukturierte ACE-Herkunft (z.B. Altdaten) feuert die Regel nicht.
         assert!(DirectUserAceRule
             .evaluate(&ctx(vec![perm(USER_SID, MASK_READ, r"C:\data", vec![])]))
             .is_empty());
     }
 
-    /// Folge-Befund 2: `matched_aces` darf keine INHERIT_ONLY-Einträge mehr
     /// enthalten — die Engine filtert sie inzwischen aus. Dieser Test
-    /// dokumentiert die Konsequenz für die Risikoregel: ein expliziter
-    /// Benutzer-ACE, der nur Kindern gilt, wirkt nicht auf das aktuelle
-    /// Objekt und darf damit auch keinen `DIRECT_USER_ACE`-Befund auslösen.
     ///
     /// Follow-up finding 2: `matched_aces` must no longer carry INHERIT_ONLY
     /// entries — the engine filters them out. This test documents the
@@ -1092,10 +998,6 @@ mod tests {
     /// `DIRECT_USER_ACE` finding.
     #[test]
     fn inherit_only_explicit_user_ace_does_not_trigger_direct_user_finding() {
-        // Wir simulieren das, was die Engine NACH dem Fix liefert: matched_aces
-        // enthält nur ACEs, die das Objekt tatsächlich betreffen. Der
-        // explizite IO-Benutzer-ACE ist also gar nicht enthalten — nur ein
-        // Gruppen-ACE, der die effektive Berechtigung trägt.
         //
         // We simulate what the engine produces AFTER the fix: matched_aces
         // only contains ACEs that actually affect the object. The explicit
@@ -1107,7 +1009,6 @@ mod tests {
             r"C:\data",
             vec![],
             vec![],
-            // Nur der wirksame Gruppen-ACE landet in matched_aces.
             // Only the effective group ACE remains in matched_aces.
             vec![ace_entry("S-1-5-21-9999", AceKind::Allow, false)],
         )]));
@@ -1133,7 +1034,6 @@ mod tests {
 
     /// ChatGPT-Review 2026-05-31 Finding 3: SensitivePathRule muss bei
     /// `ShareEvalStatus::ReadFailed` den Befund als `incomplete` melden,
-    /// weil `effective_mask` dann nur eine NTFS-Untergrenze ist.
     /// ChatGPT review 2026-05-31 finding 3: SensitivePathRule must mark
     /// the finding as `incomplete` when `ShareEvalStatus::ReadFailed`,
     /// because `effective_mask` is then only an NTFS lower bound.
@@ -1150,8 +1050,6 @@ mod tests {
     }
 
     /// Folge-Befund 3 (Review 2026-05-25): SensitivePathRule darf nur
-    /// melden, wenn die Identität tatsächlich Zugriff hat. Effective-Mask
-    /// 0 = kein Zugriff → kein Finding. Vorher hätte die Regel allein
     /// aufgrund des Pfadnamens gefeuert und im Bericht „has access"
     /// behauptet — Falschmeldung.
     /// Follow-up finding 3 (review 2026-05-25): SensitivePathRule must
@@ -1173,14 +1071,11 @@ mod tests {
         );
     }
 
-    /// Regression: auch mit zero NTFS-Mask + nicht-leerer Share-Mask
-    /// (theoretischer Edge-Case) bleibt das Effektiv-Ergebnis maßgeblich.
     /// Regression: even with zero NTFS mask plus non-empty share mask
     /// (a theoretical edge case) the effective result governs.
     #[test]
     fn sensitive_path_uses_effective_not_ntfs_mask() {
         // perm() setzt ntfs_mask = effective_mask = mask — wir konstruieren
-        // hier direkt eine Berechtigung mit unterschiedlichen Werten.
         // perm() sets ntfs_mask = effective_mask = mask — we construct
         // a permission with different values directly here.
         let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data\secrets", vec![]);

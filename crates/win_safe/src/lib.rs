@@ -4,8 +4,6 @@
 //! Sichere Wrapper fuer Windows-API-Ressourcen.
 //!
 //! Aktuelles Modul: [`netapi`] kapselt von `NetApi`-Funktionen
-//! allozierte Puffer mit einem RAII-Guard, der `NetApiBufferFree` im
-//! `Drop` aufruft. Damit gibt jeder Pfad — auch ein `?`-Early-Return —
 //! die Ressource korrekt frei.
 //!
 //! Safe wrappers for Windows API resources.
@@ -15,8 +13,6 @@
 //! That way every path — including a `?` early return — releases the
 //! resource correctly.
 //!
-//! Der Crate ist `windows`-only. Auf Nicht-Windows-Plattformen
-//! kompiliert die Bibliothek leer, damit Workspace-Builds (CI auf
 //! Linux) nicht scheitern.
 //!
 //! The crate is `windows`-only. On non-Windows platforms the library

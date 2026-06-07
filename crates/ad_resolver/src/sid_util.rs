@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! SID-Konvertierungslogik zwischen Windows-SID-String und binärem LDAP-Format.
 //! SID conversion logic between Windows SID string and binary LDAP format.
 //!
 //! Windows SID-Format: S-R-I-S1-S2-...-Sn
 //!   R  = Revision (immer 1)
-//!   I  = Identifier Authority (meistens 5 für NT Authority)
 //!   Sn = Sub-Authorities (32-bit little-endian)
 //!
 //! Binary layout:
@@ -17,7 +15,6 @@
 
 use adpa_core::error::CoreError;
 
-/// Konvertiert einen SID-String in LDAP-Escape-Bytes für einen Filter.
 /// Converts a SID string into LDAP-escaped bytes for use in a search filter.
 ///
 /// Beispiel / Example:
@@ -27,7 +24,6 @@ pub fn sid_str_to_ldap_filter(sid: &str) -> Result<String, CoreError> {
     Ok(bytes_to_ldap_escape(&bytes))
 }
 
-/// Konvertiert einen SID-String in sein binäres Byte-Format.
 /// Converts a SID string to its binary byte representation.
 pub fn sid_str_to_bytes(sid: &str) -> Result<Vec<u8>, CoreError> {
     let parts: Vec<&str> = sid.trim().split('-').collect();
@@ -84,7 +80,6 @@ pub fn sid_str_to_bytes(sid: &str) -> Result<Vec<u8>, CoreError> {
     Ok(bytes)
 }
 
-/// Konvertiert binäre SID-Bytes zurück in den kanonischen SID-String.
 /// Converts binary SID bytes back into the canonical SID string.
 pub fn bytes_to_sid_str(bytes: &[u8]) -> Result<String, CoreError> {
     if bytes.len() < 8 {
@@ -127,7 +122,6 @@ pub fn bytes_to_sid_str(bytes: &[u8]) -> Result<String, CoreError> {
     Ok(sid)
 }
 
-/// Gibt LDAP-escaped Hex-Sequenz für Binärdaten zurück (\xx\xx...).
 /// Returns LDAP-escaped hex sequence for binary data (\xx\xx...).
 fn bytes_to_ldap_escape(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("\\{b:02x}")).collect()
@@ -137,7 +131,6 @@ fn bytes_to_ldap_escape(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    // Bekannte Well-Known SIDs für deterministische Tests
     // Known well-known SIDs for deterministic tests
 
     #[test]
@@ -158,7 +151,6 @@ mod tests {
 
     #[test]
     fn domain_user_sid_roundtrip() {
-        // Typische Domänen-Benutzer-SID
         // Typical domain user SID
         let sid = "S-1-5-21-3623811015-3361044348-30300820-1013";
         let bytes = sid_str_to_bytes(sid).unwrap();

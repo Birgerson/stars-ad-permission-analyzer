@@ -5,7 +5,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
-    #[error("AD-Verbindungsfehler / AD connection error: {0}")]
+    #[error("AD connection error: {0}")]
     AdConnection(String),
 
     #[error("LDAP-Abfragefehler / LDAP query error: {0}")]
@@ -38,6 +38,6 @@ pub enum CoreError {
     #[error("Abgebrochen / Cancellation requested")]
     Cancelled,
 
-    #[error("Validierungsfehler / Validation error: {0}")]
+    #[error("Validation error: {0}")]
     Validation(String),
 }

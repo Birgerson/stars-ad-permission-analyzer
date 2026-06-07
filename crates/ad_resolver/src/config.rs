@@ -4,29 +4,22 @@
 //! LDAP-Verbindungskonfiguration.
 //! LDAP connection configuration.
 
-/// TLS-Modus für die LDAP-Verbindung.
 /// TLS mode for the LDAP connection.
 ///
-/// StartTLS ist derzeit nicht implementiert (abhängig von ldap3-Feature-Flags).
 /// StartTLS is not yet implemented (requires ldap3 feature flags).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum TlsMode {
-    /// LDAPS (ldaps://server:636) — verschlüsselt ab dem ersten Byte, empfohlen.
     /// LDAPS (ldaps://server:636) — encrypted from the first byte, recommended.
     #[default]
     Ldaps,
 
-    /// Kein TLS (ldap://server:389) — Bind-Passwort wird im Klartext übertragen.
     /// No TLS (ldap://server:389) — bind password is transmitted in plaintext.
-    /// Nur mit explizitem --insecure-ldap / GUI-Warnung verwenden.
     /// Only use with explicit --insecure-ldap / GUI warning.
     Insecure,
 }
 
-/// Verbindungsparameter für einen LDAP/Active-Directory-Server.
 /// Connection parameters for an LDAP/Active Directory server.
 ///
-/// `Debug` ist hand-implementiert und maskiert das Bind-Passwort, damit ein
 /// versehentliches `{config:?}` keine Secrets in Logs schreibt.
 /// `Debug` is hand-implemented and masks the bind password so an accidental
 /// `{config:?}` does not leak secrets into logs.
@@ -36,33 +29,26 @@ pub struct LdapConfig {
     /// LDAP server address (IP or hostname).
     pub server: String,
 
-    /// LDAP-Port (Standard: 636 für LDAPS, 389 für unverschlüsseltes LDAP).
     /// LDAP port (default: 636 for LDAPS, 389 for unencrypted LDAP).
     pub port: u16,
 
-    /// Base DN für alle Suchen, z.B. "DC=testdomain,DC=local".
     /// Base DN for all searches, e.g. "DC=testdomain,DC=local".
     pub base_dn: String,
 
-    /// Bind-DN für die Authentifizierung, z.B. "CN=Administrator,CN=Users,DC=testdomain,DC=local".
     /// Bind DN for authentication, e.g. "CN=Administrator,CN=Users,DC=testdomain,DC=local".
     pub bind_dn: String,
 
-    /// Bind-Passwort. Wird nicht geloggt.
     /// Bind password. Never logged.
     pub bind_password: String,
 
-    /// Timeout für LDAP-Operationen in Sekunden.
     /// Timeout for LDAP operations in seconds.
     pub timeout_secs: u64,
 
-    /// TLS-Modus. Standard: Ldaps (verschlüsselt).
     /// TLS mode. Default: Ldaps (encrypted).
     pub tls_mode: TlsMode,
 }
 
 impl LdapConfig {
-    /// Erstellt eine Konfiguration mit LDAPS (sicherer Standard, Port 636).
     /// Creates a configuration with LDAPS (secure default, port 636).
     pub fn new(
         server: impl Into<String>,
@@ -81,10 +67,8 @@ impl LdapConfig {
         }
     }
 
-    /// Erstellt eine Konfiguration für unverschlüsseltes LDAP (Port 389).
     /// Creates a configuration for unencrypted LDAP (port 389).
     ///
-    /// Nur für Test- und Entwicklungsumgebungen ohne LDAPS-Unterstützung.
     /// Only for test and development environments without LDAPS support.
     pub fn new_insecure(
         server: impl Into<String>,
@@ -103,7 +87,6 @@ impl LdapConfig {
         }
     }
 
-    /// Gibt die LDAP-URL zurück.
     /// Returns the LDAP URL.
     pub fn url(&self) -> String {
         match self.tls_mode {
@@ -115,7 +98,6 @@ impl LdapConfig {
 
 impl std::fmt::Debug for LdapConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Passwort wird ausschließlich als Platzhalter („***" bzw. „<empty>") ausgegeben.
         // Password is rendered as a placeholder only ("***" or "<empty>").
         let pw_placeholder: &str = if self.bind_password.is_empty() {
             "<empty>"

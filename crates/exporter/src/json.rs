@@ -4,15 +4,8 @@
 //! JSON-Berichtsexport — stabil strukturiertes, maschinenlesbares Ausgabeformat.
 //! JSON report export — stable, structured, machine-readable output format.
 //!
-//! Der Export schreibt ein Top-Level-Objekt mit `version`, `permissions`,
-//! `risk_findings` und `path_trustees`. Die Felder beider Identitaets-
 //! orientierten Listen entsprechen den `Serialize`-Implementierungen von
-//! `EffectivePermission` und `RiskFinding`, sodass Audit-Pipelines
 //! Strukturen wie `share_status`, `local_group_status`, `incomplete` und
-//! `matched_aces` direkt konsumieren koennen. Die pfad-orientierte
-//! Trustee-Liste (`path_trustees`) wurde in Round-8-Folgereview Finding 2
-//! ergaenzt, damit die zweite Audit-Frage „wer hat ueberhaupt Zugriff?"
-//! auch im maschinenlesbaren Format vorhanden ist.
 //!
 //! Writes a top-level object with `version`, `permissions`,
 //! `risk_findings`, and `path_trustees`. Both identity-oriented lists
@@ -30,12 +23,9 @@ use adpa_core::{
 };
 use serde::Serialize;
 
-/// Versionsnummer des JSON-Schemas — bei strukturändernden Anpassungen erhöhen.
 /// * v2 (Round-8-Folge): neues Feld `path_trustees` ergaenzt.
-/// * v3 (Round-10 Finding 4): `path_trustees`-Eintraege sind jetzt eine
 ///   tagged Union (`{"kind":"ace",...}` oder `{"kind":"diagnostic",...}`)
 ///   statt einer flachen `PathTrustee`-Struct. Diagnose-Hinweise
-///   (Share-DACL nicht lesbar, NULL-DACL) sind damit eindeutig vom echten
 ///   Allow/Deny-ACE unterscheidbar.
 ///
 /// Version number of the JSON schema — bump it on structural changes.
@@ -179,7 +169,6 @@ mod tests {
             ..Default::default()
         };
         let body = render(&result);
-        // share_status muss als strukturiertes Feld auftauchen, nicht nur als Maske.
         // share_status must appear as a structured field, not only as a mask.
         assert!(
             body.contains("\"share_status\""),
@@ -195,7 +184,6 @@ mod tests {
             body.contains("\"local_group_status\""),
             "local_group_status missing in JSON: {body}"
         );
-        // incomplete=true muss erscheinen, sonst sind Audit-Pipelines blind.
         // incomplete=true must appear, otherwise audit pipelines are blind.
         assert!(
             body.contains("\"incomplete\": true"),
@@ -220,10 +208,7 @@ mod tests {
         );
     }
 
-    /// Round-10 Finding 4: das JSON-Schema enthaelt eine `path_trustees`-Liste
     /// als tagged Union (`{"kind":"ace",...}` / `{"kind":"diagnostic",...}`),
-    /// die Schema-Version steht auf 3, und der ehemals synthetische Allow-ACE
-    /// fuer Diagnose-Hinweise ist verschwunden.
     /// Round-10 finding 4: the JSON schema carries `path_trustees` as a
     /// tagged union (`{"kind":"ace",...}` / `{"kind":"diagnostic",...}`),
     /// the schema version is bumped to 3, and the former synthetic Allow ACE
@@ -273,14 +258,11 @@ mod tests {
             .expect("trustees must be an array");
         assert_eq!(entries.len(), 2);
 
-        // Ace-Variante — Tag heisst `entry_kind`, damit das innere
-        // PathTrustee-Feld `kind: AceKind` nicht ueberschrieben wird.
         // Ace variant — tag is `entry_kind` to avoid colliding with the
         // inner PathTrustee field `kind: AceKind`.
         assert_eq!(entries[0]["entry_kind"], "ace");
         assert_eq!(entries[0]["sid"], "S-1-5-32-544");
         assert_eq!(entries[0]["display_name"], "BUILTIN\\Administrators");
-        // Der inner Allow/Deny-Wert bleibt als `kind` erhalten.
         // The inner Allow/Deny value stays under `kind`.
         assert_eq!(entries[0]["kind"], "Allow");
 
@@ -306,9 +288,6 @@ mod tests {
         );
     }
 
-    /// Round-8-Folgereview Finding 1: der JSON-Exporter darf eine
-    /// existierende Zieldatei NICHT mehr ueberschreiben, wenn
-    /// `ExportTarget::File` genutzt wird. Mit `ExportTarget::FileOverwrite`
     /// ist Ueberschreiben explizit erlaubt.
     /// Round-8 follow-up finding 1: the JSON exporter must NOT overwrite an
     /// existing target file when called with `ExportTarget::File`. With
@@ -320,7 +299,6 @@ mod tests {
         let sentinel = b"sentinel\n";
         std::fs::write(&path, sentinel).expect("write sentinel");
 
-        // Default-Branch muss ablehnen und Sentinel intakt lassen.
         let result = AnalysisResult::default();
         let refusal = JsonExporter
             .export(&result, ExportTarget::File(path.clone()))
@@ -335,7 +313,6 @@ mod tests {
             "pre-existing file content must stay intact when overwrite refused"
         );
 
-        // Mit FileOverwrite darf die Datei truncatet werden.
         JsonExporter
             .export(&result, ExportTarget::FileOverwrite(path.clone()))
             .expect("FileOverwrite branch must succeed");

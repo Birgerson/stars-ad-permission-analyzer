@@ -5,16 +5,12 @@ use adpa_core::{error::CoreError, model::NormalizedPath};
 
 use crate::net::{validate_share_name, validate_smb_server};
 
-/// Obergrenze für Pfadlängen (extended-length-Limit von Windows).
 /// Upper bound for path length (Windows extended-length limit).
 const MAX_PATH_LEN: usize = 32_767;
 
-/// In Windows-Pfadkomponenten verbotene Zeichen (zusätzlich zu Steuerzeichen).
 /// Characters forbidden inside Windows path components (in addition to controls).
 const FORBIDDEN_PATH_CHARS: &[char] = &['<', '>', '"', '|', '?', '*'];
 
-/// Reservierte Windows-Gerätenamen (case-insensitive). Eine Pfadkomponente, deren
-/// Stamm einem dieser Namen entspricht, ist unzulässig — egal mit welcher Endung.
 /// Reserved Windows device names (case-insensitive). A path segment whose stem
 /// equals one of these is invalid regardless of its extension.
 const RESERVED_DEVICE_NAMES: &[&str] = &[
@@ -22,7 +18,6 @@ const RESERVED_DEVICE_NAMES: &[&str] = &[
     "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
-/// Null-Byte ist in keinem Pfad zulässig.
 /// Null byte disallowed in any path.
 fn contains_null(s: &str) -> bool {
     s.contains('\0')
@@ -38,14 +33,10 @@ pub struct ValidatedUncPath(pub String);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedLocalPath(pub String);
 
-/// Prüft ein einzelnes Pfadsegment auf Steuerzeichen, verbotene Zeichen und
-/// reservierte Gerätenamen.
 /// Checks a single path segment for control characters, forbidden characters
 /// and reserved device names.
 fn check_path_segment(segment: &str, full_path: &str) -> Result<(), CoreError> {
     if segment.is_empty() {
-        // Doppel-Backslashes innerhalb des Pfads werden nicht akzeptiert, weil
-        // sie auf ein leeres Segment hindeuten (Tippfehler oder Injektion).
         // Double backslashes inside the path are not accepted because they
         // imply an empty segment (typo or injection).
         return Err(CoreError::Validation(format!(
@@ -68,7 +59,6 @@ fn check_path_segment(segment: &str, full_path: &str) -> Result<(), CoreError> {
             "Path segment '{segment}' must not contain ':' (drive separator): {full_path}"
         )));
     }
-    // Reservierter Gerätename — Stamm ohne Endung prüfen.
     // Reserved device name — check the stem without extension.
     let stem = segment.split('.').next().unwrap_or(segment);
     if RESERVED_DEVICE_NAMES
@@ -82,11 +72,8 @@ fn check_path_segment(segment: &str, full_path: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
-/// Prüft die Segmente eines Pfads ohne Prefix (`X:\…` oder `\\server\share\…`).
 /// Checks the segments of a path without its prefix (`X:\…` or `\\server\share\…`).
 fn check_path_segments(rest: &str, full_path: &str) -> Result<(), CoreError> {
-    // Ein abschließender Backslash ergibt nach split ein leeres Segment — den
-    // tolerieren wir, alles andere wird geprüft.
     // A trailing backslash produces an empty segment after split — tolerate it,
     // check everything else.
     let segments: Vec<&str> = rest.split('\\').collect();
@@ -120,7 +107,6 @@ pub fn validate_unc_path(input: &str) -> Result<ValidatedUncPath, CoreError> {
             "UNC path must start with '\\\\': {trimmed}"
         )));
     }
-    // Mindestens \\server\share mit nicht-leeren Komponenten.
     // At least \\server\share with non-empty components.
     let without_prefix = &trimmed[2..];
     let mut parts = without_prefix.splitn(3, '\\');
@@ -132,8 +118,6 @@ pub fn validate_unc_path(input: &str) -> Result<ValidatedUncPath, CoreError> {
             "UNC path must contain at least \\\\server\\share: {trimmed}"
         )));
     }
-    // Server- und Share-Komponenten gegen die strengeren Regeln aus
-    // `validation::net` prüfen — keine doppelte Pflege mehr.
     // Server and share components validated against the stricter rules from
     // `validation::net` — no duplicate maintenance.
     validate_smb_server(server).map_err(|e| {
@@ -173,7 +157,6 @@ pub fn validate_local_path(input: &str) -> Result<ValidatedLocalPath, CoreError>
             "Local path must be an absolute Windows path (e.g. C:\\folder): {trimmed}"
         )));
     }
-    // Segmentprüfung erst nach dem `X:\`-Prefix; das `:` im Prefix ist legitim.
     // Segment checks only after the `X:\` prefix; the `:` in the prefix is legitimate.
     let rest = &trimmed[3..];
     if !rest.is_empty() {
@@ -182,7 +165,6 @@ pub fn validate_local_path(input: &str) -> Result<ValidatedLocalPath, CoreError>
     Ok(ValidatedLocalPath(trimmed.to_string()))
 }
 
-/// Validiert einen Benutzer-Pfad und liefert die normalisierte Anzeigeform.
 ///
 /// Akzeptiert:
 /// - UNC-Pfade `\\server\share\…`
@@ -190,11 +172,6 @@ pub fn validate_local_path(input: &str) -> Result<ValidatedLocalPath, CoreError>
 /// - Windows-Long-Path-Form `\\?\X:\…` (lokal)
 /// - Windows-Long-Path-UNC-Form `\\?\UNC\server\share\…`
 ///
-/// Das `\\?\`-Präfix wird vor der Segmentprüfung entfernt und durch die
-/// kanonische Anzeigeform ersetzt, weil `?` sonst von der Segmentvalidierung
-/// als verbotenes Zeichen abgelehnt würde. Downstream-Code, der das Präfix
-/// für Win32-APIs benötigt, fügt es über [`to_windows_api_path`] wieder
-/// hinzu — die Funktion ist idempotent.
 ///
 /// Validates a user-supplied path and returns the canonical display form.
 ///
@@ -240,11 +217,8 @@ impl From<ValidatedUncPath> for NormalizedPath {
     }
 }
 
-/// Windows-API-tauglicher Pfad mit Long-Path-Präfix.
 ///
 /// Win32-ANSI-/Wide-APIs wie `GetFileAttributesW` und
-/// `GetNamedSecurityInfoW` sind ohne den Präfix `\\?\` auf `MAX_PATH`
-/// (260 Zeichen) limitiert. Mit dem Präfix akzeptiert Windows bis zu
 /// 32.767 Zeichen — passend zu unserer Validierungs-Obergrenze.
 ///
 /// Long-path-prefixed Windows API path. Win32 ANSI/Wide APIs such as
@@ -273,20 +247,12 @@ impl From<&ValidatedUncPath> for WindowsApiPath {
     }
 }
 
-/// Zerlegt einen UNC-Pfad in `(server, share)`. Lokale Pfade (`C:\…`),
-/// `\\?\C:\…`-Long-Paths und Pfade mit nur einem führenden Slash
-/// liefern `None` — damit kein Share-Lookup mit einem Laufwerks­buchstaben
-/// als Servername gestartet wird.
 ///
 /// Akzeptierte Eingabeformen:
 /// - `\\server\share\…` (klassisches UNC)
 /// - `//server/share/…` (POSIX-Variante)
 /// - `\\?\UNC\server\share\…` (Long-Path-UNC)
 ///
-/// Schließt **Review-Befund 1** (CLI hielt `C:\Windows\SYSVOL` für UNC) und
-/// **Review-Befund 4** (Long-Path-UNC wurde als Server=`?`, Share=`UNC`
-/// zerlegt). Die GUI hatte eine ähnliche Lokal-Pfad-Prüfung schon; CLI nicht.
-/// Diese Funktion ist die *eine* Quelle der Wahrheit für CLI **und** GUI.
 ///
 /// Splits a UNC path into `(server, share)`. Local paths (`C:\…`),
 /// `\\?\C:\…` long paths and single-prefix paths return `None` — so no
@@ -302,9 +268,7 @@ impl From<&ValidatedUncPath> for WindowsApiPath {
 /// The GUI had a similar local-path guard already; the CLI did not. This
 /// function is the *single* source of truth for both CLI and GUI.
 pub fn parse_unc_components(path: &str) -> Option<(String, String)> {
-    // Long-Path-UNC erst normalisieren — sonst sieht der Split `?` als
     // Server. Lokale Long-Path-Form (`\\?\C:\…`) bleibt ausgeschlossen,
-    // weil sie nach dem Strip mit einem Laufwerks­buchstaben anfängt
     // statt mit `\\`.
     // Normalize long-path UNC first — otherwise the split would treat `?`
     // as the server. Local long-path form (`\\?\C:\…`) is excluded by the
@@ -332,10 +296,8 @@ pub fn parse_unc_components(path: &str) -> Option<(String, String)> {
     Some((server, share))
 }
 
-/// Liefert den effektiven SMB-Zielserver für lokale-Gruppen- und
 /// Share-DACL-Abfragen. Ein explizit gesetzter `smb_server` hat
 /// Vorrang vor dem aus dem Pfad abgeleiteten UNC-Server — sonst werden
-/// lokale Gruppen vom Pfad-Server gelesen, während die Share-DACL vom
 /// Override-Server kommt (Review-Befund 2: Token-Mismatch).
 ///
 /// Returns the effective SMB target server for local-group and share-DACL
@@ -351,18 +313,11 @@ pub fn effective_smb_target(path: &str, explicit_smb_server: Option<&str>) -> Op
 }
 
 /// Typisierter SMB-Audit-Kontext: enthaelt **beide** Bausteine
-/// (`server`, `share`), die nötig sind, um eine Share-DACL zu lesen
-/// oder einen Share-Overlay zu bauen. Ein UNC-Pfad wie
 /// `\\fs01\data\foo\bar` liefert `("fs01", "data")`; ein lokaler Pfad
 /// ohne explizite SMB-Flags liefert `None`.
 ///
-/// Eingefuehrt fuer Review-Runde 10 Finding 1: vorher hat die CLI an
-/// drei Stellen einzeln Server **oder** Share aus Pfad und Flags
 /// abgeleitet, das fuehrte dazu, dass `path_trustees` bei einem reinen
-/// UNC-Aufruf ohne `--smb-server`/`--share-name` die Share-Schicht
 /// stillschweigend wegliess, waehrend `share_status` sie korrekt
-/// auswertete. Mit diesem Typ haben CLI und GUI genau **eine** Quelle
-/// fuer die Ableitung.
 ///
 /// Typed SMB audit context: holds **both** building blocks (`server`,
 /// `share`) needed to read a share DACL or build a share overlay. A
@@ -386,9 +341,6 @@ impl SmbAuditContext {
     /// expliziten Flags ab. Prioritaet pro Feld: **explizit > UNC**.
     ///
     /// Wichtige Eigenschaft (vgl. Review-Runde 10 Finding 1): liefert
-    /// **immer beide** Felder oder `None`. Wenn explizit nur ein
-    /// Server angegeben ist (und der Pfad nicht UNC), reicht das
-    /// nicht — der Share-Name fehlt fuer den DACL-Lookup. Ergebnis:
     /// `None`, der Aufrufer sieht klar „kein SMB-Kontext bestimmbar".
     ///
     /// Derives the effective SMB context from path and optional
@@ -417,10 +369,7 @@ impl SmbAuditContext {
     }
 }
 
-/// Entfernt das Long-Path-Präfix (`\\?\` bzw. `\\?\UNC\`) und liefert die
-/// menschenlesbare Form als Eigentümer-String zurück. Inverse zu
 /// [`to_windows_api_path`]; wird genutzt, um `FileSystemObject.path`
-/// präfix-frei zu speichern, auch wenn der Walker intern mit präfixierten
 /// Pfaden arbeitet.
 ///
 /// Strips the long-path prefix (`\\?\` or `\\?\UNC\`) and returns the
@@ -439,14 +388,9 @@ pub fn strip_long_path_prefix(path: &str) -> String {
     path.to_string()
 }
 
-/// Wandelt einen Pfad in die Long-Path-Form um, die Win32-Wide-APIs
-/// für Pfade > `MAX_PATH` benötigen:
 ///
-/// - Bereits präfixiert (`\\?\…`) → unverändert
 /// - UNC `\\server\share\…` → `\\?\UNC\server\share\…`
 /// - Lokal `C:\…` → `\\?\C:\…`
-/// - Sonst (relativ o. ä.) → unverändert (keine sinnvolle Konvertierung;
-///   Validierung sollte solche Pfade ohnehin abgelehnt haben)
 ///
 /// Converts a path into the long-path form required by Win32 wide APIs
 /// for paths exceeding `MAX_PATH`:
@@ -538,8 +482,6 @@ mod tests {
         let result = validate_path(r"data\folder");
         assert!(result.is_err());
     }
-
-    // --- F6: schärfere Validierung / tighter validation ---
 
     #[test]
     fn local_path_with_forbidden_char_rejected() {
@@ -643,7 +585,6 @@ mod tests {
 
     #[test]
     fn to_windows_api_path_keeps_already_prefixed_paths() {
-        // Bereits präfixierte Pfade dürfen nicht doppelt präfixiert werden.
         // Already prefixed paths must not be prefixed twice.
         assert_eq!(
             to_windows_api_path(r"\\?\C:\very\long\path"),
@@ -657,8 +598,6 @@ mod tests {
 
     #[test]
     fn to_windows_api_path_handles_long_local_path() {
-        // Konstruiert einen klar über MAX_PATH (260) liegenden Pfad und prüft,
-        // dass die Präfix-Form korrekt entsteht.
         let long = format!("C:\\{}", "a".repeat(400));
         let api = to_windows_api_path(&long);
         assert!(api.starts_with(r"\\?\C:\"));
@@ -681,8 +620,6 @@ mod tests {
 
     #[test]
     fn to_windows_api_path_leaves_unrecognized_input_untouched() {
-        // Ein relativer oder unbekannter Pfad darf nicht zerstört werden —
-        // Validierung sollte ihn ohnehin schon abgelehnt haben.
         assert_eq!(to_windows_api_path("relative/path"), "relative/path");
         assert_eq!(to_windows_api_path(""), "");
     }
@@ -731,7 +668,6 @@ mod tests {
     #[test]
     fn validate_path_accepts_long_local_prefix() {
         let np = validate_path(r"\\?\C:\Windows\System32").expect("must accept long-path local");
-        // Anzeigeform ohne Präfix — to_windows_api_path setzt es bei Bedarf wieder.
         // Display form without prefix — to_windows_api_path re-adds it when needed.
         assert_eq!(np.0, r"C:\Windows\System32");
     }
@@ -751,7 +687,6 @@ mod tests {
 
     #[test]
     fn validate_path_accepts_overlong_local_with_prefix() {
-        // Ein Pfad > MAX_PATH (260) muss in Long-Path-Form akzeptiert werden,
         // solange er unter MAX_PATH_LEN (32767) bleibt.
         // A path > MAX_PATH (260) must be accepted in long-path form as long as
         // it stays under MAX_PATH_LEN (32767).
@@ -777,7 +712,6 @@ mod tests {
 
     #[test]
     fn validate_path_rejects_long_prefix_without_drive() {
-        // `\\?\foo` ist nach Strip ein relativer Pfad und damit ungültig.
         // `\\?\foo` becomes a relative path after stripping and is invalid.
         assert!(validate_path(r"\\?\foo").is_err());
     }
@@ -791,21 +725,18 @@ mod tests {
 
     #[test]
     fn validate_path_rejects_bare_long_prefix() {
-        // `\\?\` ohne Inhalt darf nicht akzeptiert werden.
         // `\\?\` with no content must not be accepted.
         assert!(validate_path(r"\\?\").is_err());
     }
 
     #[test]
     fn validate_path_rejects_bare_long_unc_prefix() {
-        // `\\?\UNC\` ohne Server/Share darf nicht akzeptiert werden.
         // `\\?\UNC\` without server/share must not be accepted.
         assert!(validate_path(r"\\?\UNC\").is_err());
     }
 
     #[test]
     fn validate_path_rejects_long_path_with_forbidden_char_in_segment() {
-        // Das Präfix `\\?\` wird gestrippt; ein `?` *im Segment* danach bleibt
         // verboten.
         // The `\\?\` prefix is stripped; a `?` *inside a segment* after that
         // is still forbidden.
@@ -817,7 +748,6 @@ mod tests {
 
     #[test]
     fn parse_unc_components_rejects_local_paths() {
-        // Finding 1: lokale Pfade dürfen nicht als UNC durchgehen, sonst
         // landet `C:\Windows` als NetShareGetInfo("C:", "Windows") im
         // share_scanner.
         // Finding 1: local paths must not pass as UNC, otherwise
@@ -844,7 +774,6 @@ mod tests {
 
     #[test]
     fn parse_unc_components_handles_long_path_unc() {
-        // Finding 4: \\?\UNC\server\share\folder darf nicht in Server=`?`,
         // Share=`UNC` zerfallen — vorher genau dieser Bug.
         // Finding 4: \\?\UNC\server\share\folder must not decompose into
         // Server=`?`, Share=`UNC` — that was exactly the bug.
@@ -860,7 +789,6 @@ mod tests {
 
     #[test]
     fn parse_unc_components_rejects_local_long_path() {
-        // \\?\C:\… ist eine lokale Long-Path-Form, kein UNC.
         // \\?\C:\… is a local long-path form, not a UNC.
         assert_eq!(parse_unc_components(r"\\?\C:\Windows\System32"), None);
         assert_eq!(parse_unc_components(r"\\?\D:\Data"), None);
@@ -868,7 +796,6 @@ mod tests {
 
     #[test]
     fn parse_unc_components_rejects_incomplete_unc() {
-        // \\server (ohne Share) ist kein vollständiger UNC.
         // \\server (without a share) is not a complete UNC.
         assert_eq!(parse_unc_components(r"\\server"), None);
         assert_eq!(parse_unc_components(r"\\server\"), None);
@@ -877,7 +804,6 @@ mod tests {
     #[test]
     fn effective_smb_target_prefers_explicit_server_for_local_path() {
         // Finding 2: lokaler Pfad mit explizit gesetztem SMB-Server →
-        // lokale Gruppen müssen vom Override-Server gelesen werden, nicht
         // vom lokalen Rechner.
         // Finding 2: local path with explicit SMB server → local groups
         // must come from the override server, not from the local machine.
@@ -890,7 +816,6 @@ mod tests {
     #[test]
     fn effective_smb_target_prefers_explicit_server_for_unc() {
         // Finding 2: UNC-Pfad PLUS expliziter Override → Override gewinnt,
-        // damit der User absichtlich gegen einen anderen Server testen kann.
         // Finding 2: UNC path PLUS explicit override → override wins, so
         // the user can deliberately test against a different server.
         assert_eq!(
@@ -916,7 +841,6 @@ mod tests {
     #[test]
     fn effective_smb_target_returns_none_for_local_path_without_override() {
         // Lokaler Pfad ohne Override → kein SMB-Ziel → kein Share-Lookup.
-        // Genau das verhindert den ursprünglichen `C:` als Server-Bug.
         // Local path without override → no SMB target → no share lookup.
         // This is exactly what prevents the original `C:` as server bug.
         assert_eq!(effective_smb_target(r"C:\Windows\SYSVOL", None), None);
@@ -926,7 +850,6 @@ mod tests {
     // --- SmbAuditContext: Review-Runde 10 Finding 1 ---
 
     /// Reine UNC ohne explizite Flags → beide Komponenten aus dem Pfad.
-    /// Das war der Hauptfall, der vor der Round-10-Korrektur nicht in
     /// `path_trustees` einfloss.
     /// Bare UNC without explicit flags → both fields from the path.
     /// This was the main case that didn't reach `path_trustees`
@@ -940,8 +863,6 @@ mod tests {
     }
 
     /// Explizite Flags ueberschreiben die UNC-Komponenten — wichtig
-    /// fuer Audit-Szenarien, in denen die Share-DACL auf einem anderen
-    /// Server liegt als der Pfad selbst.
     /// Explicit flags override the UNC components — important for
     /// audit scenarios where the share DACL lives on a server
     /// different from the path itself.
@@ -970,7 +891,6 @@ mod tests {
     }
 
     /// Nur Server explizit, Pfad lokal, kein Share → `None`. Vorher haetten
-    /// einzelne Helper an dieser Stelle einen Halb-Kontext gebaut, mit
     /// dem dann `get_share_dacl` mit leerem Share-Namen aufgerufen worden
     /// waere.
     /// Server only explicit, path local, no share → `None`. Previously
@@ -994,8 +914,6 @@ mod tests {
         assert_eq!(ctx.share, "data");
     }
 
-    /// Leere String-Flags zaehlen als „nicht gesetzt" — Defense gegen
-    /// CLI-Frontends, die `Option<String>` immer als `Some("")`
     /// uebergeben statt `None`.
     /// Empty string flags count as "not set" — defence against CLI
     /// frontends that always hand over `Some("")` instead of `None`.
@@ -1009,9 +927,6 @@ mod tests {
 
     #[test]
     fn to_windows_api_path_is_idempotent() {
-        // Walker baut FSO-Pfade auf Basis von `entry.path()`, welches das
-        // Long-Path-Präfix vom Parent vererbt. Eine erneute Anwendung von
-        // to_windows_api_path darf den Pfad nicht doppelt präfixieren.
         let once = to_windows_api_path(r"C:\Windows");
         let twice = to_windows_api_path(&once);
         assert_eq!(once, twice);

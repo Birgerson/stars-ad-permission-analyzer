@@ -57,7 +57,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Effektive Berechtigungen für einen Benutzer auf einem einzelnen Pfad analysieren.
     /// Analyze effective permissions for a user on a single path.
     Analyze {
         #[arg(short, long)]
@@ -70,9 +69,7 @@ enum Commands {
         base_dn: Option<String>,
         #[arg(long)]
         bind_dn: Option<String>,
-        /// **DEPRECATED — unsicher.** Sichtbar in Prozesslisten und Shell-History.
         /// Nutze stattdessen die Umgebungsvariable `ADPA_BIND_PASSWORD`.
-        /// Bleibt aus Rueckwaertskompatibilitaet erhalten, wird in einer
         /// kommenden Version entfernt.
         /// **DEPRECATED — insecure.** Visible in process listings and shell
         /// history. Use the `ADPA_BIND_PASSWORD` environment variable
@@ -80,28 +77,23 @@ enum Commands {
         /// a future release.
         #[arg(long)]
         bind_password: Option<String>,
-        /// Unverschlüsseltes LDAP (Port 389) — Passwort im Klartext. Nur für Testumgebungen.
         /// Unencrypted LDAP (port 389) — password in plaintext. Test environments only.
         #[arg(long)]
         insecure_ldap: bool,
         /// Optional CSV export path
         #[arg(short = 'o', long)]
         output: Option<String>,
-        /// SMB-Server für Share-Berechtigungen (auto-erkannt bei UNC-Pfad)
         /// SMB server for share permissions (auto-detected for UNC paths)
         #[arg(long)]
         smb_server: Option<String>,
-        /// Share-Name für NTFS-∩-Share-Kombination (auto-erkannt bei UNC-Pfad)
         /// Share name for NTFS ∩ Share combination (auto-detected for UNC paths)
         #[arg(long)]
         share_name: Option<String>,
-        /// Vorhandene Exportdatei ohne Rückfrage überschreiben.
         /// Overwrite an existing export file without confirmation.
         #[arg(long)]
         force: bool,
     },
 
-    /// Verzeichnisbaum rekursiv scannen und Ergebnisse in der Datenbank speichern.
     /// Recursively scan a directory tree and store results in the database.
     Scan {
         /// Wurzelpfad des Scans (lokal oder UNC) / Root path (local or UNC)
@@ -116,9 +108,7 @@ enum Commands {
         base_dn: Option<String>,
         #[arg(long)]
         bind_dn: Option<String>,
-        /// **DEPRECATED — unsicher.** Sichtbar in Prozesslisten und Shell-History.
         /// Nutze stattdessen die Umgebungsvariable `ADPA_BIND_PASSWORD`.
-        /// Bleibt aus Rueckwaertskompatibilitaet erhalten, wird in einer
         /// kommenden Version entfernt.
         /// **DEPRECATED — insecure.** Visible in process listings and shell
         /// history. Use the `ADPA_BIND_PASSWORD` environment variable
@@ -126,29 +116,23 @@ enum Commands {
         /// a future release.
         #[arg(long)]
         bind_password: Option<String>,
-        /// Unverschlüsseltes LDAP (Port 389) — Passwort im Klartext. Nur für Testumgebungen.
         /// Unencrypted LDAP (port 389) — password in plaintext. Test environments only.
         #[arg(long)]
         insecure_ldap: bool,
-        /// SQLite-Datenbankdatei für Ergebnisse (wird erstellt wenn nicht vorhanden)
         /// SQLite database file for results (created if absent)
         #[arg(long)]
         db: Option<String>,
-        /// Maximale Scan-Tiefe (unbegrenzt wenn nicht angegeben) / Max scan depth (unlimited if omitted)
         #[arg(long)]
         max_depth: Option<u32>,
         /// Optional CSV export path
         #[arg(short = 'o', long)]
         output: Option<String>,
-        /// SMB-Server für Share-Berechtigungen (auto-erkannt bei UNC-Pfad)
         /// SMB server for share permissions (auto-detected for UNC paths)
         #[arg(long)]
         smb_server: Option<String>,
-        /// Share-Name für NTFS-∩-Share-Kombination (auto-erkannt bei UNC-Pfad)
         /// Share name for NTFS ∩ Share combination (auto-detected for UNC paths)
         #[arg(long)]
         share_name: Option<String>,
-        /// Vorhandene Exportdatei ohne Rückfrage überschreiben.
         /// Overwrite an existing export file without confirmation.
         #[arg(long)]
         force: bool,
@@ -237,11 +221,6 @@ async fn main() -> anyhow::Result<()> {
 // Shared identity resolution
 // ---------------------------------------------------------------------------
 
-/// CLI-lokales Bündel aus [`PrincipalResolution`] und dem Flag
-/// `ad_connected` (LDAP-Pfad ja/nein). `ad_connected = false` heißt
-/// SAM-only und ist beibehalten, weil einige UI-/Output-Texte davon
-/// abhängen. Review 2026-06-04 Runde 3 Finding 1: die zentrale Logik
-/// liegt jetzt in `PrincipalResolution`, nicht mehr in einer
 /// zusammengeschusterten Tupel-Struktur.
 /// CLI-local bundle: [`PrincipalResolution`] + the `ad_connected`
 /// flag.
@@ -251,11 +230,7 @@ struct ResolvedIdentity {
 }
 
 /// Normalisierte Verbindungs-Eingaben — getrimmte und validierte
-/// Werte, die direkt an LDAP- bzw. NetAPI-Aufrufe weitergegeben werden
-/// dürfen. Schließt Review 2026-06-04 Runde 3 Finding 2: vorher gaben
 /// CLI und GUI nach `validate_*`-Aufrufen weiterhin den (un-getrimmten)
-/// Rohstring weiter — die Validierung hatte nur Konsultations-, nicht
-/// Übergabe-Charakter.
 /// Normalized connection inputs — trimmed and validated, ready for
 /// LDAP / NetAPI consumption.
 #[derive(Debug)]
@@ -267,8 +242,6 @@ struct NormalizedConnectionInputs {
     share_name: Option<String>,
 }
 
-/// Validiert optionale Verbindungs-Eingaben und liefert die getrimmten
-/// Normalformen zurück. Aufrufer dürfen die ursprünglichen Rohstrings
 /// danach nicht mehr verwenden.
 /// Centrally validates optional connection inputs and returns trimmed
 /// normalized values.
@@ -304,9 +277,6 @@ fn validate_connection_inputs(
         None => None,
     };
     // Review 2026-06-04 Runde 2, Finding 2: --smb-server und --share-name
-    // sind nur als Paar sinnvoll. Halb-Sets verunreinigten sonst die
-    // lokale-Gruppen-Auflösung mit Token-SIDs vom Remote-Server, ohne
-    // dass eine Share-Maske angewendet werden konnte.
     let smb_server_set = smb_server.is_some_and(|s| !s.trim().is_empty());
     let share_name_set = share_name.is_some_and(|s| !s.trim().is_empty());
     match (smb_server_set, share_name_set) {
@@ -419,10 +389,7 @@ async fn resolve_identity(
         })
     } else {
         let trimmed = user.trim();
-        // SAM-only-Pfad: weiterhin der Workhorse fuer das DC-Szenario
-        // ohne explizite LDAP-Bindung. Liefert jetzt aber eine
         // `PrincipalResolution` mit korrekt klassifiziertem ScopeStatus
-        // und GroupResolutionStatus, statt einer Sondertupel-Struktur.
         // SAM-only path: still the workhorse for DC-without-LDAP usage.
         #[cfg(windows)]
         {
@@ -451,13 +418,9 @@ async fn resolve_identity(
                 identity: sam_res.identity,
                 memberships: sam_res.memberships,
                 // SAM-only auf einem DC = lokale Domain → "Inside" im
-                // Sinne des konfigurierten Scopes ist nicht definiert,
                 // da kein LDAP-Scope existiert. Wir verwenden Inside
                 // (keine zusaetzliche Cross-Domain-Warnung), da die
-                // SAM-Aufloesung domaenenkohaerent ist. Die
-                // Domain-Gruppen-Rekursion ist trotzdem nur flach —
                 // GroupResolutionStatus::SamFlat treibt den richtigen
-                // Marker durch die Engine.
                 // SAM-only on a DC = local domain → Inside; the
                 // flat-recursion incompleteness is signalled separately
                 // via SamFlat → DomainGroupRecursionIncomplete.
@@ -516,7 +479,6 @@ struct AnalyzeOptions {
     smb_server: Option<String>,
     share_name: Option<String>,
     insecure_ldap: bool,
-    /// Vorhandene Exportdatei überschreiben. / Overwrite an existing export file.
     force: bool,
 }
 
@@ -537,9 +499,6 @@ async fn run_analyze(
         force,
     } = opts;
 
-    // Review 2026-06-04 Runde 2, Finding 6: ab hier die validierte
-    // Normalform durchreichen, nicht den rohen Eingabestring. Der Wrapper
-    // hat geleerte Pfade abgelehnt, Whitespace getrimmt und Long-Path-
     // Formen kanonisiert — Downstream-Code muss genau diese Form sehen.
     // Review 2026-06-04 round 2, finding 6: from here on we forward the
     // validated canonical form, not the raw input string. The wrapper
@@ -588,9 +547,6 @@ async fn run_analyze(
     .await?;
 
     // Lokale Server-Gruppen zuerst aufloesen — sie gehoeren zum Token-SID-Satz
-    // und werden sowohl von der Share-Maskenberechnung als auch von der NTFS-
-    // Auswertung benoetigt. Reihenfolge ist hier wichtig: ohne local_group_sids
-    // wuerde die Share-Maske ACEs auf lokale Server-Gruppen ignorieren.
     // Resolve local server groups first — they belong to the token SID set and
     // are needed by both the share mask computation and the NTFS evaluation.
     // Order matters: without local_group_sids the share mask would ignore ACEs
@@ -630,10 +586,6 @@ async fn run_analyze(
             "[Warning] {unsupported_share_ace_count} share ACE(s) of unsupported type were skipped — share mask may be incomplete."
         );
     }
-    // SID→Name-Tabelle für die Erklärungstexte vorbereiten: Memberships
-    // (mit ggf. bereits vom Resolver gesetzten Gruppennamen) und alle in
-    // der DACL referenzierten Trustee-SIDs einmalig in `DOMAIN\Name`
-    // auflösen. Der Engine reicht das in den Berechtigungspfad durch.
     // Build the SID→name table for the explanation text: memberships
     // (with names possibly already set by the resolver) and all trustee
     // SIDs referenced in the DACL get a single LSA round-trip into
@@ -650,7 +602,6 @@ async fn run_analyze(
     // abgeleitet — Single Source of Truth (Review Runde 3 Finding 1).
     // Engine flags are derived centrally from the resolution status.
     // Review 2026-06-05 Runde 6 Finding 1: AD-Memberships +
-    // lokale-Servergruppen-Memberships zusammen an die Engine, damit
     // der Erklaerungspfad jeden Token-Schritt sichtbar macht.
     // Round 6 finding 1: feed AD memberships + local server group
     // memberships together so the explanation path renders every
@@ -687,7 +638,6 @@ async fn run_analyze(
         resolved.ad_connected,
     );
 
-    // Risikoregeln auch im CLI-Pfad ausführen — sonst wirkt der Report unvollständig.
     // Run the risk rules in the CLI path too — otherwise the report looks incomplete.
     let risk_findings = compute_risk_findings(std::slice::from_ref(&result));
     output::print_risk_findings(&risk_findings);
@@ -696,12 +646,7 @@ async fn run_analyze(
         let status = validate_export_path(&out_path)
             .map_err(|e| anyhow::anyhow!("Invalid export path: {e}"))?;
         check_overwrite_policy(&status, force)?;
-        // Round-9 Finding 1: CLI-Exports muessen jetzt auch die
         // pfadzentrische Trustee-Liste mitliefern.
-        // Round-10 Finding 1: die Ableitung von Server/Share laeuft jetzt
-        // ueber `SmbAuditContext::resolve` — dieselbe Quelle, die auch
-        // `resolve_scan_share_status` nutzt. Damit sieht die Trustee-
-        // Liste auch bei einem reinen UNC-Aufruf ohne `--smb-server`/
         // `--share-name` die Share-Schicht, statt sie still wegzulassen.
         // Round-9 finding 1: CLI exports must carry the path-centric
         // trustee list.
@@ -747,7 +692,6 @@ struct ScanOptions {
     smb_server: Option<String>,
     share_name: Option<String>,
     insecure_ldap: bool,
-    /// Vorhandene Exportdatei überschreiben. / Overwrite an existing export file.
     force: bool,
 }
 
@@ -777,7 +721,6 @@ async fn run_scan(
         .0;
     // AGENTS.md DoD 11: numerische Eingaben zentral validieren, bevor sie
     // an WalkConfig wandern — sonst kann ein --max-depth=4_000_000_000
-    // den Walker bis zur RAM-Sättigung treiben.
     // AGENTS.md DoD 11: validate numeric inputs centrally before they reach
     // WalkConfig — otherwise --max-depth=4_000_000_000 would let the walker
     // run until RAM exhaustion.
@@ -812,7 +755,6 @@ async fn run_scan(
         validate_db_path(db).map_err(|e| anyhow::anyhow!("Invalid database path: {e}"))?;
     }
 
-    // 1. Identität auflösen / resolve identity
     let resolved = resolve_identity(
         &user,
         server,
@@ -823,7 +765,6 @@ async fn run_scan(
     )
     .await?;
 
-    // 2. Datenbank öffnen / open database
     let db = db_path
         .as_deref()
         .map(Database::open)
@@ -845,8 +786,6 @@ async fn run_scan(
             .map_err(|e| anyhow::anyhow!("Cannot create scan run: {e}"))?;
     }
 
-    // 4a. Lokale Server-Gruppen vor der Share-Maske auflösen — sonst fehlen die
-    //     lokalen Gruppen-SIDs im Token, das gegen die Share-DACL evaluiert wird.
     //     Resolve local server groups before the share mask — otherwise the local
     //     group SIDs are missing from the token evaluated against the share DACL.
     let (scan_local_group_sids, scan_local_group_memberships, scan_local_group_status) =
@@ -869,7 +808,6 @@ async fn run_scan(
         );
     }
 
-    // 4b. Share-Status auflösen (optional) / resolve share status (optional)
     let scan_access_context =
         AccessContext::for_path_with_smb(&path, smb_server.as_deref(), share_name.as_deref());
     let (scan_share_status, scan_unsupported_share_ace_count) = resolve_scan_share_status(
@@ -892,7 +830,6 @@ async fn run_scan(
         );
     }
 
-    // Maske für die Headeranzeige extrahieren — nur informativ.
     // Extract the mask for the header display — informational only.
     let scan_share_mask_for_header = match &scan_share_status {
         adpa_core::model::ShareMaskStatus::Applied(m) => Some(*m),
@@ -909,7 +846,6 @@ async fn run_scan(
     );
 
     // 6. Baum scannen / walk tree
-    // Ctrl-C löst einen kooperativen Abbruch aus, statt den Prozess hart zu beenden.
     // Ctrl-C triggers a cooperative cancellation instead of killing the process.
     let cancel = CancellationToken::new();
     {
@@ -926,7 +862,6 @@ async fn run_scan(
     let walk = {
         let scan_path = path.clone();
         let cancel = cancel.clone();
-        // Der Walk ist blockierend — auf einem Blocking-Thread ausführen, damit der
         // Ctrl-C-Handler reagieren kann.
         // The walk is blocking — run it on a blocking thread so the Ctrl-C handler
         // can still react.
@@ -941,16 +876,9 @@ async fn run_scan(
     let mut unsupported_ace_paths = 0usize;
 
     // Round-9 Finding 1: Share-Overlay einmalig pro Scan lesen (analog
-    // zur GUI seit ADR 0038), damit jeder Pfad-Aufruf von
     // build_path_trustees_with_share dieselbe Share-DACL anhaengt ohne
     // sie pro Pfad neu lesen zu muessen.
-    // Round-10 Finding 1: die Server/Share-Ableitung kommt jetzt aus
-    // `SmbAuditContext::resolve` — dieselbe Quelle, die auch die CLI-
-    // analyze-Trustees und der `resolve_scan_share_status`-Helper
-    // benutzen. Damit verhaelt sich `\\fs01\data` ohne explizite Flags
     // konsistent: alle drei Trustee-/Status-Wege sehen die Share-Schicht.
-    // Auf Nicht-Windows-Plattformen ist read_share_overlay nicht
-    // aufrufbar — fuer den CI-Build setzen wir den Overlay dort
     // konsequent auf None.
     // Round-9 finding 1: read the share overlay once per scan (like the
     // GUI does since ADR 0038) so every build_path_trustees_with_share
@@ -976,19 +904,13 @@ async fn run_scan(
         let _ = &scan_smb_context;
         None
     };
-    // scan_local_group_sids wurde bereits oben (vor der Share-Maske) aufgelöst.
     // scan_local_group_sids was already resolved above (before the share mask).
-    // scan_access_context wurde ebenfalls schon vor der Share-Maske abgeleitet.
     // scan_access_context was likewise derived above before the share mask.
 
-    // SID→Name-Tabelle für den gesamten Scan einmal aufbauen. Trustee-SIDs
     // wiederholen sich quer durch viele Pfade (BUILTIN\Administrators,
     // Authenticated Users …), deshalb sammeln wir die unique SIDs aller
-    // DACLs vorab und führen nur einen LSA-Lookup pro SID statt einen pro
     // Pfad. Memberships sind ohnehin scan-weit konstant.
     //
-    // Round-10 Finding 2: die Map deckt JETZT auch die ACE-SIDs des Share-
-    // Overlays ab (vorher nur NTFS-DACL-SIDs) UND wird zusaetzlich an die
     // Trustee-Build-Funktion uebergeben, sodass `build_path_trustees_*`
     // keine eigenen LSA-Aufrufe pro Pfad mehr macht.
     //
@@ -1048,10 +970,7 @@ async fn run_scan(
 
         // Round-9 Finding 1: pro Pfad die Trustee-Liste sammeln —
         // identisch zur GUI seit ADR 0038. Der einmal gelesene
-        // Share-Overlay wird hier nur referenziert, nicht erneut
         // angefragt.
-        // Round-10 Finding 2: die scan-weite SID→Name-Map wird
-        // mitgegeben, sodass die Trustee-Build-Funktion KEINEN
         // LSA-Aufruf pro Pfad mehr macht.
         // Round-9 finding 1: collect trustees per path — identical to
         // the GUI since ADR 0038. The share overlay was read once and
@@ -1069,7 +988,6 @@ async fn run_scan(
         });
 
         let rights = NormalizedRights::new(result.effective_mask.0);
-        // Diagnose: Pfade mit nicht ausgewerteten ACE-Typen sichtbar markieren.
         // Diagnostic: visibly flag paths with unevaluated ACE types.
         if result.unsupported_ace_count > 0 {
             unsupported_ace_paths += 1;
@@ -1124,7 +1042,6 @@ async fn run_scan(
         }
     }
 
-    // 7. Scan abschließen / finish scan run
     if let Some(ref db) = db {
         db.scan_store()
             .finish_scan_run(&run_id, Utc::now())
@@ -1142,7 +1059,6 @@ async fn run_scan(
         &run_id,
     );
 
-    // 8b. Risikoregeln auch im CLI-Scan-Pfad ausführen.
     // 8b. Run the risk rules in the CLI scan path too.
     let risk_findings = compute_risk_findings(&all_permissions);
     output::print_risk_findings(&risk_findings);
@@ -1168,8 +1084,6 @@ async fn run_scan(
 // Share-mask helpers
 // ---------------------------------------------------------------------------
 
-// UNC-Zerlegung lebt jetzt zentral in validation::path::parse_unc_components.
-// Die alte CLI-lokale Variante hat lokale Pfade fälschlich als UNC akzeptiert
 // (Review-Befund 1) und Long-Path-UNC falsch zerlegt (Review-Befund 4).
 // UNC parsing now lives centrally in validation::path::parse_unc_components.
 // The old CLI-local variant accepted local paths as UNC (review finding 1) and
@@ -1178,10 +1092,8 @@ use validation::path::effective_smb_target;
 
 /// Sammelt alle SIDs des Benutzers (eigene + Gruppen-SIDs).
 /// Collects all SIDs for the user (own + group SIDs).
-/// Löst den Share-Status für Scan und Analyze auf.
 /// Resolves the share status for scan and analyze commands.
 ///
-/// Gibt `NotApplicable` zurück wenn kein SMB-Kontext erkennbar; `Applied(mask)`
 /// nach erfolgreichem DACL-Lesen; `ReadFailed(reason)` bei NetAPI-Fehlern.
 /// Returns `NotApplicable` when no SMB context is detectable; `Applied(mask)`
 /// after a successful DACL read; `ReadFailed(reason)` on NetAPI errors.
@@ -1195,8 +1107,6 @@ fn resolve_scan_share_status(
 ) -> (adpa_core::model::ShareMaskStatus, usize) {
     use adpa_core::model::ShareMaskStatus;
     // Round-10 Finding 1: Server/Share-Ableitung geht ueber
-    // `SmbAuditContext::resolve` — dieselbe Quelle, die der Trustee-
-    // Overlay-Bau in analyze/scan und die GUI nutzen. Damit liefern
     // effektive Share-Maske UND Trustee-Tabelle exakt denselben
     // Server/Share.
     // Round-10 finding 1: server/share derivation goes through
@@ -1218,11 +1128,6 @@ fn resolve_scan_share_status(
             (ShareMaskStatus::ReadFailed(e.to_string()), 0)
         }
         Ok(scan) => {
-            // Token-Satz MUSS dieselben SIDs enthalten wie auf NTFS-Seite, sonst
-            // werden Share-ACEs auf lokale Server-Gruppen (z. B. lokale Admins)
-            // ignoriert und die Share-Maske ist falsch. Der Access-Context
-            // sorgt zusätzlich dafür, dass z. B. `NETWORK` (S-1-5-2) für SMB
-            // im Token landet — sonst werden `Deny NETWORK`-ACEs auf der
             // Share ignoriert (Review-Folge-Befund 1).
             // Token set MUST contain the same SIDs as on the NTFS side, otherwise
             // share ACEs on local server groups (e.g. local Administrators) are
@@ -1238,7 +1143,6 @@ fn resolve_scan_share_status(
             );
             // NULL-Share-DACL: effective_share_mask liefert None — als eigener
             // Status `Unrestricted` weitergeben, statt eine kuenstliche Maske
-            // 0xFFFFFFFF zu fabrizieren (die in Reports wie eine reale
             // Special-Access-Maske wirken wuerde).
             // NULL share DACL: effective_share_mask returns None — surface as
             // dedicated `Unrestricted` status instead of fabricating a fake
@@ -1263,11 +1167,6 @@ fn resolve_scan_share_status(
 // Lokale Server-Gruppen / local server groups
 // ---------------------------------------------------------------------------
 
-/// Sammelt die lokalen Gruppen-SIDs des Benutzers auf dem Zielserver der Analyse.
-/// Bei UNC-Pfaden wird der Server aus dem Pfad abgeleitet; bei lokalen Pfaden
-/// wird der lokale Rechner abgefragt.
-/// Ohne aufgeloeste Identitaet (kein AD verbunden) liefert die Funktion eine
-/// leere Liste — ein fehlgeschlagener Aufruf bricht die Analyse nicht ab.
 ///
 /// Collects the user's local group SIDs on the analysis target server. For UNC
 /// paths the server is derived from the path; for local paths the local machine
@@ -1285,17 +1184,12 @@ fn collect_local_group_sids_for_path(
 ) {
     use adpa_core::model::LocalGroupEvalStatus;
 
-    // Finding 2: lokale Gruppen MÜSSEN vom selben Server kommen wie die
     // Share-DACL. effective_smb_target priorisiert den expliziten
-    // `--smb-server` und fällt sonst auf den UNC-Server zurück.
     let server_owned = effective_smb_target(path, explicit_smb_server);
     let server = server_owned.as_deref();
     // Review 2026-06-05 Runde 6 Finding 1: lokale Servergruppen werden
-    // jetzt als `GroupMembership` mit
-    // `MembershipPathSource::LocalGroup` aufgeloest, damit der
     // Erklaerungspfad jeden Token-Schritt nachvollziehbar darstellt.
     // SIDs werden aus den Memberships extrahiert; bekannte Domain-
-    // Gruppen werden als Mediator-Namen mitgegeben.
     // Round 6 finding 1: resolve local server groups as
     // GroupMembership instances so the explanation path renders each
     // mediator step explicitly. SIDs come from the memberships;
@@ -1347,7 +1241,6 @@ fn collect_local_group_sids_for_path(
 // Risk evaluation and export helpers
 // ---------------------------------------------------------------------------
 
-/// Führt die Standard-Risikoregeln über eine Ergebnismenge aus.
 /// Runs the default risk rules over a set of results.
 fn compute_risk_findings(permissions: &[EffectivePermission]) -> Vec<RiskFinding> {
     RuleRegistry::with_defaults().evaluate_all(&RiskContext {
@@ -1355,8 +1248,6 @@ fn compute_risk_findings(permissions: &[EffectivePermission]) -> Vec<RiskFinding
     })
 }
 
-/// Setzt die Overwrite-Policy durch: ohne `--force` wird eine vorhandene
-/// Exportdatei nicht überschrieben, sondern als Fehler abgelehnt.
 /// Enforces the overwrite policy: without `--force` an existing export file is
 /// not overwritten but rejected as an error.
 fn check_overwrite_policy(status: &ExportPathStatus, force: bool) -> anyhow::Result<()> {
@@ -1375,11 +1266,8 @@ fn check_overwrite_policy(status: &ExportPathStatus, force: bool) -> anyhow::Res
     Ok(())
 }
 
-/// Wählt den Exporter anhand der Dateiendung und schreibt den Bericht.
 /// Selects the exporter by file extension and writes the report.
 ///
-/// `.html` und `.json` enthalten Risikobefunde; `.csv` enthält nur
-/// Berechtigungen — in dem Fall wird ein Hinweis ausgegeben.
 /// `.html` and `.json` include risk findings; `.csv` only includes
 /// permissions — a note is printed in that case.
 fn export_analysis(
@@ -1393,8 +1281,6 @@ fn export_analysis(
         .map(|e| e.to_lowercase());
     // Round-8-Folgereview Finding 1: bei --force explizit den
     // Overwrite-Pfad des Exporters waehlen. Ohne --force passiert
-    // bewusst create_new — der Trait wird die Datei selbst ablehnen,
-    // wenn sie schon existiert (zusaetzliche Sicherheit zur
     // CLI-Vorabpruefung in check_overwrite_policy).
     // Round-8 follow-up finding 1: pick the exporter's explicit
     // overwrite branch only when --force is set. Without --force the
@@ -1553,9 +1439,6 @@ mod tests {
     }
 
     /// Review 2026-06-04 Runde 3 Finding 2: `validate_connection_inputs`
-    /// muss die getrimmten Wrapperwerte zurueckgeben, nicht den Rohstring.
-    /// Vorher wurde der Rueckgabewert verworfen und CLI/GUI verarbeiteten
-    /// weiter die Roh-Strings — der Test deckt explizit das
     /// Whitespace-Trimming an allen fuenf Eingabefeldern ab.
     /// Review round 3 finding 2: connection-input validation must
     /// propagate the trimmed wrapper values.
@@ -1587,7 +1470,6 @@ mod tests {
         assert!(err.to_string().contains("SMB context incomplete"));
     }
 
-    /// Leere String-Eingaben fuer SMB-Felder zaehlen wie nicht gesetzt.
     /// Empty strings for SMB count as unset.
     #[test]
     fn validate_connection_inputs_treats_empty_smb_strings_as_unset() {

@@ -1,23 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Validierung von Netzwerk- und Verzeichnis-Eingaben (SMB, LDAP, DN).
 //! Validation of network and directory inputs (SMB, LDAP, DN).
 //!
-//! Diese Eingaben werden an System- und Netzwerk-APIs übergeben (NetAPI, LDAP)
-//! und müssen daher vor der Verarbeitung formal geprüft und längenbegrenzt sein.
 //! These inputs are passed to system and network APIs (NetAPI, LDAP) and must
 //! therefore be formally checked and length-bounded before processing.
 
 use adpa_core::error::CoreError;
 
-/// Obergrenze für Hostnamen (DNS-Limit) / upper bound for host names (DNS limit).
 const MAX_HOST_LEN: usize = 255;
-/// Obergrenze für SMB-Freigabenamen / upper bound for SMB share names.
 const MAX_SHARE_LEN: usize = 80;
-/// Obergrenze für Distinguished Names / upper bound for distinguished names.
 const MAX_DN_LEN: usize = 1024;
-/// Obergrenze für Identitäts-Suchbegriffe / upper bound for identity search queries.
 const MAX_QUERY_LEN: usize = 256;
 
 /// Validierter Server-/Hostname (SMB oder LDAP).
@@ -35,13 +28,10 @@ pub struct ValidatedShareName(pub String);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedDn(pub String);
 
-/// Validierter Identitäts-Suchbegriff für die AD-Suche.
 /// Validated identity search query for the AD search.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedIdentityQuery(pub String);
 
-/// Prüft einen Hostnamen: nicht leer, längenbegrenzt, keine Steuer-/Pfadzeichen,
-/// nur Buchstaben, Ziffern, '.', '-' und '_'.
 /// Checks a host name: non-empty, length-bounded, no control/path characters,
 /// only letters, digits, '.', '-', and '_'.
 fn check_hostname(trimmed: &str, label: &str) -> Result<(), CoreError> {
@@ -74,7 +64,6 @@ fn check_hostname(trimmed: &str, label: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
-/// Validiert einen SMB-Servernamen, bevor er an die NetAPI übergeben wird.
 /// Validates an SMB server name before it is passed to the NetAPI.
 pub fn validate_smb_server(input: &str) -> Result<ValidatedServerName, CoreError> {
     let trimmed = input.trim();
@@ -82,7 +71,6 @@ pub fn validate_smb_server(input: &str) -> Result<ValidatedServerName, CoreError
     Ok(ValidatedServerName(trimmed.to_string()))
 }
 
-/// Validiert einen LDAP-Endpunkt (Hostname oder IP), bevor er für die
 /// Verbindung verwendet wird.
 /// Validates an LDAP endpoint (host name or IP) before it is used for the
 /// connection.
@@ -95,8 +83,6 @@ pub fn validate_ldap_endpoint(input: &str) -> Result<ValidatedServerName, CoreEr
 /// Validiert einen SMB-Freigabenamen.
 /// Validates an SMB share name.
 ///
-/// Freigabenamen dürfen keine Pfadtrenner oder Windows-reservierten Zeichen
-/// enthalten und sind auf 80 Zeichen begrenzt.
 /// Share names must not contain path separators or Windows-reserved characters
 /// and are limited to 80 characters.
 pub fn validate_share_name(input: &str) -> Result<ValidatedShareName, CoreError> {
@@ -114,7 +100,6 @@ pub fn validate_share_name(input: &str) -> Result<ValidatedShareName, CoreError>
             "Share name must not contain control characters".into(),
         ));
     }
-    // Windows-reservierte Zeichen für Freigabenamen / Windows-reserved share name characters.
     const FORBIDDEN: &[char] = &[
         '\\', '/', '"', '[', ']', ':', '|', '<', '>', '+', '=', ';', ',', '*', '?',
     ];
@@ -126,10 +111,8 @@ pub fn validate_share_name(input: &str) -> Result<ValidatedShareName, CoreError>
     Ok(ValidatedShareName(trimmed.to_string()))
 }
 
-/// Validiert einen Distinguished Name (Base-DN oder Bind-DN).
 /// Validates a distinguished name (base DN or bind DN).
 ///
-/// Prüft Form und Länge; verhindert Steuerzeichen und offensichtlich
 /// fehlgeformte DNs, bevor sie an den LDAP-Server gehen.
 /// Checks form and length; rejects control characters and obviously
 /// malformed DNs before they reach the LDAP server.
@@ -165,10 +148,8 @@ pub fn validate_dn(input: &str) -> Result<ValidatedDn, CoreError> {
     Ok(ValidatedDn(trimmed.to_string()))
 }
 
-/// Validiert einen Suchbegriff für die AD-Identitätssuche.
 /// Validates a query for the AD identity search.
 ///
-/// Der Wert wird vor dem Filter-Escaping geprüft: nicht leer, längenbegrenzt,
 /// keine Steuerzeichen.
 /// The value is checked before filter escaping: non-empty, length-bounded,
 /// no control characters.

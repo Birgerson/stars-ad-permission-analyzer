@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! exporter — CSV, JSON, HTML und spätere Berichtsformate
 //! exporter — CSV, JSON, HTML and future report formats
 
 pub mod csv;
@@ -19,9 +18,7 @@ pub use trustees::{
 
 /// Zentrale Overwrite-Policy fuer alle Datei-basierten Exporter.
 /// Implementiert Round-8-Folgereview Finding 1: der Trait-Default
-/// scheitert auf eine vorhandene Zieldatei (`create_new`), der explizite
 /// `FileOverwrite`-Pfad truncatet bewusst. Die jeweiligen Exporter
-/// rufen den Helfer und schreiben in den zurueckgegebenen `File`.
 ///
 /// Centralised overwrite policy for every file-based exporter.
 /// Implements round-8 follow-up finding 1: the trait default refuses

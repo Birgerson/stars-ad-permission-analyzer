@@ -1,20 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Einheitliche Principal-Auflösung — die zentrale Pipeline für alle
 //! Eingabeformen (`DOMAIN\user`, UPN, plain `sAMAccountName`, direkte
 //! SID, GUI Name → SID-Workflow).
 //!
-//! Vorgeschichte: bis v1.4.1 lag die Logik verteilt auf drei
 //! `lookup_via_*`-Helfern in [`crate::resolver::LdapResolver`] plus
-//! einen Sonderpfad in der GUI (`resolve_name_to_sid` → nur SID-String,
 //! danach `resolver.resolve_identity(&sid)`). Folge: der Multi-Domain-/
-//! Trust-Fallback griff nur für `DOMAIN\user`, nicht für die anderen
 //! drei Eingabeformen — ein realer Trust-Principal wurde je nach
-//! Eingabeform mal korrekt als LSA-only-Identity und mal still als
 //! [`IdentityKind::Orphaned`] klassifiziert. Review 2026-06-04 Runde 3
 //! Finding 1 hat diesen Architektur-Defekt offengelegt; dieser Modul
-//! schließt ihn durch eine **einzige** Pipeline, die CLI und GUI
 //! gemeinsam nutzen.
 //!
 //! Unified principal resolution — the single pipeline for all input
@@ -63,21 +57,13 @@ pub enum PrincipalInput {
     /// Explizit eine SID (`S-1-…`).
     /// Explicit SID (`S-1-…`).
     Sid(Sid),
-    /// GUI-Name-Suche: ein Anzeige- oder Anmeldename, der zuerst per
-    /// LSA in eine SID übersetzt wird; danach läuft die Pipeline wie
-    /// für [`PrincipalInput::Sid`] mit `OriginatedFromLsaLookup =
-    /// true`, damit der LDAP-Miss-Fall korrekt als
     /// [`IdentityScopeStatus::OutsideConfiguredLdapBase`] markiert
-    /// wird (nicht als [`IdentityScopeStatus::OrphanedSid`]).
     /// GUI name search.
     DisplayName(String),
 }
 
 impl PrincipalInput {
-    /// Klassifiziert `Auto`-Eingaben anhand der Syntax in einen
     /// spezifischen Variantentyp. Whitespace wird vorher getrimmt —
-    /// die zurückgegebene Variante trägt nur den getrimmten Inhalt
-    /// (schließt Review 2026-06-04 Runde 3 Finding 2 für den
     /// Identity-Dispatch).
     /// Classifies `Auto` by syntax; trims whitespace first.
     pub fn classify(self) -> Result<Self, CoreError> {
@@ -105,11 +91,7 @@ impl PrincipalInput {
     }
 }
 
-/// Klassifiziert das Ergebnis der Identitätsauflösung im Verhältnis
-/// zum konfigurierten LDAP-Scope. Ersetzt die frühere Sammelvariante
 /// [`IdentityKind::Orphaned`], die zwei semantisch unterschiedliche
-/// Fälle (echte verwaiste SID vs. realer User aus einer Trust-Domain
-/// ausserhalb der konfigurierten `base_dn`) zusammenwarf.
 ///
 /// Classifies the identity resolution outcome relative to the
 /// configured LDAP scope. Replaces the former overloaded
@@ -118,38 +100,24 @@ impl PrincipalInput {
 /// a trust domain outside the configured `base_dn`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityScopeStatus {
-    /// LDAP-Treffer unter der konfigurierten `base_dn`. Identity ist
-    /// vollständig (inkl. `userAccountControl`, UPN, korrekte
     /// `IdentityKind`-Klassifikation).
     /// LDAP hit inside the configured `base_dn`.
     InsideConfiguredLdapBase,
-    /// LDAP-Miss, aber LSA hat die SID aufgelöst — typisch in
-    /// Multi-Domain-Forests / Trust-Beziehungen, wo `base_dn` nur eine
     /// Domain indexiert. Identity stammt aus LSA-Reverse-Lookup;
-    /// `disabled`-Status ist nicht zuverlässig bestimmbar.
     /// LDAP miss, but LSA resolved the SID — typical in multi-domain
     /// forests / trusts.
     OutsideConfiguredLdapBase,
-    /// LDAP-Miss UND LSA-Miss (oder LSA-Fehler). Echte verwaiste SID
-    /// nach AD-Object-Löschung.
     /// LDAP miss AND LSA miss. Truly orphaned SID.
     OrphanedSid,
     /// LDAP-Verbindung selbst ist gescheitert (Timeout, Bind-Fehler,
-    /// unerreichbarer DC). Die Identity ist eine konservative
-    /// Platzhalter-Identity; das Risk-Modell muss das als
-    /// unvollständig behandeln.
     /// LDAP connection itself failed.
     LookupFailed { reason: String },
 }
 
-/// Status der Gruppenauflösung. Trennt explizit, ob die Auflösung über
-/// LDAP rekursiv oder über SAM/NetAPI flach (nur direkte Gruppen)
-/// passierte — ersetzt das frühere boolesche
 /// `group_resolution_via_sam_fallback`.
 /// Status of the group resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupResolutionStatus {
-    /// Rekursive LDAP-Auflösung über
     /// `LDAP_MATCHING_RULE_IN_CHAIN`. Komplett.
     /// Recursive LDAP resolution. Complete.
     LdapRecursive,
@@ -157,19 +125,13 @@ pub enum GroupResolutionStatus {
     /// lokale-Gruppen-Ketten; verschachtelte Domain-Gruppen fehlen.
     /// SAM/NetAPI path: only direct domain groups + local group chains.
     SamFlat,
-    /// Auflösung gescheitert (LDAP-Fehler, NetAPI-Fehler) — der
-    /// Membership-Vector kann unvollständig sein.
     /// Resolution failed.
     Failed { reason: String },
-    /// Bewusst übersprungen, weil kein LDAP konfiguriert und SAM nicht
-    /// verfügbar (z. B. Non-Windows-CLI mit SID-Eingabe). Bare SID,
     /// keine Gruppen.
     /// Deliberately skipped.
     NotAttempted,
 }
 
-/// Tri-State für den `disabled`-Status — `Known(false)` und
-/// `Unknown` sind semantisch unterschiedlich und dürfen nicht
 /// zusammenfallen.
 /// Tri-state for the `disabled` flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,18 +141,12 @@ pub enum DisabledStatus {
 }
 
 impl DisabledStatus {
-    /// Bequemer Zugriff für Aufrufer, die nur den Bool wollen. `Unknown`
-    /// → `false` (konservativ, weil "aktiv" der Default-Annahme
-    /// entspricht); die *Sichtbarkeit* der Unsicherheit erfolgt
-    /// separat über den `PermissionDiagnostic`-Marker.
     /// Bool accessor with conservative default.
     pub fn as_bool_conservative(self) -> bool {
         matches!(self, Self::Known(true))
     }
 }
 
-/// Vollständiges Ergebnis der Principal-Auflösung. Das ist das eine
-/// Modell, das CLI, GUI und alle Aufrufer der
 /// `PermissionEvaluationInput`-Konstruktion teilen.
 /// Complete principal resolution outcome.
 #[derive(Debug, Clone)]
@@ -202,16 +158,13 @@ pub struct PrincipalResolution {
     pub group_resolution_status: GroupResolutionStatus,
     pub disabled_status: DisabledStatus,
     /// Bereits aufgesammelte Diagnose-Marker (z. B. aus Sub-Resolvern).
-    /// Die Engine pusht ihre eigenen Marker zusätzlich.
     /// Pre-collected diagnostic markers.
     pub diagnostics: Vec<PermissionDiagnostic>,
 }
 
 impl PrincipalResolution {
     /// Ableitung der Engine-Flags aus dem Resolution-Status —
-    /// einzige offizielle Quelle für die entsprechenden
     /// `PermissionEvaluationInput`-Felder. Aufrufer sollen die Flags
-    /// **immer** über diese Methode lesen, nicht selbst aus den
     /// Status-Feldern ableiten.
     /// Derives the engine flags from the resolution status — the
     /// single official source for the corresponding
@@ -219,7 +172,6 @@ impl PrincipalResolution {
     pub fn engine_flags(&self) -> EngineFlags {
         // Review 2026-06-04 Runde 4 Finding 1: LookupFailed,
         // GroupResolutionStatus::Failed und NotAttempted (im
-        // Outside-Pfad) tragen jetzt einen Reason — die Engine pusht
         // daraus IdentityLookupFailed / GroupResolutionFailed-Marker.
         // Review round 4 finding 1.
         let identity_lookup_failure_reason = match &self.scope_status {
@@ -229,8 +181,6 @@ impl PrincipalResolution {
         let group_resolution_failure_reason = match &self.group_resolution_status {
             GroupResolutionStatus::Failed { reason } => Some(reason.clone()),
             // NotAttempted im OutsideConfiguredLdapBase-Pfad ist
-            // strukturell unvollständig — der LDAP-base hat die SID
-            // nicht und wir haben keinen GC-Crawl gemacht. Auditoren
             // muessen das sehen.
             // NotAttempted in the Outside path is structurally incomplete.
             GroupResolutionStatus::NotAttempted
@@ -265,7 +215,6 @@ impl PrincipalResolution {
     }
 }
 
-/// Bool/Reason-Flags, die in `PermissionEvaluationInput` fließen.
 /// Flag bundle fed into `PermissionEvaluationInput`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineFlags {
@@ -276,25 +225,17 @@ pub struct EngineFlags {
     /// Engine pusht `PermissionDiagnostic::IdentityLookupFailed`,
     /// Risk-Engine markiert incomplete. Default `None`.
     pub identity_lookup_failure_reason: Option<String>,
-    /// `Some(reason)` wenn `GroupResolutionStatus::Failed` oder
-    /// strukturell unvollständige `NotAttempted`. Default `None`.
     pub group_resolution_failure_reason: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
-// Backend-Traits — die Testschicht, die Phase 2 möglich macht.
 // Backend traits — the abstraction layer that makes phase 2 testable.
 // ---------------------------------------------------------------------------
 
-/// LDAP-Backend, das der Principal-Resolver für seine Lookups braucht.
 /// Der Produktiv-Adapter delegiert an [`crate::resolver::LdapResolver`];
-/// Tests liefern ein In-Memory-Fake (siehe `tests/fake_ldap.rs`).
 /// LDAP backend the principal resolver consumes.
 #[async_trait]
 pub trait IdentityBackend: Send + Sync {
-    /// SID → Identity über das konfigurierte LDAP-`base_dn`. Liefert
-    /// `Ok(None)`, wenn der `base_dn` die SID nicht indexiert (= echter
-    /// LDAP-Miss, kein Fehler). Verbindungs- und Timeout-Fehler werden
     /// als `Err` propagiert.
     /// SID → Identity inside the configured LDAP base.
     async fn lookup_identity_by_sid(&self, sid: &Sid) -> Result<Option<Identity>, CoreError>;
@@ -305,33 +246,25 @@ pub trait IdentityBackend: Send + Sync {
         -> Result<Option<(Sid, Identity)>, CoreError>;
 
     /// `sAMAccountName` → alle passenden Identities. Der Aufrufer
-    /// behandelt > 1 Treffer als Eindeutigkeits-Fehler (siehe
     /// [`PrincipalResolver::resolve`]).
     /// `sAMAccountName` → all matching identities (caller dedupes).
     async fn lookup_identities_by_sam(&self, sam: &str) -> Result<Vec<(Sid, Identity)>, CoreError>;
 
-    /// Rekursive Gruppenauflösung über LDAP_MATCHING_RULE_IN_CHAIN.
     /// Recursive group resolution.
     async fn resolve_memberships(&self, sid: &Sid) -> Result<Vec<GroupMembership>, CoreError>;
 }
 
-/// LSA-Backend für Windows-Reverse-Lookups. Auf Non-Windows liefert die
-/// Implementierung pauschal `Err(CoreError::Validation(...))` für alle
-/// Aufrufe — der Principal-Resolver behandelt das als "LSA nicht
-/// verfügbar" und überspringt den Crosscheck.
 /// LSA backend for Windows reverse lookups.
 pub trait LsaBackend: Send + Sync {
     /// `DOMAIN\user` oder UPN → SID.
     /// Name → SID.
     fn lookup_sid_for_name(&self, name: &str) -> Result<Sid, CoreError>;
 
-    /// SID → (Name, Domain, Kind) für den LSA-only-Identity-Bau bei
     /// LDAP-Miss.
     /// SID → account info for the LSA-only identity build path.
     fn lookup_account_for_sid(&self, sid: &Sid) -> Result<LsaAccountInfo, CoreError>;
 }
 
-/// Reduziertes Account-Info-DTO für [`LsaBackend::lookup_account_for_sid`].
 /// Reduced account info DTO.
 #[derive(Debug, Clone)]
 pub struct LsaAccountInfo {
@@ -345,8 +278,6 @@ pub struct LsaAccountInfo {
 // Adapter: existing LdapResolver as IdentityBackend.
 // ---------------------------------------------------------------------------
 
-/// Adapter, der einen [`crate::resolver::LdapResolver`] als
-/// [`IdentityBackend`] verfügbar macht.
 /// Adapter that exposes [`crate::resolver::LdapResolver`] as an
 /// [`IdentityBackend`].
 pub struct LdapIdentityBackend {
@@ -363,10 +294,6 @@ impl LdapIdentityBackend {
 impl IdentityBackend for LdapIdentityBackend {
     async fn lookup_identity_by_sid(&self, sid: &Sid) -> Result<Option<Identity>, CoreError> {
         use adpa_core::traits::IdentityResolver;
-        // Der bisherige `resolve_identity` liefert auch bei LDAP-Miss
-        // eine `Identity` mit `kind = Orphaned` zurück. Für das
-        // Backend-Trait übersetzen wir das in `None` — der
-        // PrincipalResolver entscheidet anschließend, ob LSA dafür
         // einsteht.
         // `resolve_identity` returns an `Orphaned` identity on miss;
         // here we translate that to `None`.
@@ -422,7 +349,6 @@ impl LsaBackend for WindowsLsaBackend {
 }
 
 /// Non-Windows-Stub. Alle Aufrufe liefern Validation-Fehler — der
-/// PrincipalResolver behandelt das als "LSA nicht verfügbar".
 /// Non-Windows stub.
 #[cfg(not(windows))]
 pub struct NoLsaBackend;
@@ -448,16 +374,9 @@ impl LsaBackend for NoLsaBackend {
 // PrincipalResolver — the central pipeline.
 // ---------------------------------------------------------------------------
 
-/// Orchestriert die fünf Schritte einer Identitätsauflösung:
 ///
-/// 1. Eingabe validieren und in einen Variantentyp klassifizieren.
-/// 2. SID ermitteln (LSA für Namen, direkt für SID-Eingaben).
 /// 3. LDAP-Identity unter der konfigurierten `base_dn` suchen.
-/// 4. Bei LDAP-Miss + Windows: LSA-Reverse-Lookup als Crosscheck und
-///    Identity aus LSA bauen, falls die SID dort existiert.
-/// 5. Gruppen rekursiv über LDAP auflösen.
 ///
-/// Liefert eine [`PrincipalResolution`] mit explizitem
 /// [`IdentityScopeStatus`], [`GroupResolutionStatus`] und
 /// [`DisabledStatus`] — Aufrufer leiten daraus die Engine-Flags ab.
 ///
@@ -484,7 +403,6 @@ where
         }
     }
 
-    /// Vollständige Auflösung — die einzige öffentliche Entry-Point-Methode.
     /// Full resolution — the single public entry point.
     pub async fn resolve(&self, input: PrincipalInput) -> Result<PrincipalResolution, CoreError> {
         let classified = input.classify()?;
@@ -508,9 +426,6 @@ where
             )
         })?;
         let sid = lsa.lookup_sid_for_name(name)?;
-        // Im Anschluss laufen wir denselben Pfad wie für direkte SIDs —
-        // dort steckt der LDAP-/LSA-Crosscheck. So bleibt das Verhalten
-        // zwischen "DOMAIN\user gegeben" und "Name → LSA-SID → Analyse"
         // bitgenau identisch.
         // Then we run the same path as for direct SIDs — that contains
         // the LDAP / LSA cross-check. Behavior between
@@ -519,10 +434,7 @@ where
         self.resolve_by_sid(sid).await
     }
 
-    /// UPN-Pfad. Bei LDAP-Miss kein LSA-Crosscheck möglich (LSA kann
-    /// kein UPN auflösen) — das Ergebnis wird als
     /// [`IdentityScopeStatus::LookupFailed`] markiert mit eindeutigem
-    /// Hinweis auf den GC-Bind als nächsten Schritt.
     /// UPN path. No LSA cross-check possible — miss → `LookupFailed`.
     async fn resolve_by_upn(&self, upn: &str) -> Result<PrincipalResolution, CoreError> {
         match self.identity_backend.lookup_identity_by_upn(upn).await? {
@@ -547,11 +459,8 @@ where
                 })
             }
             None => {
-                // UPN nicht in konfigurierter base_dn — wir wissen
-                // weder die SID noch eine vertrauenswürdige Identity.
                 // Konsistente Antwort: Fehler statt unsichtbarer
                 // Fallback. ChatGPT-Review 2026-06-04 Runde 3 Finding
-                // 1: UPN-Doku und Implementierung dürfen nicht
                 // auseinanderlaufen.
                 // UPN missing in configured base_dn — return a clean
                 // error rather than fabricating a fallback identity.
@@ -609,7 +518,6 @@ where
 
         match ldap_result {
             Ok(Some(identity)) => {
-                // LDAP-Hit — alles innerhalb der konfigurierten base.
                 let (memberships, group_status) = self.resolve_groups(&sid).await;
                 let disabled_status = disabled_from_ldap(&identity);
                 let mut diagnostics = Vec::with_capacity(2);
@@ -635,9 +543,7 @@ where
                 self.fall_back_to_lsa(&sid).await
             }
             Err(e) => {
-                // Echter LDAP-Fehler (Bind, Timeout) — nicht in
                 // `Orphaned` verwandeln. ScopeStatus =
-                // LookupFailed mit Begründung; Identity ist Platzhalter.
                 warn!(
                     sid = %sid.0,
                     error = %e,
@@ -648,9 +554,7 @@ where
         }
     }
 
-    /// LDAP-Miss + LSA-Crosscheck. Wenn LSA die SID kennt → Identity
     /// aus LSA bauen, Scope = `OutsideConfiguredLdapBase`. Wenn LSA
-    /// die SID auch nicht kennt → Scope = `OrphanedSid`.
     /// LDAP miss + LSA cross-check.
     async fn fall_back_to_lsa(&self, sid: &Sid) -> Result<PrincipalResolution, CoreError> {
         let lsa = match self.lsa_backend.as_ref() {
@@ -671,7 +575,6 @@ where
                 // LSA kennt die SID — typisches Multi-Domain-/Trust-
                 // Szenario. Identity wird aus LSA gebaut; LDAP-Memberships
                 // bleiben leer (eine LDAP-Suche im falschen base_dn
-                // liefert nichts), das wird als SamFlat o.ä. markiert.
                 let identity = Identity {
                     sid: sid.clone(),
                     name: if account.name.is_empty() {
@@ -689,8 +592,6 @@ where
                     user_principal_name: None,
                 };
                 let scope = IdentityScopeStatus::OutsideConfiguredLdapBase;
-                // Memberships sind LDAP-seitig leer; ein Versuch ueber
-                // SAM/NetAPI auf dem lokalen System koennte das ergaenzen.
                 // Aufrufer (GUI/CLI) faerben das ggf. nachtraeglich;
                 // hier markieren wir konservativ NotAttempted.
                 // Memberships unknown from LDAP; flagged NotAttempted.
@@ -708,14 +609,12 @@ where
                 })
             }
             Err(_) => {
-                // LSA findet die SID auch nicht — echte Orphan.
                 debug!(sid = %sid.0, "LDAP miss and LSA miss — OrphanedSid");
                 Ok(self.orphaned_resolution(sid.clone()))
             }
         }
     }
 
-    /// Hilfsfunktion: rekursive Gruppen über das LDAP-Backend.
     /// Helper: recursive groups via the LDAP backend.
     async fn resolve_groups(&self, sid: &Sid) -> (Vec<GroupMembership>, GroupResolutionStatus) {
         match self.identity_backend.resolve_memberships(sid).await {
@@ -774,9 +673,6 @@ where
 }
 
 /// Liest den `disabled`-Status aus einer LDAP-gelieferten Identity.
-/// LDAP weiß den Wert immer (aus `userAccountControl`); auf einer
-/// LSA-only-Identity ist er unbekannt (Default `false`, aber Marker
-/// `IdentityDisabledStatusUnknown` muss gesetzt sein).
 /// Reads `disabled` from an LDAP-sourced identity.
 fn disabled_from_ldap(identity: &Identity) -> DisabledStatus {
     DisabledStatus::Known(identity.disabled)
@@ -806,7 +702,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    /// In-Memory-LDAP-Fake. Bildet einen `base_dn`-Scope nach.
     /// In-memory LDAP fake.
     struct FakeLdapBackend {
         by_sid: HashMap<String, Identity>,
@@ -982,8 +877,6 @@ mod tests {
         assert!(flags.identity_disabled_status_unknown);
     }
 
-    /// 3) Direkte SID-Eingabe + LDAP-Miss + LSA-Hit: muss als
-    ///    Outside klassifiziert werden (vorher: still als Orphaned).
     /// 3) Direct SID + LDAP miss + LSA hit: Outside.
     #[tokio::test]
     async fn direct_sid_ldap_miss_with_lsa_hit_is_outside_base() {
@@ -1034,7 +927,6 @@ mod tests {
         assert_eq!(res.identity.name.as_deref(), Some("charlie"));
     }
 
-    /// 5) UPN ausserhalb der konfigurierten base_dn: explicit
     ///    Validation-Fehler mit GC-Hinweis (kein stiller Orphan).
     /// 5) UPN outside configured base: explicit error pointing at GC.
     #[tokio::test]
@@ -1120,8 +1012,6 @@ mod tests {
     /// keine LSA-Reklassifikation.
     /// LDAP error: LookupFailed, no LSA reclassification. Plus
     /// Review 2026-06-04 Runde 4 Finding 1: engine_flags() muss den
-    /// Reason als `identity_lookup_failure_reason` durchreichen, damit
-    /// die Engine den IdentityLookupFailed-Marker pushen kann.
     /// LDAP error → LookupFailed + engine_flags carry the reason.
     #[tokio::test]
     async fn ldap_error_yields_lookup_failed_not_orphaned() {
@@ -1216,7 +1106,6 @@ mod tests {
             res.scope_status,
             IdentityScopeStatus::InsideConfiguredLdapBase
         );
-        // Group resolution muss aber als Failed markiert sein.
         match &res.group_resolution_status {
             GroupResolutionStatus::Failed { reason } => {
                 assert!(
@@ -1238,8 +1127,6 @@ mod tests {
     }
 
     /// `IdentityScopeStatus::OutsideConfiguredLdapBase` mit
-    /// `GroupResolutionStatus::NotAttempted` muss ebenfalls einen
-    /// `group_resolution_failure_reason` produzieren — sonst wuerde der
     /// Trust-/Multi-Domain-Pfad still mit leerem Token rechnen.
     /// Outside + NotAttempted = also a group failure (silent skip
     /// otherwise).
@@ -1288,7 +1175,6 @@ mod tests {
         assert!(err.to_string().contains("Ambiguous"));
     }
 
-    /// `Auto`-Dispatcher klassifiziert anhand der Syntax und trimmt.
     /// `Auto` classification + trim.
     #[test]
     fn auto_dispatcher_classifies_by_syntax_and_trims() {

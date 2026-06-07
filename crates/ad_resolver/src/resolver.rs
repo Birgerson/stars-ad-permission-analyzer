@@ -1,31 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! LdapResolver — implementiert IdentityResolver über LDAP gegen Active Directory.
 //! LdapResolver — implements IdentityResolver via LDAP against Active Directory.
 //!
-//! Fachliche Regeln die hier umgesetzt werden:
 //! Domain rules implemented here:
 //!
-//! - SID ist die primäre technische Identität, nicht der Anzeigename.
 //!   SID is the primary technical identity, not the display name.
-//! - Deaktivierte Benutzer werden erkannt und markiert.
 //!   Disabled users are detected and marked.
-//! - Verwaiste SIDs (kein AD-Objekt gefunden) werden als Unknown markiert.
 //!   Orphaned SIDs (no AD object found) are marked as Unknown.
-//! - Transitive Gruppenmitgliedschaft wird serverseitig über
-//!   `LDAP_MATCHING_RULE_IN_CHAIN` aufgelöst — damit umgehen wir das
 //!   `memberOf`-Range-Retrieval (das AD bei > ~1500 Werten abschneidet)
-//!   und vermeiden die N+1-Rekursion pro Hierarchieebene. Zyklen sind
-//!   in dieser Form unmöglich.
 //!   Transitive group membership is resolved server-side via
 //!   `LDAP_MATCHING_RULE_IN_CHAIN`, which avoids `memberOf` range
 //!   retrieval (AD truncates beyond ~1500 values) and the per-level
 //!   N+1 recursion. Cycles cannot occur in this scheme.
-//! - SID-zu-Identity-Auflösungen werden gecacht.
 //!   SID-to-Identity resolutions are cached.
-//! - Die primäre Gruppe eines Benutzers wird gesondert berücksichtigt,
-//!   da sie über `primaryGroupID` (nicht `member`) modelliert ist.
 //!   The primary group of a user is handled separately because it is
 //!   modelled via `primaryGroupID` (not `member`).
 
@@ -48,11 +36,9 @@ use crate::{
     sid_util::bytes_to_sid_str,
 };
 
-/// AD-Benutzer userAccountControl-Bit für deaktivierte Konten.
 /// AD userAccountControl bit for disabled accounts.
 const UAC_ACCOUNT_DISABLE: u32 = 0x0002;
 
-/// Implementiert IdentityResolver über LDAP mit In-Memory-Cache.
 /// Implements IdentityResolver via LDAP with an in-memory cache.
 pub struct LdapResolver {
     config: Arc<LdapConfig>,
@@ -61,7 +47,6 @@ pub struct LdapResolver {
 }
 
 impl LdapResolver {
-    /// Erstellt einen neuen LdapResolver mit der gegebenen Konfiguration.
     /// Creates a new LdapResolver with the given configuration.
     pub fn new(config: LdapConfig) -> Self {
         Self {
@@ -71,8 +56,6 @@ impl LdapResolver {
     }
 
     /// Roh-LDAP-Lookup per UPN — liefert `(Sid, Identity)` ohne
-    /// Diagnose-Flags. Aufrufer ist das [`crate::principal`]-Modul,
-    /// das die Flags aus dem ScopeStatus ableitet.
     /// Raw LDAP UPN lookup. Consumed by [`crate::principal`].
     pub async fn lookup_by_upn_raw(&self, upn: &str) -> Result<Option<(Sid, Identity)>, CoreError> {
         ldap_client::with_timeout(
@@ -136,16 +119,13 @@ impl LdapResolver {
         .await
     }
 
-    /// Gibt die Anzahl gecachter Identitäten zurück (für Tests und Diagnose).
     /// Returns the number of cached identities (for tests and diagnostics).
     pub async fn cache_size(&self) -> usize {
         self.identity_cache.lock().await.len()
     }
 
-    /// Löst eine Identität auf — erst aus Cache, dann per LDAP.
     /// Resolves an identity — first from cache, then via LDAP.
     async fn resolve_identity_internal(&self, sid: &Sid) -> Result<Identity, CoreError> {
-        // Cache-Treffer prüfen
         // Check cache hit
         {
             let cache = self.identity_cache.lock().await;
@@ -155,7 +135,6 @@ impl LdapResolver {
             }
         }
 
-        // Gesamtoperation gegen das konfigurierte Timeout absichern
         // (Review-Befund 5).
         // Bound the whole operation against the configured timeout
         // (review finding 5).
@@ -190,9 +169,6 @@ impl LdapResolver {
 
         // Review 2026-06-04 Runde 3 Finding 1 (Cache-Vergiftung):
         // `Orphaned`-Identities durften vorher in den Cache. Ein
-        // anschliessender `lookup_via_lsa`-Aufruf, der bei LDAP-Miss eine
-        // LSA-only-Identity baut (mit Namen + Domain), hatte keine
-        // Chance, den Cache zu korrigieren — der naechste Konsument fuer
         // dieselbe SID bekam wieder die unvollstaendige `Orphaned`.
         // Konsequenz: keine `Orphaned`-Persistierung. Beim naechsten
         // Aufruf darf der Resolver/PrincipalResolver erneut entscheiden,
@@ -214,18 +190,8 @@ impl LdapResolver {
         Ok(identity)
     }
 
-    /// Löst alle Gruppenmitgliedschaften transitiv auf — serverseitig via
-    /// `LDAP_MATCHING_RULE_IN_CHAIN`, ergänzt um die Primärgruppe (die nicht
-    /// über `member` verlinkt ist) und deren transitive Eltern.
     ///
-    /// Zusätzlich wird pro Mitgliedschaft ein konkreter [`MembershipPath`]
-    /// rekonstruiert: ausgehend von den `memberOf`-Edges des Benutzers wird
-    /// per BFS durch die `memberOf`-Edges der jeweiligen Gruppen die kürzeste
-    /// Kette zur Zielgruppe gebaut. Wenn die Rekonstruktion nicht möglich ist
-    /// (z. B. weil `memberOf` einer Zwischengruppe vom Server trunkiert
-    /// wurde), bleibt der Pfad zwei SIDs lang und wird als
     /// `complete = false` mit Quelle [`MembershipPathSource::LdapMatchingRule`]
-    /// markiert — die transitive Zugehörigkeit ist dann gesichert, der
     /// konkrete Weg jedoch nicht.
     ///
     /// Resolves all group memberships transitively — server-side via
@@ -245,7 +211,6 @@ impl LdapResolver {
         &self,
         sid: &Sid,
     ) -> Result<Vec<GroupMembership>, CoreError> {
-        // Gesamte Mitgliedschafts-Auflösung gegen das konfigurierte Timeout
         // absichern (Review-Befund 5).
         // Bound the whole membership resolution against the configured
         // timeout (review finding 5).
@@ -272,7 +237,6 @@ impl LdapResolver {
             return Ok(Vec::new());
         };
 
-        // 2) Primärgruppe nachschlagen (separat von der `member`-Kette).
         // 2) Resolve the primary group (separate from the `member` chain).
         let primary_group_sid =
             resolve_primary_group(&entry, &self.config.base_dn, &mut ldap).await;
@@ -286,9 +250,6 @@ impl LdapResolver {
         )
         .await?;
 
-        // 4) Primärgruppen-Entry und ihre transitiven Eltern. Werden
-        //    benötigt, um auch über die Primärgruppe verschachtelte
-        //    Ketten korrekt rekonstruieren zu können.
         // 4) Primary group entry and its transitive parents — needed to
         //    correctly reconstruct chains that run through the primary
         //    group.
@@ -314,7 +275,6 @@ impl LdapResolver {
 
         // 5) Forward-Graph aufbauen: group_dn → Liste von Eltern-DNs (aus
         //    deren `memberOf`-Attribut). Eine Kante G_x → G_y bedeutet
-        //    „G_x ist direktes Mitglied von G_y", also „G_y enthält G_x".
         //    SID- und Name-Indizes parallel pflegen.
         // 5) Build the forward graph: group_dn → list of parent DNs (from
         //    its `memberOf` attribute). Edge G_x → G_y means "G_x is a
@@ -355,8 +315,6 @@ impl LdapResolver {
             register_group_entry(e);
         }
 
-        // 6) Startknoten der BFS: die direkten Gruppen des Benutzers
-        //    (`memberOf` des Principals) plus die Primärgruppe (falls
         //    bekannt). Beide gelten als Hop-1 vom Benutzer aus.
         // 6) BFS starting nodes: the user's direct groups (`memberOf` of
         //    the principal) plus the primary group (if known). Both count
@@ -370,7 +328,6 @@ impl LdapResolver {
         let primary_dn_lc: Option<String> = pg_entry.as_ref().map(|e| e.dn.to_ascii_lowercase());
 
         // 7) BFS von allen Startknoten gleichzeitig — pro Ziel-DN den
-        //    Vorgänger merken (`came_from`). Daraus lassen sich die
         //    konkreten DN-Ketten rekonstruieren.
         // 7) Multi-source BFS — track each reached DN's predecessor in
         //    `came_from`. Concrete DN chains can then be reconstructed.
@@ -403,7 +360,6 @@ impl LdapResolver {
             }
         }
 
-        // 8) Mitgliedschaften zusammenstellen und Pfade anhängen.
         // 8) Assemble memberships and attach paths.
         let mut memberships = Vec::new();
         let mut visited: HashSet<String> = HashSet::new();
@@ -414,8 +370,6 @@ impl LdapResolver {
             .or_else(|| entry.first_attr("cn"))
             .map(str::to_owned);
 
-        // Hilfs-Closure: BFS-Pfad zu group_dn als SID-Kette inkl. Benutzer
-        // am Anfang rekonstruieren. Liefert None, wenn group_dn nicht
         // erreichbar war.
         // Helper closure: reconstruct the BFS path to group_dn as a SID
         // chain prefixed with the user. Returns None when group_dn was
@@ -447,7 +401,6 @@ impl LdapResolver {
             Some((nodes, names))
         };
 
-        // 8a) Primärgruppe als eigene Mitgliedschaft (direkt).
         // 8a) Primary group as its own membership (direct).
         if let Some(ref pg_sid) = primary_group_sid {
             if visited.insert(pg_sid.0.clone()) {
@@ -498,10 +451,7 @@ impl LdapResolver {
                     complete: true,
                 },
                 None => {
-                    // Transitive Zugehörigkeit ist gesichert (steht ja in
-                    // der Trefferliste), nur die Zwischenstufen sind
                     // unbekannt — typischerweise wegen trunkiertem
-                    // memberOf in einer Zwischengruppe.
                     // Transitive membership is certain (it is in the
                     // result set) but intermediate hops are unknown —
                     // typically due to a truncated memberOf in an
@@ -528,8 +478,6 @@ impl LdapResolver {
             });
         }
 
-        // 8c) Transitive Eltern der Primärgruppe (separate Hop-Kette über
-        //     die Primärgruppe).
         // 8c) Transitive parents of the primary group (separate chain
         //     that runs through the primary group).
         for parent_entry in &pg_parents {
@@ -630,7 +578,6 @@ fn parse_identity_from_entry(entry: &RawEntry, sid: &Sid) -> Identity {
 /// Bestimmt den IdentityKind aus den objectClass-Werten.
 /// Determines the IdentityKind from objectClass values.
 fn classify_identity(object_classes: &[&str]) -> IdentityKind {
-    // Reihenfolge ist wichtig: Computer hat auch "user" in objectClass
     // Order matters: computers also have "user" in objectClass
     if object_classes.contains(&"computer") {
         IdentityKind::Computer
@@ -643,7 +590,6 @@ fn classify_identity(object_classes: &[&str]) -> IdentityKind {
     }
 }
 
-/// Extrahiert die SID aus einem LDAP-Eintrag (binäres objectSid-Attribut).
 /// Extracts the SID from an LDAP entry (binary objectSid attribute).
 pub fn extract_sid_from_entry(entry: &RawEntry) -> Option<Sid> {
     let bytes = entry.first_bin_attr("objectSid")?;
@@ -656,7 +602,6 @@ pub fn extract_sid_from_entry(entry: &RawEntry) -> Option<Sid> {
     }
 }
 
-/// Extrahiert den Domänennamen aus einem Distinguished Name.
 /// Extracts the domain name from a distinguished name.
 ///
 /// "CN=User,CN=Users,DC=testdomain,DC=local" → Some("testdomain.local")
@@ -676,10 +621,8 @@ fn dn_to_domain(dn: &str) -> Option<String> {
     }
 }
 
-/// Löst die primäre Gruppe eines Benutzers auf (nicht in memberOf enthalten).
 /// Resolves the primary group of a user (not included in memberOf).
 ///
-/// Die primäre Gruppe ergibt sich aus: Domänen-SID + primaryGroupID als RID.
 /// Primary group = domain SID + primaryGroupID as RID.
 async fn resolve_primary_group(
     entry: &RawEntry,
@@ -690,7 +633,6 @@ async fn resolve_primary_group(
         .first_attr("primaryGroupID")
         .and_then(|v| v.parse().ok())?;
 
-    // Domänen-SID aus der Benutzer-SID ableiten (alle Sub-Authorities außer dem letzten RID)
     // Derive domain SID from user SID (all sub-authorities except the last RID)
     let user_sid_bytes = entry.first_bin_attr("objectSid")?;
     let user_sid_str = bytes_to_sid_str(user_sid_bytes).ok()?;
@@ -721,8 +663,6 @@ async fn resolve_primary_group(
 }
 
 // --- Integrationstests ---
-// Diese Tests erfordern eine laufende TESTDOMAIN-Umgebung und sind standardmäßig
-// mit #[ignore] markiert. Ausführung: cargo test -- --ignored
 //
 // --- Integration tests ---
 // These tests require a running TESTDOMAIN environment and are marked #[ignore]
@@ -758,7 +698,6 @@ mod tests {
         let resolver = LdapResolver::new(cfg.clone());
         // Administrator-SID beginnt immer mit S-1-5-21-...-500
         // Administrator SID always ends with -500
-        // Wir suchen zuerst per sAMAccountName um die SID zu bekommen
         // We first search by sAMAccountName to get the SID
         let mut ldap = ldap_client::connect(&cfg).await.unwrap();
         let entry = ldap_client::search_by_samaccount(&mut ldap, &base_dn, "Administrator")
@@ -793,8 +732,6 @@ mod tests {
         let sid = extract_sid_from_entry(&entry).unwrap();
         let memberships = resolver.resolve_group_memberships(&sid).await.unwrap();
 
-        // max.mustermann ist in GRP_IT_Admins und GRP_Development (direkt)
-        // und transitiv in GRP_FullAccess_FS und GRP_ShareAccess_SMB
         let group_names: Vec<String> = {
             let mut ldap2 = ldap_client::connect(&cfg).await.unwrap();
             let mut names = Vec::new();
@@ -811,7 +748,6 @@ mod tests {
             names
         };
 
-        // Basisprüfung: Mindestens Domain Users (Primärgruppe) muss aufgelöst werden.
         // Basic check: at least Domain Users (primary group) must be resolved.
         assert!(
             !group_names.is_empty(),
@@ -822,7 +758,6 @@ mod tests {
             "Domain Users (Primärgruppe) muss immer enthalten sein / Domain Users (primary group) must always be present"
         );
 
-        // Transitivitätsprüfung gegen die im Setup-Script
         // (scripts/test-env/02-setup-ad-objects.ps1) angelegte AD-Struktur:
         //   max.mustermann → GRP_IT_Admins   (direct)
         //   max.mustermann → GRP_Development (direct)
@@ -830,7 +765,6 @@ mod tests {
         //   GRP_Development → GRP_ShareAccess_SMB (nested)
         //
         // Diese Asserts setzen voraus, dass Finding 8 wirkt — die transitive
-        // Auflösung läuft jetzt serverseitig via LDAP_MATCHING_RULE_IN_CHAIN.
         // These asserts depend on Finding 8 — transitive resolution now runs
         // server-side via LDAP_MATCHING_RULE_IN_CHAIN.
         assert!(
@@ -850,8 +784,6 @@ mod tests {
             "GRP_ShareAccess_SMB (transitiv) fehlt — vorhandene Gruppen: {group_names:?}"
         );
 
-        // Direkt-Markierung prüfen: GRP_IT_Admins und GRP_Development müssen
-        // als direct=true geliefert werden, GRP_FullAccess_FS und
         // GRP_ShareAccess_SMB als direct=false.
         // Verify direct flag: GRP_IT_Admins and GRP_Development must be
         // direct=true, while GRP_FullAccess_FS and GRP_ShareAccess_SMB must
@@ -898,7 +830,6 @@ mod tests {
     async fn orphaned_sid_returns_unknown() {
         let Some(cfg) = test_config() else { return };
         let resolver = LdapResolver::new(cfg);
-        // SID die sicher nicht in der Testdomäne existiert (gültige u32-Sub-Authorities).
         // SID that definitely does not exist in the test domain (valid u32 sub-authorities).
         let fake_sid = Sid("S-1-5-21-1111111111-2222222222-3333333333-9999".to_string());
         let identity = resolver.resolve_identity(&fake_sid).await.unwrap();
@@ -924,7 +855,6 @@ mod tests {
         assert_eq!(resolver.cache_size().await, 0);
         resolver.resolve_identity(&sid).await.unwrap();
         assert_eq!(resolver.cache_size().await, 1);
-        // Zweiter Aufruf: muss aus Cache kommen, Cache-Größe bleibt 1
         // Second call: must come from cache, cache size stays 1
         resolver.resolve_identity(&sid).await.unwrap();
         assert_eq!(resolver.cache_size().await, 1);
@@ -963,7 +893,6 @@ mod tests {
 
     #[test]
     fn classify_computer_over_user() {
-        // Computer-Objekte haben auch "user" in objectClass — Computer hat Vorrang
         // Computer objects also have "user" in objectClass — Computer takes precedence
         assert_eq!(
             classify_identity(&["top", "person", "user", "computer"]),
