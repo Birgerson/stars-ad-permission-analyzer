@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lab Phase 4 — Reboot aller drei VMs (Promote-Aktivierung) + Warten bis AD antwortet.
+# Lab phase 4 — reboot all three VMs (promote activation) and wait until AD responds.
 set -eu
 
 wait_for_agent() {

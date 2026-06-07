@@ -2,7 +2,7 @@
 # Lab Block C.4 — Stars Performance-Benchmark gegen 5105 Ordner / 500 Users
 # auf tier0 mit Live-LDAP-Resolve und CSV-Output.
 set -eu
-: "${LAB_ADMIN_PASSWORD:?Bitte LAB_ADMIN_PASSWORD exportieren}"
+: "${LAB_ADMIN_PASSWORD:?Please export LAB_ADMIN_PASSWORD}"
 
 run_ps() {
     local vmid="$1"; local ps_file="$2"; local label="$3"; local timeout="${4:-1800}"
@@ -11,7 +11,7 @@ run_ps() {
     qm guest exec "$vmid" --timeout "$timeout" -- powershell -NoProfile -EncodedCommand "$ENC"
 }
 
-# Full scan: mm0001 (Sales-Alpha) auf C:\Data
+# Full scan: mm0001 (Sales-Alpha) on C:\Data
 cat > /tmp/scan.ps1 <<PSEOF
 \$env:ADPA_BIND_PASSWORD = "${LAB_ADMIN_PASSWORD}"
 \$out = 'C:\\Stars\\scan-output.csv'

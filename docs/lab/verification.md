@@ -1,26 +1,26 @@
-# Verifikation des Lab-Aufbaus und der Stars-Software
+# Verification of the Lab Setup and the Stars Software
 
-> **Letzter Update-Stand:** v1.5.16 (2026-06-07). Die Datei wächst pro Release um den jeweils neuen Verifikations-Block; ältere Blöcke bleiben unverändert als historischer Beleg.
-> Jeder Verifikations-Block notiert seine eigene Stars-Version (z. B. „Block C — v1.5.8"). Die Lab-Topologie selbst stammt aus dem ersten Aufbau (siehe Commit-Zeitstempel von [`forest-topology.md`](forest-topology.md)).
+> **Last update:** v1.5.16 (2026-06-07). This file grows by one verification block per release; older blocks stay unchanged as a historical record.
+> Each verification block notes its own Stars version (e.g. "Block C — v1.5.8"). The lab topology itself comes from the initial setup (see commit timestamps of [`forest-topology.md`](forest-topology.md)).
 
-Diese Datei dokumentiert *was* verifiziert wurde, *wie* es geprüft wurde, und *was* Stars dabei tatsächlich ausgegeben hat. Reproduzieren mit den Skripten unter [`scripts/`](scripts/).
+This file documents *what* was verified, *how* it was checked, and *what* Stars actually produced. Reproduce with the scripts under [`scripts/`](scripts/).
 
-| Block | Stars-Version | Thema |
+| Block | Stars version | Topic |
 |---|---|---|
-| A — Lab-Infrastruktur | v1.5.5 (initial) | Forest-/Trust-/CF-Snapshot beim ersten Lab-Build |
-| B — Test-Datenbestückung | v1.5.5 (initial) | OUs, Test-User, Test-ACL inkl. FSP |
-| C — Stars-Tests (initial) | v1.5.5 | T1 nested-groups, T2 cross-forest FSP, T3 cross-forest no-ACE |
-| D — Block A | v1.5.7 | NTFS-Edge-Cases (Deny, Protect, Share ∩ NTFS) |
-| E — Block B | v1.5.7 | GUI-Boot-Smoke auf VirtIO-GPU |
-| F — Block C | v1.5.8 | Skalierung — 1000 User, 5000 Dirs |
-| G — Block D | v1.5.9 | NETWORK-SID bei lokalem Pfad + explizitem SMB-Kontext (Round-7 Finding 1) |
-| H — Server 2025 | v1.5.16 | Plattform-Smoke auf Windows Server 2025 Standard (3 Forests, 1000 User, 5000 Dirs) |
+| A — Lab infrastructure | v1.5.5 (initial) | Forest / trust / CF snapshot at the initial lab build |
+| B — Test data population | v1.5.5 (initial) | OUs, test users, test ACL incl. FSP |
+| C — Stars tests (initial) | v1.5.5 | T1 nested groups, T2 cross-forest FSP, T3 cross-forest no ACE |
+| D — Block A | v1.5.7 | NTFS edge cases (Deny, Protect, Share ∩ NTFS) |
+| E — Block B | v1.5.7 | GUI boot smoke on VirtIO-GPU |
+| F — Block C | v1.5.8 | Scaling — 1000 users, 5000 dirs |
+| G — Block D | v1.5.9 | NETWORK SID on a local path + explicit SMB context (Round-7 finding 1) |
+| H — Server 2025 | v1.5.16 | Platform smoke on Windows Server 2025 Standard (3 forests, 1000 users, 5000 dirs) |
 
-## Teil A — Lab-Infrastruktur
+## Part A — Lab infrastructure
 
-Geprüft auf jedem der drei DCs nach Reboot und vor Stars-Test.
+Checked on every one of the three DCs after reboot and before the Stars test.
 
-### A.1  AD-DS-Topologie
+### A.1  AD-DS topology
 
 ```powershell
 $d = Get-ADDomain
@@ -29,15 +29,15 @@ $f = Get-ADForest
 "forest=$($f.Name)  mode=$($f.ForestMode)  schema-master=$($f.SchemaMaster)"
 ```
 
-Beobachtete Werte:
+Observed values:
 
-| VMID | Get-ADDomain.DNSRoot | NetBIOS | Domain-SID | Mode |
+| VMID | Get-ADDomain.DNSRoot | NetBIOS | Domain SID | Mode |
 |---|---|---|---|---|
 | 100 | tier0.lab | T0LAB | `S-1-5-21-82128098-3850859968-3663624259` | Windows2016Domain / -Forest |
 | 101 | tier1.lab | T1LAB | `S-1-5-21-2422202677-580894712-1536135282` | Windows2016Domain / -Forest |
 | 102 | tier2.lab | T2LAB | `S-1-5-21-2422907361-2909490334-1284861871` | Windows2016Domain / -Forest |
 
-### A.2  DC-Services
+### A.2  DC services
 
 ```powershell
 foreach ($s in 'ADWS','Netlogon','Kdc','DNS','NTDS') {
@@ -45,16 +45,16 @@ foreach ($s in 'ADWS','Netlogon','Kdc','DNS','NTDS') {
 }
 ```
 
-Alle drei DCs liefern **Running** für alle fünf Dienste.
+All three DCs return **Running** for all five services.
 
-### A.3  Conditional DNS Forwarders
+### A.3  Conditional DNS forwarders
 
 ```powershell
 Get-DnsServerZone | Where-Object { $_.ZoneType -eq 'Forwarder' } |
     Format-Table ZoneName, MasterServers
 ```
 
-| DC | CF-Zone | Master |
+| DC | CF zone | Master |
 |---|---|---|
 | tier0 | tier1.lab | 192.168.11.101 |
 | tier0 | tier2.lab | 192.168.11.102 |
@@ -63,16 +63,16 @@ Get-DnsServerZone | Where-Object { $_.ZoneType -eq 'Forwarder' } |
 | tier2 | tier0.lab | 192.168.11.100 |
 | tier2 | tier1.lab | 192.168.11.101 |
 
-Resolve-Check `Resolve-DnsName tier{0,1,2}.lab` von jedem DC → liefert die jeweilige IP der Zieldomain.
+Resolve check `Resolve-DnsName tier{0,1,2}.lab` from each DC → returns the matching IP of the target domain.
 
-### A.4  Forest-Trusts
+### A.4  Forest trusts
 
 ```powershell
 [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest().GetAllTrustRelationships() |
     ForEach-Object { "$($_.SourceName) -> $($_.TargetName) [$($_.TrustDirection)/$($_.TrustType)]" }
 ```
 
-Liefert auf allen drei DCs jeweils zwei Bidirectional-/Forest-Trusts zu den beiden anderen Forests:
+Returns two Bidirectional / Forest trusts to the other two forests on each of the three DCs:
 
 ```text
 tier0.lab:
@@ -88,55 +88,55 @@ tier2.lab:
   tier2.lab -> tier0.lab [Bidirectional/Forest]
 ```
 
-### A.5  Bekannte Auffälligkeit — `netdom trust /Verify`
+### A.5  Known quirk — `netdom trust /Verify`
 
 ```text
 netdom trust tier0.lab /Domain:tier1.lab /Verify /Quiet
 > rc=87 — "The syntax of this command is: NETDOM [...]"
 ```
 
-Die Trusts existieren trotzdem laut Reflection-API (A.4). `/Verify` ist eine Read-only-Diagnose, ihr Fehlen blockiert keine Funktionalität. Akzeptiert als bekannte Quirk.
+The trusts exist nonetheless per the reflection API (A.4). `/Verify` is a read-only diagnostic; its absence does not block functionality. Accepted as a known quirk.
 
-## Teil B — Test-Datenbestückung
+## Part B — Test data population
 
-Angelegt für Stars-Tests:
+Created for the Stars tests:
 
-### B.1  Identitäten
+### B.1  Identities
 
-| Forest | OU | User | Gruppen-Mitgliedschaften |
+| Forest | OU | User | Group memberships |
 |---|---|---|---|
-| tier0.lab | OU=TestOU | T0LAB\alice | GroupA → GroupB (verschachtelt) |
-| tier1.lab | OU=TestOU | T1LAB\bob | (nur Primary Group) |
-| tier2.lab | OU=TestOU | T2LAB\carol | (nur Primary Group) |
+| tier0.lab | OU=TestOU | T0LAB\alice | GroupA → GroupB (nested) |
+| tier1.lab | OU=TestOU | T1LAB\bob | (primary group only) |
+| tier2.lab | OU=TestOU | T2LAB\carol | (primary group only) |
 
-Gruppen:
+Groups:
 
-| Forest | Gruppe | SID-Suffix | Mitglied von |
+| Forest | Group | SID suffix | Member of |
 |---|---|---|---|
 | tier0.lab | GroupA | -1105 | GroupB |
-| tier0.lab | GroupB | -1106 | (Wurzel der Test-Kette) |
+| tier0.lab | GroupB | -1106 | (root of the test chain) |
 
-### B.2  Pfad mit ACL
+### B.2  Path with ACL
 
-`C:\TestShare` auf tier0 (lokales Verzeichnis, vorerst kein SMB-Share).
+`C:\TestShare` on tier0 (local directory, no SMB share yet).
 
 ```powershell
 Get-Acl C:\TestShare | Select-Object -ExpandProperty Access
 ```
 
-Liefert (relevante Test-ACEs):
+Returns (relevant test ACEs):
 
-| IdentityReference | Rights | Type | Quelle |
+| IdentityReference | Rights | Type | Source |
 |---|---|---|---|
-| `T0LAB\GroupB` | Modify | Allow (explicit) | Test-ACE für nested-Group-Test |
-| `T1LAB\bob` (SID-only) | ReadAndExecute | Allow (explicit) | **Cross-Forest FSP**, gesetzt über `NTAccount("T1LAB","bob").Translate(SID)` (Trust-vermittelte Auflösung) |
-| `NT AUTHORITY\SYSTEM` / `BUILTIN\Administrators` / `BUILTIN\Users` / `CREATOR OWNER` | … | inherited | Default-NTFS-Erbung |
+| `T0LAB\GroupB` | Modify | Allow (explicit) | Test ACE for the nested-group test |
+| `T1LAB\bob` (SID-only) | ReadAndExecute | Allow (explicit) | **Cross-forest FSP**, set via `NTAccount("T1LAB","bob").Translate(SID)` (trust-mediated resolution) |
+| `NT AUTHORITY\SYSTEM` / `BUILTIN\Administrators` / `BUILTIN\Users` / `CREATOR OWNER` | … | inherited | Default NTFS inheritance |
 
-## Teil C — Stars-Tests gegen das Lab
+## Part C — Stars tests against the lab
 
-Stars-CLI (`C:\Stars\adpa.exe`, Version 1.5.5) wurde auf tier0 hochgeladen und mit drei Szenarien geprüft. Vollständige Ausgaben liegen im Lab-Capture (`/tmp/lab-stars-evidence.txt`). Hier nur die kritischen Auszüge.
+The Stars CLI (`C:\Stars\adpa.exe`, version 1.5.5) was uploaded to tier0 and checked with three scenarios. Full outputs live in the lab capture (`/tmp/lab-stars-evidence.txt`). Here only the critical excerpts.
 
-### C.1  T1 — Innerhalb des Forests, nested groups
+### C.1  T1 — Inside the forest, nested groups
 
 ```text
 adpa.exe analyze \
@@ -148,7 +148,7 @@ adpa.exe analyze \
     --insecure-ldap
 ```
 
-Wesentliches Ergebnis:
+Key result:
 
 ```text
 Effective Rights
@@ -167,12 +167,12 @@ Explanation Path
   10. NTFS effective: Modify (0x001301BF)
 ```
 
-**Bestätigt:**
-- Nested-Group-Auflösung (alice → GroupA → GroupB) wird im Pfad korrekt als Mediator-Kette gerendert.
-- Lokale-Gruppen-Auflösung (BUILTIN\Users) erscheint als eigene Step-Zeile mit `source: LocalGroup` — das ist genau das Verhalten aus dem Finding 1 dieses Release-Zyklus.
-- Risk-Engine meldet `HIGH WRITE_ACCESS` (Modify) und `MEDIUM DELETE_RIGHT` für alice auf dem Pfad.
+**Confirmed:**
+- Nested-group resolution (alice → GroupA → GroupB) is rendered correctly as a mediator chain in the path.
+- Local-group resolution (BUILTIN\Users) appears as its own step line with `source: LocalGroup` — exactly the behaviour from finding 1 of this release cycle.
+- Risk engine reports `HIGH WRITE_ACCESS` (Modify) and `MEDIUM DELETE_RIGHT` for alice on the path.
 
-### C.2  T2 — Cross-Forest, Foreign Security Principal
+### C.2  T2 — Cross-forest, Foreign Security Principal
 
 ```text
 adpa.exe analyze \
@@ -184,7 +184,7 @@ adpa.exe analyze \
     --insecure-ldap
 ```
 
-Wesentliches Ergebnis:
+Key result:
 
 ```text
 Effective Rights
@@ -201,12 +201,12 @@ Risk Findings (1)
   [LOW] DIRECT_USER_ACE — 'bob' has a direct explicit ACE …
 ```
 
-**Bestätigt:**
-- Stars löst `T1LAB\bob` über tier1.tier1.lab korrekt zur Cross-Forest-SID auf.
-- Die FSP-ACE auf dem tier0-Pfad wird mit ihrem Cross-Forest-SID erkannt und zum effektiven Recht aggregiert.
-- Risk-Engine erkennt die Direct-User-ACE-Risikoklasse.
+**Confirmed:**
+- Stars resolves `T1LAB\bob` via tier1.tier1.lab to the correct cross-forest SID.
+- The FSP ACE on the tier0 path is recognized by its cross-forest SID and aggregated into the effective permission.
+- The risk engine detects the Direct-User-ACE risk class.
 
-### C.3  T3 — Cross-Forest ohne ACE (Negativ-Test)
+### C.3  T3 — Cross-forest without an ACE (negative test)
 
 ```text
 adpa.exe analyze \
@@ -218,7 +218,7 @@ adpa.exe analyze \
     --insecure-ldap
 ```
 
-Wesentliches Ergebnis:
+Key result:
 
 ```text
 Matching ACEs (for this identity)
@@ -236,41 +236,40 @@ Explanation Path
 Risk Findings (0)
 ```
 
-**Bestätigt:**
-- Identität wird auch ohne ACE-Treffer korrekt aufgelöst.
-- "Keine effektive Berechtigung" ist eine valide, vollständig erklärte Antwort — kein Fehler.
+**Confirmed:**
+- The identity is resolved correctly even without an ACE match.
+- "No effective permission" is a valid, fully explained answer — not an error.
 
-## Zusammenfassung
+## Summary
 
-| Bereich | Ergebnis |
+| Area | Result |
 |---|---|
-| 3 Forests / 3 separate Domain-SIDs | ✓ angelegt, ausgelesen |
-| Conditional DNS Forwarder zwischen allen Paaren | ✓ ergänzt, Resolve cross-forest geprüft |
-| 3 bidirektionale Forest-Trusts | ✓ über `Forest.CreateTrustRelationship` erstellt, alle Seiten sichtbar |
-| Stars Smoke (alice, nested groups, innerhalb tier0) | ✓ Modify, Pfad mit allen Mediatoren |
-| Stars Cross-Forest FSP (bob aus tier1, ACE auf tier0) | ✓ Read & Execute korrekt |
-| Stars Cross-Forest ohne ACE (carol aus tier2) | ✓ 0x0 Spezial, Pfad sauber |
-| Finding 1 — LocalGroup-Source im Erklärungspfad | ✓ in T1 sichtbar (`source: LocalGroup`) |
+| 3 forests / 3 separate domain SIDs | ✓ created, read back |
+| Conditional DNS forwarders between every pair | ✓ added, cross-forest resolution checked |
+| 3 bidirectional forest trusts | ✓ created via `Forest.CreateTrustRelationship`, both sides visible |
+| Stars smoke (alice, nested groups, inside tier0) | ✓ Modify, path with all mediators |
+| Stars cross-forest FSP (bob from tier1, ACE on tier0) | ✓ Read & Execute correct |
+| Stars cross-forest without ACE (carol from tier2) | ✓ 0x0 special, clean path |
+| Finding 1 — LocalGroup source in the explanation path | ✓ visible in T1 (`source: LocalGroup`) |
 
-Die Lab-Topologie reproduziert die zwei wichtigsten realen Auditing-Szenarien, die ein Single-Forest-Setup nicht abbildet (Cross-Forest-FSPs und sauber getrennte Schemata), und zeigt, dass Stars sie auswertbar berichtet.
+The lab topology reproduces the two most important real-world auditing scenarios that a single-forest setup cannot represent (cross-forest FSPs and cleanly separated schemas) and shows that Stars reports them in an evaluable way.
 
-## Teil D — Block A: NTFS-Edge-Cases (Deny, Protect-Inheritance, SMB-Share ∩ NTFS)
+## Part D — Block A: NTFS edge cases (Deny, Protect-Inheritance, Share ∩ NTFS)
 
-> Hinzugefügt im Release-Zyklus **v1.5.7** (2026-06-05). Reproduktions-Skript:
+> Added in release cycle **v1.5.7** (2026-06-05). Reproduction script:
 > [`scripts/09-blockA-edge-cases.sh`](scripts/09-blockA-edge-cases.sh).
 
-Block A prüft drei Edge-Cases, die ein typisches AD-Audit-Tool falsch
-aggregieren kann, ohne dass es jemand bemerkt:
+Block A checks three edge cases that a typical AD audit tool can aggregate incorrectly without anyone noticing:
 
-### D.1  E1 — Deny-ACE schlägt geerbte Allow-ACE
+### D.1  E1 — Deny ACE beats an inherited Allow ACE
 
-Setup auf tier0:
+Setup on tier0:
 
-- `C:\TestShare\DenyZone` Subordner mit Vererbung vom Parent
-- **Explicit Deny Modify** für `T0LAB\alice`
-- **Inherited Allow Modify** für `T0LAB\GroupB` (alice ist via GroupA → GroupB Mitglied)
+- `C:\TestShare\DenyZone` subfolder inheriting from the parent
+- **Explicit Deny Modify** for `T0LAB\alice`
+- **Inherited Allow Modify** for `T0LAB\GroupB` (alice is a member via GroupA → GroupB)
 
-Stars-Ergebnis (Auszug):
+Stars result (excerpt):
 
 ```text
 Effective Rights
@@ -287,23 +286,19 @@ Explanation Path
   12. NTFS effective: Special (0x00100000)
 ```
 
-**Bestätigt:**
-- Engine rechnet Allow ⊖ Deny korrekt aus (übrig bleibt nur das
-  SYNCHRONIZE-Bit `0x00100000`, faktisch kein Datenzugriff).
-- Pfad benennt die Deny-Auswirkung jetzt explizit (Schritt 11, siehe
-  ADR 0042) — vor v1.5.7 musste der Auditor die Hex-Differenz selbst
-  erkennen.
+**Confirmed:**
+- The engine computes Allow ⊖ Deny correctly (only the SYNCHRONIZE bit `0x00100000` remains, effectively no data access).
+- The path now names the Deny effect explicitly (step 11, see ADR 0042) — before v1.5.7 the auditor had to spot the hex difference themselves.
 
-### D.2  E2 — Vererbungs-Unterbrechung (`Protect`)
+### D.2  E2 — Inheritance break (`Protect`)
 
-Setup auf tier0:
+Setup on tier0:
 
-- `C:\TestShare\Protected` Subordner
-- `SetAccessRuleProtection($true, $false)` — Vererbung deaktiviert, geerbte
-  Regeln entfernt
-- Nur `BUILTIN\Administrators` und `NT AUTHORITY\SYSTEM` als explizite Allow-Regeln
+- `C:\TestShare\Protected` subfolder
+- `SetAccessRuleProtection($true, $false)` — inheritance disabled, inherited rules removed
+- Only `BUILTIN\Administrators` and `NT AUTHORITY\SYSTEM` as explicit Allow rules
 
-Stars-Ergebnis:
+Stars result:
 
 ```text
 Inheritance : Protected (inheritance disabled)
@@ -315,27 +310,25 @@ Effective Rights
 
 Explanation Path
   1. User: alice (...)
-  2-5. (Mitgliedschaftskette)
+  2-5. (membership chain)
   6. NTFS effective: Special (0x00000000)
 
 Risk Findings (0)
 ```
 
-**Bestätigt:**
-- Vererbungs-Unterbrechung wird sichtbar gemeldet (`Inheritance:
-  Protected (inheritance disabled)`).
-- Kein false-positive auf inherited-Ebene: weil GroupB hier nicht erbt,
-  hat alice gar keinen Treffer.
-- Risk-Engine schweigt korrekt (keine Rechte, kein Risiko).
+**Confirmed:**
+- The inheritance break is reported visibly (`Inheritance: Protected (inheritance disabled)`).
+- No false positive on the inherited level: because GroupB does not inherit here, alice has no match at all.
+- The risk engine correctly stays silent (no rights, no risk).
 
-### D.3  E3 — SMB-Share-Permissions dominieren über NTFS
+### D.3  E3 — SMB share permissions dominate NTFS
 
-Setup auf tier0:
+Setup on tier0:
 
 - `New-SmbShare -Name TestShareSMB -Path C:\TestShare -ReadAccess Everyone -FullAccess "T0LAB\Domain Admins"`
-- NTFS hat weiterhin GroupB=Modify (alice via Mediator-Kette).
+- NTFS still has GroupB=Modify (alice via the mediator chain).
 
-Stars-Aufruf mit UNC-Pfad + Share-Hint:
+Stars call with UNC path + share hint:
 
 ```text
 adpa.exe analyze \
@@ -346,7 +339,7 @@ adpa.exe analyze \
     ...
 ```
 
-Ergebnis:
+Result:
 
 ```text
 Effective Rights
@@ -361,23 +354,18 @@ Explanation Path
   12. Effective (NTFS ∩ Share): Read & Execute (0x001200A9)
 ```
 
-**Bestätigt:**
-- Stars liest Share-Permissions per SMB korrekt aus (Everyone=Read
-  mapped auf Read & Execute).
-- `Result = NTFS ∩ Share` (restriktiver gewinnt) — der Pfad rendert die
-  Aggregation als eigenen Schritt 12.
+**Confirmed:**
+- Stars reads share permissions correctly over SMB (Everyone=Read mapped to Read & Execute).
+- `Result = NTFS ∩ Share` (the more restrictive wins) — the path renders the aggregation as its own step 12.
 
-## Teil E — Block B: GUI-Boot-Smoke
+## Part E — Block B: GUI boot smoke
 
-> Hinzugefügt im Release-Zyklus **v1.5.7** (2026-06-05). Reproduktions-Skript:
+> Added in release cycle **v1.5.7** (2026-06-05). Reproduction script:
 > [`scripts/10-blockB-gui-smoke.sh`](scripts/10-blockB-gui-smoke.sh).
 
-Volle UI-Validierung der GUI bleibt ein manueller Schritt — `qm guest
-exec` hat keinen interaktiven Desktop und kann keine Screenshots machen.
-Was sich automatisieren lässt, ist der **Boot-Smoke**: Prozess startet,
-hält stabil, terminiert sauber.
+Full UI validation of the GUI remains a manual step — `qm guest exec` has no interactive desktop and cannot take screenshots. What can be automated is the **boot smoke**: process starts, stays stable, terminates cleanly.
 
-Ergebnis auf tier0:
+Result on tier0:
 
 ```text
 gui-binary: C:\Stars\adpa-gui.exe
@@ -388,101 +376,97 @@ process-terminated cleanly
 stderr: (empty)
 ```
 
-**Bestätigt:**
-- Slint + winit-software-Backend bootet auf der VirtIO-GPU-VM
-  fehlerfrei (Memory `project-deployment-target` ist also weiterhin
-  valide).
-- Working Set ~23 MB nach Boot, keine Auffälligkeiten im stderr.
-- Prozess lässt sich sauber per Stop-Process beenden, keine
-  hängenden Threads.
+**Confirmed:**
+- Slint + the winit software backend boot on the VirtIO-GPU VM without errors (the `project-deployment-target` memory is therefore still valid).
+- Working set ~23 MB after boot, no anomalies on stderr.
+- The process can be terminated cleanly with Stop-Process; no dangling threads.
 
-Was Block B **nicht** abdeckt und manuell durch den Betreiber via
-RDP/SPICE geprüft werden muss:
+What Block B **does not** cover and must be checked manually by the operator via RDP/SPICE:
 
-- Rendering-Korrektheit der Theme-Umschaltung
-- Layout-Stabilität bei Fenster-Resize
-- Eingabe-Validierung in Live-Forms
-- Output-Tabellen mit echten Scan-Ergebnissen
+- Rendering correctness when toggling themes
+- Layout stability on window resize
+- Input validation in live forms
+- Output tables with real scan results
 
-## Zusammenfassung v1.5.7
+## Summary v1.5.7
 
-| Bereich | Ergebnis |
+| Area | Result |
 |---|---|
-| Block A E1 — Deny-Override | ✓ rechnerisch + neuer Erklär-Step (ADR 0042) |
-| Block A E2 — Protect-Inheritance | ✓ ohne false-positive |
-| Block A E3 — Share ∩ NTFS | ✓ Share dominiert, Pfad expliziert die Aggregation |
-| Block B — GUI Boot-Smoke | ✓ kein Slint-Crash auf VirtIO-GPU |
+| Block A E1 — Deny override | ✓ computationally + new explanation step (ADR 0042) |
+| Block A E2 — Protect inheritance | ✓ without false positive |
+| Block A E3 — Share ∩ NTFS | ✓ Share dominates, the path makes the aggregation explicit |
+| Block B — GUI boot smoke | ✓ no Slint crash on VirtIO-GPU |
 
-## Teil F — Block C: Skalierung auf großen Verzeichnissen
+## Part F — Block C: scaling on large directories
 
-> Hinzugefügt im Release-Zyklus **v1.5.8** (2026-06-05). Reproduktions-Skripte:
+> Added in release cycle **v1.5.8** (2026-06-05). Reproduction scripts:
 > [`scripts/11-blockC-ad-bulk.sh`](scripts/11-blockC-ad-bulk.sh),
 > [`scripts/12-blockC-dirs-acls.sh`](scripts/12-blockC-dirs-acls.sh),
 > [`scripts/13-blockC-stars-perf.sh`](scripts/13-blockC-stars-perf.sh).
 
-Block C prüft, ob Stars unter realistischer Lab-Last bleibt — also bei einem Forest mit hunderten Usern, geschachtelten Gruppen und tausenden Ordnern mit gemischten ACLs.
+Block C checks whether Stars stays in shape under realistic lab load — i.e. on a forest with hundreds of users, nested groups, and thousands of folders with mixed ACLs.
 
-### F.1  AD-Bulk-Setup
+### F.1  AD bulk setup
 
-Pro Forest werden angelegt:
+Per forest the following is created:
 
-- OUs: `OU=Company / OU={Departments, Users, Groups}` plus 5 Department-OUs unter `Departments` = **9 OUs**
-- Sicherheitsgruppen: 5 Department-Gruppen + 15 Sub-Team-Gruppen = **20 Gruppen**
-- Nesting: User → Sub-Team-Gruppe → Department-Gruppe (3-Level)
-- User-Verteilung:
+- OUs: `OU=Company / OU={Departments, Users, Groups}` plus 5 department OUs under `Departments` = **9 OUs**
+- Security groups: 5 department groups + 15 sub-team groups = **20 groups**
+- Nesting: user → sub-team group → department group (3 levels)
+- User distribution:
 
-| Forest | User-Bereich | Anzahl | Pro Department | Pro Sub-Team |
+| Forest | User range | Count | Per department | Per sub-team |
 |---|---|---|---|---|
 | tier0.lab | `mm0001`–`mm0500` | 500 | ~100 | ~33 |
 | tier1.lab | `mm0501`–`mm0800` | 300 | ~60 | ~20 |
 | tier2.lab | `mm0801`–`mm1000` | 200 | ~40 | ~13 |
 
-**Insgesamt: 1000 User über drei Forests, lexikographisch sortierbar (4-stelliges Padding).**
+**In total: 1000 users across three forests, lexicographically sortable (4-digit padding).**
 
-Bulk-Laufzeit gemessen via `Stopwatch`:
+Bulk runtime measured via `Stopwatch`:
 
-| Forest | User-Create-Dauer | ms/User |
+| Forest | User create duration | ms/user |
 |---|---|---|
 | tier0 (500) | 44.7 s | ~89 |
 | tier1 (300) | 24.7 s | ~82 |
 | tier2 (200) | 17.0 s | ~85 |
 
-Konsistente ~85 ms pro `New-ADUser` + `Add-ADGroupMember`-Paar, dominiert von LDAP-Replikation und Index-Aktualisierung.
+A consistent ~85 ms per `New-ADUser` + `Add-ADGroupMember` pair, dominated by LDAP replication and index update.
 
-### F.2  Verzeichnis- und ACL-Setup auf tier0
+### F.2  Directory and ACL setup on tier0
 
-Verzeichnisstruktur auf `C:\Data`:
+Directory structure on `C:\Data`:
 
 ```text
 C:\Data\
-  Sales\Engineering\HR\Finance\IT      (5 Department-Wurzeln)
-    Project01..20                      (20 Projekte pro Dept)
-      Folder01..50                     (50 Folder pro Projekt)
-                                       Σ = 5000 Folder-Ordner
-                                         + 100 Project-Ordner
-                                         + 5 Department-Ordner
-                                         = 5105 Verzeichnisse
+  Sales\Engineering\HR\Finance\IT      (5 department roots)
+    Project01..20                      (20 projects per dept)
+      Folder01..50                     (50 folders per project)
+                                       Σ = 5000 folder dirs
+                                         + 100 project dirs
+                                         + 5 department dirs
+                                         = 5105 directories
 ```
 
-ACL-Variation auf den 100 Project-Ordnern:
-- **Project 01..15** (75 Stück): explicit Allow Modify für die jeweilige Sub-Team-Gruppe (`Sales-Alpha`, `Engineering-Beta`, …)
-- **Project 16..18** (15 Stück): `SetAccessRuleProtection($true)` — Vererbung deaktiviert, nur `BUILTIN\Administrators` + `NT AUTHORITY\SYSTEM`
-- **Project 19..20** (10 Stück): explicit Deny ReadAndExecute für die jeweilige `-Gamma`-Sub-Team-Gruppe
+ACL variation on the 100 project folders:
+- **Project 01..15** (75 dirs): explicit Allow Modify for the matching sub-team group (`Sales-Alpha`, `Engineering-Beta`, …)
+- **Project 16..18** (15 dirs): `SetAccessRuleProtection($true)` — inheritance disabled, only `BUILTIN\Administrators` + `NT AUTHORITY\SYSTEM`
+- **Project 19..20** (10 dirs): explicit Deny ReadAndExecute for the matching `-Gamma` sub-team group
 
-Setup-Laufzeit:
+Setup runtime:
 
-| Schritt | Dauer | Rate |
+| Step | Duration | Rate |
 |---|---|---|
-| 5000 Folder-Ordner anlegen | 8.8 s | ~570 dirs/s |
-| 5 Dept-Wurzel-ACLs | 1.6 s | (3 ms/ACL, dominiert von `Set-Acl`-IO) |
-| 100 Project-ACLs (variiert) | 1.9 s | ~52 ACLs/s |
-| **Gesamt C.2+C.3** | **13.2 s** | |
+| Create 5000 folder dirs | 8.8 s | ~570 dirs/s |
+| 5 dept-root ACLs | 1.6 s | (3 ms/ACL, dominated by `Set-Acl` I/O) |
+| 100 project ACLs (varied) | 1.9 s | ~52 ACLs/s |
+| **Total C.2+C.3** | **13.2 s** | |
 
-### F.3  Stars-Performance gegen `C:\Data`
+### F.3  Stars performance against `C:\Data`
 
-Test-User: `T0LAB\mm0001` (Sales-Alpha-Member, hat Modify auf Sales/Project01..15 via Mediator-Kette).
+Test user: `T0LAB\mm0001` (Sales-Alpha member, has Modify on Sales/Project01..15 via the mediator chain).
 
-**T1 — Full Scan** (`adpa.exe scan --path C:\Data --user T0LAB\mm0001 --output ...`):
+**T1 — Full scan** (`adpa.exe scan --path C:\Data --user T0LAB\mm0001 --output ...`):
 
 ```text
 elapsed_seconds : 4.89
@@ -491,10 +475,10 @@ csv_lines       : 5107
 csv_size_kb     : 6538.5
 ```
 
-- 5105 Verzeichnisse + 1 Header + 1 Root-Eintrag = 5107 CSV-Zeilen ✓
-- ~1043 dirs/s (= 0.96 ms pro Verzeichnis inkl. ACL-Lese, Owner-Lookup, Effective-Rights-Berechnung und CSV-Serialisierung)
-- 6.5 MB CSV (~1.3 KB pro Zeile, also volle Pfad-Erklärung pro Eintrag)
-- Exit 0, kein Crash, kein OOM-Hinweis
+- 5105 directories + 1 header + 1 root entry = 5107 CSV rows ✓
+- ~1043 dirs/s (= 0.96 ms per directory including ACL read, owner lookup, effective-rights computation, and CSV serialization)
+- 6.5 MB CSV (~1.3 KB per row, i.e. full path explanation per entry)
+- Exit 0, no crash, no OOM hint
 
 **T2 — Single deep analyze** (`adpa.exe analyze --path C:\Data\Sales\Project05\Folder25 --user T0LAB\mm0001`):
 
@@ -512,45 +496,45 @@ Explanation Path
   10. NTFS effective: Modify (0x001301BF)
 ```
 
-- Dominant: einmalige LDAP-Connect + Bind + Gruppen-Auflösung (~4 s)
-- ACL-Lese und Aggregation < 100 ms
-- Mediator-Kette korrekt (ADR 0036) + LocalGroup-Step (ADR 0041) sichtbar
+- Dominant cost: one-off LDAP connect + bind + group resolution (~4 s)
+- ACL read and aggregation < 100 ms
+- Mediator chain correct (ADR 0036) + LocalGroup step (ADR 0041) visible
 
-### F.4  Beobachtungen
+### F.4  Observations
 
-- Stars rendert sich auch bei 1000 AD-Identities und 5000 Pfaden **ohne Memory-Druck und ohne Crash** durch.
-- Der dominante Faktor bei *einzelnen* Aufrufen ist der LDAP-Bind plus die Gruppen-Auflösung des User-Tokens (einmalige Kosten). Sobald die Identität aufgelöst ist, ist der ACL-Lese-Pfad pro Verzeichnis sub-Millisekunde.
-- Bei einem Full Scan amortisiert sich der LDAP-Aufwand über den gesamten Tree — die effektive Rate von ~1 ms/dir ist real-Production-tauglich.
+- Stars renders even with 1000 AD identities and 5000 paths **without memory pressure and without a crash**.
+- The dominant factor on *single* invocations is the LDAP bind plus the group resolution of the user token (one-off cost). Once the identity is resolved, the per-directory ACL-read path is sub-millisecond.
+- On a full scan the LDAP cost amortizes over the entire tree — the effective rate of ~1 ms/dir is real-production grade.
 
-### F.5  Bekannte Lab-Limitierung — Cross-Forest-FSPs
+### F.5  Known lab limitation — cross-forest FSPs
 
-Das Bulk-Setup-Skript versucht, 50 Cross-Forest-Foreign-Security-Principals (25 aus `T1LAB`, 25 aus `T2LAB`) in tier0 `Dept-*`-Gruppen einzutragen. Sowohl `Add-ADGroupMember -Members <SID>` als auch eine ADSI-`Add`-Variante scheitern mit `0x80072030 — There is no such object on the server`. Microsoft-`Add-ADGroupMember` legt den FSP-Container-Eintrag nur dann automatisch an, wenn die Eingabe ein NetBIOS-Account-Name aus einem als Quell-Forest beim Lookup auflösbaren Trust ist — was bei großen Cross-Forest-Setups oft eine weitere Konfiguration verlangt (`dsadd group` aus legacy-Tools auf älteren Schemata, oder explizites `New-ADObject -Type foreignSecurityPrincipal`).
+The bulk setup script attempts to enter 50 cross-forest Foreign Security Principals (25 from `T1LAB`, 25 from `T2LAB`) into tier0 `Dept-*` groups. Both `Add-ADGroupMember -Members <SID>` and an ADSI `Add` variant fail with `0x80072030 — There is no such object on the server`. Microsoft's `Add-ADGroupMember` only auto-creates the FSP container entry when the input is a NetBIOS account name from a trust whose source forest can be resolved at lookup time — which on large cross-forest setups often requires additional configuration (`dsadd group` from legacy tools on older schemas, or an explicit `New-ADObject -Type foreignSecurityPrincipal`).
 
-**Wichtig:** Dies ist **kein Stars-Bug**. Stars liest existierende FSP-ACEs sauber (siehe Test T2 in Teil C — `T1LAB\bob` hatte einen FSP-ACE in tier0 und Stars hat ihn korrekt aufgelöst und im Effective-Rights-Report wiedergegeben). Es ist nur das Lab-Bulk-Setup, das ohne weitere Konfigurationsschritte keine FSPs anlegen kann. Wer das Lab vervollständigen will, ergänzt die FSPs manuell oder über `dsadd group` von einem Domain Controller mit RSAT.
+**Important:** This is **not a Stars bug**. Stars reads existing FSP ACEs cleanly (see test T2 in Part C — `T1LAB\bob` had an FSP ACE in tier0 and Stars resolved it correctly and reflected it in the Effective Rights report). It is just the lab bulk setup that cannot create FSPs without further configuration steps. Whoever wants to complete the lab adds the FSPs manually or via `dsadd group` from a Domain Controller with RSAT.
 
-## Zusammenfassung v1.5.8
+## Summary v1.5.8
 
-| Bereich | Ergebnis |
+| Area | Result |
 |---|---|
-| Block C.1 — 1000 User über 3 Forests, 3-Level-Nesting | ✓ in 86 s |
-| Block C.2/C.3 — 5000 Folder + 100 variierte ACLs | ✓ in 13 s |
+| Block C.1 — 1000 users across 3 forests, 3-level nesting | ✓ in 86 s |
+| Block C.2/C.3 — 5000 folders + 100 varied ACLs | ✓ in 13 s |
 | Block C.4 T1 — Full scan 5105 dirs | ✓ 4.89 s (≈ 1 ms/dir) |
-| Block C.4 T2 — Single deep analyze | ✓ 4.24 s (LDAP-dominiert) |
-| Block C.5 — Cross-Forest-FSP via Bulk-Skript | Lab-Limitierung dokumentiert (kein Stars-Bug) |
+| Block C.4 T2 — Single deep analyze | ✓ 4.24 s (LDAP-dominated) |
+| Block C.5 — Cross-forest FSP via bulk script | Lab limitation documented (no Stars bug) |
 
-## Teil G — Block D: NETWORK-SID bei lokalem Pfad + explizitem SMB-Kontext (v1.5.9)
+## Part G — Block D: NETWORK SID on a local path + explicit SMB context (v1.5.9)
 
-> Hinzugefügt im Release-Zyklus **v1.5.9** (2026-06-05). Reproduktions-Skript:
+> Added in release cycle **v1.5.9** (2026-06-05). Reproduction script:
 > [`scripts/14-blockD-network-context.sh`](scripts/14-blockD-network-context.sh).
-> Referenzen: Round-7 Review Finding 1, ADR 0043.
+> References: Round-7 review finding 1, ADR 0043.
 
-Block D verifiziert die zentrale Wirkung des Round-7-Fixes: wenn ein Auditor einen **lokalen NTFS-Pfad** (z. B. `C:\TestShare\NetworkBlock`) zusammen mit einem **expliziten SMB-Kontext** (`--smb-server` + `--share-name`) analysiert — der häufige Fileserver-lokal-Audit-Fall — muss Stars die `NETWORK`-Well-Known-SID in den Token aufnehmen und Share-DACL-ACEs gegen `NETWORK` korrekt aggregieren.
+Block D verifies the central effect of the Round-7 fix: when an auditor analyzes a **local NTFS path** (e.g. `C:\TestShare\NetworkBlock`) together with an **explicit SMB context** (`--smb-server` + `--share-name`) — the common file-server-local audit case — Stars must add the `NETWORK` well-known SID to the token and aggregate share-DACL ACEs against `NETWORK` correctly.
 
 ### G.1  Setup
 
-`C:\TestShare\NetworkBlock` ist ein Unterordner mit der von `C:\TestShare` geerbten NTFS-DACL — `T0LAB\GroupB` hat dort **Modify**, und alice (via `Sales-Alpha → GroupB`-Mediator) damit auch.
+`C:\TestShare\NetworkBlock` is a subfolder with the NTFS DACL inherited from `C:\TestShare` — `T0LAB\GroupB` has **Modify** there, and alice (via the `Sales-Alpha → GroupB` mediator) does too.
 
-Neue SMB-Freigabe `TestShareNetBlock` zeigt auf diesen Subordner und hat eine restriktive Share-Permission-Liste:
+A new SMB share `TestShareNetBlock` points at this subfolder and has a restrictive share permission list:
 
 ```text
 Everyone              Full Allow
@@ -558,26 +542,26 @@ NT AUTHORITY\NETWORK  Full Deny
 NT AUTHORITY\NETWORK  Read Allow
 ```
 
-Die Reihenfolge ist absichtlich: Allow Everyone + explizit Deny NETWORK. Über SMB landet der Zugriff über `NETWORK` — der Deny dominiert.
+The order is deliberate: Allow Everyone + explicit Deny NETWORK. Over SMB the access lands via `NETWORK` — the Deny dominates.
 
-### G.2  Drei Stars-Szenarien
+### G.2  Three Stars scenarios
 
-| Szenario | Pfad | `--smb-server` / `--share-name` | Stars-Output (`Result`) |
+| Scenario | Path | `--smb-server` / `--share-name` | Stars output (`Result`) |
 |---|---|---|---|
-| **E4a** | `C:\TestShare\NetworkBlock` | — (nicht gesetzt) | `Modify (0x001301BF)` |
+| **E4a** | `C:\TestShare\NetworkBlock` | — (not set) | `Modify (0x001301BF)` |
 | **E4b** | `C:\TestShare\NetworkBlock` | `tier0` / `TestShareNetBlock` | `Special (0x00000000)` |
-| **E4c** | `\\tier0\TestShareNetBlock` (Kontrolle) | `tier0` / `TestShareNetBlock` | Access denied beim NTFS-Read (Share blockt NETWORK an der Quelle) |
+| **E4c** | `\\tier0\TestShareNetBlock` (control) | `tier0` / `TestShareNetBlock` | Access denied during NTFS read (share blocks NETWORK at the source) |
 
-### G.3  Analyse
+### G.3  Analysis
 
-**E4a — keinen SMB-Hint, Stars nutzt `LocalInteractive`:**
-- Kein Share-Kontext → Share-DACL wird gar nicht abgefragt → `Share: (not specified)`
-- NTFS dominiert: `Modify`
-- Korrekt: ein lokaler Audit ohne SMB-Bezug soll die NTFS-Sicht zeigen.
+**E4a — no SMB hint, Stars uses `LocalInteractive`:**
+- No share context → the share DACL is never queried → `Share: (not specified)`
+- NTFS dominates: `Modify`
+- Correct: a local audit without an SMB reference should show the NTFS view.
 
-**E4b — derselbe lokale Pfad mit explizitem SMB-Hint:**
-- *Vor v1.5.9:* `AccessContext::for_path(&path)` lieferte `LocalInteractive`, `NETWORK` fehlte im Token, der Deny-ACE gegen NETWORK wirkte nicht → Stars meldete fälschlich `Result = Modify`.
-- *Mit v1.5.9 (`for_path_with_smb(path, smb_server, share_name)`):* `RemoteSmb`, NETWORK im Token, Deny-ACE auf NETWORK greift → Stars rendert die volle Aggregation:
+**E4b — the same local path with an explicit SMB hint:**
+- *Before v1.5.9:* `AccessContext::for_path(&path)` returned `LocalInteractive`, `NETWORK` was missing in the token, the Deny ACE against NETWORK did not apply → Stars incorrectly reported `Result = Modify`.
+- *With v1.5.9 (`for_path_with_smb(path, smb_server, share_name)`):* `RemoteSmb`, NETWORK in the token, Deny ACE on NETWORK applies → Stars renders the full aggregation:
 
 ```text
 Effective Rights
@@ -585,65 +569,65 @@ Effective Rights
   Share   : Special (0x00000000)
   Result  : Special (0x00000000)
 
-Explanation Path (Auszug)
+Explanation Path (excerpt)
   ...
   10. NTFS effective: Modify (0x001301BF)
   11. Share permission: Special (0x00000000)
   12. Effective (NTFS ∩ Share): Special (0x00000000)
 ```
 
-Damit ist genau die Konstellation gefixt, die ein Auditor in der Praxis hat: lokal auf den Fileserver, aber Share-Sicht haben wollen.
+This fixes exactly the constellation an auditor encounters in practice: local on the file server but wanting the share view.
 
-**E4c — UNC-Pfad als Kontrollfall:**
-- Die Share-Permission blockt NETWORK schon auf der Verbindungsebene. Stars läuft als LocalSystem, ist beim NTFS-Read der UNC-Pfad-Form selbst NETWORK → bekommt **Access denied** beim ACL-Lesen.
-- Das ist semantisch konsistent: die Share verbietet NETWORK-Zugang, und auch ein Audit-Tool darf da nicht durch.
-- Für die Engine-Korrektheit ist E4b der eigentliche Beweis-Punkt.
+**E4c — UNC path as the control case:**
+- The share permission blocks NETWORK already at the connection layer. Stars runs as LocalSystem and is itself NETWORK when reading the UNC path's NTFS → it receives **Access denied** while reading the ACL.
+- This is semantically consistent: the share forbids NETWORK access, and an audit tool isn't allowed through either.
+- For engine correctness, E4b is the actual proof point.
 
-### G.4  Engine-Tests
+### G.4  Engine tests
 
-Zwei neue Engine-Unit-Tests in `crates/permission_engine/src/engine.rs::tests` decken den End-to-End-Pfad ab:
+Two new engine unit tests in `crates/permission_engine/src/engine.rs::tests` cover the end-to-end path:
 
-- `remote_smb_context_grants_network_ace_even_on_local_path` — mit `AccessContext::RemoteSmb` aggregiert die Engine eine Allow-NETWORK-ACE korrekt.
-- `local_interactive_context_ignores_network_ace` — Spiegelbild: unter `LocalInteractive` ignoriert sie sie korrekt.
+- `remote_smb_context_grants_network_ace_even_on_local_path` — with `AccessContext::RemoteSmb` the engine correctly aggregates an Allow-NETWORK ACE.
+- `local_interactive_context_ignores_network_ace` — mirror image: under `LocalInteractive` it correctly ignores it.
 
-Plus fünf Tests für die Helfer-Funktion `AccessContext::for_path_with_smb` in `crates/core/src/model.rs::tests`.
+Plus five tests for the helper function `AccessContext::for_path_with_smb` in `crates/core/src/model.rs::tests`.
 
-## Zusammenfassung v1.5.9
+## Summary v1.5.9
 
-| Bereich | Ergebnis |
+| Area | Result |
 |---|---|
-| Finding 1 — `AccessContext::for_path_with_smb` + 6 Call-Sites | ✓ E4b live verifiziert: Result `Modify` → `Special (0x00000000)` |
-| Finding 2 — GUI HTML-Export Overwrite-Schutz | ✓ Worker-Test verifiziert: bestehende Datei wird abgelehnt, Inhalt bleibt unverändert |
-| Finding 3 — `--bind-password` deprecate | ✓ Help-Text + Runtime-Warnung als DEPRECATED |
-| Finding 4 — verification.md aufgeräumt | ✓ Header-Stand auf v1.5.9, Block-Übersicht mit Version pro Block |
+| Finding 1 — `AccessContext::for_path_with_smb` + 6 call sites | ✓ E4b live-verified: Result `Modify` → `Special (0x00000000)` |
+| Finding 2 — GUI HTML export overwrite protection | ✓ Worker test verified: an existing file is refused, content stays unchanged |
+| Finding 3 — `--bind-password` deprecation | ✓ help text + runtime warning marked as DEPRECATED |
+| Finding 4 — verification.md cleaned up | ✓ header status set to v1.5.9, block overview with version per block |
 
 ---
 
-## Block H — Plattform-Smoke auf Windows Server 2025 Standard
+## Block H — Platform smoke on Windows Server 2025 Standard
 
-**Stars-Version:** v1.5.16
-**Datum:** 2026-06-07
-**Plattform-Wechsel:** Windows Server 2022 Standard → **Windows Server 2025 Standard** (`SERVER_EVAL_x64_2025_FRE_de-de.iso`)
+**Stars version:** v1.5.16
+**Date:** 2026-06-07
+**Platform change:** Windows Server 2022 Standard → **Windows Server 2025 Standard** (`SERVER_EVAL_x64_2025_FRE_de-de.iso`)
 
-### H.1 — Hardware-Profil (alle 3 DCs identisch)
+### H.1 — Hardware profile (all 3 DCs identical)
 
-| Setting | Wert |
+| Setting | Value |
 |---|---|
-| Machine-Type | `pc-q35-10.1` |
-| BIOS | OVMF (UEFI) mit pre-enrolled Microsoft-Keys |
+| Machine type | `pc-q35-10.1` |
+| BIOS | OVMF (UEFI) with pre-enrolled Microsoft keys |
 | TPM | v2.0 (swtpm) |
-| CPU | 1 Socket × 8 Kerne, `x86-64-v2-AES` |
-| RAM | 16 GiB ohne Ballooning |
-| Disk | 50 GiB VirtIO Block, `qcow2`, Cache `directsync`, IO-Thread |
-| Grafik | VirtIO (`vga: virtio`) |
-| OS-Type | `win11` (Server 2022/2025/Win11) |
-| Network | VirtIO, vmbr0, Firewall on |
+| CPU | 1 socket × 8 cores, `x86-64-v2-AES` |
+| RAM | 16 GiB without ballooning |
+| Disk | 50 GiB VirtIO Block, `qcow2`, cache `directsync`, IO thread |
+| Graphics | VirtIO (`vga: virtio`) |
+| OS type | `win11` (Server 2022/2025/Win11) |
+| Network | VirtIO, vmbr0, firewall on |
 
-Hintergrund: Erste Setup-Versuche mit `pc-i440fx-10.1` + alter VGA scheiterten am Disk-Driver-Loading im WinPE. Mit `q35` + VirtIO und einer Autounattend.xml-Sektion `PnpCustomizationsWinPE` (lädt `viostor`/`vioscsi`/`NetKVM` aus dem virtio-win-ISO) läuft das Setup vollautomatisch durch.
+Background: first setup attempts with `pc-i440fx-10.1` + old VGA failed at disk-driver loading inside WinPE. With `q35` + VirtIO and an Autounattend.xml section `PnpCustomizationsWinPE` (loads `viostor`/`vioscsi`/`NetKVM` from the virtio-win ISO) the setup runs fully unattended.
 
-### H.2 — Forest-Topologie
+### H.2 — Forest topology
 
-3 Forests `tier0.lab` / `tier1.lab` / `tier2.lab` mit NetBIOS `T0LAB` / `T1LAB` / `T2LAB`. Forest-Mode pro Forest:
+3 forests `tier0.lab` / `tier1.lab` / `tier2.lab` with NetBIOS `T0LAB` / `T1LAB` / `T2LAB`. Forest mode per forest:
 
 ```text
 tier0.lab — Windows2025Forest
@@ -651,9 +635,9 @@ tier1.lab — Windows2025Forest
 tier2.lab — Windows2025Forest
 ```
 
-(2022-Lab hatte `Windows2016Forest` — der neue Wert ist der Default auf Server 2025.)
+(The 2022 lab had `Windows2016Forest` — the new value is the default on Server 2025.)
 
-Drei bidirektionale Forest-Trusts (vollvermascht), erstellt via `[System.DirectoryServices.ActiveDirectory.Forest]::CreateTrustRelationship`:
+Three bidirectional forest trusts (fully meshed), created via `[System.DirectoryServices.ActiveDirectory.Forest]::CreateTrustRelationship`:
 
 ```text
 tier0.lab ↔ tier1.lab  Bidirectional / Forest
@@ -661,118 +645,118 @@ tier1.lab ↔ tier2.lab  Bidirectional / Forest
 tier0.lab ↔ tier2.lab  Bidirectional / Forest
 ```
 
-Plus 6 Conditional DNS Forwarder (jeder DC hält CFs auf die jeweils anderen beiden Domain-Roots), `ReplicationScope: Forest`.
+Plus 6 conditional DNS forwarders (every DC holds CFs pointing at the other two domain roots), `ReplicationScope: Forest`.
 
-### H.3 — Test-Datenbestand
+### H.3 — Test data set
 
-| DC | User-Range | Anzahl | Verteilung |
+| DC | User range | Count | Distribution |
 |---|---|---|---|
-| tier0 | `mm0001`..`mm0500` | 500 | 5 Departments × 3 Sub-Teams + Nesting |
-| tier1 | `mm0501`..`mm0800` | 300 | dito |
-| tier2 | `mm0801`..`mm1000` | 200 | dito |
+| tier0 | `mm0001`..`mm0500` | 500 | 5 departments × 3 sub-teams + nesting |
+| tier1 | `mm0501`..`mm0800` | 300 | same |
+| tier2 | `mm0801`..`mm1000` | 200 | same |
 
-Plus auf tier0 `C:\Data\<Dept>\Project01..20\Folder01..50` = **5000 Folder + 100 Project-ACLs** mit drei ACL-Varianten:
+Plus on tier0: `C:\Data\<Dept>\Project01..20\Folder01..50` = **5000 folders + 100 project ACLs** with three ACL variants:
 
-- Project01..15 (75 Projekte): explicit Modify für Department-Sub-Team
-- Project16..18 (15 Projekte): Protected Inheritance + nur SYSTEM/Administrators
-- Project19..20 (10 Projekte): Allow Modify + zusätzlich Deny ReadAndExecute für `<Dept>-Gamma`
+- Project01..15 (75 projects): explicit Modify for the department sub-team
+- Project16..18 (15 projects): Protected Inheritance + only SYSTEM/Administrators
+- Project19..20 (10 projects): Allow Modify + an additional Deny ReadAndExecute for `<Dept>-Gamma`
 
-### H.4 — Stars Smoke-Tests (`adpa.exe analyze` v1.5.16)
+### H.4 — Stars smoke tests (`adpa.exe analyze` v1.5.16)
 
-Drei semantisch unterschiedliche Pfade gegen User `T0LAB\mm0001` (Mitglied in `Sales-Alpha`).
+Three semantically different paths against user `T0LAB\mm0001` (a member of `Sales-Alpha`).
 
 **Test 1 — `C:\Data\Sales\Project01` (Modify via Sales-Alpha):**
 
-| Feld | Erwartung | Ergebnis |
+| Field | Expectation | Result |
 |---|---|---|
-| Effective | Modify (0x001301BF) | ✅ exakt |
-| Matching ACEs | Sales-Alpha Modify explicit, BUILTIN\Users inherited Read | ✅ exakt |
-| Risk Findings | WRITE_ACCESS (HIGH), DELETE_RIGHT (MEDIUM) | ✅ erkannt |
-| Explanation Path | 10 Schritte: User → Sales-Alpha → ACE → NTFS effective | ✅ vollständig |
+| Effective | Modify (0x001301BF) | ✅ exact |
+| Matching ACEs | Sales-Alpha Modify explicit, BUILTIN\Users inherited Read | ✅ exact |
+| Risk findings | WRITE_ACCESS (HIGH), DELETE_RIGHT (MEDIUM) | ✅ detected |
+| Explanation path | 10 steps: User → Sales-Alpha → ACE → NTFS effective | ✅ complete |
 
-**Test 2 — `C:\Data\Sales\Project16` (Protected Inheritance, kein Zugriff):**
+**Test 2 — `C:\Data\Sales\Project16` (Protected Inheritance, no access):**
 
-| Feld | Erwartung | Ergebnis |
+| Field | Expectation | Result |
 |---|---|---|
-| Effective | Special (0x00000000) = kein Zugriff | ✅ |
-| Inheritance | „Protected (inheritance disabled)" | ✅ erkannt |
-| Matching ACEs | `(none)` — Sales-Alpha-ACE existiert nicht, da Inheritance protected | ✅ |
-| Risk Findings | (none) | ✅ |
+| Effective | Special (0x00000000) = no access | ✅ |
+| Inheritance | "Protected (inheritance disabled)" | ✅ detected |
+| Matching ACEs | `(none)` — the Sales-Alpha ACE does not exist because inheritance is protected | ✅ |
+| Risk findings | (none) | ✅ |
 
 **Test 3 — `C:\Data\Sales\Project19` (Deny Sales-Gamma, mm0001 in Sales-Alpha):**
 
-| Feld | Erwartung | Ergebnis |
+| Field | Expectation | Result |
 |---|---|---|
-| Effective | Read & Execute via BUILTIN\Users (Gamma-Deny greift nicht für Alpha-User) | ✅ Read & Execute (0x001200AF) |
-| DACL-Anzeige | DENY-ACE für Sales-Gamma SID sichtbar | ✅ |
-| Matching ACEs | 3 inherited Allow-ACEs für BUILTIN\Users — kein Deny-Match (mm0001 ≠ Gamma) | ✅ |
+| Effective | Read & Execute via BUILTIN\Users (the Gamma Deny does not apply to an Alpha user) | ✅ Read & Execute (0x001200AF) |
+| DACL display | DENY ACE for the Sales-Gamma SID visible | ✅ |
+| Matching ACEs | 3 inherited Allow ACEs for BUILTIN\Users — no Deny match (mm0001 ≠ Gamma) | ✅ |
 
-Diagnose-Marker waren erwartungsgemäß aktiv: „No AD connection — group memberships not resolved" und „Group resolution ran through SAM/LSA fallback" (Smoke-Test ohne `--server`/`--base-dn`).
+Diagnostic markers were active as expected: "No AD connection — group memberships not resolved" and "Group resolution ran through SAM/LSA fallback" (smoke test without `--server`/`--base-dn`).
 
-### H.5 — Was Block H verifiziert
+### H.5 — What Block H verifies
 
-| Bereich | Ergebnis |
+| Area | Result |
 |---|---|
-| Setup-Automation auf Server 2025 (Autounattend + VirtIO-Treiber) | ✅ läuft durch ohne manuelle Interaktion |
-| `Windows2025Forest`-Mode | ✅ automatisch gewählt, keine Anpassung am `Install-ADDSForest`-Skript nötig |
-| Cross-Forest-Trusts auf Server 2025 | ✅ `CreateTrustRelationship` baut bidirektionale Forest-Trusts unverändert |
-| Stars v1.5.16 (Round-10-Architektur) auf Server 2025 | ✅ Effective Rights + Explanation Path + Diagnose-Marker + Risk Findings korrekt |
-| Round-10-Findings 1–4 (Trustees-Enum, SmbAuditContext, SID-Map, win_safe-Crate) | ✅ keine Regression — alle 3 Tests sauber durchlaufen |
+| Setup automation on Server 2025 (Autounattend + VirtIO drivers) | ✅ runs through without manual interaction |
+| `Windows2025Forest` mode | ✅ chosen automatically, no adjustment to the `Install-ADDSForest` script needed |
+| Cross-forest trusts on Server 2025 | ✅ `CreateTrustRelationship` builds bidirectional forest trusts unchanged |
+| Stars v1.5.16 (Round-10 architecture) on Server 2025 | ✅ Effective Rights + Explanation Path + diagnostic markers + risk findings correct |
+| Round-10 findings 1–4 (trustees enum, SmbAuditContext, SID map, win_safe crate) | ✅ no regression — all 3 tests pass cleanly |
 
-### H.6 — Erweiterte Lab-Tests auf Server 2025 (nach H.4)
+### H.6 — Extended lab tests on Server 2025 (after H.4)
 
-H.4 war ein kompakter Plattform-Smoke (3 CLI-`analyze`-Aufrufe). H.6 ergänzt die fehlenden Codepfade — Scan + Export, LDAP-Bind-Verhalten, SMB-∩-Share, Cross-Forest. Status pro Test:
+H.4 was a compact platform smoke (3 CLI `analyze` calls). H.6 fills in the missing code paths — scan + export, LDAP bind behaviour, SMB ∩ share, cross-forest. Status per test:
 
-| # | Test auf Server 2025 | Status | Ergebnis |
+| # | Test on Server 2025 | Status | Result |
 |---|---|---|---|
-| H.6.1 | **GUI-Walkthrough** (`adpa-gui.exe`) — alle 4 Tabs, Theme-Toggle | ⏳ **offen** | `adpa-gui.exe` ist auf tier0 deployt, aber kein manueller Klick-Test durchgeführt. Abgedeckt durch Block E (Server 2022, Screenshots vom 6. Juni). |
-| H.6.2 | **CLI `scan` rekursiv** + HTML + JSON + CSV-Export über 5105 Pfade | ✅ **erfolgreich** | Siehe H.6.2.* unten. |
-| H.6.3 | **JSON-Schema v3** mit Round-10 `path_trustees`-Enum (`entry_kind: "ace"`/`"diagnostic"`) | ✅ **erfolgreich** | Siehe H.6.3.* unten. |
-| H.6.4 | **LDAP-Bind** gegen `tier0.lab` | ⚠️ **Befund** (kein Bug) | Server 2025 verlangt LDAP-Signing per Default + DC hat ohne AD CS kein LDAPS-Cert. Stars erkennt beide Fehler vorbildlich. Siehe H.6.4.* unten. |
-| H.6.5 | **SMB-Share-Test mit UNC** + NTFS-∩-Share | ✅ **erfolgreich** | Siehe H.6.5.* unten. |
-| H.6.6 | **Cross-Forest T2** — User aus `tier1.lab` greift via Trust auf ACL im `tier0.lab`-Forest zu | ✅ **erfolgreich** | Siehe H.6.6.* unten. |
-| H.6.7 | **Cross-Forest T3** — Cross-Forest-User OHNE ACE → effektiv kein Zugriff | ✅ **erfolgreich** | Siehe H.6.7.* unten. |
-| H.6.8 | **Trustee-Tabelle „Wer hat Zugriff?"** mit Round-10 `PathTrusteeEntry::Diagnostic`-Variante in der GUI | ⏳ **offen** | Abgedeckt durch `exporter::trustees` + `exporter::html` Unit-Tests; visueller Lab-Test nicht ausgeführt. |
-| H.6.9 | **5000-Pfad-Scan-Performance** Server 2022 vs. 2025 — LSA-Last gemessen | ⏳ **offen** | Aber: H.6.2 zeigt 5105 Pfade in **1,5 s** pro Format auf Server 2025 — Indikator, dass Round-10 SID-Map-Caller-Owned auf großen Bäumen greift. Quantitativer 2022-vs-2025-Vergleich nicht gemessen. |
-| H.6.10 | **Delta-Vergleich** zwei Scan-Läufe auf Server 2025 | ⏳ **offen** | Delta-Engine ist plattformunabhängig (Block C-Screenshots aus 2022-Lab decken Logik ab). |
+| H.6.1 | **GUI walkthrough** (`adpa-gui.exe`) — all 4 tabs, theme toggle | ⏳ **open** | `adpa-gui.exe` is deployed on tier0, but no manual click test executed. Covered by Block E (Server 2022, screenshots from June 6). |
+| H.6.2 | **CLI `scan` recursive** + HTML + JSON + CSV export over 5105 paths | ✅ **successful** | See H.6.2.* below. |
+| H.6.3 | **JSON schema v3** with Round-10 `path_trustees` enum (`entry_kind: "ace"`/`"diagnostic"`) | ✅ **successful** | See H.6.3.* below. |
+| H.6.4 | **LDAP bind** against `tier0.lab` | ⚠️ **finding** (not a bug) | Server 2025 requires LDAP signing by default + the DC has no LDAPS cert without AD CS. Stars detects both errors honestly. See H.6.4.* below. |
+| H.6.5 | **SMB share test with UNC** + NTFS ∩ share | ✅ **successful** | See H.6.5.* below. |
+| H.6.6 | **Cross-forest T2** — user from `tier1.lab` accesses an ACL in the `tier0.lab` forest via the trust | ✅ **successful** | See H.6.6.* below. |
+| H.6.7 | **Cross-forest T3** — cross-forest user WITHOUT an ACE → effectively no access | ✅ **successful** | See H.6.7.* below. |
+| H.6.8 | **Trustee table "Who has access?"** with the Round-10 `PathTrusteeEntry::Diagnostic` variant in the GUI | ⏳ **open** | Covered by `exporter::trustees` + `exporter::html` unit tests; visual lab test not executed. |
+| H.6.9 | **5000-path scan performance** Server 2022 vs. 2025 — LSA load measured | ⏳ **open** | But: H.6.2 shows 5105 paths in **1.5 s** per format on Server 2025 — an indicator that the Round-10 caller-owned SID map pays off on large trees. A quantitative 2022 vs. 2025 comparison was not measured. |
+| H.6.10 | **Delta comparison** of two scan runs on Server 2025 | ⏳ **open** | The delta engine is platform independent (Block C screenshots from the 2022 lab cover the logic). |
 
-> **Quintessenz nach H.6:** Die drei riskantesten Codepfade (Round-10 JSON-Enum live, NTFS-∩-Share live, Cross-Forest-Trust mit FSP live) sind auf Server 2025 erfolgreich verifiziert. Offen bleiben GUI-Klick-Tests (abgedeckt durch 2022-Block E), Delta + Trustee-Render-Walkthrough (Unit-Tests grün), und Performance-Vergleich (nice-to-have).
+> **Bottom line after H.6:** The three riskiest code paths (Round-10 JSON enum live, NTFS ∩ share live, cross-forest trust with FSP live) are successfully verified on Server 2025. Open items are GUI click tests (covered by 2022 Block E), the delta + trustee render walkthrough (unit tests green), and the performance comparison (nice-to-have).
 
-#### H.6.2.* — Scan + Export
+#### H.6.2.* — Scan + export
 
 ```text
 adpa.exe scan --path "C:\Data" --user "T0LAB\mm0001" --max-depth 4 --output ...
 ```
 
-| Format | Größe | Zeit | Pro Pfad |
+| Format | Size | Time | Per path |
 |---|---|---|---|
-| HTML | 22,9 MB | 1.5 s | 0.29 ms |
-| JSON | 25,4 MB | 1.1 s | 0.22 ms |
-| CSV | 6,9 MB | 1.1 s | 0.22 ms |
+| HTML | 22.9 MB | 1.5 s | 0.29 ms |
+| JSON | 25.4 MB | 1.1 s | 0.22 ms |
+| CSV | 6.9 MB | 1.1 s | 0.22 ms |
 
-5105 Pfade, alle ACL-Varianten (Modify / Protected / Deny), drei Export-Formate — alle drei Läufe ohne Fehler.
+5105 paths, all ACL variants (Modify / Protected / Deny), three export formats — all three runs without errors.
 
-#### H.6.3.* — JSON-Schema v3
+#### H.6.3.* — JSON schema v3
 
 `scan-mm0001.json`:
 
 ```json
 {
   "version": 3,
-  "permissions":    [5106 Einträge],
-  "risk_findings":  [510 Einträge],
-  "path_trustees":  [5106 Einträge]
+  "permissions":    [5106 entries],
+  "risk_findings":  [510 entries],
+  "path_trustees":  [5106 entries]
 }
 ```
 
-Stichproben in `path_trustees`:
+Samples in `path_trustees`:
 
 ```text
-entry_kind = "ace"        : 41342 Vorkommen
-entry_kind = "diagnostic" : 0 Vorkommen (erwartet — keine Share-DACL-Read-Fehler)
+entry_kind = "ace"        : 41342 occurrences
+entry_kind = "diagnostic" : 0 occurrences (expected — no share-DACL read errors)
 ```
 
-Beispiel-Eintrag (Round-10 Finding 4 typisierte Variante):
+Example entry (Round-10 finding 4 typed variant):
 
 ```json
 {
@@ -786,31 +770,31 @@ Beispiel-Eintrag (Round-10 Finding 4 typisierte Variante):
 }
 ```
 
-**Verifiziert:** `version: 3` ist aktiv, `entry_kind`-Tag (Round-10 Finding 4) trägt sauber, `display_name`-Auflösung aus der scanweiten SID-Name-Map (Round-10 Finding 2) füllt korrekt.
+**Verified:** `version: 3` is active, the `entry_kind` tag (Round-10 finding 4) carries cleanly, the `display_name` resolution from the scan-wide SID-name map (Round-10 finding 2) populates correctly.
 
-#### H.6.4.* — LDAP-Bind-Verhalten
+#### H.6.4.* — LDAP bind behaviour
 
-Zwei Versuche, beide scheitern — **kein Stars-Bug**:
+Two attempts, both fail — **not a Stars bug**:
 
-| Versuch | Server-Antwort | Server-2025-Ursache |
+| Attempt | Server response | Server 2025 cause |
 |---|---|---|
-| `--insecure-ldap` (Port 389, Klartext) | `rc=8 strongerAuthRequired: The server requires binds to turn on integrity checking if SSL\TLS are not already active on the connection` | Server 2025 hat **LDAP-Signing per Default an** (Security-Hardening, MS-Baseline-Empfehlung seit 2020 jetzt erzwungen) |
-| LDAPS Port 636 (Default) | `native TLS error: Eine vorhandene Verbindung wurde vom Remotehost geschlossen. (os error 10054)` | DC hat **kein gültiges Computer-Zertifikat** für LDAPS — AD CS ist im Lab nicht installiert |
+| `--insecure-ldap` (port 389, plaintext) | `rc=8 strongerAuthRequired: The server requires binds to turn on integrity checking if SSL\TLS are not already active on the connection` | Server 2025 has **LDAP signing on by default** (security hardening, MS baseline recommendation since 2020 now enforced) |
+| LDAPS port 636 (default) | `native TLS error: an existing connection was forcibly closed by the remote host. (os error 10054)` | The DC has **no valid computer certificate** for LDAPS — AD CS is not installed in the lab |
 
-**Stars-Verhalten in beiden Fällen** (das ist die eigentliche Verifikation):
+**Stars behaviour in both cases** (this is the actual verification):
 
-- Bind-Fehler wird erkannt
-- Strukturierter Diagnose-Marker mit klarem Fehlertext (`[!] LDAP identity lookup failed: …`)
-- Ergebnis kommt als `incomplete` markiert zurück, mit Hinweis „Treat as incomplete"
-- Stars crasht nicht und zeigt nicht still falsche Daten an
+- Bind failure is detected
+- Structured diagnostic marker with a clear error text (`[!] LDAP identity lookup failed: …`)
+- The result comes back marked `incomplete`, with the hint "Treat as incomplete"
+- Stars does not crash and does not silently show wrong data
 
-Folgerung: Für Stars-Einsatz auf einem Server 2025 als Audit-DC sollten Anwender entweder LDAPS mit gültigem Zertifikat einrichten oder das LDAP-Signing-Verhalten in der Test-Umgebung lockern. Stars selbst verhält sich auf beiden Fehler-Pfaden ehrlich.
+Conclusion: for Stars deployment on a Server 2025 as an audit DC, users should either set up LDAPS with a valid certificate or relax the LDAP signing behaviour in the test environment. Stars itself behaves honestly on both error paths.
 
-#### H.6.5.* — SMB-Share-Test mit UNC
+#### H.6.5.* — SMB share test with UNC
 
-Setup: SMB-Share `\\tier0\SalesShare` auf `C:\Data\Sales` mit Share-DACL = nur **Read** für Authentifizierte Benutzer.
+Setup: SMB share `\\tier0\SalesShare` on `C:\Data\Sales` with share DACL = only **Read** for authenticated users.
 
-Stars-Aufruf:
+Stars call:
 
 ```text
 adpa.exe analyze \
@@ -820,13 +804,13 @@ adpa.exe analyze \
   --share-name SalesShare
 ```
 
-Ergebnis:
+Result:
 
 ```text
 Effective Rights
   NTFS    : Modify (0x001301BF)           ← mm0001 in Sales-Alpha
-  Share   : Read & Execute (0x001200A9)   ← Share gibt AuthUsers nur Read
-  Result  : Read & Execute (0x001200A9)   ← restriktivere gewinnt
+  Share   : Read & Execute (0x001200A9)   ← share gives AuthUsers Read only
+  Result  : Read & Execute (0x001200A9)   ← more restrictive wins
 
 Explanation Path
   ...
@@ -835,20 +819,20 @@ Explanation Path
   12. Effective (NTFS ∩ Share): Read & Execute (0x001200A9)
 ```
 
-**Verifiziert:** NTFS-∩-Share-Aggregation rendert auf Server 2025 als eigener Erklärungsschritt 12, restriktivere Maske gewinnt, lokalisierte Namen werden sauber angezeigt (`VORDEFINIERT\Benutzer`, `Domänen-Benutzer`).
+**Verified:** NTFS ∩ share aggregation renders on Server 2025 as its own explanation step 12, the more restrictive mask wins, localized names are displayed cleanly (`VORDEFINIERT\Benutzer`, `Domänen-Benutzer`).
 
-#### H.6.6.* — Cross-Forest T2 (Trust-User direkt im ACE)
+#### H.6.6.* — Cross-forest T2 (trust user directly in the ACE)
 
-Setup: `C:\Data\CrossForestTest` mit expliziter ACE für `T1LAB\mm0501` (Cross-Forest-User aus `tier1.lab`). Test-User analysiert: derselbe `T1LAB\mm0501`.
+Setup: `C:\Data\CrossForestTest` with an explicit ACE for `T1LAB\mm0501` (cross-forest user from `tier1.lab`). Test user analyzed: the same `T1LAB\mm0501`.
 
 ```text
-=== mm0501 aus T1LAB als NTAccount aufloesen ===
+=== resolve mm0501 from T1LAB as an NTAccount ===
 cross-user-resolved: T1LAB\mm0501 -> S-1-5-21-1437207643-1140488888-3943352020-1123
 ```
 
-Trust hat die SID-Resolution sauber durchgeführt (anderer Forest-Domain-SID, RID 1123).
+The trust performed the SID resolution cleanly (different forest domain SID, RID 1123).
 
-Stars-Ergebnis:
+Stars result:
 
 ```text
 Matching ACEs (for this identity)
@@ -869,15 +853,15 @@ Risk Findings (3)
   [LOW  ] DIRECT_USER_ACE 'mm0501' has a direct explicit ACE → best practice is to assign permissions via groups
 ```
 
-**Verifiziert:** Cross-Forest-SID-Resolution über Trust funktioniert, expliziter ACE wird gematcht, effektive Rechte sind korrekt, Risk-Findings inkl. `DIRECT_USER_ACE`-Hinweis (Best Practice) werden ausgegeben.
+**Verified:** Cross-forest SID resolution via the trust works, the explicit ACE is matched, the effective rights are correct, the risk findings including the `DIRECT_USER_ACE` hint (best practice) are emitted.
 
-#### H.6.7.* — Cross-Forest T3 (User ohne ACE → kein Zugriff)
+#### H.6.7.* — Cross-forest T3 (user without an ACE → no access)
 
-Setup: Derselbe Pfad `C:\Data\CrossForestTest`. Test-User: `T2LAB\mm0801` (anderer Forest, **keine ACE** auf diesem Pfad).
+Setup: same path `C:\Data\CrossForestTest`. Test user: `T2LAB\mm0801` (different forest, **no ACE** on this path).
 
 ```text
-=== Stars T3: T2LAB\mm0801 auf C:\Data\CrossForestTest ===
-  User: mm0801 (S-1-5-21-571288721-…-1124)  ← tier2-Forest, klar anders als tier1
+=== Stars T3: T2LAB\mm0801 on C:\Data\CrossForestTest ===
+  User: mm0801 (S-1-5-21-571288721-…-1124)  ← tier2 forest, clearly different from tier1
 
 Matching ACEs (for this identity)
   (none)
@@ -891,17 +875,17 @@ Explanation Path
   2. NTFS effective: Special (0x00000000)
 ```
 
-**Verifiziert:** Stars resolved den Cross-Forest-User sauber (kein „Konto nicht gefunden"-False-Negative), findet aber zu Recht keine matching ACEs, gibt `kein Zugriff` aus. Der schlanke 2-Schritt-Explanation-Path zeigt, dass die Logik nichts „dazu erfindet".
+**Verified:** Stars resolves the cross-forest user cleanly (no "account not found" false negative), but rightly finds no matching ACEs and reports `no access`. The lean 2-step explanation path shows that the logic doesn't make anything up.
 
 ---
 
-### H.7 — Was bleibt offen nach H.6
+### H.7 — What remains open after H.6
 
-| Verbleibend offen | Abdeckung anderswo | Risiko |
+| Remaining open | Coverage elsewhere | Risk |
 |---|---|---|
-| GUI-Walkthrough auf Server 2025 (H.6.1) | Block E auf Server 2022 (Screenshots 6. Juni) | niedrig — derselbe Slint-Renderer |
-| Trustee-Tabelle GUI-Render mit Diagnostic-Variante (H.6.8) | `exporter::trustees` + `html.rs` Unit-Tests grün | niedrig |
-| 5000-Pfad-Performance-Vergleich Server 2022 vs. 2025 (H.6.9) | H.6.2 misst 0,22–0,29 ms pro Pfad — sehr schnell | niedrig — Korrektheit ist primär |
-| Delta-Vergleich zwischen zwei Scan-Läufen (H.6.10) | Block C / Screenshots 2022, Delta-Engine plattformunabhängig | niedrig |
+| GUI walkthrough on Server 2025 (H.6.1) | Block E on Server 2022 (screenshots from June 6) | low — same Slint renderer |
+| Trustee table GUI render with the Diagnostic variant (H.6.8) | `exporter::trustees` + `html.rs` unit tests green | low |
+| 5000-path performance comparison Server 2022 vs. 2025 (H.6.9) | H.6.2 measures 0.22–0.29 ms per path — very fast | low — correctness is primary |
+| Delta comparison between two scan runs (H.6.10) | Block C / screenshots from 2022, delta engine platform independent | low |
 
-**Empfehlung:** GUI-Walkthrough mit Trustee-Tab und Delta-Tab auf Server 2025 als nächste Test-Session zusammen erledigen — sind beide nur „GUI auf 2025 klicken" und in 15 Min durch.
+**Recommendation:** Do the GUI walkthrough with the trustee tab and the delta tab on Server 2025 together as the next test session — both are just "click the GUI on 2025" and done in 15 minutes.

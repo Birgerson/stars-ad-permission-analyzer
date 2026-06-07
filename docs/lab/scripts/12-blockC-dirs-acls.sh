@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Lab Block C.2 + C.3 — Verzeichnisstruktur + ACLs auf tier0.
-# Struktur (5 Depts × 20 Projects × 50 Folders = 5000 Folder-Ordner):
+# Structure (5 depts × 20 projects × 50 folders = 5000 folder dirs):
 #   C:\Data\<Department>\<Project01..20>\<Folder01..50>
 # ACL-Variation:
-#   Dept-Wurzel : Dept-<Department>      = Modify (inherited)
+#   Dept root   : Dept-<Department>      = Modify (inherited)
 #   Project01..15: <Department>-<Sub-Team> = Modify (explicit)
-#   Project16..18: PROTECT inheritance + nur Admins+SYSTEM
-#   Project19..20: Deny Read fuer <Department>-Gamma
+#   Project16..18: PROTECT inheritance + only Admins+SYSTEM
+#   Project19..20: Deny Read for <Department>-Gamma
 set -eu
 
 run_ps() {

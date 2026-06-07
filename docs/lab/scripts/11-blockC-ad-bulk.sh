@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Lab Block C.1 — AD-Bulk-Setup:
 #   - OUs Company/Departments/Users/Groups
-#   - 5 Departments × 3 Sub-Teams = 20 Sicherheitsgruppen
-#   - Nesting: User -> Sub-Team-Group -> Department-Group
+#   - 5 departments × 3 sub-teams = 20 security groups
+#   - Nesting: user -> sub-team group -> department group
 #   - 1000 User max.mustermann0001..1000 verteilt:
 #       tier0.lab: 0001..0500 (500)
 #       tier1.lab: 0501..0800 (300)
@@ -12,11 +12,11 @@
 # der ForeignSecurityPrincipal-Container in tier0.lab muss fuer die Variante
 # mit Add-ADGroupMember + Cross-Forest-SID erst per dsadd oder New-ADObject
 # foreignSecurityPrincipal vorbereitet werden. Das ist ein Lab-Setup-Quirk,
-# kein Stars-Bug — Stars liest existierende FSPs korrekt (siehe Test T2 in
+# kein Stars-Bug — Stars liest existierende FSPs korrekt (see Test T2 in
 # verification.md). Wer das Lab-Setup vervollstaendigen will, ergaenzt den
 # FSP-Step manuell auf tier0.
 set -eu
-: "${LAB_ADMIN_PASSWORD:?Bitte LAB_ADMIN_PASSWORD exportieren}"
+: "${LAB_ADMIN_PASSWORD:?Please export LAB_ADMIN_PASSWORD}"
 
 run_ps() {
     local vmid="$1"

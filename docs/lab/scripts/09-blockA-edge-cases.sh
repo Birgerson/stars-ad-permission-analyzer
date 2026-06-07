@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Lab Block A — NTFS-Edge-Cases (Deny + Protect + Share) + Stars-CLI-Smoke.
-# Voraussetzungen:
+# Prerequisites:
 #   - Phases 01..08 sind durchgelaufen.
 #   - C:\Stars\adpa.exe ist auf VMID 100 vorhanden.
-#   - $LAB_ADMIN_PASSWORD ist gesetzt.
+#   - $LAB_ADMIN_PASSWORD is set.
 set -eu
-: "${LAB_ADMIN_PASSWORD:?Bitte LAB_ADMIN_PASSWORD exportieren}"
+: "${LAB_ADMIN_PASSWORD:?Please export LAB_ADMIN_PASSWORD}"
 
 run_ps() {
     local vmid="$1"

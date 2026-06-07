@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Lab Phase 3 — Install-ADDSForest auf tier0/tier1/tier2 parallel.
-# Voraussetzungen:
-#   - VMs sind oben, Hostnames sind tier0/tier1/tier2.
-#   - Local-Admin-Passwort ist gesetzt (Phase 2).
-#   - $LAB_ADMIN_PASSWORD ist gesetzt.
+# Lab phase 3 — Install-ADDSForest on tier0/tier1/tier2 in parallel.
+# Prerequisites:
+#   - VMs are up, hostnames are tier0/tier1/tier2.
+#   - Local admin password is set (phase 2).
+#   - $LAB_ADMIN_PASSWORD is set.
 set -eu
-: "${LAB_ADMIN_PASSWORD:?Bitte LAB_ADMIN_PASSWORD exportieren}"
+: "${LAB_ADMIN_PASSWORD:?Please export LAB_ADMIN_PASSWORD}"
 
 write_promote_ps() {
     local domain="$1"
@@ -35,7 +35,7 @@ PSEOF
 }
 
 # NetBIOS-Namen unterscheiden sich bewusst vom Hostnamen, sonst lehnt der
-# Promote-Check ab: "The NetBIOS name TIER0 is already in use."
+# Promote check rejected: "The NetBIOS name TIER0 is already in use."
 write_promote_ps "tier0.lab" "T0LAB" /tmp/promote-100.ps1
 write_promote_ps "tier1.lab" "T1LAB" /tmp/promote-101.ps1
 write_promote_ps "tier2.lab" "T2LAB" /tmp/promote-102.ps1

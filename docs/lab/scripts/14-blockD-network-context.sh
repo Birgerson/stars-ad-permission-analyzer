@@ -14,7 +14,7 @@
 #        --share-name
 #   E4c: UNC path + SMB hints           -> Share blocks NETWORK end-to-end
 set -eu
-: "${LAB_ADMIN_PASSWORD:?Bitte LAB_ADMIN_PASSWORD exportieren}"
+: "${LAB_ADMIN_PASSWORD:?Please export LAB_ADMIN_PASSWORD}"
 
 run_ps() {
     local vmid="$1"; local ps_file="$2"; local label="$3"; local timeout="${4:-180}"

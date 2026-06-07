@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Lab Phase 6 — Bidirektionale Forest-Trusts via Forest.CreateTrustRelationship.
-# Voraussetzungen: Conditional Forwarders (Phase 5) gesetzt, DNS-Resolve cross-forest funktioniert.
+# Lab phase 6 — bidirectional forest trusts via Forest.CreateTrustRelationship.
+# Prerequisites: conditional forwarders (phase 5) are set, cross-forest DNS resolution works.
 set -eu
-: "${LAB_ADMIN_PASSWORD:?Bitte LAB_ADMIN_PASSWORD exportieren}"
+: "${LAB_ADMIN_PASSWORD:?Please export LAB_ADMIN_PASSWORD}"
 
 make_trust_ps() {
     local local_fqdn="$1"

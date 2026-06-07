@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lab Phase 5 — Conditional DNS Forwarders zwischen allen drei Forests.
+# Lab phase 5 — conditional DNS forwarders between all three forests.
 set -eu
 
 write_cf_ps() {

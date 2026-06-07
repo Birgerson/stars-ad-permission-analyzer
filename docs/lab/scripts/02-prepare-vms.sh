@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Lab Phase 2 — Hostname, statische IP, DNS=self, Local-Admin-Passwort, AD-DS-Feature.
-# Voraussetzungen:
-#   - VMs sind oben (qemu-guest-agent erreichbar).
-#   - $LAB_ADMIN_PASSWORD ist gesetzt.
+# Lab phase 2 — hostname, static IP, DNS=self, local admin password, AD-DS feature.
+# Prerequisites:
+#   - VMs are up (qemu-guest-agent reachable).
+#   - $LAB_ADMIN_PASSWORD is set.
 set -eu
-: "${LAB_ADMIN_PASSWORD:?Bitte LAB_ADMIN_PASSWORD exportieren}"
+: "${LAB_ADMIN_PASSWORD:?Please export LAB_ADMIN_PASSWORD}"
 
 TIER0_VMID="${TIER0_VMID:-100}"
 TIER1_VMID="${TIER1_VMID:-101}"

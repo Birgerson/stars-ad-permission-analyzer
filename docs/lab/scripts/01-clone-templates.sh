@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Lab Phase 1 — Klont 2 weitere DCs aus dem Windows-Server-2022-Template.
-# Existierende VMID 100 wird hier nicht angetastet — die Umwidmung ist Lab-spezifisch
-# (siehe ../setup-procedure.md, Phase B).
+# Lab phase 1 — clones 2 additional DCs from the Windows Server 2022 template.
+# Existing VMID 100 is left untouched here — its repurposing is lab specific
+# (see ../setup-procedure.md, phase B).
 #
-# Voraussetzungen:
-#   - Template-VM existiert (in unserem Lab: VMID 9000).
-#   - VMIDs 101 und 102 sind frei.
+# Prerequisites:
+#   - Template VM exists (in our lab: VMID 9000).
+#   - VMIDs 101 and 102 are free.
 set -eu
 
 TEMPLATE_VMID="${TEMPLATE_VMID:-9000}"

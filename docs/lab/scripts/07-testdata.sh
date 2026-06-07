@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Lab Phase 7 — Test-OUs, Test-User, verschachtelte Gruppen, Test-Pfad mit ACL inkl. Cross-Forest-FSP.
 set -eu
-: "${LAB_ADMIN_PASSWORD:?Bitte LAB_ADMIN_PASSWORD exportieren}"
+: "${LAB_ADMIN_PASSWORD:?Please export LAB_ADMIN_PASSWORD}"
 
 run_ps() {
     local vmid="$1"
@@ -13,7 +13,7 @@ run_ps() {
     qm guest exec "$vmid" --timeout 180 -- powershell -NoProfile -EncodedCommand "$ENC"
 }
 
-# tier0.lab: TestOU, GroupA -> GroupB, alice, C:\TestShare mit ACE für GroupB
+# tier0.lab: TestOU, GroupA -> GroupB, alice, C:\TestShare with an ACE for GroupB
 cat > /tmp/td-tier0.ps1 <<PSEOF
 \$ErrorActionPreference = "Stop"
 \$ProgressPreference = "SilentlyContinue"
