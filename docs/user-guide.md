@@ -402,9 +402,39 @@ carries both answers:
 Since v1.5.14 **both blocks are also populated in CLI exports**.
 Before that only the GUI produced the path-centric trustee list; the
 CLI export had the field defined but passed it empty. JSON consumers
-find the field under the `path_trustees` key (schema version 2);
-HTML auto-renders the "Trustees per path" table whenever the list is
-not empty.
+find the field under the `path_trustees` key (**schema version 3**
+since v1.5.14); HTML auto-renders the "Trustees per path" table
+whenever the list is not empty.
+
+#### JSON schema v3 — tagged trustee entries
+
+Each item in `path_trustees[].trustees[]` carries a discriminator
+`entry_kind` and one of two shapes:
+
+```json
+{ "entry_kind": "ace",
+  "sid": "S-1-5-32-544",
+  "display_name": "BUILTIN\\Administrators",
+  "kind": "Allow",
+  "mask": 2032127,
+  "inherited": false,
+  "inheritance_flags": 0,
+  "propagation_flags": 0,
+  "category": "Ntfs" }
+
+{ "entry_kind": "diagnostic",
+  "category": "Share",
+  "code": "share_read_failed",
+  "detail": "Access denied reading share DACL" }
+```
+
+`"ace"` is the regular trustee row backed by an ACE. `"diagnostic"`
+appears when Stars could not read a layer for a structured reason
+(typically a share-DACL read failure) — it replaces what would
+otherwise be a missing row that SIEM consumers might misread as
+"no permission". The discriminator was introduced with schema v3 in
+Round 10; consumers reading schema v2 should be updated to dispatch
+on `entry_kind`.
 
 In practice: `adpa analyze --output report.json --path X --user alice`
 and `adpa scan --output report.json --path X --user alice` now both

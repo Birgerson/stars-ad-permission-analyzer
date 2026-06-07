@@ -162,6 +162,14 @@ adpa.exe analyze --path "\\server\share\Daten" --user S-1-5-21-... ^
 > Das Passwort wird über `ADPA_BIND_PASSWORD` übergeben, nicht als CLI-Argument
 > (CLI-Argumente sind in Prozesslisten und Shell-History sichtbar).
 > Für Testumgebungen ohne LDAPS: `--insecure-ldap` ergänzen.
+>
+> **Hinweis zu Windows Server 2025:** Server 2025 erzwingt LDAP-Signing per Default
+> (`rc=8 strongerAuthRequired` bei unverschlüsseltem Bind). Für `--insecure-ldap`
+> auf einem 2025-Ziel müsste das Server-seitig gelockert werden — produktiv
+> nicht empfehlenswert. Für LDAPS braucht der DC ein gültiges Computer-Zertifikat
+> (typischerweise via AD CS); ohne Zertifikat scheitert der TLS-Handshake. Stars
+> erkennt beide Fälle und zeigt einen klaren Diagnose-Marker statt still
+> unvollständige Ergebnisse zu liefern.
 
 **CLI — UNC-Pfad mit automatischer Share-Erkennung:**
 ```
@@ -557,6 +565,14 @@ adpa.exe analyze --path "\\server\share\Data" --user S-1-5-21-... ^
 > The password is passed through `ADPA_BIND_PASSWORD`, not as a CLI argument
 > (CLI arguments are visible in process lists and shell history).
 > For test environments without LDAPS, add `--insecure-ldap`.
+>
+> **Note for Windows Server 2025:** Server 2025 enforces LDAP signing by default
+> (`rc=8 strongerAuthRequired` for unencrypted binds). To use `--insecure-ldap`
+> against a 2025 target you would have to loosen this server-side — not advisable
+> in production. For LDAPS, the DC needs a valid computer certificate (typically
+> via AD CS); without a certificate the TLS handshake fails. Stars detects both
+> cases and surfaces a clear diagnostic marker instead of silently returning
+> incomplete results.
 
 **CLI — UNC path with automatic share detection:**
 ```

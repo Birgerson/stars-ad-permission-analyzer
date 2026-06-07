@@ -739,11 +739,16 @@ For the "who can access?" trustee view the GUI worker builds the
 
 ```rust
 struct ShareTrusteeOverlay {
-    trustees: Vec<PathTrustee>,  // all TrusteeCategory::Share
+    trustees: Vec<PathTrusteeEntry>,  // all TrusteeCategory::Share
+                                       // PathTrusteeEntry::Ace or ::Diagnostic
 }
 
-// per path:
-let raw_trustees = build_path_trustees_with_share(&fso, share_overlay.as_ref());
+// per path (Round-10 signature; see § 11):
+let raw_trustees = build_path_trustees_with_share_and_names(
+    &fso,
+    share_overlay.as_ref(),
+    sid_name_map.as_ref(),
+);
 ```
 
 Every path then carries the NTFS trustees from its DACL **plus** the
@@ -1179,7 +1184,7 @@ out paths without change client-side.
 Stars answers two audit questions per path:
 
 1. **Identity-bound:** "What effective right does *this one* identity have?" — `EffectivePermission` from the engine.
-2. **Path-centric:** "Who is *on the DACL at all*?" — `Vec<PathTrustee>`, split into NTFS and share.
+2. **Path-centric:** "Who is *on the DACL at all*?" — `Vec<PathTrusteeEntry>`, split into NTFS and share, with a tagged-union per entry.
 
 The second question does not depend on a specific identity. It is the raw enumeration of the ACEs in the NTFS DACL and the share DACL and answers who is configured for a path — regardless of whether that's a real identity or an orphaned SID.
 
@@ -1187,10 +1192,17 @@ Until v1.5.13 the build logic for that lived privately in `crates/gui/src/worker
 
 With v1.5.14 the logic moved to `crates/exporter/src/trustees.rs`. Choosing that home follows the workspace's layering rule: trustees are report data, not engine output. `exporter` is allowed to depend on `share_scanner` and (windows-only) `ad_resolver`, but not on `cli` or `gui` — so GUI and CLI are equal consumers.
 
-Public API:
+With Round 10 (v1.5.16) the `PathTrustee` struct became a tagged union `PathTrusteeEntry` and the JSON schema went to **version 3** (see § 13). The `Diagnostic` variant replaces the previous practice of inventing a synthetic ACE row for read failures — SIEM/script consumers now dispatch on the `entry_kind` field instead of trying to spot the failure string in `display_name`.
+
+Public API (post-Round-10):
 
 ```rust
-pub struct ShareTrusteeOverlay { pub trustees: Vec<PathTrustee> }
+pub struct ShareTrusteeOverlay { pub trustees: Vec<PathTrusteeEntry> }
+
+pub enum PathTrusteeEntry {
+    Ace(PathTrusteeAce),         // entry_kind = "ace"
+    Diagnostic(TrusteeDiagnostic), // entry_kind = "diagnostic"
+}
 
 pub fn read_share_overlay(server: &str, share_name: &str) -> ShareTrusteeOverlay;
 
@@ -1198,29 +1210,30 @@ pub fn build_path_trustees(
     fso: &FileSystemObject,
     smb_server: Option<&str>,
     share_name: Option<&str>,
-) -> Vec<PathTrustee>;
+) -> Vec<PathTrusteeEntry>;
 
-pub fn build_path_trustees_with_share(
+pub fn build_path_trustees_with_share_and_names(
     fso: &FileSystemObject,
     share_overlay: Option<&ShareTrusteeOverlay>,
-) -> Vec<PathTrustee>;
+    sid_names: Option<&SidNameMap>,
+) -> Vec<PathTrusteeEntry>;
 ```
 
-The plain `build_path_trustees` form reads the share DACL on each call — fine for `analyze` with one path. The `_with_share` form takes a pre-read overlay — the scan path reads the share DACL once before the per-path loop and passes the reference into every call. That keeps share DACL read load constant per scan instead of linear per path (identical to the GUI scan path since ADR 0038).
+The plain `build_path_trustees` form reads the share DACL on each call — fine for `analyze` with one path. The `_with_share_and_names` form takes a pre-read overlay and a scan-wide SID-to-name map — the scan path reads the share DACL once and builds the SID map once before the per-path loop and passes both references into every call. That keeps share DACL read load constant per scan instead of linear per path (identical to the GUI scan path since ADR 0038) and avoids N×M LSA lookups across the tree (Round 10 Finding 2).
 
-NULL DACL and share read failures are intentionally surfaced as visible pseudo-rows — no silent skips:
+NULL DACL and share read failures are intentionally surfaced as visible entries — no silent skips:
 
-- NULL DACL → `Everyone (NULL DACL — no access restriction)` with mask `0x001F01FF`.
-- Share read failure → `Share-DACL nicht lesbar: <message>` with mask `0`.
+- NULL DACL → `PathTrusteeEntry::Ace` with `Everyone` and full-access mask (the NULL DACL semantically grants Everyone full access).
+- Share read failure → `PathTrusteeEntry::Diagnostic { category: Share, code: "share_read_failed", detail: <message> }`. This is the Round-10 typed replacement for the v1.5.15 synthetic-ACE pseudo-row.
 
 Consumers:
 
 - **GUI** (`crates/gui/src/worker.rs`) re-exports the symbols via `pub use exporter::{…}`. The old private implementation is gone; all 11 existing GUI tests keep passing unchanged.
 - **CLI** (`crates/cli/src/main.rs`):
   - `run_analyze` calls `exporter::build_path_trustees(&fso, smb_server, share_name)` and stores the result in `AnalysisResult.path_trustees`.
-  - `run_scan` reads the overlay once (cfg-gated for Windows) and calls `exporter::build_path_trustees_with_share(fso, overlay.as_ref())` per path FSO.
+  - `run_scan` reads the overlay once (cfg-gated for Windows), builds the scan-wide SID-name map once, and calls `exporter::build_path_trustees_with_share_and_names(fso, overlay.as_ref(), sid_names.as_ref())` per path FSO.
 
-Three unit tests inside the module verify on crate level: NTFS-only trustees, NULL DACL pseudo-row, share overlay appended. Platform-independent — the SID-to-name resolution is `cfg(windows)`-only, on CI Linux `display_name` fields just stay `None`.
+Unit tests inside the module verify on crate level: NTFS-only trustees, NULL DACL is rendered as a typed Allow-row (not a Diagnostic — see `null_dacl_yields_typed_diagnostic_not_synthetic_ace`), share overlay appended, and share-read-failure surfaces as `PathTrusteeEntry::Diagnostic` with the typed `code` field. Platform-independent — the SID-to-name resolution is `cfg(windows)`-only, on CI Linux `display_name` fields just stay `None`.
 
 ---
 

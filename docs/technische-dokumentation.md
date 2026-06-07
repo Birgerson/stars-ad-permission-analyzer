@@ -746,11 +746,16 @@ Für die „Wer hat Zugriff?"-Trustee-Ansicht baut der GUI-Worker
 
 ```rust
 struct ShareTrusteeOverlay {
-    trustees: Vec<PathTrustee>,  // alle TrusteeCategory::Share
+    trustees: Vec<PathTrusteeEntry>,  // alle TrusteeCategory::Share
+                                        // PathTrusteeEntry::Ace oder ::Diagnostic
 }
 
-// Pro Pfad:
-let raw_trustees = build_path_trustees_with_share(&fso, share_overlay.as_ref());
+// Pro Pfad (Round-10-Signatur, siehe § 11):
+let raw_trustees = build_path_trustees_with_share_and_names(
+    &fso,
+    share_overlay.as_ref(),
+    sid_name_map.as_ref(),
+);
 ```
 
 Damit hat jeder Pfad die NTFS-Trustees aus seiner DACL **plus** die
@@ -1190,7 +1195,7 @@ filtert clientseitig Pfade ohne Änderung heraus.
 Stars beantwortet pro Pfad zwei Audit-Fragen:
 
 1. **Identitäts-bezogen:** „Welche effektive Berechtigung hat *diese eine* Identität?" — `EffectivePermission` aus der Engine.
-2. **Pfad-bezogen:** „Wer steht *überhaupt* auf der DACL?" — `Vec<PathTrustee>`, sortiert nach NTFS und Share.
+2. **Pfad-bezogen:** „Wer steht *überhaupt* auf der DACL?" — `Vec<PathTrusteeEntry>`, sortiert nach NTFS und Share, mit typisierter Union pro Eintrag.
 
 Die zweite Frage hängt nicht von einer konkreten Identität ab. Sie ist die rohe Aufzählung der ACEs in NTFS-DACL und Share-DACL und beantwortet, wer auf einem Pfad konfiguriert ist — unabhängig davon, ob das eine reale Identität ist oder eine verwaiste SID.
 
@@ -1198,10 +1203,17 @@ Bis v1.5.13 lag die Build-Logik dafür privat in `crates/gui/src/worker.rs`. Kon
 
 Mit v1.5.14 wandert die Logik nach `crates/exporter/src/trustees.rs`. Die Heimat dort folgt der Workspace-Layering-Regel: Trustees sind Reportdaten, kein Engine-Output. `exporter` darf in `share_scanner` und (windows-only) `ad_resolver` greifen, aber nicht in `cli` oder `gui` — damit sind GUI und CLI gleichberechtigte Konsumenten.
 
-Öffentliche API:
+Mit Round 10 (v1.5.16) wurde das `PathTrustee`-Struct durch die typisierte Union `PathTrusteeEntry` ersetzt und das JSON-Schema auf **Version 3** angehoben (siehe § 13). Die `Diagnostic`-Variante ersetzt die frühere Praxis, für Read-Fehler eine synthetische ACE-Zeile zu erfinden — SIEM-/Script-Konsumenten dispatchen jetzt auf dem `entry_kind`-Tag, statt die Fehlerformulierung im `display_name` zu suchen.
+
+Öffentliche API (nach Round 10):
 
 ```rust
-pub struct ShareTrusteeOverlay { pub trustees: Vec<PathTrustee> }
+pub struct ShareTrusteeOverlay { pub trustees: Vec<PathTrusteeEntry> }
+
+pub enum PathTrusteeEntry {
+    Ace(PathTrusteeAce),           // entry_kind = "ace"
+    Diagnostic(TrusteeDiagnostic), // entry_kind = "diagnostic"
+}
 
 pub fn read_share_overlay(server: &str, share_name: &str) -> ShareTrusteeOverlay;
 
@@ -1209,29 +1221,30 @@ pub fn build_path_trustees(
     fso: &FileSystemObject,
     smb_server: Option<&str>,
     share_name: Option<&str>,
-) -> Vec<PathTrustee>;
+) -> Vec<PathTrusteeEntry>;
 
-pub fn build_path_trustees_with_share(
+pub fn build_path_trustees_with_share_and_names(
     fso: &FileSystemObject,
     share_overlay: Option<&ShareTrusteeOverlay>,
-) -> Vec<PathTrustee>;
+    sid_names: Option<&SidNameMap>,
+) -> Vec<PathTrusteeEntry>;
 ```
 
-Die einfache `build_path_trustees`-Form liest die Share-DACL pro Aufruf neu — sinnvoll für `analyze` mit genau einem Pfad. Die `_with_share`-Form nimmt einen vorab gelesenen Overlay entgegen — der Scan-Pfad liest die Share-DACL einmal vor der Pfad-Schleife und übergibt die Referenz an jeden Aufruf. Damit bleibt die Share-DACL-Read-Last konstant pro Scan statt linear pro Pfad (identisches Verhalten wie der GUI-Scan-Pfad seit ADR 0038).
+Die einfache `build_path_trustees`-Form liest die Share-DACL pro Aufruf neu — sinnvoll für `analyze` mit genau einem Pfad. Die `_with_share_and_names`-Form nimmt einen vorab gelesenen Overlay und eine scanweite SID-zu-Name-Map entgegen — der Scan-Pfad liest die Share-DACL einmal und baut die SID-Map einmal vor der Pfad-Schleife und übergibt beide Referenzen an jeden Aufruf. Damit bleibt die Share-DACL-Read-Last konstant pro Scan statt linear pro Pfad (wie der GUI-Scan-Pfad seit ADR 0038) und N×M LSA-Lookups über den Baum entfallen (Round 10 Finding 2).
 
-NULL-DACL und Share-Read-Fehler werden bewusst als sichtbare Pseudo-Zeilen aufgenommen — keine stillen Skips:
+NULL-DACL und Share-Read-Fehler werden bewusst als sichtbare Einträge aufgenommen — keine stillen Skips:
 
-- NULL-DACL → `Everyone (NULL DACL — no access restriction)` mit Maske `0x001F01FF`.
-- Share-Read-Fehler → `Share-DACL nicht lesbar: <Fehlermeldung>` mit Maske `0`.
+- NULL-DACL → `PathTrusteeEntry::Ace` mit `Everyone` und Voll-Maske (NULL-DACL bedeutet semantisch Everyone hat Vollzugriff).
+- Share-Read-Fehler → `PathTrusteeEntry::Diagnostic { category: Share, code: "share_read_failed", detail: <Fehlermeldung> }`. Round-10-Ersatz für die synthetische ACE-Pseudo-Zeile aus v1.5.15.
 
 Konsumenten:
 
 - **GUI** (`crates/gui/src/worker.rs`) re-exportiert die Symbole per `pub use exporter::{…}`. Die alte private Implementierung ist ersatzlos entfernt; alle 11 bestehenden GUI-Tests laufen unverändert weiter.
 - **CLI** (`crates/cli/src/main.rs`):
   - `run_analyze` ruft `exporter::build_path_trustees(&fso, smb_server, share_name)` und legt das Ergebnis in `AnalysisResult.path_trustees` ab.
-  - `run_scan` liest den Overlay einmal (cfg-gated für Windows) und ruft `exporter::build_path_trustees_with_share(fso, overlay.as_ref())` pro Pfad-FSO.
+  - `run_scan` liest den Overlay einmal (cfg-gated für Windows), baut die scanweite SID-Name-Map einmal und ruft `exporter::build_path_trustees_with_share_and_names(fso, overlay.as_ref(), sid_names.as_ref())` pro Pfad-FSO.
 
-Drei Unit-Tests im Modul verifizieren auf Crate-Ebene: NTFS-only-Trustees, NULL-DACL-Pseudo-Zeile, Share-Overlay-Anhang. Plattform-unabhängig — die SID-zu-Name-Auflösung ist `cfg(windows)`-only, auf CI-Linux bleiben `display_name`-Felder einfach `None`.
+Unit-Tests im Modul verifizieren auf Crate-Ebene: NTFS-only-Trustees, NULL-DACL als typisierte Allow-Zeile (kein Diagnostic — siehe `null_dacl_yields_typed_diagnostic_not_synthetic_ace`), Share-Overlay-Anhang, Share-Read-Fehler als `PathTrusteeEntry::Diagnostic` mit typisiertem `code`-Feld. Plattform-unabhängig — die SID-zu-Name-Auflösung ist `cfg(windows)`-only, auf CI-Linux bleiben `display_name`-Felder einfach `None`.
 
 ---
 

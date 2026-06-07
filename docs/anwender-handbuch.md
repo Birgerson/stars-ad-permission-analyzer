@@ -408,8 +408,40 @@ Seit v1.5.14 sind **beide Blöcke auch in CLI-Exports** vollständig
 befüllt. Bis dahin lieferte nur die GUI die pfad­zentrische
 Trustee-Liste; der CLI-Export hatte sie strukturell vorgesehen, aber
 leer übergeben. JSON-Konsumenten finden das Feld unter dem Key
-`path_trustees` (Schema-Version 2), HTML rendert die Tabelle
-„Trustees pro Pfad" automatisch, sobald die Liste nicht leer ist.
+`path_trustees` (**Schema-Version 3** seit v1.5.14), HTML rendert die
+Tabelle „Trustees pro Pfad" automatisch, sobald die Liste nicht
+leer ist.
+
+#### JSON-Schema v3 — typisierte Trustee-Einträge
+
+Jedes Element in `path_trustees[].trustees[]` trägt einen
+Discriminator `entry_kind` und hat eine von zwei Formen:
+
+```json
+{ "entry_kind": "ace",
+  "sid": "S-1-5-32-544",
+  "display_name": "VORDEFINIERT\\Administratoren",
+  "kind": "Allow",
+  "mask": 2032127,
+  "inherited": false,
+  "inheritance_flags": 0,
+  "propagation_flags": 0,
+  "category": "Ntfs" }
+
+{ "entry_kind": "diagnostic",
+  "category": "Share",
+  "code": "share_read_failed",
+  "detail": "Zugriff verweigert beim Lesen der Share-DACL" }
+```
+
+`"ace"` ist der normale Trustee-Eintrag, der durch einen ACE
+abgedeckt ist. `"diagnostic"` erscheint dort, wo Stars eine
+Berechtigungsschicht aus einem strukturierten Grund nicht lesen
+konnte (typischerweise Share-DACL-Read-Fehler) — der Eintrag ersetzt
+eine sonst fehlende Zeile, die SIEM-Konsumenten als „keine
+Berechtigung" missinterpretieren könnten. Der Discriminator kam mit
+Schema v3 in Round 10; ältere Parser für Schema v2 sollten auf
+`entry_kind`-Dispatch umgestellt werden.
 
 Praktisch heißt das: Wenn du `adpa analyze --output report.json --path X --user alice`
 oder `adpa scan --output report.json --path X --user alice` aufrufst,
