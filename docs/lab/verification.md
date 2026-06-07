@@ -719,9 +719,23 @@ Diagnose-Marker waren erwartungsgemäß aktiv: „No AD connection — group mem
 | Stars v1.5.16 (Round-10-Architektur) auf Server 2025 | ✅ Effective Rights + Explanation Path + Diagnose-Marker + Risk Findings korrekt |
 | Round-10-Findings 1–4 (Trustees-Enum, SmbAuditContext, SID-Map, win_safe-Crate) | ✅ keine Regression — alle 3 Tests sauber durchlaufen |
 
-### H.6 — Nicht geprüft in Block H
+### H.6 — Was Block H nicht abdeckt (offene Tests auf Server 2025)
 
-- HTML-/JSON-Export auf Server 2025 (deckt v1.5.16 schon über Round-10-Tests + 2022-Lab-Verifikation ab).
-- GUI auf Server 2025 (`adpa-gui.exe` ist auf tier0 deployed, aber kein manueller Walkthrough wie in Block E).
-- 5000-Pfad-Performance-Vergleich Server 2022 vs. 2025 (Round-10-Optimierung „SID-Map Caller-Owned" reduziert LSA-Last; quantitativer Vergleich nicht gemessen).
-- Cross-Forest-Tests (T2 mit FSP, T3 ohne ACE) auf Server 2025 — die Trust-Topologie ist gleich; die Stars-Logik hängt nicht am Forest-Mode.
+Der heutige Block ist ein kompakter Plattform-Smoke (3 CLI-`analyze`-Aufrufe), kein Vollumfangs-Test. Die folgenden Punkte sind **bewusst offen** und sollen im Blick bleiben — Spalte „Abdeckung anderswo" zeigt, ob die Funktion zumindest im 2022-Lab oder in Unit-Tests bereits geprüft ist.
+
+| # | Offener Test auf Server 2025 | Abdeckung anderswo | Risiko-Klassifikation |
+|---|---|---|---|
+| H.6.1 | **GUI-Walkthrough** (`adpa-gui.exe`) — alle 4 Tabs durchklicken: Analyze, Scan Tree, Delta, Info-Tab, Theme-Toggle | Block E auf Server 2022 (Screenshots vom 6. Juni) | mittel — GUI-Render kann auf 2025 anders aussehen (DWM, DPI) |
+| H.6.2 | **CLI `scan` rekursiv** über die 5000 Verzeichnisse mit `--output report.html` und `--output report.json` | Block C.5 / G auf Server 2022, plus `crates/exporter` Unit-Tests | niedrig — Logik durch Unit-Tests gedeckt, aber Lauf gegen realen Großbaum offen |
+| H.6.3 | **HTML-/JSON-/CSV-Export** auf Server 2025 — Format-Output ansehen, Round-10-`path_trustees`-Enum im JSON v3 verifizieren | `exporter`-Unit-Tests (35 Tests grün, inkl. `null_dacl_yields_typed_diagnostic_not_synthetic_ace`) | niedrig — Schema-Test im Code grün, aber kein End-to-End-Aufruf im Lab |
+| H.6.4 | **LDAP-Bind** (`--server`/`--base-dn`/`--bind-dn`/`ADPA_BIND_PASSWORD`) gegen `tier0.lab` | Block C.1 (T1) auf Server 2022 | mittel — Auf 2025 könnte LDAPS-Verhalten leicht anders sein (Schannel-Updates) |
+| H.6.5 | **SMB-Share-Tests** mit UNC-Pfaden (`\\tier0\TestShareSMB\…`) und `--smb-server`/`--share-name` | Block D auf Server 2022 (Round-7 NETWORK-SID-Test), plus `validation::path::SmbAuditContext`-Unit-Tests aus Round-10 | mittel — Share-DACL-Read-Verhalten auf 2025 nicht im Lab geprüft |
+| H.6.6 | **Cross-Forest T2** — User aus `tier2.lab` greift via FSP auf eine ACL im `tier0.lab`-Forest zu | Block C.2 auf Server 2022 | mittel — Trust-Topologie ist gleich (siehe H.2), Stars-Logik hängt nicht am Forest-Mode. Trotzdem offen. |
+| H.6.7 | **Cross-Forest T3** — Cross-Forest-User ohne ACE auf der DACL → effektiv kein Zugriff, kein Verwechseln mit „Konto nicht gefunden" | Block C.3 auf Server 2022 | niedrig — Negativ-Test, gleiche Begründung wie H.6.6 |
+| H.6.8 | **Trustee-Tabelle „Wer hat Zugriff?"** in der GUI mit Round-10 `PathTrusteeEntry::Diagnostic`-Variante (Share-DACL-Read-Fail rendert als Hinweis, nicht als Allow-ACE) | `exporter::trustees` Unit-Tests + `html.rs` Render-Test | niedrig — Test im Code grün, aber kein visueller Lab-Test |
+| H.6.9 | **5000-Pfad-Scan-Performance** Server 2022 vs. 2025 — quantitativer Vergleich der LSA-Last (Round-10 „SID-Map Caller-Owned" reduziert N×M auf einmal pro Scan) | nicht abgedeckt — Round-10 Finding 2 ist logisch korrekt, aber nicht gemessen | niedrig — Korrektheit ist die Hauptanforderung, Performance ist sekundär |
+| H.6.10 | **Delta-Vergleich** zwischen zwei Scan-Läufen auf Server 2025 (z. B. einmal vor und einmal nach einer ACL-Änderung) | Block C / Screenshots vom 6. Juni auf Server 2022 | niedrig — Delta-Engine ist plattformunabhängig |
+
+**Empfehlung für die nächsten Sessions:** H.6.1 (GUI-Walkthrough), H.6.2 (Scan + Export) und H.6.4 (LDAP-Bind) sind die wichtigsten — sie decken die drei Codepfade ab, in denen Server-2025-Spezifika am ehesten zuschlagen könnten (Render-Stack, NetAPI-Performance, Schannel-/LDAP-Verhalten). Die Cross-Forest- und Performance-Tests sind nice-to-have, aber durch das gleiche Trust-Setup wie auf 2022 und die plattformunabhängige Engine-Logik gut abgesichert.
+
+> **Status-Spalte „Abdeckung anderswo" lesen:** Wo die Funktion bereits in einem anderen Verifikations-Block oder durch Unit-Tests geprüft ist, ist das Lab-Test-Restrisiko überschaubar. Wo „nicht abgedeckt" steht, ist die Lücke echt — auch wenn die Risiko-Klassifikation in der dritten Spalte „niedrig" sagt.
