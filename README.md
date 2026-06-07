@@ -15,6 +15,23 @@ Das Tool zeigt für jeden Benutzer, welche effektiven Zugriffsrechte er tatsäch
 
 > **Stars ist ausschließlich ein Lese- und Analysetool. Es verändert keine Berechtigungen, Gruppen oder AD-Objekte.**
 
+![Stars Analyze-Tab (v1.5.16) — Zielpfad, Identität, Auflösungsmodus, SMB-Freigabe und die beiden Aktionsknöpfe „Analysieren" und „Wer hat Zugriff?"](docs/screenshots/stars-analyze-tab.png)
+
+### Konkretes Beispiel in 10 Sekunden
+
+Stars beantwortet pro Pfad **„was darf der Benutzer und warum"** — mit vollständigem Berechtigungspfad:
+
+```text
+Benutzer max.mustermann -> Mitglied von "Sales"
+                        -> Mitglied von "FileServer_Read"
+                        -> Allow ACE [geerbt] für FileServer_Read
+                        -> NTFS: Read & Execute
+                        -> Share-Berechtigung: Change
+                        -> Effektiv (NTFS ∩ Share): Read & Execute
+```
+
+Genau diese Schritt-für-Schritt-Erklärung — inklusive Diagnose-Markern, wenn etwas unklar ist — bekommst du in der GUI, im CSV/JSON/HTML-Bericht und im CLI-Output. Für 1 Pfad oder 5000 Pfade gleich.
+
 ### Kann Stars dir helfen? — 30-Sekunden-Übersicht
 
 > **Volle Übersicht:** [`docs/can-stars-help-you.md`](docs/can-stars-help-you.md) (DE + EN, mit Entscheidungs-Matrix).
@@ -54,9 +71,9 @@ Den aktuellen Windows-Installer gibt es auf der **[Releases-Seite](https://githu
 
 Systemvoraussetzungen: Windows 10, Windows 11 oder Windows Server. Keine weitere Laufzeitumgebung nötig.
 
-> **Getestete Plattformen:** Stars ist gegen **Windows Server 2022 Standard** **und Windows Server 2025 Standard** verifiziert (3-Forest-Lab, 1000 Test-User, 5000 Verzeichnisse mit ACL-Mix aus Modify / Protected Inheritance / Deny).
+> **Getestete Plattformen:** Stars ist gegen **Windows Server 2022 Standard** und **Windows Server 2025 Standard** verifiziert (3-Forest-Lab, 1000 Test-User, 5000 Verzeichnisse).
 >
-> **Haftungsausschluss:** Die Nutzung von Stars erfolgt **immer auf eigene Verantwortung** — auf allen Plattformen, auch auf den verifizierten. Birger Labinsch übernimmt **keine Haftung** für Schäden, Datenverluste, falsche Audit-Ergebnisse oder Folgen aus der Nutzung dieser Software. **Vor jeder Nutzung in einer produktiven Umgebung ist ein vollständiges, getestetes Backup der betroffenen Systeme verpflichtend** — auch wenn Stars architektonisch ausschließlich lesend arbeitet. Siehe Abschnitt „Haftungsausschluss" am Ende dieses Dokuments.
+> **Nutzung auf eigene Verantwortung. Vor produktivem Einsatz ein vollständiges Backup anlegen.** → [Vollständiger Haftungsausschluss](#haftungsausschluss)
 
 ### Was ist Stars?
 
@@ -374,6 +391,8 @@ Beide überleben damit eine Neuinstallation — die Audit-Historie ist Beweismit
 
 Diese Zuschreibung ist bewusst transparent: Birger Labinsch hat den Code **nicht selbst geschrieben**, sondern als Prompt Engineer den gesamten Entwicklungs­prozess durch das KI-Modell geführt — von der Architektur­entscheidung über die einzelnen Code-Änderungen bis hin zu Tests, Bugfixes und Dokumentation. Jeder Commit dieses Repositories trägt deshalb auch eine `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`-Zeile, die den KI-Anteil pro Änderung sichtbar macht.
 
+<a name="haftungsausschluss"></a>
+
 ### Haftungsausschluss
 
 Stars wird ausschließlich **„wie besehen"** („as is") zur Verfügung gestellt, ohne ausdrückliche oder stillschweigende Zusicherung jeglicher Art — einschließlich, aber nicht beschränkt auf Eignung für einen bestimmten Zweck, Vollständigkeit, Korrektheit der Ergebnisse, ununterbrochene Verfügbarkeit oder Fehlerfreiheit.
@@ -418,6 +437,23 @@ For every user, the tool shows the effective access rights that actually apply t
 
 > **Stars is exclusively a read-and-analyze tool. It does not modify any permissions, groups, or AD objects.**
 
+![Stars Analyze tab (v1.5.16) — target path, identity, resolution mode, SMB share fields, and the two action buttons "Analyze" and "Who has access?"](docs/screenshots/stars-analyze-tab.png)
+
+### Concrete example in 10 seconds
+
+For every path Stars answers **"what does the user have, and why"** — with the full permission chain:
+
+```text
+User max.mustermann -> member of "Sales"
+                    -> member of "FileServer_Read"
+                    -> Allow ACE [inherited] for FileServer_Read
+                    -> NTFS: Read & Execute
+                    -> Share permission: Change
+                    -> Effective (NTFS ∩ Share): Read & Execute
+```
+
+You get this step-by-step chain — including diagnostic markers when something is uncertain — in the GUI, in the CSV/JSON/HTML report, and in the CLI output. For 1 path or 5000 paths alike.
+
 ### Can Stars help you? — 30-second overview
 
 > **Full overview:** [`docs/can-stars-help-you.md`](docs/can-stars-help-you.md) (DE + EN, decision matrix).
@@ -457,9 +493,9 @@ Get the current Windows installer from the **[Releases page](https://github.com/
 
 System requirements: Windows 10, Windows 11, or Windows Server. No additional runtime needed.
 
-> **Tested platforms:** Stars is verified against **Windows Server 2022 Standard** **and Windows Server 2025 Standard** (3-forest lab, 1000 test users, 5000 directories with an ACL mix of Modify / Protected Inheritance / Deny).
+> **Tested platforms:** Stars is verified against **Windows Server 2022 Standard** and **Windows Server 2025 Standard** (3-forest lab, 1000 test users, 5000 directories).
 >
-> **Disclaimer:** Use of Stars is **always at your own risk** — on all platforms, including the verified ones. Birger Labinsch assumes **no liability** for damages, data loss, incorrect audit results, or any consequences arising from the use of this software. **A complete, tested backup of all affected systems is mandatory before each use in any production environment** — even though Stars per its architecture only reads. See the "Disclaimer" section at the end of this document.
+> **Use at your own risk. Make a full backup before any production use.** → [Full disclaimer](#disclaimer)
 
 ### What is Stars?
 
@@ -776,6 +812,8 @@ Both therefore survive a reinstall — the audit history is evidence and should 
 **Claude Opus 4.7** (Anthropic) — as an AI model under direct guidance and continuous review by Birger Labinsch.
 
 This attribution is deliberately transparent: Birger Labinsch did **not** write the code himself but, as a prompt engineer, directed the entire development process through the AI model — from architectural decisions to individual code changes to tests, bug fixes, and documentation. Every commit in this repository therefore also carries a `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>` line that makes the AI contribution visible per change.
+
+<a name="disclaimer"></a>
 
 ### Disclaimer
 
