@@ -10,6 +10,149 @@ Stand vor `v0.2.0-rc1` wird zusammenfassend abgehandelt, weil dort noch keine ec
 
 ## [Unreleased]
 
+**Code-Review-Antwort (2026-06-07).** Vier Findings aus einer
+externen ChatGPT-Review umgesetzt — keine Symptom-Fixes, sondern
+strukturelle Korrekturen mit Regressionstests. Plus Lab-Verifikation
+auf Windows Server 2025 Standard und eine erste Strukturüberarbeitung
+der README für GitHub-Besucher.
+
+### Finding 1 (High) — Audit-Integrität: Identity-Snapshot pro Permission-Zeile
+
+Bis v1.5.16 wurden `name`, `domain`, `kind` und `disabled` in der
+globalen `identities`-Tabelle gehalten und beim Lesen historischer
+Permissions per JOIN aufgelöst. Ein späterer Upsert konnte alte
+Scans rückwirkend anders aussehen lassen — z. B. einen User, der
+zum Scan-Zeitpunkt aktiv war, beim Re-Read als deaktiviert zeigen.
+Das verletzte die Audit-Eigenschaft „Evidence ist unveränderlich".
+
+- Schema-Migration **v7**: `effective_permissions` bekommt vier
+  Snapshot-Spalten (`identity_name`, `identity_domain`,
+  `identity_kind`, `identity_disabled`). Backfill aus dem
+  `identities`-Cache als Best-Effort für bestehende Zeilen.
+- `insert_permission` schreibt jetzt zusätzlich den Identity-Snapshot
+  pro Permission-Zeile.
+- `get_permissions` liest Identity **ausschließlich aus dem Snapshot** —
+  der frühere LEFT JOIN gegen `identities` ist entfernt. Backfill-
+  Fälle ohne identities-Eintrag erscheinen als `Unknown` statt einen
+  potenziell mutierten Wert zu zeigen.
+- `identities` bleibt als Cache für Live-Lookups, **ist aber nicht
+  mehr die Quelle historischer Reports**.
+- Regressionstest `run_a_immutable_against_later_identity_upsert_in_run_b`
+  legt Run A mit „alice.old"/aktiv an, dann Run B mit derselben SID
+  als „alice.new"/deaktiviert; Run A muss „alice.old"/aktiv liefern.
+
+### Finding 2 (Medium) — `analyze_trustees` mit `SmbAuditContext::resolve`
+
+CLI-Analyze und GUI-Scan nutzen seit Round 10
+`SmbAuditContext::resolve`, um Server/Share aus einem UNC-Pfad
+abzuleiten. `analyze_trustees` (GUI „Wer hat Zugriff?"-Aktion) tat
+das nicht — bei einem blanken UNC-Pfad ohne explizite SMB-Felder
+zeigte der Trustee-Tab nur die NTFS-Schicht, während Scan-Tab und
+CLI-Analyze die Share-Schicht erfassten. Inkonsistenz zwischen
+GUI-Pfaden für denselben UNC-Pfad.
+
+- Fix in `crates/gui/src/worker.rs` Zeile 1505 — derselbe
+  `SmbAuditContext::resolve`-Aufruf wie in den anderen Codepfaden.
+- Regressionstest deckt vier semantische Fälle ab (bare UNC,
+  explizite Felder, lokaler Pfad, half-set).
+
+### Finding 3 (Medium) — Delta-Vergleich über alle audit-relevanten Felder
+
+`compare_scans` markierte einen Pfad nur als `Changed`, wenn sich
+`effective_mask` änderte. Damit verschwanden audit-relevante
+Änderungen mit gleichbleibender Endmaske still — z. B. NTFS/Share-
+Swap mit identischer Result-Maske, `share_status`-Wechsel auf
+`ReadFailed`, neue Diagnose-Marker.
+
+- Neues Modul `delta::PermissionSignature` bündelt alle
+  audit-relevanten Felder zum Vergleich (effective/ntfs/share-Maske,
+  `share_status`, `local_group_status`, `unsupported_ace_count`,
+  Diagnostics).
+- `DeltaKind::Changed` bekommt ein `reasons: Vec<DeltaReason>`-Feld
+  zusätzlich zu `old_mask`/`new_mask`. Sieben Varianten:
+  `EffectiveMaskChanged`, `NtfsMaskChanged`, `ShareMaskChanged`,
+  `ShareStatusChanged`, `LocalGroupStatusChanged`,
+  `UnsupportedAceCountChanged`, `DiagnosticsChanged`.
+- GUI-Delta-Zeile rendert die Gründe in der Spalte `kind_label`
+  („Geändert (NTFS mask + share status)").
+- Fünf Regressionstests in `delta.rs` decken alle fünf
+  Trigger-Szenarien aus dem Review-Beispiel ab.
+
+### Finding 4 (Medium) — Doku auf JSON-Schema v3 + LDAP-Hinweis für Server 2025
+
+User-Guides und technische Doku beschrieben noch Schema v2 und die
+alte flache `Vec<PathTrustee>`-API. Code ist seit Round 10 auf
+Schema v3 mit typisierter `PathTrusteeEntry`-Union.
+
+- `docs/user-guide.md` + `docs/anwender-handbuch.md` aktualisiert
+  inkl. JSON-v3-Beispielen für `entry_kind: "ace"` und
+  `entry_kind: "diagnostic"`.
+- `docs/technical-documentation.md` + `docs/technische-dokumentation.md`
+  zeigen die Round-10-API mit `build_path_trustees_with_share_and_names`
+  und SID-Name-Map-Parameter.
+- README: Hinweis ergänzt, dass Server 2025 LDAP-Signing per Default
+  erzwingt und LDAPS ohne AD CS keinen funktionierenden Bind hat.
+  Stars erkennt beide Fälle und gibt klare Diagnose-Marker.
+
+### Lab — Verifikation auf Windows Server 2025 Standard
+
+3-Forest-Setup (`tier0/1/2.lab` mit Forest-Mode `Windows2025Forest`)
+mit 3 bidirektionalen Forest-Trusts, 6 Conditional DNS Forwardern,
+1000 Test-Usern (mm0001–mm1000) und 5000 Verzeichnissen mit
+ACL-Mix (Modify / Protected Inheritance / Deny).
+
+Live-verifiziert:
+
+- **H.4** Drei Smoke-Tests gegen `mm0001` (Modify via Membership,
+  Protected Inheritance, Deny gilt nicht für Alpha-User).
+- **H.6.2** CLI `scan` über 5105 Pfade in 1.1–1.5 s pro Format
+  (HTML 22.9 MB, JSON 25.4 MB, CSV 6.9 MB).
+- **H.6.3** JSON-Schema v3 mit `entry_kind: "ace"` 41 342×, korrekt
+  befüllte `display_name`-Map aus Round-10 SID-Name-Cache.
+- **H.6.5** SMB-Share mit UNC-Pfad: `NTFS Modify ∩ Share Read =
+  Read & Execute`, Aggregation als Schritt 12 im Explanation Path.
+- **H.6.6** Cross-Forest T2: ACE für `T1LAB\mm0501` auf
+  tier0-Pfad — SID-Resolution über Trust, korrekte Auswertung,
+  `DIRECT_USER_ACE`-Risk-Finding.
+- **H.6.7** Cross-Forest T3 (Negativ): `T2LAB\mm0801` ohne ACE →
+  `Special (0x00000000)`, kein „Konto nicht gefunden"-False-Negative.
+- **H.6.8** HTML-Trustee-Render: 5108 Trustee-Tabellen, lokalisierte
+  Display-Namen korrekt.
+- **H.6.4** LDAP-Bind-Verhalten als Server-2025-Befund dokumentiert
+  (kein Bug — Stars-Diagnose-Marker funktionieren ehrlich).
+
+Block H in `docs/lab/verification.md` enthält die vollständigen
+Test-Ergebnisse und ein strukturiertes Backlog der noch offenen
+Tests (H.6.1 GUI-Walkthrough, H.6.9 Performance-Vergleich,
+H.6.10 Delta-GUI-Test).
+
+### Doku-Strukturüberarbeitung
+
+Aus einer ChatGPT-Review zur GitHub-Sicht: README wirkte als
+Produktdoku statt Landing-Page. Drei Schritte:
+
+- **Schritt A:** Screenshot vom `Analyze`-Tab direkt unter dem
+  Read-only-Hinweis, konkretes 10-Sekunden-Beispiel mit
+  vollständigem Berechtigungspfad, oberer Disclaimer-Block auf
+  einen Satz mit Anker-Link verkürzt.
+- **Schritt B:** Lange Sektionen „Datenbank und gespeicherte Daten"
+  und „Deinstallation" in eigene Doku-Dateien ausgelagert
+  (`docs/scan-historie-und-datenbank.md` und
+  `docs/installation-und-deinstallation.md`, beide DE + EN).
+- **Schritt C:** Tab-Bezeichnungen Repo-weit an die GUI-Quelle
+  angeglichen — `anwender-handbuch.md` und `user-guide.md` hatten
+  fünf Tabs aufgelistet, real existieren nur vier (`Analyze`,
+  `Scan Tree`, `Delta`, `Info`). „Identität", „Trustees" und „Risk
+  Findings" sind Sektionen innerhalb der Tabs, kein Top-Level.
+
+### Tests
+
+- **`cargo test --workspace`: 526 passed** (vorher 519, plus
+  +7 Regressionstests aus den Findings 1–3 sowie analyze_trustees-
+  Test aus Finding 2). 0 failed, 7 ignored (Live-AD/LSA-Tests).
+- `cargo fmt --all --check`: sauber.
+- `cargo clippy --workspace --all-targets -- -D warnings`: sauber.
+
 ---
 
 ## [1.5.16] — 2026-06-06
