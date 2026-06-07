@@ -11,7 +11,7 @@
 
 **Stars** ist ein Windows-Analysetool für Active-Directory-Berechtigungen, NTFS-Zugriffsrechte und SMB-Freigaben.
 
-Das Tool zeigt für jeden Benutzer, welche effektiven Zugriffsrechte er tatsächlich auf Ordner und Dateien hat — inklusive vollständiger Erklärung, über welche Gruppen und ACL-Einträge diese Rechte zustande kommen.
+Das Tool zeigt für jeden Benutzer, welche effektiven Zugriffsrechte er tatsächlich auf Ordner und Dateien hat — und vor allem **wie** diese Rechte zustande kommen: über welche Gruppen, welche ACL-Einträge, welche Vererbungen.
 
 > **Stars ist ausschließlich ein Lese- und Analysetool. Es verändert keine Berechtigungen, Gruppen oder AD-Objekte.**
 
@@ -22,7 +22,7 @@ Das Tool zeigt für jeden Benutzer, welche effektiven Zugriffsrechte er tatsäch
 **✅ Stars ist das richtige Tool, wenn du:**
 
 - erklären musst, **warum** ein Benutzer auf einen Ordner / eine Freigabe genau diese effektive Berechtigung hat (mit vollständigem Pfad: Identität → Gruppe → Mediator → ACE → Aggregation)
-- die Kombination aus NTFS- und SMB-Share-Rechten als „restriktivere gewinnt" sehen willst
+- die Kombination aus NTFS- und SMB-Share-Rechten verstehen willst (die restriktivere Maske gewinnt — Stars rechnet das korrekt)
 - mit verschachtelten AD-Gruppen, lokalen Server-Gruppen (`BUILTIN\…`), Deny-ACEs und Vererbungs-Unterbrechungen arbeitest
 - ein Tool brauchst, das **nichts** an AD, NTFS oder SMB verändert — auch nicht „nur zur Reparatur"
 - einen Berechtigungs-Snapshot eines Ordnerbaums (z. B. 5000 Verzeichnisse) als CSV / JSON / HTML brauchst
@@ -56,7 +56,7 @@ Systemvoraussetzungen: Windows 10, Windows 11 oder Windows Server. Keine weitere
 
 > **Getestete Plattformen:** Stars ist gegen **Windows Server 2022 Standard** **und Windows Server 2025 Standard** verifiziert (3-Forest-Lab, 1000 Test-User, 5000 Verzeichnisse mit ACL-Mix aus Modify / Protected Inheritance / Deny).
 >
-> **Haftungsausschluss:** Die Nutzung von Stars erfolgt **immer auf eigene Verantwortung** — auf allen Plattformen, auch auf den getesteten. Birger Labinsch übernimmt **keine Haftung** für Schäden, Datenverluste, falsche Audit-Ergebnisse oder Folgen aus der Nutzung dieser Software. **Vor jeder Nutzung in einer produktiven Umgebung ist ein vollständiges, getestetes Backup der betroffenen Systeme verpflichtend** — auch wenn Stars architektonisch ausschließlich lesend arbeitet. Siehe Abschnitt „Haftungsausschluss" am Ende dieses Dokuments.
+> **Haftungsausschluss:** Die Nutzung von Stars erfolgt **immer auf eigene Verantwortung** — auf allen Plattformen, auch auf den verifizierten. Birger Labinsch übernimmt **keine Haftung** für Schäden, Datenverluste, falsche Audit-Ergebnisse oder Folgen aus der Nutzung dieser Software. **Vor jeder Nutzung in einer produktiven Umgebung ist ein vollständiges, getestetes Backup der betroffenen Systeme verpflichtend** — auch wenn Stars architektonisch ausschließlich lesend arbeitet. Siehe Abschnitt „Haftungsausschluss" am Ende dieses Dokuments.
 
 ### Was ist Stars?
 
@@ -88,7 +88,7 @@ Stars liest die Windows-Zugriffskontrolllisten (ACLs) direkt vom Dateisystem:
 Stars löst Benutzer und Gruppen über LDAP auf:
 
 - Direkte und transitive Gruppenmitgliedschaften
-- Konkreter, geordneter Mitgliedschafts­pfad pro Gruppe (`User → Group A → Group B`) im Erklärungstext, nicht nur „Member of B [transitive]"
+- Vollständiger Mitgliedschaftspfad pro Gruppe (`User → Group A → Group B`), nicht nur „Member of B [transitive]"
 - Primärgruppe des Benutzers
 - Deaktivierte Konten
 - Verwaiste SIDs
@@ -99,7 +99,7 @@ Stars löst Benutzer und Gruppen über LDAP auf:
 Stars berücksichtigt Share-Berechtigungen bei der Berechnung:
 
 - Enumeration aller Freigaben auf einem Server
-- NULL DACL vs. leere DACL (kein Unterschied in der Anzeige, aber korrektes Verhalten)
+- NULL DACL (jeder hat Vollzugriff) vs. leere DACL (niemand hat Zugriff) — beide Fälle werden korrekt unterschieden
 - Kombination aus NTFS- und Share-Rechten: `effektiv = NTFS ∩ Share`
 
 #### Effektive Berechtigungen
@@ -115,9 +115,11 @@ Benutzer max.muster → Mitglied von "Buchhaltung" → Mitglied von "FileServer_
 
 ### Wie wird Stars gestartet?
 
-Stars wird über den **signierten Setup-Installer** auf der [Release-Seite](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) bereitgestellt — aktuell `Stars-v1.5.16-Setup.exe`. Der Installer legt die Anwendung nach `C:\Program Files\Stars\` ab, erstellt einen Start-Menü-Eintrag „Stars" und richtet keine Hintergrunddienste oder Auto-Start-Komponenten ein.
+Stars wird über den **Setup-Installer** auf der [Release-Seite](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) ausgeliefert — aktuell `Stars-v1.5.16-Setup.exe`. Der Installer legt die Anwendung nach `C:\Program Files\Stars\` ab, erstellt einen Start-Menü-Eintrag „Stars" und installiert **keine Hintergrunddienste** und **keine Auto-Start-Komponenten**.
 
-Für Entwickler und CI-Builds können die `.exe`-Dateien aus `target/release/` (`adpa.exe`, `adpa-gui.exe`) nach `cargo build --release` auch ohne Installer direkt gestartet werden — der produktive Auslieferungsweg bleibt der Installer.
+> **Hinweis zur Signatur:** Der Installer ist aktuell **nicht codesigned**. Beim ersten Start warnt Windows SmartScreen entsprechend („Computer durch unbekannten Herausgeber geschützt"). Ein Code-Signing-Zertifikat ist eingeplant, aber noch nicht eingerichtet.
+
+Für Entwickler und CI-Builds lassen sich die `.exe`-Dateien aus `target/release/` (`adpa.exe`, `adpa-gui.exe`) nach `cargo build --release` auch ohne Installer direkt starten — der reguläre Auslieferungsweg ist und bleibt der Installer.
 
 **Systemvoraussetzungen:**
 - Windows 10 / Windows 11 / Windows Server
@@ -131,13 +133,13 @@ Für Entwickler und CI-Builds können die `.exe`-Dateien aus `target/release/` (
 |---|---|
 | Windows Server 2022 Standard | ✅ verifiziert — Nutzung trotzdem auf eigene Verantwortung |
 | Windows Server 2025 Standard | ✅ verifiziert (Lab-Smoke-Test am 2026-06-07) — Nutzung auf eigene Verantwortung |
-| Windows 10 / 11, ältere Server-Versionen | Implementierungsziel, nicht systematisch verifiziert — Nutzung auf eigene Verantwortung |
+| Windows 10 / 11, ältere Server-Versionen | sollte laufen, aber nicht im Lab geprüft — Nutzung auf eigene Verantwortung |
 
-> Der Vermerk „getestet" bedeutet, dass die Audit-Funktionen auf dieser Plattform durchlaufen wurden — er ist **keine Garantie** auf Korrektheit, Vollständigkeit oder Eignung für einen bestimmten Zweck. Vollständiger Haftungsausschluss am Ende des Dokuments.
+> Der Vermerk „verifiziert" bedeutet, dass die Audit-Funktionen auf dieser Plattform im Lab-Setup durchgelaufen sind — er ist **keine Garantie** auf Korrektheit, Vollständigkeit oder Eignung für einen bestimmten Zweck. Vollständiger Haftungsausschluss am Ende des Dokuments.
 
 **GUI starten:** Start-Menü → „Stars" (nach Installer), oder direkt `C:\Program Files\Stars\adpa-gui.exe`.
 
-**CLI:** Die Setup-Installation legt `adpa.exe` im selben Verzeichnis ab. Für komfortable PATH-Nutzung kann das Verzeichnis manuell in die `PATH`-Umgebungsvariable aufgenommen werden.
+**CLI:** Der Installer legt `adpa.exe` ins selbe Verzeichnis. Für bequeme Aufrufe ohne Pfadangabe das Verzeichnis manuell in die `PATH`-Umgebungsvariable aufnehmen.
 
 **CLI — einzelnen Pfad analysieren:**
 ```
@@ -174,7 +176,7 @@ Stars erkennt den UNC-Pfad automatisch und bezieht die Share-Berechtigung in die
 Gibt die effektive Berechtigung für **einen einzelnen Pfad** zurück.
 
 Eingaben:
-- **Pfad** (lokal oder UNC) — beim Start vorbelegt mit `C:\Windows\SYSVOL\sysvol` (der audit-relevanteste Pfad auf einer Standard-DC). Frei überschreibbar.
+- **Pfad** (lokal oder UNC) — beim Start vorbelegt mit `C:\Windows\SYSVOL\sysvol` (der wichtigste Pfad zum Auditieren auf jedem Domain Controller). Frei überschreibbar.
 - **Benutzer/Gruppe** — Klartextname mit Live-Suche (siehe „Benutzereingabe" unten)
 - **Benutzer-SID** — wird vom Namensfeld befüllt, kann auch direkt eingegeben werden
 - Optional: LDAP-Verbindungsdaten für Gruppenauflösung (auf einem DC nicht nötig — die SAM/LSA reicht)
@@ -230,7 +232,7 @@ Die Liste wird beim App-Start einmalig aus den lokalen NetAPI-Quellen aufgebaut:
 | `[U]` | **User** — Domänen- oder lokales Benutzerkonto (`NetUserEnum`) | `[U] TESTDOMAIN\Administrator` |
 | `[G]` | **Globale (Domänen-)Gruppe** (`NetGroupEnum`) | `[G] TESTDOMAIN\Domain Admins` |
 | `[L]` | **Lokale Gruppe** (`NetLocalGroupEnum`, in der UI als `BUILTIN`-Authority) | `[L] BUILTIN\Administratoren` |
-| `[W]` | **Well-Known-Identität** (hartcodierte audit-relevante SIDs) | `[W] NT AUTHORITY\Authenticated Users` |
+| `[W]` | **Well-Known-Identität** (audit-relevante Standard-SIDs aus einer eingebauten Tabelle) | `[W] NT AUTHORITY\Authenticated Users` |
 
 #### 2. „🔍 SID auflösen"-Button
 
@@ -240,13 +242,15 @@ Wenn du den vollen Namen bereits weißt, tippe ihn ein und klick den Button — 
 
 Wer eine SID aus einem anderen Tool kopiert hat (z.B. `S-1-5-21-1234-5678-…-500`), tippt sie direkt ins SID-Feld. Funktioniert mit oder ohne Live-Suche.
 
-### CLI-Befehle
+### CLI-Befehle (Übersicht)
 
 ```
-adpa.exe scan      — Pfad analysieren
-adpa.exe shares    — Freigaben auf einem Server auflisten
-adpa.exe help      — Hilfe anzeigen
+adpa.exe analyze   — effektive Berechtigung für einen einzelnen Pfad
+adpa.exe scan      — rekursiver Scan eines Verzeichnisbaums
+adpa.exe --help    — vollständige Hilfe mit allen Optionen
 ```
+
+Die detaillierten Aufruf-Beispiele stehen oben unter „Wie wird Stars gestartet?".
 
 ### Was Stars nicht kann
 
@@ -366,7 +370,7 @@ Diese Zuschreibung ist bewusst transparent: Birger Labinsch hat den Code **nicht
 
 Stars wird ausschließlich **„wie besehen"** („as is") zur Verfügung gestellt, ohne ausdrückliche oder stillschweigende Zusicherung jeglicher Art — einschließlich, aber nicht beschränkt auf Eignung für einen bestimmten Zweck, Vollständigkeit, Korrektheit der Ergebnisse, ununterbrochene Verfügbarkeit oder Fehlerfreiheit.
 
-Die Nutzung erfolgt **ausschließlich auf eigene Verantwortung des Anwenders** — auf **allen** Plattformen, auch auf denen, die in dieser README als „getestet" markiert sind. Der Vermerk „getestet" beschreibt lediglich, dass auf der genannten Plattform manuelle Funktionsprüfungen durchgeführt wurden; er ist **keine Zusicherung** und **kein Beleg** für Korrektheit oder Eignung in einer bestimmten produktiven Umgebung.
+Die Nutzung erfolgt **ausschließlich auf eigene Verantwortung des Anwenders** — auf **allen** Plattformen, auch auf denen, die in dieser README als „verifiziert" markiert sind. Der Vermerk „verifiziert" beschreibt lediglich, dass auf der genannten Plattform manuelle Funktionsprüfungen durchgeführt wurden; er ist **keine Zusicherung** und **kein Beleg** für Korrektheit oder Eignung in einer bestimmten produktiven Umgebung.
 
 **Birger Labinsch übernimmt keinerlei Haftung** für:
 
@@ -381,7 +385,7 @@ Der Anwender ist verpflichtet, die Eignung von Stars für seinen konkreten Einsa
 
 #### Pflicht zur Datensicherung vor Nutzung
 
-Stars ist als **read-only-Analysewerkzeug** konzipiert und greift gemäß seiner Architektur weder schreibend auf NTFS-Berechtigungen, SMB-Freigaben, AD-Objekte noch auf Dateien oder Ordner der Zielsysteme zu (siehe [`AGENTS.md`](AGENTS.md) und [`docs/known-limitations.md`](docs/known-limitations.md)). Diese Architektur­zusicherung ist jedoch **keine Garantie** gegen jeden denkbaren Nebeneffekt — z. B. durch Inkompatibilitäten, Treiberfehler, Antiviren-Eingriffe, Sperrkonflikte, Logging-Nebenwirkungen oder die ungewollte Auslastung von Ziel­systemen unter Last.
+Stars ist als **read-only-Analysewerkzeug** konzipiert und greift gemäß seiner Architektur weder schreibend auf NTFS-Berechtigungen, SMB-Freigaben, AD-Objekte noch auf Dateien oder Ordner der Zielsysteme zu (siehe [`docs/known-limitations.md`](docs/known-limitations.md) für die Liste der bewussten Architekturentscheidungen). Diese Architekturzusicherung ist jedoch **keine Garantie** gegen jeden denkbaren Nebeneffekt — etwa durch Inkompatibilitäten, Treiberfehler, Antiviren-Eingriffe, Sperrkonflikte, Logging-Nebenwirkungen oder die ungewollte Auslastung von Zielsystemen unter Last.
 
 **Der Anwender ist deshalb verpflichtet, vor jeder Nutzung von Stars in einer produktiven oder produktions­nahen Umgebung ein vollständiges, getestetes Backup der betroffenen Systeme und Datenbestände anzufertigen** — einschließlich Domain Controller, Dateiserver, NTFS-Volumes und SMB-Share-Konfigurationen. Dies gilt **auch dann**, wenn Stars laut Architektur und Dokumentation ausschließlich lesend agiert. Birger Labinsch übernimmt **keinerlei Haftung** für Datenverluste, Konfigurations­schäden oder Betriebs­unterbrechungen, die durch fehlende, unvollständige oder nicht getestete Backups verursacht oder verschlimmert wurden.
 
@@ -402,7 +406,7 @@ Konkret: Stars darf frei genutzt, studiert, geändert und weitergegeben werden. 
 
 **Stars** is a Windows analysis tool for Active Directory permissions, NTFS access rights, and SMB shares.
 
-For every user, the tool shows the effective access rights that actually apply to folders and files — including a complete explanation of which groups and ACL entries grant those rights.
+For every user, the tool shows the effective access rights that actually apply to folders and files — and above all **how** those rights come about: through which groups, which ACL entries, which inheritance.
 
 > **Stars is exclusively a read-and-analyze tool. It does not modify any permissions, groups, or AD objects.**
 
@@ -413,7 +417,7 @@ For every user, the tool shows the effective access rights that actually apply t
 **✅ Stars is the right tool when you need to:**
 
 - explain **why** a user has exactly this effective permission on a folder / share (full path: identity → group → mediator → ACE → aggregation)
-- see the NTFS + SMB-share combination as “more restrictive wins”
+- understand how NTFS and SMB share permissions combine (the more restrictive mask wins — Stars computes this correctly)
 - handle nested AD groups, local server groups (`BUILTIN\…`), Deny ACEs, and protected inheritance
 - use a tool that changes **nothing** in AD, NTFS, or SMB — not even “just to fix it”
 - snapshot a directory tree (e.g. 5000 folders) as CSV / JSON / HTML
@@ -447,7 +451,7 @@ System requirements: Windows 10, Windows 11, or Windows Server. No additional ru
 
 > **Tested platforms:** Stars is verified against **Windows Server 2022 Standard** **and Windows Server 2025 Standard** (3-forest lab, 1000 test users, 5000 directories with an ACL mix of Modify / Protected Inheritance / Deny).
 >
-> **Disclaimer:** Use of Stars is **always at your own risk** — on all platforms, including the tested ones. Birger Labinsch assumes **no liability** for damages, data loss, incorrect audit results, or any consequences arising from the use of this software. **A complete, tested backup of all affected systems is mandatory before each use in any production environment** — even though Stars per its architecture only reads. See the "Disclaimer" section at the end of this document.
+> **Disclaimer:** Use of Stars is **always at your own risk** — on all platforms, including the verified ones. Birger Labinsch assumes **no liability** for damages, data loss, incorrect audit results, or any consequences arising from the use of this software. **A complete, tested backup of all affected systems is mandatory before each use in any production environment** — even though Stars per its architecture only reads. See the "Disclaimer" section at the end of this document.
 
 ### What is Stars?
 
@@ -479,7 +483,7 @@ Stars reads Windows access control lists (ACLs) directly from the file system:
 Stars resolves users and groups via LDAP:
 
 - Direct and transitive group memberships
-- Concrete ordered membership chain per group (`User → Group A → Group B`) in the explanation text, not just "Member of B [transitive]"
+- Full membership chain per group (`User → Group A → Group B`), not just "Member of B [transitive]"
 - The user's primary group
 - Disabled accounts
 - Orphaned SIDs
@@ -490,7 +494,7 @@ Stars resolves users and groups via LDAP:
 Stars takes share permissions into account when computing effective access:
 
 - Enumeration of all shares on a server
-- NULL DACL vs. empty DACL (no visible difference, but correct behavior)
+- NULL DACL (everyone has full access) vs. empty DACL (nobody has access) — Stars distinguishes both cases correctly
 - Combined NTFS + share rights: `effective = NTFS ∩ Share`
 
 #### Effective permissions
@@ -506,9 +510,11 @@ User max.muster → member of "Accounting" → member of "FileServer_Read"
 
 ### How is Stars started?
 
-Stars is distributed as a **signed setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.5.16-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and configures no background services or auto-start components.
+Stars is distributed as a **setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.5.16-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and installs **no background services** and **no auto-start components**.
 
-Developers and CI builds may also run the `.exe` files from `target/release/` (`adpa.exe`, `adpa-gui.exe`) directly after `cargo build --release` — the production delivery path remains the installer.
+> **Note on code signing:** The installer is currently **not code-signed**. Windows SmartScreen will warn on first launch ("Windows protected your PC — unrecognized publisher"). A code-signing certificate is planned but not yet in place.
+
+Developers and CI builds may also run the `.exe` files from `target/release/` (`adpa.exe`, `adpa-gui.exe`) directly after `cargo build --release` — the regular delivery path is and remains the installer.
 
 **System requirements:**
 - Windows 10 / Windows 11 / Windows Server
@@ -522,13 +528,13 @@ Developers and CI builds may also run the `.exe` files from `target/release/` (`
 |---|---|
 | Windows Server 2022 Standard | ✅ verified — use at your own responsibility nonetheless |
 | Windows Server 2025 Standard | ✅ verified (lab smoke test 2026-06-07) — use at your own responsibility |
-| Windows 10 / 11, older Server versions | Implementation target, not systematically verified — use at your own responsibility |
+| Windows 10 / 11, older Server versions | should work but not lab-verified — use at your own responsibility |
 
-> "Tested" means the audit functions were exercised on that platform — it is **not a guarantee** of correctness, completeness, or fitness for any particular purpose. The full disclaimer is at the end of the document.
+> "Verified" means the audit functions were exercised on that platform in the lab — it is **not a guarantee** of correctness, completeness, or fitness for any particular purpose. The full disclaimer is at the end of the document.
 
 **Start the GUI:** Start menu → "Stars" (after installer), or run `C:\Program Files\Stars\adpa-gui.exe` directly.
 
-**CLI:** The installer places `adpa.exe` in the same directory. For convenient PATH usage you can add the directory to the `PATH` environment variable manually.
+**CLI:** The installer places `adpa.exe` in the same directory. For convenient calls without specifying the full path, add the directory to the `PATH` environment variable manually.
 
 **CLI — analyze a single path:**
 ```
@@ -565,7 +571,7 @@ Stars detects the UNC path automatically and factors the share permission into t
 Returns the effective permission for **a single path**.
 
 Inputs:
-- **Path** (local or UNC) — pre-filled at startup with `C:\Windows\SYSVOL\sysvol` (the most audit-relevant path on a default DC). Freely overwritable.
+- **Path** (local or UNC) — pre-filled at startup with `C:\Windows\SYSVOL\sysvol` (the most important path to audit on any domain controller). Freely overwritable.
 - **User/group** — plain-text name with live search (see "Identity input" below)
 - **User SID** — populated by the name field; can also be entered directly
 - Optional: LDAP connection settings for group resolution (not needed on a DC — SAM/LSA is enough)
@@ -621,7 +627,7 @@ The list is built once at app start from local NetAPI sources: domain users, glo
 | `[U]` | **User** — domain or local user account (`NetUserEnum`) | `[U] TESTDOMAIN\Administrator` |
 | `[G]` | **Global (domain) group** (`NetGroupEnum`) | `[G] TESTDOMAIN\Domain Admins` |
 | `[L]` | **Local group** (`NetLocalGroupEnum`, shown with `BUILTIN` authority in the UI) | `[L] BUILTIN\Administrators` |
-| `[W]` | **Well-known identity** (hard-coded audit-relevant SIDs) | `[W] NT AUTHORITY\Authenticated Users` |
+| `[W]` | **Well-known identity** (audit-relevant standard SIDs from a built-in table) | `[W] NT AUTHORITY\Authenticated Users` |
 
 #### 2. "🔍 Resolve SID" button
 
@@ -631,13 +637,15 @@ If you already know the full name, type it and click the button — or press **E
 
 If you have a SID copied from another tool (e.g. `S-1-5-21-1234-5678-…-500`), type it straight into the SID field. Works with or without the live search.
 
-### CLI commands
+### CLI commands (overview)
 
 ```
-adpa.exe scan      — analyze a path
-adpa.exe shares    — list shares on a server
-adpa.exe help      — show help
+adpa.exe analyze   — effective permission for a single path
+adpa.exe scan      — recursive scan of a directory tree
+adpa.exe --help    — full help with all options
 ```
+
+Detailed invocation examples are above under "How is Stars started?".
 
 ### What Stars cannot do
 
@@ -757,7 +765,7 @@ This attribution is deliberately transparent: Birger Labinsch did **not** write 
 
 Stars is provided **"as is"**, without any warranty of any kind, express or implied — including but not limited to fitness for a particular purpose, completeness, correctness of results, uninterrupted availability, or freedom from defects.
 
-Use is **at the user's sole risk** — on **all** platforms, including those marked as "tested" in this README. The "tested" marker only states that manual functional checks were performed on the named platform; it is **not a guarantee** and **not proof** of correctness or suitability for any particular production environment.
+Use is **at the user's sole risk** — on **all** platforms, including those marked as "verified" in this README. The "verified" marker only states that manual functional checks were performed on the named platform; it is **not a guarantee** and **not proof** of correctness or suitability for any particular production environment.
 
 **Birger Labinsch assumes no liability whatsoever** for:
 
@@ -772,7 +780,7 @@ The user is required to verify Stars' fitness for their specific use case before
 
 #### Mandatory backup before use
 
-Stars is designed as a **read-only analysis tool** and, per its architecture, does not write to NTFS permissions, SMB shares, AD objects, or files and folders on target systems (see [`AGENTS.md`](AGENTS.md) and [`docs/known-limitations.md`](docs/known-limitations.md)). This architectural commitment is, however, **not a guarantee** against every conceivable side effect — for example through incompatibilities, driver bugs, antivirus interference, locking conflicts, logging side effects, or unintended load on target systems.
+Stars is designed as a **read-only analysis tool** and, per its architecture, does not write to NTFS permissions, SMB shares, AD objects, or files and folders on target systems (see [`docs/known-limitations.md`](docs/known-limitations.md) for the list of deliberate architectural decisions). This architectural commitment is, however, **not a guarantee** against every conceivable side effect — for example through incompatibilities, driver bugs, antivirus interference, locking conflicts, logging side effects, or unintended load on target systems.
 
 **The user is therefore required to create a complete, tested backup of all affected systems and data before each use of Stars in a production or production-like environment** — including domain controllers, file servers, NTFS volumes, and SMB share configurations. This applies **even though** Stars per its architecture and documentation only reads. Birger Labinsch assumes **no liability whatsoever** for data loss, configuration damage, or operational outages caused or worsened by missing, incomplete, or untested backups.
 
