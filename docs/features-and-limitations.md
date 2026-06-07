@@ -1,364 +1,361 @@
-# Stars — Features, Grenzen und Hinweise zur Lesart der Ergebnisse
+# Stars — Features, Limits and How to Read the Results
 
-**Zielgruppe:** Windows-/AD-Administratoren mit Mischbestand
-(Wald-und-Wiesen-Umgebung — Domain Controller, Fileserver, NTFS-Volumes,
-SMB-Freigaben).
-**Sprachregel:** Diese Datei ist die zentrale User-Doku für die Frage
-„Was zeigt mir Stars korrekt, was nicht?". Wenn ein Feature hier nicht
-steht oder ausdrücklich als Einschränkung markiert ist, gilt das auch.
+**Audience:** Windows/AD administrators with mixed environments
+(domain controllers, file servers, NTFS volumes, SMB shares).
+**Convention:** This file is the central user-facing document for the
+question "What does Stars show me correctly, what doesn't it?". If a
+feature is not listed here or is explicitly marked as a limitation,
+that applies.
 
-> **Grundprinzip:** Stars ist und bleibt ein read-only-Analyse-Tool.
-> Stars **schreibt nichts** an NTFS, SMB-Shares oder AD. Findings sind
-> Hinweise — die produktive Behebung macht der Admin selbst.
+> **Core principle:** Stars is and remains a read-only analysis tool.
+> Stars **writes nothing** to NTFS, SMB shares, or AD. Findings are
+> hints — the admin handles productive remediation themselves.
 
 ---
 
-## Was Stars zuverlässig kann
+## What Stars reliably covers
 
-### Identität und Gruppen
+### Identity and groups
 
-- **SID ↔ Name-Auflösung** via LDAP (`objectSid`-Suche) und über die
-  Windows-LSA (`LookupAccountSidW`, `LookupAccountNameW`).
-- **Eingabe-Formate**: `DOMAIN\user`, `user@domain.tld` (UPN), reine
-  `sAMAccountName` und SIDs (`S-1-5-…`). Mehrdeutige
-  `sAMAccountName`-Treffer werden als Eindeutigkeits-Fehler gemeldet
-  (kein stilles Auswählen) — siehe ADR 0032.
-- **Rekursive Gruppenauflösung über LDAP**: über `memberOf` mit
-  `LDAP_MATCHING_RULE_IN_CHAIN`. Damit gibt es keine N+1-Recursion und
-  keine Range-Retrieval-Probleme bei großen Gruppen — auch keine
-  Zyklen.
-- **Primäre Gruppe** wird separat über `primaryGroupID` ausgewertet.
-- **`disabled`-Status** wird im LDAP-Pfad über `userAccountControl`
-  und im SAM-Pfad über `NetUserGetInfo` Level 1 gelesen — siehe ADR
-  0033 und ADR 0035.
+- **SID ↔ name resolution** via LDAP (`objectSid` search) and via the
+  Windows LSA (`LookupAccountSidW`, `LookupAccountNameW`).
+- **Input formats:** `DOMAIN\user`, `user@domain.tld` (UPN), bare
+  `sAMAccountName`, and SIDs (`S-1-5-…`). Ambiguous `sAMAccountName`
+  hits are reported as an uniqueness error (no silent selection) —
+  see ADR 0032.
+- **Recursive group resolution via LDAP**: through `memberOf` with
+  `LDAP_MATCHING_RULE_IN_CHAIN`. This avoids N+1 recursion and
+  range-retrieval problems on large groups — and cycles.
+- **Primary group** is evaluated separately via `primaryGroupID`.
+- **`disabled` status** is read in the LDAP path via
+  `userAccountControl` and in the SAM path via `NetUserGetInfo`
+  level 1 — see ADR 0033 and ADR 0035.
 
-### NTFS-DACL-Auswertung
+### NTFS DACL evaluation
 
-- **Allow- und Deny-ACEs**, **explizite und geerbte** Einträge,
-  **Vererbungsflags** und **Propagation Flags** werden gelesen und im
-  Pfad-Bericht getrennt ausgewiesen.
-- **Owner**-SID und benannter Owner werden separat ausgewiesen.
-- **Access-Mask-Normalisierung**: Windows-Access-Mask-Bits werden in
-  normalisierte Rechte (Read, Write, Modify, Full Control, …)
-  übersetzt; Rohdaten bleiben erhalten.
-- **Identische Security Descriptoren** werden per Hash dedupliziert —
-  die GUI zeigt einen Hinweis, wenn die DACL über große Pfadbäume
-  identisch durchgereicht wird.
-- **Lange Pfade** (`\\?\…`, UNC-Long-Path-Form `\\?\UNC\server\…`)
-  werden unterstützt — siehe ADR 0031.
-- **Reparse Points / Junctions / Symlinks** verursachen keine
-  Endlosschleifen mehr; Schleifen werden erkannt und sichtbar gemacht.
+- **Allow and Deny ACEs**, **explicit and inherited** entries,
+  **inheritance flags** and **propagation flags** are read and shown
+  separately in the path report.
+- **Owner** SID and the named owner are shown separately.
+- **Access mask normalization:** Windows access mask bits are
+  translated into normalized rights (Read, Write, Modify, Full
+  Control, …); raw data is preserved.
+- **Identical security descriptors** are deduplicated by hash — the
+  GUI shows a hint when the same DACL propagates across large path
+  trees.
+- **Long paths** (`\\?\…`, UNC long-path form `\\?\UNC\server\…`) are
+  supported — see ADR 0031.
+- **Reparse points / junctions / symlinks** no longer cause infinite
+  loops; loops are detected and surfaced.
 
-### SMB-Share-Auswertung
+### SMB share evaluation
 
-- **Share-DACL und NTFS-DACL bleiben getrennt** im Datenmodell und im
-  Bericht. Die effektive SMB-Berechtigung ist die restriktive
-  Kombination aus beidem (Maske ∩ NTFS).
-- **Administrative Freigaben** (`C$`, `ADMIN$`, …) sind standardmäßig
-  als solche markiert.
-- **UNC-Pfade und lokale Zielpfade** werden konsistent normalisiert
+- **Share DACL and NTFS DACL stay separate** in the data model and
+  the report. The effective SMB permission is the restrictive
+  combination of both (mask ∩ NTFS).
+- **Administrative shares** (`C$`, `ADMIN$`, …) are marked as such
+  by default.
+- **UNC paths and local target paths** are consistently normalized
   (`validation::path::effective_smb_target`, ADR 0031).
-- **`--smb-server` ohne `--share-name`** (und umgekehrt) wird als
-  Konfigurationsfehler abgelehnt — sonst verunreinigt der unvollständige
-  SMB-Kontext die lokale-Gruppen-Auflösung still. Closes Review
-  2026-06-04 Runde 2, Finding 2.
+- **`--smb-server` without `--share-name`** (and vice versa) is
+  rejected as a configuration error — otherwise an incomplete SMB
+  context silently contaminates local-group resolution. Closes
+  review 2026-06-04 round 2, finding 2.
 
-### Berechtigungspfad-Erklärung
+### Permission-path explanation
 
-- Jeder Befund trägt einen **erklärbaren Pfad** in der Form
-  `User → Group A → Group B → ACL-Eintrag → normalisiertes Recht`.
-- **Lokale Gruppen-Ketten** auf dem Zielserver werden über
-  `NetLocalGroupGetMembers` rekonstruiert (ADR 0029) — die
-  Vermittler-Schicht (z. B. `Domain Admins → BUILTIN\Administrators`)
-  ist im Pfad sichtbar.
-- **SID → Name-Tabelle** wird einmal pro Scan aufgebaut; jeder
-  Erklärungspfad rendert `DOMAIN\Name` statt nackter SIDs.
+- Every finding carries an **explainable path** of the form
+  `User → Group A → Group B → ACL entry → normalized right`.
+- **Local group chains** on the target server are reconstructed via
+  `NetLocalGroupGetMembers` (ADR 0029) — the mediator layer (e.g.
+  `Domain Admins → BUILTIN\Administrators`) is visible in the path.
+- **SID → name table** is built once per scan; every explanation
+  path renders `DOMAIN\Name` instead of raw SIDs.
 
-### Scan, Persistenz und Export
+### Scan, persistence, and export
 
-- **Abbrechbare Scans** über Cancel-Token; die GUI bleibt während des
-  Scans bedienbar.
-- **Scan-Historie** in SQLite (lokal, `persistence`-Crate) — siehe
+- **Cancellable scans** through a cancel token; the GUI stays
+  responsive during a scan.
+- **Scan history** in SQLite (local, `persistence` crate) — see
   ADR 0026.
-- **Delta-Vergleich** zwischen zwei Scans (was hat sich pro Pfad an
-  effektivem Recht geändert?).
-- **Trustee-Ansicht** pro Pfad (Wer-hat-Zugriff?), ergänzt zum
-  klassischen pro-Benutzer-Bericht.
-- **Exporter**: CSV, JSON (variant-tagged Diagnostics — ADR 0021),
-  HTML mit Diagnostik-Badges.
-- **Update-Manager-Skelett**: Versionierung, Signaturprüfung,
-  Update-Pfad-Validierung sind als eigene Komponente ausgewiesen
+- **Delta comparison** between two scans (what changed per path in
+  effective rights?).
+- **Trustee view** per path (who has access?), complementing the
+  classic per-user report.
+- **Exporter:** CSV, JSON (variant-tagged diagnostics — ADR 0021),
+  HTML with diagnostic badges.
+- **Update-manager skeleton:** versioning, signature verification,
+  update-path validation are designated as their own component
   (ADR 0028, ADR 0030).
 
-### Strukturierte Diagnose-Marker pro Befund
+### Structured diagnostic markers per finding
 
-Jeder `EffectivePermission` trägt einen `diagnostics`-Vector mit
-variant-tagged JSON. CLI, HTML und JSON rendern jeden Marker mit
-eigener Beschreibung — eine Liste der Marker und ihre Bedeutung:
+Every `EffectivePermission` carries a `diagnostics` vector with
+variant-tagged JSON. CLI, HTML, and JSON render every marker with
+its own description — a list of markers and their meaning:
 
-| Marker | Schweregrad | Risk-`incomplete`? | Bedeutung |
+| Marker | Severity | Risk `incomplete`? | Meaning |
 | --- | --- | --- | --- |
-| `NonCanonicalDaclOrder { at_index }` | medium | nein | DACL ist nicht in Windows-Canonical-Order. AccessCheck läuft trotzdem in gespeicherter Reihenfolge — das Ergebnis kann von einer kanonisierten Erwartung abweichen. |
-| `UnsupportedShareAces { count }` | medium | **ja** | Share-DACL enthielt ACE-Typen, die der Parser nicht auswerten konnte (Object-/Callback-/Conditional-/herstellerspezifisch). Share-Maske ist potentiell unvollständig. |
-| `DomainGroupRecursionIncomplete` | medium | **ja** | Gruppenauflösung lief über SAM/LSA statt LDAP. `NetUserGetGroups` liefert nur direkte globale Gruppen — verschachtelte Domain-Gruppen sind nicht rekursiv. |
-| `IdentityDisabled` | info | nein | Konto ist in AD via `userAccountControl/UF_ACCOUNTDISABLE` deaktiviert. ACL-theoretische Rechte stimmen, aber das Konto kann sich normal nicht authentifizieren. |
-| `IdentityNotInConfiguredLdapBase` | medium | **ja** | LSA hat SID aufgelöst, aber das konfigurierte LDAP-`base_dn` indexiert sie nicht. Typisch in Multi-Domain-Forests / Trusts — Cross-Domain-Mitgliedschaften können fehlen. |
-| `IdentityDisabledStatusUnknown` | info | nein | `disabled`-Flag konnte nicht ermittelt werden (z. B. SAM-Pfad ohne `NetUserGetInfo`-Erfolg oder LDAP ohne User-Objekt). |
-| `IdentityLookupFailed { reason }` | high | **ja** | LDAP-Identity-Lookup ist mit einem technischen Fehler gescheitert (Bind, Timeout, DC unerreichbar, Query-Fehler). Analyse läuft mit Platzhalter-Identity und leerem Token weiter — ACEs auf Domain-Gruppen können fehlen. Der `reason`-Text trägt die ursprüngliche Fehlermeldung. |
-| `GroupResolutionFailed { reason }` | high | **ja** | Rekursive Gruppenauflösung ist gescheitert oder wurde übersprungen (z. B. Cross-Domain-Pfad ohne GC-Crawl). ACEs auf Domain-Gruppen können fehlen. Der `reason`-Text trägt die ursprüngliche Fehlermeldung. |
+| `NonCanonicalDaclOrder { at_index }` | medium | no | DACL is not in Windows canonical order. AccessCheck still runs in stored order — the result may diverge from a canonical expectation. |
+| `UnsupportedShareAces { count }` | medium | **yes** | The share DACL contained ACE types the parser could not evaluate (object / callback / conditional / vendor-specific). The share mask is potentially incomplete. |
+| `DomainGroupRecursionIncomplete` | medium | **yes** | Group resolution ran via SAM/LSA instead of LDAP. `NetUserGetGroups` only returns direct global groups — nested domain groups are not recursive. |
+| `IdentityDisabled` | info | no | The account is disabled in AD via `userAccountControl/UF_ACCOUNTDISABLE`. ACL-theoretical rights are correct, but the account cannot normally authenticate. |
+| `IdentityNotInConfiguredLdapBase` | medium | **yes** | LSA resolved the SID, but the configured LDAP `base_dn` does not index it. Typical in multi-domain forests / trusts — cross-domain memberships may be missing. |
+| `IdentityDisabledStatusUnknown` | info | no | The `disabled` flag could not be determined (e.g. SAM path without successful `NetUserGetInfo`, or LDAP without a user object). |
+| `IdentityLookupFailed { reason }` | high | **yes** | LDAP identity lookup failed with a technical error (bind, timeout, DC unreachable, query error). Analysis continues with a placeholder identity and empty token — ACEs targeting domain groups may be missing. The `reason` text carries the original error message. |
+| `GroupResolutionFailed { reason }` | high | **yes** | Recursive group resolution failed or was skipped (e.g. cross-domain path without GC crawl). ACEs targeting domain groups may be missing. The `reason` text carries the original error message. |
 
-Die Spalte „Risk-`incomplete`?" zeigt, ob `risk_engine::is_incomplete()`
-diesen Marker matched — `incomplete = true` heißt: das Risk-Finding ist
-strukturell unvollständig und sollte als solches im Audit erscheinen.
-
----
-
-## Was Stars **nicht** macht (per Design)
-
-Stars verändert grundsätzlich **nichts** an Zielsystemen. Folgende
-Funktionen sind dauerhaft kein Teil des Produkts:
-
-- NTFS-Berechtigungen ändern, bereinigen oder reparieren.
-- Owner ändern, Vererbung aktivieren/deaktivieren.
-- SMB-Share-Berechtigungen ändern.
-- AD-Benutzer, AD-Gruppen, AD-Computer ändern.
-- Gruppenmitgliedschaften ändern.
-- Dateien oder Ordner auf Zielsystemen erstellen, ändern, verschieben,
-  löschen.
-- ACL-Auto-Reparatur, Remediation-Workflows, Repair-Recipes.
-- Automatische Berechtigungsempfehlungen mit Umsetzung.
-- Credential Harvesting; Dateinamen-Treffer auf
-  `password|secret|credentials|…` werden markiert, **aber nicht
-  geöffnet oder inhaltlich verarbeitet**.
-- Agenten-Rollout auf Fremdsysteme.
-- Aktive SIEM-Reaktion.
-
-> Diese Liste folgt direkt der CLAUDE.md/AGENTS.md-Projektgrenze. Jeder
-> Beitrag, der eine schreibende Operation in den Code einführt, wird
-> als Bruch dieser Grenze gewertet.
+The "Risk `incomplete`?" column shows whether
+`risk_engine::is_incomplete()` matches this marker —
+`incomplete = true` means: the risk finding is structurally
+incomplete and should be presented as such in the audit.
 
 ---
 
-## Bekannte Einschränkungen und ihre Lesart
+## What Stars does **not** do (by design)
 
-### 1. SAM-Fallback ohne LDAP (Domain Controller / lokal)
+Stars never modifies target systems. The following functions are
+permanently not part of the product:
 
-- **Wann:** Wenn Stars ohne `--server`/LDAP-Bind läuft (z. B. auf
-  einem DC oder einer Workstation als schnelle Voranalyse).
-- **Was passiert:** Gruppen kommen über `NetUserGetGroups` +
-  `NetLocalGroupGetMembers`. Diese liefern nur **direkte** Domänen-
-  und lokale Gruppen.
-- **Folge:** Verschachtelte Domain-Gruppen jenseits der direkten
-  Mitgliedschaft sind nicht im Token. ACEs auf solche tief
-  verschachtelten Gruppen werden im Befund nicht erkannt.
-- **Wie sichtbar:** Marker `DomainGroupRecursionIncomplete` an jedem
-  Befund; Risk-Findings sind `incomplete = true`. CLI druckt den
-  Hinweis im Diagnostics-Block; HTML zeigt ein `badge-medium`.
-- **Lösung:** `--server`, `--base-dn`, `--bind-dn` und Passwort
-  setzen — dann läuft die rekursive Auflösung serverseitig per
-  `LDAP_MATCHING_RULE_IN_CHAIN`. Siehe ADR 0033.
+- Modifying, cleaning up, or repairing NTFS permissions.
+- Changing owners, enabling/disabling inheritance.
+- Modifying SMB share permissions.
+- Modifying AD users, AD groups, AD computers.
+- Modifying group memberships.
+- Creating, modifying, moving, or deleting files or folders on
+  target systems.
+- ACL auto-repair, remediation workflows, repair recipes.
+- Automatic permission recommendations with implementation.
+- Credential harvesting; filename hits on
+  `password|secret|credentials|…` are marked, **but not opened or
+  processed for content**.
+- Agent rollout to foreign systems.
+- Active SIEM response.
 
-### 2. Multi-Domain-Forest / Trusted Domains
+> This list follows directly from the CLAUDE.md/AGENTS.md project
+> boundary. Any contribution that introduces a writing operation
+> into the code is considered a breach of this boundary.
 
-- **Wann:** Identity gehört zu einer Domain, die das konfigurierte
-  LDAP-`base_dn` nicht überstreicht (typischer Fall: forest-weiter
-  Trust, oder GUI-Identity-Picker hat in einer Trust-Domain gesucht).
-- **Was passiert (seit v1.5.0):** **Alle** Eingabeformen — `DOMAIN\user`,
-  UPN (außer s. u.), direkte SID und GUI Name → SID — laufen durch
-  dieselbe zentrale Principal-Pipeline (`ad_resolver::principal`).
-  Bei LDAP-Miss + LSA-Hit baut Stars eine LSA-only-Identity mit
-  Name + Domain und kennzeichnet das Ergebnis als
-  `IdentityScopeStatus::OutsideConfiguredLdapBase`.
-- **Folge:** Gruppenrekursion läuft nur in der konfigurierten Domain —
-  Cross-Domain-Mitgliedschaften des Trust-Partners können fehlen.
-  `disabled` ist nicht bekannt.
-- **Wie sichtbar:** Marker `IdentityNotInConfiguredLdapBase` (medium,
-  `incomplete = true`) **und** `IdentityDisabledStatusUnknown` (info)
-  an jedem Befund — egal über welche UI-/CLI-Eingabeform der User
-  reinkam.
-- **UPN ist Sonderfall:** UPN-Suche kennt keinen LSA-Crosscheck (LSA
-  kann UPN nicht reverse-lookupen). Wenn die UPN-Suche im
-  konfigurierten `base_dn` keinen Treffer findet, liefert Stars einen
-  **expliziten Fehler** mit dem Hinweis, gegen den Global Catalog zu
-  binden (`port 3268`) oder die Eingabeform `DOMAIN\user` / direkte SID
-  zu verwenden. Kein stiller Fallback. Siehe ADR 0036.
-- **Lösung (manuell):** Zweite Stars-Analyse mit dem `base_dn` der
-  Partner-Domain laufen lassen, oder gegen den Global Catalog binden
-  (`gc://…:3268/…`). Siehe ADR 0034 (initialer Fix, nur `DOMAIN\user`)
-  und ADR 0036 (Generalisierung auf alle Eingabeformen).
+---
 
-### 3. Zugriff verweigert während des Scans
+## Known limitations and how to read them
 
-- **Wann:** Stars hat keine Leserechte auf einen Pfad oder dessen
-  DACL (Access Denied).
-- **Was passiert:** Der einzelne Pfad wird im Scan-Fehlerprotokoll
-  vermerkt (mit Pfad und Ursache); der Scan läuft weiter.
-- **Wie sichtbar:** Im CLI als `[scan error]`-Zeile, in der GUI als
-  Eintrag in der Scan-Fehlerliste, im HTML-Bericht eigene Sektion
-  „Scan errors".
-- **Lösung:** Stars als Konto starten, das mindestens
-  `SeBackupPrivilege` oder Lese-DACL-Rechte auf den Zielpfad hat.
+### 1. SAM fallback without LDAP (domain controller / local)
 
-### 4. Unsupported Share-ACEs
+- **When:** Stars is run without `--server`/LDAP bind (e.g. on a DC
+  or a workstation as a quick pre-analysis).
+- **What happens:** Groups come via `NetUserGetGroups` +
+  `NetLocalGroupGetMembers`. These only return **direct** domain
+  and local groups.
+- **Effect:** Nested domain groups beyond the direct membership are
+  not in the token. ACEs targeting such deeply nested groups are
+  not recognized in the finding.
+- **How visible:** Marker `DomainGroupRecursionIncomplete` on every
+  finding; risk findings are `incomplete = true`. The CLI prints the
+  hint in the diagnostics block; HTML shows a `badge-medium`.
+- **Solution:** Set `--server`, `--base-dn`, `--bind-dn` and a
+  password — then recursive resolution runs server-side via
+  `LDAP_MATCHING_RULE_IN_CHAIN`. See ADR 0033.
 
-- **Wann:** Die Share-DACL enthält Object-ACEs, Callback-ACEs,
-  Conditional-ACEs oder herstellerspezifische Einträge.
-- **Was passiert:** Diese ACEs werden gezählt und übersprungen — die
-  Share-Maske ist potentiell unvollständig.
-- **Wie sichtbar:** Marker `UnsupportedShareAces { count }` (medium,
-  `incomplete = true`). Risk-Findings sind als unvollständig
-  ausgewiesen.
+### 2. Multi-domain forest / trusted domains
 
-### 5. Nicht-kanonische DACL-Reihenfolge
+- **When:** The identity belongs to a domain not covered by the
+  configured LDAP `base_dn` (typical case: forest-wide trust, or the
+  GUI identity picker searched in a trust domain).
+- **What happens (since v1.5.0):** **All** input forms — `DOMAIN\user`,
+  UPN (except see below), direct SID, and GUI name → SID — run
+  through the same central principal pipeline
+  (`ad_resolver::principal`). On an LDAP miss + LSA hit, Stars
+  constructs an LSA-only identity with name + domain and marks the
+  result as `IdentityScopeStatus::OutsideConfiguredLdapBase`.
+- **Effect:** Group recursion only runs inside the configured
+  domain — cross-domain memberships of the trust partner may be
+  missing. `disabled` is not known.
+- **How visible:** Marker `IdentityNotInConfiguredLdapBase` (medium,
+  `incomplete = true`) **and** `IdentityDisabledStatusUnknown`
+  (info) on every finding — regardless of which UI/CLI input form
+  the user used.
+- **UPN is a special case:** UPN search has no LSA cross-check
+  (LSA cannot reverse-lookup UPNs). If the UPN search in the
+  configured `base_dn` finds no hit, Stars returns an **explicit
+  error** with the hint to bind against the Global Catalog
+  (`port 3268`) or to use the `DOMAIN\user` / direct-SID input
+  form. No silent fallback. See ADR 0036.
+- **Solution (manual):** Run a second Stars analysis with the
+  `base_dn` of the partner domain, or bind against the Global
+  Catalog (`gc://…:3268/…`). See ADR 0034 (initial fix, only
+  `DOMAIN\user`) and ADR 0036 (generalization to all input forms).
 
-- **Wann:** Die DACL eines Objekts ist nicht in
-  Windows-Canonical-Order (z. B. Allow vor Deny). Windows wertet die
-  Liste trotzdem in gespeicherter Reihenfolge aus.
-- **Was passiert:** Stars wertet ebenfalls in gespeicherter Reihenfolge
-  aus und meldet die Abweichung.
-- **Wie sichtbar:** Marker `NonCanonicalDaclOrder { at_index }`
-  (medium, nicht `incomplete`).
-- **Lesart:** Ein Auditor sollte die DACL nachordnen lassen — Stars
-  tut das nicht.
+### 3. Access denied during scan
 
-### 6. Deaktivierte Konten
+- **When:** Stars has no read rights on a path or its DACL (Access
+  Denied).
+- **What happens:** The single path is recorded in the scan-error
+  log (with path and reason); the scan continues.
+- **How visible:** In the CLI as a `[scan error]` line, in the GUI
+  as an entry in the scan-error list, in the HTML report as its own
+  "Scan errors" section.
+- **Solution:** Run Stars as an account that has at least
+  `SeBackupPrivilege` or read-DACL rights on the target path.
 
-- **Wann:** Konto trägt `UF_ACCOUNTDISABLE` (LDAP) oder
-  `NetUserGetInfo` liefert das gesetzte Flag (SAM).
-- **Was passiert:** ACL-theoretische Rechte werden weiter berechnet
-  und ausgewiesen.
-- **Wie sichtbar:** Marker `IdentityDisabled` (info). Audit-Konsumenten
-  trennen so „die ACL würde Modify gewähren" von „der Account kann
-  sich authentifizieren". Siehe ADR 0033.
-- **Hinweis:** Bei SAM-Pfad mit fehlgeschlagenem `NetUserGetInfo`
-  erscheint stattdessen `IdentityDisabledStatusUnknown` — siehe
-  Einschränkung 2.
+### 4. Unsupported share ACEs
 
-### 7. Reparse Points, Junctions, symbolische Links
+- **When:** The share DACL contains object ACEs, callback ACEs,
+  conditional ACEs, or vendor-specific entries.
+- **What happens:** These ACEs are counted and skipped — the share
+  mask is potentially incomplete.
+- **How visible:** Marker `UnsupportedShareAces { count }` (medium,
+  `incomplete = true`). Risk findings are marked incomplete.
 
-- **Wann:** Der Scan stößt auf Reparse Points (NTFS-Links auf andere
-  Verzeichnisse oder Volumes).
-- **Was passiert:** Der Walker folgt Reparse Points und erkennt
-  Schleifen anhand der Pfad-Identität — Endlosschleifen sind
-  ausgeschlossen.
-- **Wie sichtbar:** Reparse-Point-Treffer und erkannte Schleifen
-  werden in der GUI-Trefferliste sichtbar markiert; im HTML-Bericht
-  eigener Hinweis.
-- **Lesart:** Folgen ist eingebaut, weil ein Wechsel auf ein anderes
-  Volume sonst „verschwindet". Wer das nicht will, schneidet den
-  Pfad in der Scan-Wurzel aus.
+### 5. Non-canonical DACL order
 
-### 8. Verwaiste SIDs (echte Orphans)
+- **When:** The DACL of an object is not in Windows canonical order
+  (e.g. Allow before Deny). Windows still evaluates the list in
+  stored order.
+- **What happens:** Stars likewise evaluates in stored order and
+  reports the divergence.
+- **How visible:** Marker `NonCanonicalDaclOrder { at_index }`
+  (medium, not `incomplete`).
+- **How to read:** An auditor should have the DACL reordered —
+  Stars does not do that.
 
-- **Wann:** Eine ACE referenziert eine SID, zu der weder LDAP noch
-  LSA ein Konto findet (typisch nach AD-Object-Löschung).
-- **Was passiert:** Identity ist `IdentityKind::Orphaned`, Name ist
-  nicht gesetzt; die SID bleibt erhalten und wird angezeigt.
-- **Wie sichtbar:** Pfadanzeige enthält die rohe SID; Audit-Konsumenten
-  sehen „SID existiert in der DACL, hat aber keinen Träger mehr".
-- **Wichtig:** Eine SID, die in einer **anderen Domain** existiert (die
-  das konfigurierte LDAP nur nicht indexiert), ist **keine** Orphan
-  — sie taucht jetzt mit Name + Marker
-  `IdentityNotInConfiguredLdapBase` auf. Siehe Einschränkung 2.
+### 6. Disabled accounts
 
-### 9. Lokale Gruppen vom Zielserver
+- **When:** The account carries `UF_ACCOUNTDISABLE` (LDAP) or
+  `NetUserGetInfo` delivers the flag set (SAM).
+- **What happens:** ACL-theoretical rights are still computed and
+  reported.
+- **How visible:** Marker `IdentityDisabled` (info). Audit consumers
+  thereby separate "the ACL would grant Modify" from "the account
+  can authenticate". See ADR 0033.
+- **Note:** In the SAM path with a failed `NetUserGetInfo`,
+  `IdentityDisabledStatusUnknown` appears instead — see limitation 2.
 
-- **Wann:** Die NTFS-DACL referenziert eine lokale Gruppe des
-  Datei-/SMB-Servers (z. B. `BUILTIN\Administrators` oder eine
-  selbst angelegte lokale Gruppe).
-- **Was passiert:** Stars löst lokale Server-Gruppen vom selben Server
-  auf wie die Share-DACL (`effective_smb_target`, ADR 0031). Bei
-  expliziter Vorgabe gewinnt `--smb-server`.
-- **Wenn die Auflösung scheitert:** `LocalGroupEvalStatus::NotAvailable`
-  → Eintrag im Diagnostics-Block; das Ergebnis ist als unvollständig
-  ausgewiesen.
-- **Lesart:** Ohne erfolgreiche lokale-Gruppen-Auflösung können ACEs
-  auf lokale Gruppen für den Benutzer unsichtbar bleiben — Marker
-  „local groups unavailable" weist genau darauf hin.
+### 7. Reparse points, junctions, symbolic links
 
-### 10. Berechtigungen über Token-Privilegien
+- **When:** The scan hits reparse points (NTFS links to other
+  directories or volumes).
+- **What happens:** The walker follows reparse points and detects
+  loops via path identity — infinite loops are ruled out.
+- **How visible:** Reparse-point hits and detected loops are
+  visibly marked in the GUI hit list; the HTML report has its own
+  note.
+- **How to read:** Following is built in because a switch to
+  another volume would otherwise "disappear". Whoever does not want
+  that excludes the path at the scan root.
 
-- **Was wir nicht modellieren:** Privileg-basierter Zugriff
-  (`SeBackupPrivilege`, `SeRestorePrivilege`, `SeTakeOwnershipPrivilege`).
-  Diese gewähren effektiv Zugriff, sind aber **kein** Teil der DACL.
-- **Folge:** Ein Backup-Operator kann produktiv lesen, was die DACL
-  ihm nicht gewährt. Stars zeigt nur den ACL-Befund.
-- **Lesart:** Wenn der Auditor wissen will, „kommt dieser User
-  effektiv ran?", muss er Token-Privilegien manuell ergänzen — Stars
-  beantwortet die Frage „was sagt die ACL?".
+### 8. Orphaned SIDs (real orphans)
+
+- **When:** An ACE references a SID for which neither LDAP nor LSA
+  finds an account (typical after AD object deletion).
+- **What happens:** Identity is `IdentityKind::Orphaned`, the name
+  is unset; the SID is preserved and displayed.
+- **How visible:** The path display contains the raw SID; audit
+  consumers see "SID exists in the DACL but no longer has a bearer".
+- **Important:** A SID that exists in **another domain** (which the
+  configured LDAP simply does not index) is **not** an orphan — it
+  now appears with name + the marker
+  `IdentityNotInConfiguredLdapBase`. See limitation 2.
+
+### 9. Local groups on the target server
+
+- **When:** The NTFS DACL references a local group on the file/SMB
+  server (e.g. `BUILTIN\Administrators` or a custom local group).
+- **What happens:** Stars resolves local server groups on the same
+  server as the share DACL (`effective_smb_target`, ADR 0031). On
+  explicit specification, `--smb-server` wins.
+- **When resolution fails:** `LocalGroupEvalStatus::NotAvailable`
+  → entry in the diagnostics block; the result is marked incomplete.
+- **How to read:** Without successful local-group resolution, ACEs
+  targeting local groups may stay invisible to the user — the
+  "local groups unavailable" marker points exactly at that.
+
+### 10. Permissions via token privileges
+
+- **What we do not model:** Privilege-based access
+  (`SeBackupPrivilege`, `SeRestorePrivilege`,
+  `SeTakeOwnershipPrivilege`). These grant effective access but are
+  **not** part of the DACL.
+- **Effect:** A backup operator can productively read what the DACL
+  does not grant. Stars shows only the ACL finding.
+- **How to read:** If the auditor wants to know "can this user
+  actually reach the data?", token privileges must be added
+  manually — Stars answers the question "what does the ACL say?".
 
 ### 11. Dynamic Access Control (DAC) / Conditional ACEs
 
-- **Was wir nicht modellieren:** Claims-basierte ACEs (Windows DAC).
-  Diese werden als „unsupported" gezählt — siehe Einschränkung 4.
-- **Lesart:** Stars ist ein DACL-Auditor, kein Claims-Auswerter.
+- **What we do not model:** Claims-based ACEs (Windows DAC). These
+  are counted as "unsupported" — see limitation 4.
+- **How to read:** Stars is a DACL auditor, not a claims evaluator.
 
-### 12. SMB-Session-Layer
+### 12. SMB session layer
 
-- **Was wir nicht modellieren:** SMB-Encryption-Policy, Signing-Pflicht,
-  SMB-Versionsanforderungen, IP-Restriktionen via Firewall.
-- **Lesart:** Stars vergleicht Share-DACL ∩ NTFS-DACL. Wer
-  „darf der User überhaupt SMB?" beantworten will, braucht zusätzlich
-  die SMB-Server-Konfiguration.
+- **What we do not model:** SMB encryption policy, signing
+  requirements, SMB version requirements, IP restrictions via
+  firewall.
+- **How to read:** Stars compares share DACL ∩ NTFS DACL. To
+  answer "is the user even allowed to use SMB?", you also need the
+  SMB server configuration.
 
 ---
 
-## Lesart eines Befunds — Schritt für Schritt
+## How to read a finding — step by step
 
-Ein typischer EffectivePermission-Eintrag enthält:
+A typical EffectivePermission entry contains:
 
-1. **Pfad** (normalisiert).
-2. **Identität** (SID + Name + Domain + Kind).
-3. **Effektive Rechte** (Read / Write / Modify / Full Control, …).
-4. **NTFS-Rechte** und **Share-Rechte** getrennt (oder „—" wenn nicht
+1. **Path** (normalized).
+2. **Identity** (SID + name + domain + kind).
+3. **Effective rights** (Read / Write / Modify / Full Control, …).
+4. **NTFS rights** and **share rights** separated (or "—" if not
    relevant).
-5. **Diagnostics**: variant-tagged Marker-Liste — siehe Tabelle oben.
-6. **PermissionPath**: pro Schritt eine Zeile
-   `User → Group → … → ACE → normalisiertes Recht`.
+5. **Diagnostics**: variant-tagged marker list — see the table above.
+6. **PermissionPath**: one line per step
+   `User → Group → … → ACE → normalized right`.
 
-> **Goldene Regel:** Wenn ein Befund Marker enthält, gehört das
-> Wort „möglicherweise" davor. Marker zeigen, dass die Auswertung
-> bewusst nicht 100 % vollständig war — nicht, dass Stars geraten hat.
-
----
-
-## Wenn ein Befund unerwartet ist
-
-1. **Marker prüfen.** Steht `DomainGroupRecursionIncomplete` oder
-   `IdentityNotInConfiguredLdapBase` dran, ist die Auflösung
-   strukturell unvollständig. → Mit LDAP-Bind oder gegen den Global
-   Catalog neu fahren.
-2. **PermissionPath lesen.** Jede Stufe ist sichtbar — wo bricht die
-   Erklärung ab? Welche Gruppe fehlt?
-3. **Scan-Fehler prüfen.** Access Denied auf ein einzelnes Verzeichnis
-   führt zu Lücken, die im Fehler-Tab/CLI-Block sichtbar sind.
-4. **CLI als Gegenprobe.** Die GUI ist nur die Anzeigeschicht. Die
-   CLI baut auf derselben Engine — wenn ein Befund in GUI und CLI
-   identisch ist, liegt die Ursache nicht an der Darstellung.
-5. **Schreibender Eingriff bleibt beim Admin.** Stars schlägt nicht
-   vor, wie ACLs umzubauen sind — das wäre außerhalb des Scopes.
+> **Golden rule:** When a finding carries markers, prepend the word
+> "possibly". Markers indicate that the evaluation was deliberately
+> not 100 % complete — not that Stars guessed.
 
 ---
 
-## Verweise
+## When a finding is unexpected
 
-- [ADR-Index](adr/) — komplette Liste der Architekturentscheidungen.
-- ADR 0021 — Permission Diagnostics als variant-tagged Enum.
-- ADR 0026 — Persistente Scan-Historie.
-- ADR 0029 — Membership-Path-Rekonstruktion.
-- ADR 0031 — Shared UNC-Components und `effective_smb_target`.
-- ADR 0032 — Identity-Input-Dispatcher und LDAP-Timeouts.
-- ADR 0033 — Sichtbare Diagnostik für SAM-Fallback und deaktivierte
-  Identitäten.
-- ADR 0034 — Multi-Domain-LSA-Fallback für Identitätsauflösung
-  (initialer Fix, nur `DOMAIN\user`).
-- ADR 0035 — SAM-Pfad bestätigt `disabled` per `NetUserGetInfo`.
-- ADR 0036 — Einheitliche Principal-Resolution-Pipeline (alle
-  Eingabeformen — `DOMAIN\user`, UPN, plain SAM, direkte SID, GUI
-  Name → SID — laufen seit v1.5.0 durch dieselbe Pipeline).
-- ADR 0037 — Validierte Wrapper konsequent propagieren.
-- ADR 0038 — Share-DACL-Trustees im Scan-Output (NTFS + Share in der
-  pfadzentrischen Trustee-Tabelle).
-- ADR 0039 — Diagnostik für gescheiterte Identity- und Group-
-  Auflösung (`IdentityLookupFailed`, `GroupResolutionFailed`).
-- [Audit-Kriterien](audit-kriterien.md) — Was Stars fachlich abdeckt.
+1. **Check markers.** If `DomainGroupRecursionIncomplete` or
+   `IdentityNotInConfiguredLdapBase` is set, resolution is
+   structurally incomplete. → Re-run with LDAP bind or against the
+   Global Catalog.
+2. **Read the PermissionPath.** Every step is visible — where does
+   the explanation break off? Which group is missing?
+3. **Check scan errors.** Access Denied on a single directory leads
+   to gaps that are visible in the error tab / CLI block.
+4. **CLI as cross-check.** The GUI is only the display layer. The
+   CLI builds on the same engine — if a finding is identical in GUI
+   and CLI, the cause is not rendering.
+5. **Writing changes stay with the admin.** Stars does not suggest
+   how to rebuild ACLs — that would be out of scope.
+
+---
+
+## References
+
+- [ADR index](adr/) — full list of architecture decisions.
+- ADR 0021 — Permission diagnostics as variant-tagged enum.
+- ADR 0026 — Persistent scan history.
+- ADR 0029 — Membership-path reconstruction.
+- ADR 0031 — Shared UNC components and `effective_smb_target`.
+- ADR 0032 — Identity input dispatcher and LDAP timeouts.
+- ADR 0033 — Visible diagnostics for SAM fallback and disabled
+  identities.
+- ADR 0034 — Multi-domain LSA fallback for identity resolution
+  (initial fix, only `DOMAIN\user`).
+- ADR 0035 — SAM path confirms `disabled` via `NetUserGetInfo`.
+- ADR 0036 — Unified principal-resolution pipeline (all input
+  forms — `DOMAIN\user`, UPN, plain SAM, direct SID, GUI name →
+  SID — have gone through the same pipeline since v1.5.0).
+- ADR 0037 — Propagate validated wrappers consistently.
+- ADR 0038 — Share DACL trustees in scan output (NTFS + share in
+  the path-centric trustee table).
+- ADR 0039 — Diagnostics for failed identity and group resolution
+  (`IdentityLookupFailed`, `GroupResolutionFailed`).
+- [Audit Criteria](audit-criteria.md) — what Stars covers from an
+  audit-content perspective.

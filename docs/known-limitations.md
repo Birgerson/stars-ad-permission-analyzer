@@ -1,368 +1,364 @@
-# Stars — Bekannte Grenzen und Roadmap (v1.6+)
+# Stars — Known Limitations and Roadmap (v1.6+)
 
-**Stand:** v1.5.16 — 2026-06-06
-**Zweck:** Ehrliche Aufzählung der Stellen, an denen Stars **strukturell
-nicht garantieren kann**, ein vollständiges Bild zu liefern.
+**Status:** v1.5.16 — 2026-06-06
+**Purpose:** Honest enumeration of the places where Stars **structurally
+cannot guarantee** to deliver a complete picture.
 
-Stars ist und bleibt ein read-only-Anzeigetool. Diese Datei beschreibt
-Bereiche, in denen die aktuelle Implementierung **erkennt**, dass etwas
-fehlt (`incomplete = true`), das fehlende Wissen aber **nicht produktiv
-auflösen** kann. Jede Limitation ist ein eigener Eintrag, damit
-spätere Beiträge sie einzeln adressieren können.
+Stars is and remains a read-only analysis tool. This file describes
+areas where the current implementation **detects** that something is
+missing (`incomplete = true`) but **cannot productively resolve** the
+missing knowledge. Each limitation is its own entry so future
+contributions can address them individually.
 
-> **Bezug zur Marker-Tabelle in
-> [features-and-limitations.md](features-and-limitations.md):** Die
-> dort dokumentierten Marker (`IdentityNotInConfiguredLdapBase`,
-> `IdentityLookupFailed`, `GroupResolutionFailed`, …) machen die hier
-> beschriebenen Lücken **sichtbar**. Diese Datei beschreibt, *was*
-> Stars an strukturellen Lücken hat, die Marker-Tabelle beschreibt,
-> *wie* sie im Befund erscheinen.
-
----
-
-## L1 — Foreign Security Principals (FSP) werden nicht explizit erkannt
-
-**Priorität:** High
-**Tracking:** v1.6.0 Kandidat
-**Bezug:** ADR 0036 (Erweiterungspunkt), ADR 0034
-
-### Problem
-
-In Multi-Domain-Forests oder Inter-Forest-Trusts werden Trust-Principals
-in der Home-Domain als **Foreign Security Principal (FSP)** im Container
-`CN=ForeignSecurityPrincipals,DC=…` repräsentiert. Das FSP-Objekt trägt
-die Trust-SID als `objectSid`, aber das Mitgliedschafts-Schema läuft
-über das FSP-Objekt, nicht über das User-Objekt in der Trust-Domain.
-
-Aktueller Stars-Pfad bei einer Trust-SID:
-
-1. LDAP-Suche per `objectSid` im konfigurierten `base_dn` → Miss (das
-   FSP liegt in einem anderen LDAP-Subtree).
-2. LSA-Reverse-Lookup → Hit.
-3. → `IdentityScopeStatus::OutsideConfiguredLdapBase` + Marker.
-
-Stars sieht damit **nicht**, dass eine lokale Home-Domain-Gruppe (z. B.
-`Domain Admins` der Home-Domain) den FSP als Mitglied enthält. Solche
-Gruppen-ACEs wirken effektiv für den Trust-User, werden aber nicht
-ausgewertet.
-
-### Effekt
-
-Der Befund unterschätzt die Rechte des Trust-Users in der Home-Domain.
-Marker (`IdentityNotInConfiguredLdapBase`, `GroupResolutionFailed`)
-sind gesetzt — der Auditor weiß, dass etwas fehlt — aber Stars zeigt
-nicht, *welche* Home-Domain-Gruppen den User über FSP erfassen.
-
-### Lösungsansatz
-
-- Bei `OutsideConfiguredLdapBase` zusätzlich im
-  `CN=ForeignSecurityPrincipals`-Container der konfigurierten Home-Domain
-  per `objectSid` suchen.
-- Bei Treffer: Mitgliedschaften des FSP-Objekts rekursiv auflösen
-  (LDAP-`memberOf` auf dem FSP-Objekt → Home-Domain-Gruppen).
-- Neuer Diagnose-Marker `IdentityResolvedViaForeignSecurityPrincipal`
-  oder `IdentityScopeStatus::OutsideConfiguredLdapBaseViaFsp`.
-- Memberships ergänzen (nicht ersetzen) — Trust-Domain-Gruppen kennt
-  Stars weiterhin nicht.
-
-### Test-Plan
-
-LDAP-Fake erweitern um FSP-Container + Home-Domain-Gruppe, die den FSP
-als Member trägt. Erwartung: `engine_flags` enthalten die
-Home-Domain-Gruppe, neuer Marker erscheint.
+> **Relationship to the marker table in
+> [features-and-limitations.md](features-and-limitations.md):** The
+> markers documented there (`IdentityNotInConfiguredLdapBase`,
+> `IdentityLookupFailed`, `GroupResolutionFailed`, …) make the gaps
+> described here **visible**. This file describes *what* structural
+> gaps Stars has; the marker table describes *how* they appear in a
+> finding.
 
 ---
 
-## L2 — Global Catalog (GC) Bind wird nicht unterstützt
+## L1 — Foreign Security Principals (FSP) are not explicitly recognized
 
-**Priorität:** High
-**Tracking:** v1.6.0 Kandidat
-**Bezug:** ADR 0034, features-and-limitations.md Abschnitt 2
+**Priority:** High
+**Tracking:** v1.6.0 candidate
+**References:** ADR 0036 (extension point), ADR 0034
 
 ### Problem
 
-UPN-Lookup und SID-Suche sind im Active Directory nur dann
-forestweit eindeutig, wenn man gegen den **Global Catalog (Port 3268)**
-bindet. Stars nutzt aktuell nur den normalen LDAP-Port (389/636) und
-sucht damit ausschließlich in der konfigurierten Domain.
+In multi-domain forests or inter-forest trusts, trust principals are
+represented in the home domain as a **Foreign Security Principal (FSP)**
+in the container `CN=ForeignSecurityPrincipals,DC=…`. The FSP object
+carries the trust SID as `objectSid`, but the membership schema runs
+through the FSP object, not through the user object in the trust domain.
 
-Stars *dokumentiert* den GC-Workaround:
-- ADR 0034 nennt ihn.
-- Der UPN-Fehlertext sagt explizit „bind against a Global Catalog (port
-  3268)".
-- features-and-limitations.md verweist auf `gc://…:3268/…`.
+Current Stars path for a trust SID:
 
-Aber Stars *implementiert* ihn nicht — der Anwender muss manuell eine
-zweite Stars-Analyse mit dem `base_dn` der Partner-Domain laufen
-lassen.
+1. LDAP search by `objectSid` in the configured `base_dn` → miss (the
+   FSP lives in a different LDAP subtree).
+2. LSA reverse lookup → hit.
+3. → `IdentityScopeStatus::OutsideConfiguredLdapBase` + marker.
 
-### Effekt
+Stars therefore does **not** see that a local home-domain group (e.g.
+`Domain Admins` of the home domain) holds the FSP as a member. Such
+group ACEs effectively apply to the trust user but are not evaluated.
 
-Multi-Domain-Audit braucht aktuell entweder mehrere Stars-Läufe oder
-gibt unvollständige Ergebnisse. Beides ist Markiert (incomplete), aber
-beides ist unkomfortabel.
+### Effect
 
-### Lösungsansatz
+Findings understate the rights of the trust user in the home domain.
+Markers (`IdentityNotInConfiguredLdapBase`, `GroupResolutionFailed`)
+are set — the auditor knows something is missing — but Stars does not
+show *which* home-domain groups grant the user access via FSP.
 
-- Neuer Konfig-Modus „GC" in `LdapConfig` (Port 3268, leerer `base_dn`
-  zulässig).
-- `PrincipalResolver` erkennt GC-Mode und überspringt die
-  `OutsideConfiguredLdapBase`-Klassifikation, weil der GC forestweit
-  indexiert.
-- Doku in features-and-limitations.md anpassen.
+### Solution sketch
 
-### Test-Plan
+- On `OutsideConfiguredLdapBase`, additionally search the
+  `CN=ForeignSecurityPrincipals` container of the configured home
+  domain by `objectSid`.
+- On hit: recursively resolve the FSP object's memberships (LDAP
+  `memberOf` on the FSP object → home-domain groups).
+- New diagnostic marker `IdentityResolvedViaForeignSecurityPrincipal`
+  or `IdentityScopeStatus::OutsideConfiguredLdapBaseViaFsp`.
+- Add memberships (do not replace) — Stars still does not know
+  trust-domain groups.
 
-Live-Test gegen einen DC mit GC-Rolle (kein Fake-Backend nötig, weil
-das LDAP-Protokoll dasselbe ist — nur der Port und Scope ändert sich).
+### Test plan
+
+Extend the LDAP fake by an FSP container and a home-domain group that
+contains the FSP as member. Expectation: `engine_flags` contain the
+home-domain group, new marker appears.
 
 ---
 
-## L3 — SID-History wird nicht ausgewertet
+## L2 — Global Catalog (GC) bind is not supported
 
-**Priorität:** Medium
-**Tracking:** v1.7+ Kandidat
+**Priority:** High
+**Tracking:** v1.6.0 candidate
+**References:** ADR 0034, features-and-limitations.md section 2
 
 ### Problem
 
-In Domain-Migrationsszenarien tragen User das Attribut `sIDHistory`,
-das frühere SIDs aus migrierten Domains enthält. NTFS-DACLs, die nicht
-mit-migriert wurden, referenzieren teilweise diese alten SIDs.
+UPN lookups and SID searches are only forest-wide unique in Active
+Directory when binding against the **Global Catalog (port 3268)**.
+Stars currently uses only the regular LDAP port (389/636) and thus
+searches only inside the configured domain.
 
-Stars wertet `sIDHistory` aktuell nicht aus. Wenn die DACL eine
-SID-History-SID enthält, kann der match auf den User nicht erfolgen.
+Stars *documents* the GC workaround:
+- ADR 0034 mentions it.
+- The UPN error text explicitly says "bind against a Global Catalog
+  (port 3268)".
+- features-and-limitations.md references `gc://…:3268/…`.
 
-### Effekt
+But Stars does *not implement* it — the user has to manually run a
+second Stars analysis with the `base_dn` of the partner domain.
 
-Befunde unterschätzen die Rechte migrierter User in nicht-migrierten
-Filesystem-Strukturen. Anders als bei L1 produziert das hier **keinen
-Marker** — Stars sieht die alte SID einfach als "anderer User" und
-findet keinen Match.
+### Effect
 
-### Lösungsansatz
+Multi-domain audits currently need either multiple Stars runs or yield
+incomplete results. Both are marked (incomplete), but both are
+uncomfortable.
 
-- `parse_identity_from_entry` zusätzlich das `sIDHistory`-Multi-Value-
-  Attribut auswerten.
-- `PrincipalResolution` um `historical_sids: Vec<Sid>` erweitern.
-- Token-Bau in `build_token_sids_with_context` ergänzt die
-  History-SIDs.
-- Neuer Marker `MembershipResolvedViaSidHistory` mit historischer SID
-  im Reason, damit der Auditor sieht, dass ein Recht über die alte
-  SID greift.
+### Solution sketch
 
-### Test-Plan
+- New config mode "GC" in `LdapConfig` (port 3268, empty `base_dn`
+  permitted).
+- `PrincipalResolver` recognizes GC mode and skips the
+  `OutsideConfiguredLdapBase` classification because the GC indexes
+  forest-wide.
+- Adjust documentation in features-and-limitations.md.
 
-LDAP-Fake erweitern um `sIDHistory`-Attribut. ACE auf alter SID,
-Erwartung: Recht wird gewährt und Marker erscheint.
+### Test plan
+
+Live test against a DC with the GC role (no fake backend needed
+because the LDAP protocol is the same — only port and scope change).
 
 ---
 
-## L4 — Cross-Forest-Trust-Effekte sind nicht modelliert
+## L3 — SID History is not evaluated
 
-**Priorität:** Medium
-**Tracking:** v1.7+ Kandidat
-**Bezug:** L1, L2
+**Priority:** Medium
+**Tracking:** v1.7+ candidate
 
 ### Problem
 
-Forest-Trusts haben Konfigurationsoptionen, die zur Laufzeit am DC
-wirken:
+In domain migration scenarios, users carry the `sIDHistory` attribute,
+which contains earlier SIDs from migrated domains. NTFS DACLs that
+were not migrated along still reference these old SIDs.
 
-- **Selective Authentication** (auch „Authentication Firewall"): der
-  Trust-User darf nur an bestimmten Servern authentifizieren —
-  selbst wenn die DACL ihm Rechte gewährt, kann er sich nicht
-  anmelden.
-- **SID Filtering / Quarantine**: bestimmte SIDs aus dem Trust werden
-  ignoriert (Schutz vor SID-Spoofing).
+Stars currently does not evaluate `sIDHistory`. If a DACL contains a
+SID-history SID, no match against the user can occur.
 
-Stars sieht die rohe DACL und berechnet, was sie *theoretisch* gewährt.
-Was am realen DC dann tatsächlich gefiltert wird, sieht Stars nicht.
+### Effect
 
-### Effekt
+Findings understate the rights of migrated users on non-migrated
+filesystem structures. Unlike L1, this case produces **no marker** —
+Stars simply sees the old SID as "another user" and finds no match.
 
-Stars-Befunde für Trust-User können **zu hoch** sein — die DACL würde
-gewähren, aber Selective Auth oder SID Filtering blockt zur Laufzeit.
+### Solution sketch
 
-### Lösungsansatz
+- Have `parse_identity_from_entry` additionally evaluate the
+  `sIDHistory` multi-value attribute.
+- Extend `PrincipalResolution` by `historical_sids: Vec<Sid>`.
+- Token construction in `build_token_sids_with_context` adds the
+  history SIDs.
+- New marker `MembershipResolvedViaSidHistory` with the historical SID
+  in the reason so the auditor can see that a right applies via the
+  old SID.
 
-- Stars-Doku: features-and-limitations.md klar dokumentieren, dass
-  Stars die DACL-Sicht zeigt, nicht das gefilterte Laufzeit-Ergebnis.
-- (Optional) `trustAttributes` und `trustDirection` aus AD lesen und
-  als Read-Only-Info im Bericht zeigen.
-- Echte Erkennung der Filter-Wirkung würde voraussetzen, dass Stars
-  einen synthetischen Logon-Versuch macht — verletzt das
-  Read-Only-Prinzip → bewusst **nicht** implementieren.
+### Test plan
 
-### Test-Plan
-
-Keine automatisierte Erkennung möglich; Doku-only.
+Extend the LDAP fake by the `sIDHistory` attribute. ACE on the old
+SID, expectation: right is granted and marker appears.
 
 ---
 
-## L5 — `OutsideConfiguredLdapBase`-Identities haben leere Memberships
+## L4 — Cross-forest trust effects are not modelled
 
-**Priorität:** Medium
-**Tracking:** v1.7+ Kandidat
-**Bezug:** L1, L2, ADR 0039
+**Priority:** Medium
+**Tracking:** v1.7+ candidate
+**References:** L1, L2
 
 ### Problem
 
-Wenn Stars eine SID per LSA auflöst, aber das konfigurierte LDAP-`base_dn`
-sie nicht indexiert, läuft die Pipeline in
+Forest trusts have configuration options that take effect at runtime
+at the DC:
+
+- **Selective Authentication** (also "Authentication Firewall"): the
+  trust user may only authenticate against specific servers — even if
+  the DACL grants rights, the user cannot log on.
+- **SID Filtering / Quarantine**: certain SIDs from the trust are
+  ignored (protection against SID spoofing).
+
+Stars sees the raw DACL and computes what it *theoretically* grants.
+What the real DC actually filters at runtime is invisible to Stars.
+
+### Effect
+
+Stars findings for trust users can be **too high** — the DACL would
+grant, but Selective Auth or SID Filtering block at runtime.
+
+### Solution sketch
+
+- Stars documentation: features-and-limitations.md should clearly
+  document that Stars shows the DACL view, not the filtered runtime
+  result.
+- (Optional) Read `trustAttributes` and `trustDirection` from AD and
+  display them as read-only info in the report.
+- Real detection of the filter effect would require Stars to perform
+  a synthetic logon attempt — that violates the read-only principle →
+  deliberately **not** implemented.
+
+### Test plan
+
+No automated detection possible; documentation only.
+
+---
+
+## L5 — `OutsideConfiguredLdapBase` identities have empty memberships
+
+**Priority:** Medium
+**Tracking:** v1.7+ candidate
+**References:** L1, L2, ADR 0039
+
+### Problem
+
+When Stars resolves a SID via LSA but the configured LDAP `base_dn`
+does not index it, the pipeline ends up in
 `scope_status = OutsideConfiguredLdapBase`,
-`group_resolution_status = NotAttempted`. Seit v1.5.2 ist das mit einem
-`group_resolution_failure_reason` markiert (Befund ist `incomplete`),
-aber die tatsächlichen Memberships bleiben **leer**.
+`group_resolution_status = NotAttempted`. Since v1.5.2 this is marked
+with a `group_resolution_failure_reason` (the finding is `incomplete`),
+but the actual memberships remain **empty**.
 
-### Effekt
+### Effect
 
-Cross-Domain-Mitgliedschaften des Trust-Users werden nicht ausgewertet.
-Der Befund ist als incomplete markiert, das Recht wird aber im Zweifel
-zu niedrig berechnet.
+Cross-domain memberships of the trust user are not evaluated. The
+finding is marked incomplete, but the right gets computed too low in
+case of doubt.
 
-### Lösungsansatz
+### Solution sketch
 
-Zweigleisig (kann unabhängig implementiert werden):
+Two independent tracks (can be implemented separately):
 
-a) **L1 (FSP-Pfad):** Mitgliedschaften des FSP-Objekts in der
-   Home-Domain ergänzen.
-b) **L2 (GC-Pfad):** Wenn ein GC konfiguriert ist, Mitgliedschaften
-   forestweit über den GC abfragen.
+a) **L1 (FSP path):** add memberships of the FSP object in the home
+   domain.
+b) **L2 (GC path):** if a GC is configured, query memberships
+   forest-wide via the GC.
 
-Ohne L1 oder L2 bleibt L5 strukturell offen.
+Without L1 or L2 L5 stays structurally open.
 
-### Test-Plan
+### Test plan
 
-Siehe L1 und L2.
+See L1 and L2.
 
 ---
 
-## L6 — Multi-Domain-Live-Integrationstests fehlen
+## L6 — Multi-domain live integration tests are missing
 
-**Priorität:** High (Validierung der vorhandenen Architektur)
-**Tracking:** Sobald ein Test-Forest verfügbar ist
+**Priority:** High (validation of the existing architecture)
+**Tracking:** as soon as a test forest is available
 
 ### Problem
 
-Die zentrale Principal-Pipeline (ADR 0036) ist mit **In-Memory-Fakes**
-abgedeckt:
+The central principal pipeline (ADR 0036) is covered by **in-memory
+fakes**:
 
-- `FakeLdapBackend` simuliert LDAP-Hit/Miss/Fehler.
-- `FakeLsaBackend` simuliert LSA-Hit/Miss.
+- `FakeLdapBackend` simulates LDAP hit/miss/error.
+- `FakeLsaBackend` simulates LSA hit/miss.
 
-Das deckt die *strukturelle* Korrektheit ab — die Pipeline tut, was die
-Code-Logik vorgibt. **Niemand hat das gegen einen echten
-Multi-Domain-Forest mit Trust laufen lassen.**
+This covers *structural* correctness — the pipeline does what the
+code logic says. **No one has run it against a real multi-domain
+forest with a trust.**
 
-Die `#[ignore]`-markierten Integrationstests im Code (`sam.rs`,
-`local_groups.rs`, …) laufen nur, wenn man explizit
-`cargo test -- --ignored` auf einem DC ausführt.
+The `#[ignore]`-marked integration tests in the code (`sam.rs`,
+`local_groups.rs`, …) only run when you explicitly execute
+`cargo test -- --ignored` on a DC.
 
-### Effekt
+### Effect
 
-Unbekannte Real-World-Fallstricke (LDAP-Server-Eigenheiten, Referrals,
-spezifische Trust-Konfigurationen) sind nicht abgedeckt. Strukturell
-richtig ≠ in der Wildnis bestätigt.
+Unknown real-world pitfalls (LDAP server idiosyncrasies, referrals,
+specific trust configurations) are not covered. Structurally correct
+≠ confirmed in the wild.
 
-### Lösungsansatz
+### Solution sketch
 
-- Test-Forest in Proxmox aufsetzen (passt zu
-  [Deployment-Ziel](anwender-handbuch.md)): zwei Domains, ein Trust.
-- Stars-Smoke-Test-Skript, das die Pipeline-Cases (L1, L2, L5)
-  manuell durchspielt und das Ergebnis gegen Erwartungen prüft.
-- Ergebnisse als Markdown-Tabelle ins Repo.
+- Set up a test forest in Proxmox (matches the deployment target):
+  two domains, one trust.
+- Stars smoke-test script that manually plays through the pipeline
+  cases (L1, L2, L5) and checks the result against expectations.
+- Results as a Markdown table in the repo.
 
-### Test-Plan
+### Test plan
 
-Eigene Aufgabe; vermutlich initial manuell, später als
-`#[ignore]`-Test mit dokumentierten Voraussetzungen.
+Its own task; probably initially manual, later as `#[ignore]` test
+with documented prerequisites.
 
 ---
 
-## L7 — Token-Privilegien (`SeBackupPrivilege`, …) werden nicht modelliert
+## L7 — Token privileges (`SeBackupPrivilege`, …) are not modelled
 
-**Priorität:** Low
-**Tracking:** vermutlich nie — Out-of-Scope
+**Priority:** Low
+**Tracking:** likely never — out of scope
 
 ### Problem
 
-Windows gewährt Konten mit Token-Privilegien (`SeBackupPrivilege`,
-`SeRestorePrivilege`, `SeTakeOwnershipPrivilege`) effektiven Zugriff
-unabhängig von der DACL. Backup-Operator kann produktiv lesen, was die
-DACL nicht gewährt.
+Windows grants accounts with token privileges (`SeBackupPrivilege`,
+`SeRestorePrivilege`, `SeTakeOwnershipPrivilege`) effective access
+independent of the DACL. A backup operator can productively read what
+the DACL does not grant.
 
-### Effekt
+### Effect
 
-Stars-Befunde zeigen nur die DACL-Sicht. Wer wissen will, *kommt
-dieser User effektiv ran*, muss Token-Privilegien manuell ergänzen.
+Stars findings show only the DACL view. Whoever wants to know
+*can this user effectively reach the data*, has to add token
+privileges manually.
 
-### Lösungsansatz
+### Solution sketch
 
-- features-and-limitations.md dokumentiert das bereits (Einschränkung
-  10).
-- Stars könnte aus `Domain Admins`, `Backup Operators` etc. die
-  Mitgliedschaft als Hinweis rendern — macht es aktuell nicht.
+- features-and-limitations.md already documents this (limit 10).
+- Stars could render membership in `Domain Admins`, `Backup Operators`
+  etc. as a hint — currently does not.
 
-### Test-Plan
+### Test plan
 
-Out-of-Scope. Doku reicht.
+Out of scope. Documentation is enough.
 
 ---
 
-## L8 — Dynamic Access Control (DAC) / Conditional ACEs werden nicht ausgewertet
+## L8 — Dynamic Access Control (DAC) / Conditional ACEs are not evaluated
 
-**Priorität:** Low
-**Tracking:** vermutlich nie — Out-of-Scope
+**Priority:** Low
+**Tracking:** likely never — out of scope
 
 ### Problem
 
-Windows DAC (Claims-basierte ACEs) wird vom Stars-Parser nicht
-verstanden. Conditional ACEs werden als `UnsupportedShareAces` /
-`unsupported_ace_count` gezählt und übersprungen.
+Windows DAC (claims-based ACEs) is not understood by the Stars
+parser. Conditional ACEs are counted as `UnsupportedShareAces` /
+`unsupported_ace_count` and skipped.
 
-### Effekt
+### Effect
 
-Stars markiert das als `incomplete`. Die DAC-Logik ist aber nicht
-ausgewertet.
+Stars marks this as `incomplete`. The DAC logic, however, is not
+evaluated.
 
-### Lösungsansatz
+### Solution sketch
 
-- features-and-limitations.md dokumentiert das (Einschränkung 11).
-- DAC-Parser wäre eine eigene große Arbeit (SDDL-Conditional-Expression).
-- Verbleibt als bewusste Out-of-Scope-Entscheidung.
+- features-and-limitations.md documents this (limit 11).
+- A DAC parser would be its own large piece of work
+  (SDDL conditional expressions).
+- Remains a deliberate out-of-scope decision.
 
-### Test-Plan
+### Test plan
 
-Out-of-Scope.
+Out of scope.
 
 ---
 
-## Status-Übersicht
+## Status overview
 
-| Limit | Priorität | Marker vorhanden? | Auflösung möglich? |
+| Limit | Priority | Marker present? | Resolvable? |
 | --- | --- | --- | --- |
-| L1 — FSP | High | teilweise (Outside + GroupResolutionFailed) | ja, mit Implementierung |
-| L2 — GC-Bind | High | teilweise (Outside + UPN-Fehler) | ja, mit Implementierung |
-| L3 — SID-History | Medium | **nein** | ja, mit Implementierung |
-| L4 — Cross-Forest-Filter | Medium | nein | nein (Doku-only) |
-| L5 — Leere Memberships | Medium | ja (incomplete) | nur via L1/L2 |
-| L6 — Live-Tests | High | n/a | ja, mit Setup |
-| L7 — Token-Privilegien | Low | nein | bewusst out-of-scope |
-| L8 — DAC | Low | ja (incomplete) | bewusst out-of-scope |
+| L1 — FSP | High | partially (Outside + GroupResolutionFailed) | yes, with implementation |
+| L2 — GC bind | High | partially (Outside + UPN error) | yes, with implementation |
+| L3 — SID History | Medium | **no** | yes, with implementation |
+| L4 — Cross-forest filter | Medium | no | no (documentation only) |
+| L5 — Empty memberships | Medium | yes (incomplete) | only via L1/L2 |
+| L6 — Live tests | High | n/a | yes, with setup |
+| L7 — Token privileges | Low | no | deliberately out of scope |
+| L8 — DAC | Low | yes (incomplete) | deliberately out of scope |
 
-## Beitragspolitik
+## Contribution policy
 
-Wer eine dieser Limits adressieren will:
+Whoever wants to address one of these limits:
 
-1. ADR schreiben (Format `docs/adr/00NN-...md`), die Architektur-
-   entscheidung dokumentieren.
-2. Tests mit Fakes (für L1, L3, L5) oder gegen Live-Setup (L2, L6).
-3. features-and-limitations.md aktualisieren (Status,
-   eventuell neue Marker).
-4. CHANGELOG-Eintrag.
-5. Diese Datei beim entsprechenden Eintrag auf "geschlossen in vX.Y.Z"
-   setzen.
+1. Write an ADR (format `docs/adr/00NN-...md`) documenting the
+   architecture decision.
+2. Tests with fakes (for L1, L3, L5) or against a live setup (L2, L6).
+3. Update features-and-limitations.md (status, possibly new markers).
+4. CHANGELOG entry.
+5. Set the matching entry in this file to "closed in vX.Y.Z".
 
-Read-Only-Prinzip bleibt bei jeder Erweiterung gewahrt: Stars
-**zeigt** Lücken, **erklärt** sie, **schließt** sie strukturell —
-verändert aber nie Zielsysteme.
+The read-only principle is preserved with every extension: Stars
+**shows** gaps, **explains** them, **closes** them structurally — but
+never modifies target systems.

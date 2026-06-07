@@ -1,65 +1,65 @@
-# Stars — Test-Lab "Tri-Forest"
+# Stars — Test Lab "Tri-Forest"
 
-> **Read-only-Prinzip von Stars gilt unverändert.**
-> Stars liest AD, NTFS und SMB. Das Lab existiert, um Stars gegen eine **bewusst komplexe** AD-Topologie zu testen. Stars verändert auch in diesem Lab nichts an Domain-Objekten, Berechtigungen oder Freigaben — die VMs hier sind Test-*Material*, kein Produktivziel.
+> **Stars' read-only principle applies unchanged.**
+> Stars reads AD, NTFS, and SMB. The lab exists so we can test Stars against a **deliberately complex** AD topology. Even in the lab Stars changes nothing on domain objects, permissions, or shares — the VMs here are test *material*, not a production target.
 
-## Zweck
+## Purpose
 
-Die Lab-Umgebung deckt Konstellationen ab, die ein einzelner DC nicht abbilden kann:
+The lab environment covers constellations a single DC cannot represent:
 
-- Cross-Forest-SIDs und Foreign Security Principals
-- mehrere unabhängige Schemata
-- bidirektionale Forest-Trusts
-- Conditional-DNS-Forwarder zwischen separaten Forests
-- separate Domain-SIDs pro Forest (S-1-5-21-… verschieden je Tier)
-- separate NetBIOS-Namen (T0LAB / T1LAB / T2LAB) zur Konflikt-Vermeidung
+- Cross-forest SIDs and Foreign Security Principals
+- Multiple independent schemas
+- Bidirectional forest trusts
+- Conditional DNS forwarders between separate forests
+- Separate domain SIDs per forest (S-1-5-21-… differs per tier)
+- Separate NetBIOS names (T0LAB / T1LAB / T2LAB) to avoid conflicts
 
-Damit lassen sich Pfad-Erklärungen, SID-Auflösung über Forest-Grenzen und das Verhalten bei nicht-auflösbaren Cross-Forest-SIDs realistisch prüfen.
+That makes it possible to realistically check path explanations, SID resolution across forest boundaries, and behaviour on unresolvable cross-forest SIDs.
 
-## Topologie auf einen Blick
+## Topology at a glance
 
 ```text
-        Proxmox VE 9.1.1  (Host 192.168.11.11)
+        Proxmox VE 9.1.1  (host 192.168.11.11)
         ────────────────────────────────────────
         │
         ├── VMID 100  tier0   192.168.11.100   Forest: tier0.lab  / NetBIOS: T0LAB
         ├── VMID 101  tier1   192.168.11.101   Forest: tier1.lab  / NetBIOS: T1LAB
         ├── VMID 102  tier2   192.168.11.102   Forest: tier2.lab  / NetBIOS: T2LAB
-        └── VMID 9000 MS-Server-2022-Std       (Template, stopped)
+        └── VMID 9000 MS-Server-2022-Std       (template, stopped)
 
-Forest-Trusts (alle bidirektional, "Forest"-Trust-Typ):
+Forest trusts (all bidirectional, "Forest" trust type):
 
         tier0.lab ⟷ tier1.lab
         tier1.lab ⟷ tier2.lab
         tier0.lab ⟷ tier2.lab
 ```
 
-Mehr Details: [`forest-topology.md`](forest-topology.md).
+More details: [`forest-topology.md`](forest-topology.md).
 
-## Inhalt dieses Ordners
+## Contents of this folder
 
-| Datei | Inhalt |
+| File | Content |
 |---|---|
-| [`README.md`](README.md) | Diese Übersicht. |
-| [`forest-topology.md`](forest-topology.md) | Forest- und VM-Daten, Trust-Matrix, IP-Plan, DNS-Forwarder. |
-| [`setup-procedure.md`](setup-procedure.md) | Reproduzierbare Schrittfolge des Lab-Aufbaus inkl. behobener Stolpersteine. |
-| [`verification.md`](verification.md) | Verifikationsergebnisse vom Build-Tag, mit PowerShell-Befehlen zum Nachprüfen. |
-| [`scripts/`](scripts/) | Sanitized Bash-Skripte, die den Aufbau ausgeführt haben. **Lab-Default-Passwort steht nicht im Repo** und wird beim Lauf als Umgebungsvariable übergeben. |
+| [`README.md`](README.md) | This overview. |
+| [`forest-topology.md`](forest-topology.md) | Forest and VM data, trust matrix, IP plan, DNS forwarders. |
+| [`setup-procedure.md`](setup-procedure.md) | Reproducible step sequence of the lab setup, including fixed gotchas. |
+| [`verification.md`](verification.md) | Verification results from build day, with PowerShell commands to re-check. |
+| [`scripts/`](scripts/) | Sanitized bash scripts that performed the setup. **The lab default password is not in the repo** and is passed at runtime as an environment variable. |
 
-## Sicherheits-Hinweise
+## Security notes
 
-- Die VMs sind ausschließlich für **lokale Tests** in einem isolierten Netz (192.168.11.0/24) bestimmt.
-- Lab-Default-Passwort wird **niemals** in dieses Repository committet. Es lebt nur in der lokalen Entwicklungsumgebung des Betreibers.
-- Forest-Trusts sind bewusst ohne SID-Filtering / Quarantine konfiguriert, weil das Lab maximale Test-Sichtbarkeit produzieren soll. Für Produktion gilt das Gegenteil.
-- Die Test-VMs dürfen niemals in Produktionsnetzen erreichbar werden.
+- The VMs are only meant for **local tests** in an isolated network (192.168.11.0/24).
+- The lab default password is **never** committed to this repository. It lives only in the maintainer's local development environment.
+- Forest trusts are deliberately configured without SID filtering / quarantine because the lab is meant to produce maximum test visibility. The opposite applies in production.
+- The test VMs must never become reachable from production networks.
 
-## Stars-spezifische Test-Use-Cases, die das Lab abdeckt
+## Stars-specific test use cases covered by the lab
 
-| Use-Case | Voraussetzung | Wo abgebildet |
+| Use case | Prerequisite | Where covered |
 |---|---|---|
-| AD-Recursive-Gruppe innerhalb eines Forests | mind. ein Forest mit ≥ 2 verschachtelten Gruppen | tier0.lab (Default-Gruppen genügen für ersten Smoke-Test) |
-| Foreign Security Principal (Cross-Forest-SID auf ACE) | Trust + Test-User in Quell-Forest, FSP-ACE in Ziel-Forest | tier0.lab ⟷ tier1.lab |
-| Cross-Forest-Trust mit getrennten Schemas | 2 unabhängige Forests | tier0.lab ⟷ tier2.lab |
-| Lokale Gruppen-Mediator-Erklärung (Finding 1) | mind. ein Member-Server / DC mit lokalen Gruppen | jeder DC hat BUILTIN-Gruppen |
+| AD recursive group inside a single forest | at least one forest with ≥ 2 nested groups | tier0.lab (default groups suffice for an initial smoke test) |
+| Foreign Security Principal (cross-forest SID on an ACE) | trust + test user in the source forest, FSP ACE in the target forest | tier0.lab ⟷ tier1.lab |
+| Cross-forest trust with separate schemas | 2 independent forests | tier0.lab ⟷ tier2.lab |
+| Local-group mediator explanation (finding 1) | at least one member server / DC with local groups | every DC has BUILTIN groups |
 
-Konkrete Testdaten-Bestückung (Testbenutzer, Gruppenverschachtelung, ACEs auf Test-Pfade) folgt separat.
+Concrete test-data population (test users, group nesting, ACEs on test paths) follows separately.

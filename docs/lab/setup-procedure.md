@@ -1,33 +1,33 @@
-# Lab-Aufbau — reproduzierbare Schrittfolge
+# Lab Setup — Reproducible Step Sequence
 
-> Reproduktion durch eine zweite Person sollte ausschließlich aus dieser Datei plus den Skripten unter [`scripts/`](scripts/) möglich sein. Alle Stolpersteine sind hier dokumentiert, damit sich niemand zweimal an denselben Quoting- oder Prerequisite-Problemen abarbeitet.
+> Reproduction by a second person should be possible from this file plus the scripts under [`scripts/`](scripts/) alone. All gotchas are documented here so nobody has to work through the same quoting or prerequisite problems twice.
 
-## Voraussetzungen
+## Prerequisites
 
-| Item | Beschaffenheit |
+| Item | Requirement |
 |------|----------------|
-| Proxmox VE | 9.1.1 oder neuer |
-| Template-VM | Windows Server 2022 Standard (im hier dokumentierten Lab: VMID 9000, Name `MS-Server-2022-Std`, mit aktivem qemu-guest-agent und Default-Local-Administrator ohne Passwort) |
-| Storage | mindestens 3 × 101 GB frei für die Klone (linked clones referenzieren das Template, sind aber bei Schreiben dünn → Plattenplatz wächst über die Lebensdauer) |
-| Bridge | `vmbr0` mit Routing zu 192.168.11.0/24 |
-| Admin-Tools auf dem Steuer-Host | `plink`/`pscp` (PuTTY-Suite) oder OpenSSH-Client, dazu `bash` (Git-Bash o.Ä.) für die Skripte. Die Skripte unter [`scripts/`](scripts/) werden auf dem **PVE-Host** ausgeführt, nicht auf dem Steuer-Rechner. |
-| Lab-Default-Passwort | Eine Umgebungsvariable `LAB_ADMIN_PASSWORD` muss beim Lauf der Skripte gesetzt sein. Sie ersetzt das frühere hartkodierte Lab-Passwort und wird nicht im Repo abgelegt. |
+| Proxmox VE | 9.1.1 or newer |
+| Template VM | Windows Server 2022 Standard (in the lab documented here: VMID 9000, name `MS-Server-2022-Std`, with active qemu-guest-agent and a default local administrator without a password) |
+| Storage | at least 3 × 101 GB free for the clones (linked clones reference the template but are thin on writes → disk usage grows over their lifetime) |
+| Bridge | `vmbr0` with routing to 192.168.11.0/24 |
+| Admin tools on the control host | `plink`/`pscp` (PuTTY suite) or the OpenSSH client, plus `bash` (Git Bash or similar) for the scripts. The scripts under [`scripts/`](scripts/) run on the **PVE host**, not on the control machine. |
+| Lab default password | The environment variable `LAB_ADMIN_PASSWORD` must be set when running the scripts. It replaces the previously hard-coded lab password and is not stored in the repo. |
 
-## Phasen-Übersicht
+## Phase overview
 
-Der Aufbau lief in fünf nummerierten Schritten. Sie sind in [`scripts/`](scripts/) als `step1-*.sh` … `step5c-trusts.sh` versioniert.
+The setup ran in five numbered steps. They are versioned in [`scripts/`](scripts/) as `step1-*.sh` … `step5c-trusts.sh`.
 
 ```text
-Phase A — Klonen tier1 + tier2 vom Template
-Phase B — Bestehende VMID 100 umwidmen (Demote → RAM 16 GB → Hostname tier0 → Reboot)
-Phase C — Install-ADDSForest tier0.lab / tier1.lab / tier2.lab (parallel)
-Phase D — Conditional DNS Forwarders setzen
-Phase E — Bidirektionale Forest-Trusts via Forest::CreateTrustRelationship
+Phase A — Clone tier1 + tier2 from the template
+Phase B — Repurpose existing VMID 100 (demote → RAM 16 GB → hostname tier0 → reboot)
+Phase C — Install-ADDSForest tier0.lab / tier1.lab / tier2.lab (in parallel)
+Phase D — Set conditional DNS forwarders
+Phase E — Bidirectional forest trusts via Forest::CreateTrustRelationship
 ```
 
-## Phase A — Klonen (`step?-clone.sh`)
+## Phase A — Cloning (`step?-clone.sh`)
 
-Linked Clones aus Template 9000:
+Linked clones from template 9000:
 
 ```bash
 qm clone 9000 101 --name tier1
@@ -38,23 +38,23 @@ qm start 101
 qm start 102
 ```
 
-Hinweise:
-- `--storage` ist **nicht erlaubt** bei Linked Clones aus Templates. Die geklonte VM landet automatisch im Storage des Templates.
-- `--memory 16384` setzt RAM auf 16 GiB. Wird im laufenden Zustand vorgehalten, wirksam nach Reboot — bei frisch geklonten, noch nicht gestarteten VMs sofort wirksam.
+Notes:
+- `--storage` is **not permitted** for linked clones from templates. The cloned VM automatically lands in the template's storage.
+- `--memory 16384` sets RAM to 16 GiB. It is staged while running and takes effect on reboot — on freshly cloned, not yet started VMs it applies immediately.
 
-## Phase B — VMID 100 umwidmen (`step2-reboot-rename.sh`)
+## Phase B — Repurpose VMID 100 (`step2-reboot-rename.sh`)
 
-VMID 100 war zuvor PDC der Domain `testdomain.local`. Sie wird:
+VMID 100 was previously the PDC of the domain `testdomain.local`. It gets:
 
 1. **Demoted** (`Uninstall-ADDSDomainController -LastDomainControllerInDomain`):
-   - `-RemoveDnsDelegation` weglassen, wenn die Domain keine Eltern-Zone besitzt. Sonst: `The argument RemoveDNSDelegation=Yes is invalid`.
-   - `-Credential <NetBIOS>\Administrator` ist Pflicht, sonst `Verification of user credential permissions failed` — LocalSystem (qemu-guest-agent) kann sich nicht implizit als Domain-Admin authentifizieren.
-2. Über `qm shutdown` + `qm start` rebootet.
-3. Über `qm set 100 --memory 16384 --name tier0` auf 16 GiB RAM gestellt und in der PVE-Inventar umbenannt.
-4. Im Gast über `Rename-Computer -NewName tier0` umbenannt.
-5. Erneut rebootet, damit der Computer-Name gilt.
+   - Omit `-RemoveDnsDelegation` if the domain has no parent zone. Otherwise: `The argument RemoveDNSDelegation=Yes is invalid`.
+   - `-Credential <NetBIOS>\Administrator` is mandatory, otherwise `Verification of user credential permissions failed` — LocalSystem (qemu-guest-agent) cannot implicitly authenticate as a domain admin.
+2. Rebooted via `qm shutdown` + `qm start`.
+3. Set to 16 GiB RAM and renamed in the PVE inventory via `qm set 100 --memory 16384 --name tier0`.
+4. Renamed in the guest via `Rename-Computer -NewName tier0`.
+5. Rebooted again so the computer name applies.
 
-Ergebnis-Snapshot:
+Result snapshot:
 
 ```text
 hostname: tier0
@@ -65,9 +65,9 @@ ip      : 192.168.11.100/24
 dns     : 127.0.0.1
 ```
 
-## Phase C — Forest-Promotion (`step3-promote.sh` und `step3b-promote.sh`)
+## Phase C — Forest promotion (`step3-promote.sh` and `step3b-promote.sh`)
 
-Auf allen drei DCs parallel:
+In parallel on all three DCs:
 
 ```powershell
 Install-ADDSForest `
@@ -81,31 +81,31 @@ Install-ADDSForest `
     -NoRebootOnCompletion
 ```
 
-### Wichtige Stolpersteine
+### Important gotchas
 
-1. **NetBIOS-Konflikt Hostname ↔ Domain**: Hostname `tier0` und Domain-NetBIOS-Name `TIER0` führten zu `The NetBIOS name TIER0 is already in use.` Lösung: Domain-NetBIOS-Namen unterscheiden (`T0LAB`, `T1LAB`, `T2LAB`).
-2. **Local-Administrator-Passwort leer**: Das Template hatte kein Local-Admin-Passwort gesetzt. `Install-ADDSForest` lehnt das ab (`local Administrator password is blank`). Lösung vor Promote: `net user Administrator $LAB_ADMIN_PASSWORD`.
-3. **Warnungen sind harmlos**: "Allow cryptography algorithms compatible with Windows NT 4.0" (Default Security-Setting) und "DNS delegation cannot be created" (keine Eltern-Zone).
-4. **`-NoRebootOnCompletion`** kontrolliert wann Reboot passiert, sonst killt der Promote-Reboot die `qm guest exec`-Verbindung mitten im Lauf.
+1. **NetBIOS conflict hostname ↔ domain**: Hostname `tier0` and domain NetBIOS name `TIER0` produced `The NetBIOS name TIER0 is already in use.` Solution: use distinct domain NetBIOS names (`T0LAB`, `T1LAB`, `T2LAB`).
+2. **Local Administrator password empty**: The template had no local admin password set. `Install-ADDSForest` rejects this (`local Administrator password is blank`). Solution before promote: `net user Administrator $LAB_ADMIN_PASSWORD`.
+3. **Warnings are harmless**: "Allow cryptography algorithms compatible with Windows NT 4.0" (default security setting) and "DNS delegation cannot be created" (no parent zone).
+4. **`-NoRebootOnCompletion`** controls when the reboot happens; otherwise the promote reboot kills the `qm guest exec` connection mid-run.
 
-Nach Promote auf jeder VM: `qm shutdown` + `qm start` für sauberen Übergang in den DC-Zustand.
+After the promote on each VM: `qm shutdown` + `qm start` for a clean transition into the DC state.
 
-## Phase D — Conditional DNS Forwarders (`step5b-trusts.sh`)
+## Phase D — Conditional DNS forwarders (`step5b-trusts.sh`)
 
-Cross-Forest-Resolution funktioniert nur, wenn jeder DC die anderen Domain-Namen auflösen kann. Auf jedem DC werden CFs zu den jeweils anderen beiden Domains gesetzt:
+Cross-forest resolution only works if every DC can resolve the other domain names. On every DC, CFs to the other two domains are added:
 
 ```powershell
 Add-DnsServerConditionalForwarderZone -Name "tier1.lab" -MasterServers "192.168.11.101" -ReplicationScope Forest
 Add-DnsServerConditionalForwarderZone -Name "tier2.lab" -MasterServers "192.168.11.102" -ReplicationScope Forest
 ```
 
-### Wartezeit
+### Wait time
 
-Direkt nach DC-Promote ist `Get-ADDomain` noch nicht responsiv. Skript `step5b` pollt mit `Get-ADDomain -ErrorAction Stop` bis zu 5 Minuten und führt CFs erst dann aus. Erspart die `EXIT 1`-Pirouette aus dem ersten Anlauf.
+Right after the DC promote, `Get-ADDomain` is not yet responsive. Script `step5b` polls `Get-ADDomain -ErrorAction Stop` for up to five minutes and only then runs the CFs. Saves the `EXIT 1` pirouette from the first run.
 
-## Phase E — Forest-Trusts (`step5c-trusts.sh`)
+## Phase E — Forest trusts (`step5c-trusts.sh`)
 
-Über die .NET-Reflection-API `[System.DirectoryServices.ActiveDirectory.Forest]`:
+Via the .NET reflection API `[System.DirectoryServices.ActiveDirectory.Forest]`:
 
 ```powershell
 $localCtx  = New-Object System.DirectoryServices.ActiveDirectory.DirectoryContext("Forest", "tier0.lab")
@@ -115,23 +115,23 @@ $remote    = [System.DirectoryServices.ActiveDirectory.Forest]::GetForest($remot
 $local.CreateTrustRelationship($remote, [System.DirectoryServices.ActiveDirectory.TrustDirection]::Bidirectional)
 ```
 
-Aufrufe:
+Calls:
 
-- `tier0.lab` → `tier1.lab` (auf tier0)
-- `tier1.lab` → `tier2.lab` (auf tier1)
-- `tier0.lab` → `tier2.lab` (auf tier0)
+- `tier0.lab` → `tier1.lab` (on tier0)
+- `tier1.lab` → `tier2.lab` (on tier1)
+- `tier0.lab` → `tier2.lab` (on tier0)
 
-`CreateTrustRelationship` schreibt beide Seiten der Trust-Beziehung in einem Aufruf. Bidirectional + Forest-Transitiv ist der Default.
+`CreateTrustRelationship` writes both sides of the trust relationship in a single call. Bidirectional + Forest-transitive is the default.
 
-### Warum nicht netdom
+### Why not netdom
 
-`netdom trust ... /Twoway /ForestTransitive:yes` lieferte rc=87 ("parameter is incorrect"), sowohl beim Anlegen als auch beim Verify. Die Forest-Reflection-API ist robuster und gibt detailliertere Fehlermeldungen.
+`netdom trust ... /Twoway /ForestTransitive:yes` returned rc=87 ("parameter is incorrect"), both during creation and during verify. The Forest reflection API is more robust and gives more detailed error messages.
 
-## Saubere PowerShell-Übergabe via Bash
+## Clean PowerShell hand-off via bash
 
-`qm guest exec ... powershell -EncodedCommand` ist die zuverlässige Übergabe für mehrzeilige PowerShell-Skripte. Die Skripte werden auf dem PVE-Host in einer `/tmp/*.ps1` abgelegt (single-quoted Heredoc → keine Bash-Variablen-Expansion), dann mit `iconv -t UTF-16LE | base64 -w0` encoded und übergeben. So entfallen alle Quote-Konflikte zwischen PowerShell-Outer-Shell ↔ Bash ↔ Windows-cmd.
+`qm guest exec ... powershell -EncodedCommand` is the reliable hand-off for multi-line PowerShell scripts. The scripts are placed on the PVE host in a `/tmp/*.ps1` (single-quoted heredoc → no bash variable expansion), then encoded with `iconv -t UTF-16LE | base64 -w0` and passed. This eliminates all quote conflicts between PowerShell outer shell ↔ bash ↔ Windows cmd.
 
-## Was nicht im Skript steht (manuell vor dem Lauf)
+## Not in the script (manual before the run)
 
-- Hostkey-Eintrag des PVE-Hosts beim ersten Verbinden bestätigen / per `-hostkey SHA256:…` an plink durchreichen.
-- `LAB_ADMIN_PASSWORD` als Umgebungsvariable exportieren oder im PVE-Host als `/root/.lab-env` ablegen (chmod 600).
+- Confirm the PVE host's hostkey on first connect / pass it to plink via `-hostkey SHA256:…`.
+- Export `LAB_ADMIN_PASSWORD` as an environment variable or put it on the PVE host as `/root/.lab-env` (chmod 600).
