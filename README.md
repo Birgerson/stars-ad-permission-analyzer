@@ -61,6 +61,17 @@ Genau diese Schritt-für-Schritt-Erklärung — inklusive Diagnose-Markern, wenn
 2. **Kein Agent** auf Zielsystemen. Stars läuft auf einer Audit-Workstation oder einem Audit-DC.
 3. **Keine Backdoor-Authentifizierung.** Stars bindet per LDAP (idealerweise LDAPS), sonst nichts.
 
+### Privatsphäre und Datenfluss
+
+Stars ist ein **lokales Werkzeug**. Konkret heißt das:
+
+- **Keine Telemetrie, kein Phone-Home.** Stars meldet sich an keinen externen Server, weder bei der Installation noch im Betrieb.
+- **Keine Netzwerk-Verbindungen außer zu den von dir explizit eingegebenen Zielen** — also LDAP/LDAPS auf dem DC, den du konfigurierst, plus SMB auf den Servern, deren Freigaben du analysierst. Nichts darüber hinaus.
+- **Kein Auto-Update.** Die Update-Mechanik ist als Architektur vorbereitet, aber aktuell nicht aktiv — Stars baut keine Verbindung zu einem Update-Server auf.
+- **Keine Crash-Reports an Dritte.** Wenn Stars abstürzt, bleibt der Fehler lokal in der Logdatei (siehe unten).
+
+Damit ist Stars geeignet für isolierte Audit-Umgebungen und air-gapped Netzwerke.
+
 ### Download
 
 Den aktuellen Windows-Installer gibt es auf der **[Releases-Seite](https://github.com/Birgerson/stars-ad-permission-analyzer/releases)**.
@@ -150,7 +161,13 @@ Benutzer max.muster → Mitglied von "Buchhaltung" → Mitglied von "FileServer_
 
 Stars wird über den **Setup-Installer** auf der [Release-Seite](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) ausgeliefert — aktuell `Stars-v1.5.16-Setup.exe`. Der Installer legt die Anwendung nach `C:\Program Files\Stars\` ab, erstellt einen Start-Menü-Eintrag „Stars" und installiert **keine Hintergrunddienste** und **keine Auto-Start-Komponenten**.
 
-> **Hinweis zur Signatur:** Der Installer ist aktuell **nicht codesigned**. Beim ersten Start warnt Windows SmartScreen entsprechend („Computer durch unbekannten Herausgeber geschützt"). Ein Code-Signing-Zertifikat ist eingeplant, aber noch nicht eingerichtet.
+> **Hinweis zur Signatur:** Der Installer ist aktuell **nicht codesigned**. Beim ersten Start warnt Windows SmartScreen entsprechend („Computer durch unbekannten Herausgeber geschützt"). Ein Code-Signing-Zertifikat ist eingeplant, aber noch nicht eingerichtet — siehe [`docs/codesigning.md`](docs/codesigning.md). Bis dahin kannst du die Integrität der Datei über die SHA256-Verifikation oben prüfen.
+
+> **Hinweis zu Antivirus und EDR:** Stars ruft NetAPI-, LSA- und LDAP-Funktionen auf — die gleichen Schnittstellen, die manche Malware nutzt. Heuristik-basierte Antiviren oder Endpoint-Detection-Tools können den Installer oder die EXE deshalb in Quarantäne verschieben, obwohl Stars keinen schädlichen Code enthält. Drei Wege, falls das passiert:
+> 1. **Hash prüfen** (siehe oben) — die heruntergeladene Datei ist bit-genau der GitHub-Build.
+> 2. **Quarantäne aufheben** oder Ausnahme für `C:\Program Files\Stars\` setzen, falls eure Sicherheits-Policy das erlaubt.
+> 3. **Aus elevated PowerShell starten** — manche AV-Heuristiken sind toleranter, wenn der Aufrufer authentifiziert ist.
+> Wir empfehlen ausdrücklich, eine Ausnahme nur dann zu setzen, wenn ihr den Hash verifiziert habt und dem Quell-Repo vertraut.
 
 Für Entwickler und CI-Builds lassen sich die `.exe`-Dateien aus `target/release/` (`adpa.exe`, `adpa-gui.exe`) nach `cargo build --release` auch ohne Installer direkt starten — der reguläre Auslieferungsweg ist und bleibt der Installer.
 
@@ -345,6 +362,25 @@ Stars persistiert die Scan-Historie in `%APPDATA%\Stars\stars_data.db` (SQLite, 
 - [`docs/scan-historie-und-datenbank.md`](docs/scan-historie-und-datenbank.md) — Standort, Tabellen, Delta-Vergleich, Inspizierbarkeit (DE + EN)
 - [`docs/installation-und-deinstallation.md`](docs/installation-und-deinstallation.md) — Installer-Schritte, Uninstaller-Verhalten, was bleibt und was geht (DE + EN)
 
+### Logs, Fehlermeldungen und Support
+
+**Logs der GUI:** `%LOCALAPPDATA%\Stars\logs\` — eine Datei pro Session, im strukturierten Format (`tracing`-Crate, JSON-Lines). Bei einem Absturz bleibt die letzte Log-Datei mit Stack-Trace liegen.
+
+**Was im Log steht:**
+
+- Konfigurations-Werte beim Start (ohne Passwörter — Stars schreibt `ADPA_BIND_PASSWORD` nie in den Log)
+- Scan-Fortschritt und Fehler pro Pfad
+- LDAP- und SMB-Antwortzeiten
+- Diagnose-Marker mit strukturiertem Kontext
+
+**Was im Log nicht steht:** Klartext-Passwörter, Bind-Credentials, Dateiinhalte. Pfade und SIDs schon — die sind für die Diagnose nötig.
+
+**Wenn etwas nicht funktioniert:**
+
+1. **Letztes Log lesen** — `%LOCALAPPDATA%\Stars\logs\` öffnen, neuste Datei. Die meisten Probleme erklären sich aus den letzten 20 Zeilen.
+2. **Diagnose-Marker beachten** — Stars markiert unsichere Ergebnisse explizit als `incomplete` mit Begründung. Siehe [`docs/features-and-limitations.md`](docs/features-and-limitations.md) für die vollständige Marker-Liste.
+3. **Issue auf GitHub melden** — [Issues](https://github.com/Birgerson/stars-ad-permission-analyzer/issues). Bitte Stars-Version, Windows-Version, betroffenen Pfad (anonymisiert wenn nötig), Log-Ausschnitt mitschicken. Bei Sicherheitsproblemen siehe [SECURITY.md](SECURITY.md).
+
 ### Dokumentation
 
 - **[Anwender-Handbuch](docs/anwender-handbuch.md)** — Schritt-für-Schritt-Anleitung für die GUI und CLI, alle Tabs erklärt, Identitätseingabe, AD-Anbindung, Marker-Lesart, FAQ. **Start hier, wenn Sie Stars zum ersten Mal benutzen.**
@@ -457,6 +493,17 @@ You get this step-by-step chain — including diagnostic markers when something 
 2. **No agent** on target systems. Stars runs on an audit workstation or audit DC.
 3. **No backdoor auth.** Stars binds via LDAP (ideally LDAPS), nothing else.
 
+### Privacy and data flow
+
+Stars is a **local tool**. Concretely:
+
+- **No telemetry, no phone-home.** Stars never contacts an external server, neither during install nor while running.
+- **No network connections beyond the targets you explicitly enter** — i.e. LDAP/LDAPS to the DC you configure, plus SMB to the servers whose shares you analyze. Nothing else.
+- **No auto-update.** The update mechanic is architecturally prepared but currently inactive — Stars makes no connection to an update server.
+- **No crash reports to third parties.** If Stars crashes, the error stays in the local log file (see below).
+
+This makes Stars suitable for isolated audit environments and air-gapped networks.
+
 ### Download
 
 Get the current Windows installer from the **[Releases page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases)**.
@@ -546,7 +593,13 @@ User max.muster → member of "Accounting" → member of "FileServer_Read"
 
 Stars is distributed as a **setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.5.16-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and installs **no background services** and **no auto-start components**.
 
-> **Note on code signing:** The installer is currently **not code-signed**. Windows SmartScreen will warn on first launch ("Windows protected your PC — unrecognized publisher"). A code-signing certificate is planned but not yet in place.
+> **Note on code signing:** The installer is currently **not code-signed**. Windows SmartScreen will warn on first launch ("Windows protected your PC — unrecognized publisher"). A code-signing certificate is planned but not yet in place — see [`docs/codesigning.md`](docs/codesigning.md). Until then, you can verify the integrity of the file via the SHA256 hash above.
+
+> **Note on antivirus and EDR:** Stars calls NetAPI, LSA, and LDAP functions — the same interfaces some malware uses. Heuristic-based antivirus or endpoint-detection tools may therefore quarantine the installer or the EXE, even though Stars contains no malicious code. Three ways forward if this happens:
+> 1. **Verify the hash** (see above) — your download is bit-for-bit the GitHub build.
+> 2. **Release from quarantine** or set an exception for `C:\Program Files\Stars\` if your security policy allows.
+> 3. **Start from elevated PowerShell** — some AV heuristics are more tolerant when the caller is authenticated.
+> We explicitly recommend setting an exception only after you have verified the hash and trust the source repo.
 
 Developers and CI builds may also run the `.exe` files from `target/release/` (`adpa.exe`, `adpa-gui.exe`) directly after `cargo build --release` — the regular delivery path is and remains the installer.
 
@@ -740,6 +793,25 @@ Stars persists its scan history in `%APPDATA%\Stars\stars_data.db` (SQLite, sepa
 → **Full details:**
 - [`docs/scan-historie-und-datenbank.md`](docs/scan-historie-und-datenbank.md) — location, tables, delta comparison, inspectability (DE + EN)
 - [`docs/installation-und-deinstallation.md`](docs/installation-und-deinstallation.md) — installer steps, uninstaller behaviour, what stays and what goes (DE + EN)
+
+### Logs, error messages, and support
+
+**GUI logs:** `%LOCALAPPDATA%\Stars\logs\` — one file per session, in a structured format (`tracing` crate, JSON Lines). After a crash, the last log file with stack trace stays in place.
+
+**What goes into the log:**
+
+- Configuration values at startup (without passwords — Stars never writes `ADPA_BIND_PASSWORD` to the log)
+- Scan progress and errors per path
+- LDAP and SMB response times
+- Diagnostic markers with structured context
+
+**What does not go into the log:** plaintext passwords, bind credentials, file contents. Paths and SIDs do — they're needed for diagnosis.
+
+**When something doesn't work:**
+
+1. **Read the last log** — open `%LOCALAPPDATA%\Stars\logs\` and pick the newest file. Most problems explain themselves from the last 20 lines.
+2. **Pay attention to diagnostic markers** — Stars explicitly marks uncertain results as `incomplete` with a reason. See [`docs/features-and-limitations.md`](docs/features-and-limitations.md) for the full marker list.
+3. **File an issue on GitHub** — [Issues](https://github.com/Birgerson/stars-ad-permission-analyzer/issues). Please include Stars version, Windows version, the affected path (anonymized if needed), and a log excerpt. For security issues see [SECURITY.md](SECURITY.md).
 
 ### Documentation
 
