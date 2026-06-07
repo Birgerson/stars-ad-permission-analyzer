@@ -316,60 +316,13 @@ cargo build --release -p gui   # adpa-gui.exe
 
 Voraussetzung: [Rust Toolchain](https://rustup.rs/) für Windows (MSVC-Target)
 
-### Datenbank und gespeicherte Daten
+### Datenbank, Scan-Historie und Deinstallation
 
-Stars persistiert seine Scan-Historie in einer **SQLite-Datenbank**, damit der Delta-Tab zwei Läufe vergleichen kann und Identitäts­auflösungen über mehrere Sessions zwischengespeichert sind.
+Stars persistiert die Scan-Historie in `%APPDATA%\Stars\stars_data.db` (SQLite, pro Benutzerprofil getrennt, überlebt eine Deinstallation). Die Datenbank ist seit v1.5.16 **snapshot-stabil** — historische Reports verändern sich nicht durch spätere Identity-Updates.
 
-**Standort:**
-
-```
-%APPDATA%\Stars\stars_data.db
-```
-
-Auf einem typischen Windows-Server-DC ist das:
-
-```
-C:\Users\<Anwender>\AppData\Roaming\Stars\stars_data.db
-```
-
-Falls `%APPDATA%` nicht gesetzt ist, fällt die Anwendung auf das Verzeichnis der EXE zurück (relevant nur für `cargo run` während der Entwicklung).
-
-**Was drin gespeichert wird:**
-
-| Tabelle | Inhalt |
-|---|---|
-| `scan_runs` | Eine Zeile pro abgeschlossenem Scan: UUID, Startzeit, Endzeit, Zielpfad |
-| `permissions` | Alle ausgewerteten Pfade pro Lauf mit Identität, NTFS-Maske, Share-Maske, effektiver Maske, Erklärungspfad |
-| `scan_errors` | Walk- und Eval-Fehler pro Scan (z.B. „Access denied", „Path not found") |
-| `identity_cache` | SAM-/LDAP-Auflösungs-Cache (SID → Name, Domäne, Gruppenmitgliedschaften) |
-
-**Eigenschaften:**
-
-* Wird beim ersten Start automatisch angelegt; Migrations­skripte (Schema v1 → aktuelle Version) laufen idempotent durch.
-* **Pro Benutzer­profil getrennt** — jeder Windows-User hat seine eigene Historie.
-* **Überlebt eine Deinstallation** — der Installer entfernt nur sein Install-Verzeichnis, die Audit-Historie bleibt erhalten. Wer die Historie loswerden will, löscht den Ordner `%APPDATA%\Stars\` manuell.
-* **Kein Passwort, keine Verschlüsselung.** Wer Zugriff auf das Benutzer­profil hat, kann die Daten lesen. Für sensible Audit-Daten den Profilpfad selbst entsprechend absichern.
-* **Inspizierbar mit jedem SQLite-Tool** (DB Browser for SQLite, DBeaver, `sqlite3.exe`) — read-only, ohne dass Stars läuft.
-
-Schlägt das Öffnen oder Schreiben fehl (Schreibrechte, Plattenplatz), läuft der Scan trotzdem durch; die Persistenz-Meldung erscheint als Fehler in der Statuszeile, damit der Befund nicht still unter den Tisch fällt.
-
-### Deinstallation
-
-Stars wird über **„Programme und Features"** (`appwiz.cpl`) oder den Startmenü-Eintrag **„Stars deinstallieren"** entfernt. Der Uninstaller läuft im aktuellen Benutzerprofil — Administratorrechte sind nicht nötig.
-
-**Vor der Deinstallation:** Stars beenden. Wenn `Stars.exe` noch läuft, bricht der Uninstaller mit einem Hinweis ab statt teilweise zu scheitern.
-
-**Standardmäßig entfernt der Uninstaller:**
-- `%LOCALAPPDATA%\Stars\` (Programmverzeichnis, Verknüpfungen, Uninstaller selbst)
-- Den Eintrag in „Programme und Features"
-
-**Standardmäßig bleibt erhalten:**
-- `%APPDATA%\Stars\stars_data.db` (Scan-Historie, Identitäts-Cache)
-- `%LOCALAPPDATA%\Stars\logs\` (Logfiles der GUI)
-
-Beide überleben damit eine Neuinstallation — die Audit-Historie ist Beweismittel und sollte nicht versehentlich mit dem Tool verloren gehen.
-
-**Wer alles vollständig entfernen will:** auf der Komponenten-Seite des Uninstallers die zusätzliche Option **„Audit-Historie und Logs entfernen"** anhaken. Diese ist bewusst standardmäßig **deaktiviert** — die Entscheidung soll explizit gefällt werden.
+→ **Vollständige Details:**
+- [`docs/scan-historie-und-datenbank.md`](docs/scan-historie-und-datenbank.md) — Standort, Tabellen, Delta-Vergleich, Inspizierbarkeit (DE + EN)
+- [`docs/installation-und-deinstallation.md`](docs/installation-und-deinstallation.md) — Installer-Schritte, Uninstaller-Verhalten, was bleibt und was geht (DE + EN)
 
 ### Dokumentation
 
@@ -738,60 +691,13 @@ cargo build --release -p gui   # adpa-gui.exe
 
 Prerequisite: [Rust Toolchain](https://rustup.rs/) for Windows (MSVC target).
 
-### Database and stored data
+### Database, scan history, and uninstallation
 
-Stars persists its scan history in a **SQLite database** so the Delta tab can compare two runs and identity resolutions are cached across sessions.
+Stars persists its scan history in `%APPDATA%\Stars\stars_data.db` (SQLite, separate per user profile, survives uninstallation). Since v1.5.16 the database is **snapshot-stable** — historical reports no longer mutate when an identity is updated later.
 
-**Location:**
-
-```
-%APPDATA%\Stars\stars_data.db
-```
-
-On a typical Windows Server DC this is:
-
-```
-C:\Users\<account>\AppData\Roaming\Stars\stars_data.db
-```
-
-If `%APPDATA%` is not set, the application falls back to the directory next to the EXE (only relevant for `cargo run` during development).
-
-**What is stored:**
-
-| Table | Content |
-|---|---|
-| `scan_runs` | One row per completed scan: UUID, start time, end time, target path |
-| `permissions` | Every evaluated path per run with identity, NTFS mask, share mask, effective mask, explanation path |
-| `scan_errors` | Walk and eval errors per scan (e.g. "Access denied", "Path not found") |
-| `identity_cache` | SAM/LDAP resolution cache (SID → name, domain, group memberships) |
-
-**Properties:**
-
-* Created automatically on first start; migration scripts (schema v1 → current) run idempotently.
-* **Separate per user profile** — every Windows user has their own history.
-* **Survives uninstallation** — by default the uninstaller removes only its install directory; the audit history stays. To get rid of it, delete `%APPDATA%\Stars\` manually, or use the uninstaller's optional component (see below).
-* **No password, no encryption.** Anyone with access to the user profile can read the data. Protect the profile path itself (NTFS permissions, BitLocker) for sensitive audit data.
-* **Inspectable with any SQLite tool** (DB Browser for SQLite, DBeaver, `sqlite3.exe`) — read-only, without Stars running.
-
-If opening or writing fails (write permissions, disk space), the scan still runs but the persistence message appears as an error in the status bar so the finding does not silently disappear.
-
-### Uninstallation
-
-Stars is removed via **"Programs and Features"** (`appwiz.cpl`) or the start menu entry **"Stars deinstallieren"**. The uninstaller runs in the current user profile — administrator rights are not required.
-
-**Before uninstalling:** close Stars. If `Stars.exe` is still running, the uninstaller aborts with a notice instead of failing partway.
-
-**By default, the uninstaller removes:**
-- `%LOCALAPPDATA%\Stars\` (program directory, shortcuts, uninstaller itself)
-- The "Programs and Features" entry
-
-**By default, the uninstaller keeps:**
-- `%APPDATA%\Stars\stars_data.db` (scan history, identity cache)
-- `%LOCALAPPDATA%\Stars\logs\` (GUI log files)
-
-Both therefore survive a reinstall — the audit history is evidence and should not vanish accidentally with the tool.
-
-**To remove everything completely:** on the uninstaller's component page, check the additional **"Audit-Historie und Logs entfernen"** option. It is deliberately **off by default** — the decision must be made explicitly.
+→ **Full details:**
+- [`docs/scan-historie-und-datenbank.md`](docs/scan-historie-und-datenbank.md) — location, tables, delta comparison, inspectability (DE + EN)
+- [`docs/installation-und-deinstallation.md`](docs/installation-und-deinstallation.md) — installer steps, uninstaller behaviour, what stays and what goes (DE + EN)
 
 ### Documentation
 
