@@ -36,3 +36,6 @@ scan-output.csv
 # Proxmox VM-Setup-Screenshots (lokal, nicht im Repo)
 9025-*.png
 9025-*.ppm
+
+# Lokale Stand-Dokumente (nicht im Repo)
+aktuell.md
