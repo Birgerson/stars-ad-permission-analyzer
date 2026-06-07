@@ -1525,11 +1525,33 @@ fn analyze_trustees(
     // Trustees fuehrt.
     // Round 3 finding 2 + round 4 finding 3: trim + enforce pairing.
     let (smb_server, share_name) = normalize_smb_pair(smb_server, share_name)?;
+    // Code-Review 2026-06-07 Finding 2: Bisher wurde `build_trustee_rows`
+    // direkt mit dem normalisierten Paar aufgerufen — bei einem blanken
+    // UNC-Pfad ohne explizite `--smb-server`/`--share-name` blieb das Paar
+    // dann `(None, None)` und die Trustee-Tabelle zeigte nur NTFS-Eintraege.
+    // CLI-Analyze und GUI-Scan ziehen Server/Share aus dem UNC-Pfad ueber
+    // `SmbAuditContext::resolve` (Round-10 Finding 1) — `analyze_trustees`
+    // war damals uebersehen. Jetzt schliesst der Aufruf hier die Luecke:
+    // derselbe UNC-Pfad zeigt im Trustee-Tab dieselben Schichten wie im
+    // Scan-Tab.
+    // Code review 2026-06-07 finding 2: previously this passed the
+    // normalized pair straight to `build_trustee_rows` — a bare UNC path
+    // without explicit `--smb-server`/`--share-name` left the pair as
+    // `(None, None)` and the trustee table showed NTFS rows only. CLI
+    // analyze and GUI scan extract server/share from the UNC path via
+    // `SmbAuditContext::resolve` (Round-10 finding 1); `analyze_trustees`
+    // had been missed. This call closes the gap: the same UNC path now
+    // shows the same layers in the trustee tab as in the scan tab.
+    let smb_ctx = validation::path::SmbAuditContext::resolve(
+        path,
+        smb_server.as_deref(),
+        share_name.as_deref(),
+    );
     let fso = read_fso(path).map_err(|e| format!("Failed to read path: {e}"))?;
     Ok(build_trustee_rows(
         &fso,
-        smb_server.as_deref(),
-        share_name.as_deref(),
+        smb_ctx.as_ref().map(|c| c.server.as_str()),
+        smb_ctx.as_ref().map(|c| c.share.as_str()),
     ))
 }
 
@@ -2150,6 +2172,57 @@ mod tests {
     /// `analyze_trustees` und `validate_connection_inputs` geteilt)
     /// muss halbe SMB-Kontexte ablehnen — sonst entsteht ein stiller
     /// NTFS-only-Fallback.
+    /// Code Review 2026-06-07 Finding 2: `analyze_trustees` muss bei
+    /// einem blanken UNC-Pfad ohne explizite SMB-Felder den Server
+    /// und Share aus dem UNC-Pfad ableiten — vorher zeigte der
+    /// Trustee-Tab nur NTFS-Eintraege, waehrend Scan-Tab und
+    /// CLI-Analyze ueber `SmbAuditContext::resolve` die Share-Schicht
+    /// erfassten. Der Test deckt die vier semantischen Faelle ab,
+    /// indem er `SmbAuditContext::resolve` direkt aufruft — exakt mit
+    /// der Argumentform, die der Patch im Body von `analyze_trustees`
+    /// verwendet.
+    /// Code review 2026-06-07 finding 2: `analyze_trustees` must
+    /// derive server + share from a bare UNC path without explicit
+    /// SMB fields — previously the trustee tab showed NTFS-only while
+    /// scan tab and CLI analyze picked up the share layer via
+    /// `SmbAuditContext::resolve`. The test covers the four semantic
+    /// cases by invoking `SmbAuditContext::resolve` directly with the
+    /// exact argument shape the patched `analyze_trustees` body uses.
+    #[test]
+    fn analyze_trustees_uses_smb_audit_context_for_unc_paths() {
+        use validation::path::SmbAuditContext;
+
+        // Case 1: bare UNC, no explicit fields -> server + share from UNC.
+        let ctx = SmbAuditContext::resolve(r"\\fs01\data\subdir", None, None);
+        let ctx = ctx.expect("bare UNC must yield SMB context — closes finding 2");
+        assert_eq!(ctx.server, "fs01");
+        assert_eq!(ctx.share, "data");
+
+        // Case 2: explicit fields override UNC components.
+        let ctx = SmbAuditContext::resolve(
+            r"\\fs01\data\subdir",
+            Some("other-server"),
+            Some("other-share"),
+        );
+        let ctx = ctx.expect("explicit pair must succeed");
+        assert_eq!(ctx.server, "other-server");
+        assert_eq!(ctx.share, "other-share");
+
+        // Case 3: local path without explicit fields -> no SMB context.
+        let ctx = SmbAuditContext::resolve(r"C:\Data\Local", None, None);
+        assert!(
+            ctx.is_none(),
+            "local path without SMB fields must stay NTFS-only"
+        );
+
+        // Case 4: half-set is filtered by `normalize_smb_pair` before
+        // reaching `SmbAuditContext::resolve` (see the test above).
+        // Sanity: `resolve` itself also rejects a half-set on a
+        // non-UNC path — the share name has no UNC fallback.
+        let ctx = SmbAuditContext::resolve(r"C:\Data", Some("fs01"), None);
+        assert!(ctx.is_none(), "half-set on non-UNC path must yield None");
+    }
+
     /// Round 4 finding 3: half-set SMB context must error.
     #[test]
     fn normalize_smb_pair_rejects_half_set_combinations() {
