@@ -1,39 +1,39 @@
-# ADR 0048 — SID→Name-Map als Caller-Verantwortung im Trustee-Modul
+# ADR 0048 — SID→Name Map as a Caller Responsibility in the Trustee Module
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-06
+**Status:** Accepted
+**Date:** 2026-06-06
 
-## Kontext / Context
+## Context
 
-Das `exporter::trustees`-Modul (ADR 0044) baut für jeden Pfad eine Liste von Trustee-Einträgen. Damit der Auditor lesbare Identitäten statt nackter SIDs sieht, löst das Modul jede ACE-SID per LSA (`LookupAccountSidLocal`) in einen Namen wie `BUILTIN\Administrators` auf.
+The `exporter::trustees` module (ADR 0044) builds a list of trustee entries for every path. So that the auditor sees readable identities instead of raw SIDs, the module resolves every ACE SID via LSA (`LookupAccountSidLocal`) into a name such as `BUILTIN\Administrators`.
 
-Bisher passierte dieser Lookup **inside** der Build-Funktion, einmal pro Aufruf:
+Previously this lookup happened **inside** the build function, once per call:
 
 ```rust
 pub fn build_path_trustees_with_share(
     fso: &FileSystemObject,
     share_overlay: Option<&ShareTrusteeOverlay>,
 ) -> Vec<PathTrusteeEntry> {
-    // ... baue out ...
+    // ... build out ...
     #[cfg(windows)]
     {
         let sids: Vec<String> = out.iter().filter_map(...).collect();
         let map = ad_resolver::build_sid_name_map(&[], sids);
         for entry in &mut out {
-            // setze display_name aus map
+            // set display_name from map
         }
     }
     out
 }
 ```
 
-Im Analyze-Pfad (genau ein Pfad) ist das semantisch OK. Im **Scan-Pfad** (potenziell zehntausende Pfade unter einem Wurzel-Verzeichnis) ist es ein Performance-Problem:
+On the analyze path (exactly one path) that is semantically fine. On the **scan path** (potentially tens of thousands of paths under a root directory) it becomes a performance problem:
 
-- Stars-Projektregel: „große Umgebungen sind der Standardfall, nicht die Ausnahme".
-- 50.000 Pfade × ~5 distinct SIDs in der DACL = 250.000 LSA-Lookups, davon ~99 % Wiederholungen derselben Standard-SIDs (`S-1-5-32-544` = BUILTIN\Administrators, `S-1-5-18` = SYSTEM, `S-1-5-11` = Authenticated Users, Domain-Gruppen).
-- LSA-Lookups sind nicht trivial — sie können remote sein, RPC-Overhead haben, in Multi-Domain-Wäldern fehlschlagen.
+- Stars project rule: "large environments are the default case, not the exception".
+- 50 000 paths × ~5 distinct SIDs in the DACL = 250 000 LSA lookups, of which ~99 % are repeats of the same standard SIDs (`S-1-5-32-544` = BUILTIN\Administrators, `S-1-5-18` = SYSTEM, `S-1-5-11` = Authenticated Users, domain groups).
+- LSA lookups are not trivial — they can be remote, carry RPC overhead, and fail in multi-domain forests.
 
-Beide Konsumenten — `cli::main::run_scan` und `gui::worker::sweep_one_root` — bauten zusätzlich **eine scanweite SID→Name-Map für die Engine-Erklärungspfade**:
+Both consumers — `cli::main::run_scan` and `gui::worker::sweep_one_root` — were already building **a scan-wide SID→name map for the engine explanation paths**:
 
 ```rust
 // CLI scan
@@ -46,34 +46,34 @@ let scan_sid_names = {
 };
 ```
 
-Diese Map wurde an `PermissionEvaluationInput.sid_names` weitergereicht — damit der Engine-Erklärungspfad (`EffectivePermission.path_explanation`) lesbare Namen hat. Sie war aber **für `path_trustees` nicht zugänglich**. Konsequenz:
+This map was passed to `PermissionEvaluationInput.sid_names` so the engine explanation path (`EffectivePermission.path_explanation`) had readable names. But it was **not available to `path_trustees`**. Result:
 
-| Komponente | Nutzte Scan-Map? |
+| Component | Used the scan map? |
 |---|---|
-| `EffectivePermission.path_explanation` | ✅ ja (über `PermissionEvaluationInput.sid_names`) |
-| `path_trustees` Display-Namen | ❌ nein (machte LSA pro Pfad) |
+| `EffectivePermission.path_explanation` | ✅ yes (via `PermissionEvaluationInput.sid_names`) |
+| `path_trustees` display names | ❌ no (called LSA per path) |
 
-Review-Runde 10 Finding 2 hat das als Medium klassifiziert.
+Review round 10 finding 2 classified this as Medium.
 
-## Entscheidung / Decision
+## Decision
 
-Wir trennen die Build-Funktion von der SID-Name-Auflösung. Die Map wird **vom Aufrufer** befüllt und an die Build-Funktion übergeben — Layering wird damit ehrlich: Trustee-Bau ist Datentransformation, LSA-Lookup ist eine externe Abhängigkeit, und die wird sichtbar im Aufrufer.
+We separate the build function from SID-name resolution. The map is populated **by the caller** and passed into the build function — layering becomes honest: trustee build is data transformation, LSA lookup is an external dependency, and that becomes visible at the caller.
 
-### Neue Schnittstelle
+### New interface
 
 ```rust
 // crates/exporter/src/trustees.rs
 
-/// Sammelt alle ACE-SIDs aus FSO-DACL und Share-Overlay, die einer
-/// LSA-Aufloesung beduerfen. Diagnose-Eintraege haben keine SID und
-/// werden uebersprungen.
+/// Collects all ACE SIDs from the FSO DACL and share overlay that
+/// need LSA resolution. Diagnostic entries have no SID and are
+/// skipped.
 pub fn collect_ace_sids_for_resolution(
     fso: &FileSystemObject,
     share_overlay: Option<&ShareTrusteeOverlay>,
 ) -> Vec<String>;
 
-/// Trustee-Build OHNE eingebauten LSA-Lookup. Der Aufrufer liefert die
-/// vorab gebaute SID→Name-Map.
+/// Trustee build WITHOUT a built-in LSA lookup. The caller supplies
+/// the pre-built SID→name map.
 pub fn build_path_trustees_with_share_and_names(
     fso: &FileSystemObject,
     share_overlay: Option<&ShareTrusteeOverlay>,
@@ -81,20 +81,20 @@ pub fn build_path_trustees_with_share_and_names(
 ) -> Vec<PathTrusteeEntry>;
 ```
 
-Die beiden bestehenden Funktionen `build_path_trustees` und `build_path_trustees_with_share` bleiben für den Analyze-Pfad erhalten und delegieren intern an die Map-Variante — **mit einer per-Aufruf gebauten Map**. Damit:
+The two existing functions `build_path_trustees` and `build_path_trustees_with_share` stay around for the analyze path and delegate internally to the map variant — **with a per-call map**. That means:
 
-- **Analyze-Pfad** (CLI `run_analyze`, GUI Analyze-Tab): API unverändert, Verhalten unverändert.
-- **Scan-Pfad** (CLI `run_scan`, GUI Scan-Tab): nutzt explizit die Map-Variante mit der scanweiten Map.
+- **Analyze path** (CLI `run_analyze`, GUI Analyze tab): API unchanged, behavior unchanged.
+- **Scan path** (CLI `run_scan`, GUI Scan tab): uses the map variant explicitly with the scan-wide map.
 
-Keine Code-Duplikation — die Map-Variante ist die Implementierung, alle anderen sind Wrapper.
+No code duplication — the map variant is the implementation, everything else is a wrapper.
 
-### Was der Scan-Caller jetzt tut
+### What the scan caller now does
 
 ```rust
-// 1. Share-Overlay einmal pro Scan lesen (ADR 0044).
+// 1. Read the share overlay once per scan (ADR 0044).
 let share_overlay = SmbAuditContext::resolve(...).map(|c| read_share_overlay(...));
 
-// 2. SIDs SAMMELN (NTFS-DACL + Share-Overlay).
+// 2. COLLECT SIDs (NTFS DACL + share overlay).
 let unique_sids = {
     let mut seen = HashSet::new();
     let mut sids = Vec::new();
@@ -106,10 +106,10 @@ let unique_sids = {
     sids
 };
 
-// 3. Eine LSA-Runde fuer den ganzen Scan.
+// 3. One LSA round for the entire scan.
 let scan_sid_names = ad_resolver::build_sid_name_map(&memberships, unique_sids);
 
-// 4. Pro Pfad: keine LSA mehr, nur Map-Lookup.
+// 4. Per path: no more LSA, only map lookups.
 for fso in &walk.objects {
     let trustees = build_path_trustees_with_share_and_names(
         fso, share_overlay.as_ref(), &scan_sid_names,
@@ -118,46 +118,46 @@ for fso in &walk.objects {
 }
 ```
 
-### Wo die Map verwendet wird
+### Where the map is used
 
-| Aufrufstelle | Map-Quelle | LSA pro Pfad? |
+| Call site | Map source | LSA per path? |
 |---|---|---|
-| CLI `run_analyze` (Trustees) | per-Aufruf in `build_path_trustees` (intern, da nur 1 Pfad) | ja, aber n=1 |
-| CLI `run_scan` (Trustees) | scanweite `scan_sid_names`, jetzt inkl. Share-Overlay-SIDs | **nein** |
-| CLI `run_scan` (Engine-Erklärungspfad) | dieselbe Map über `PermissionEvaluationInput.sid_names` | unverändert |
-| GUI Analyze (Trustees) | per-Aufruf, n=1 | ja, aber n=1 |
-| GUI Scan (Trustees) | scanweite `scan_sid_names`, jetzt inkl. Share-Overlay-SIDs | **nein** |
+| CLI `run_analyze` (trustees) | per-call inside `build_path_trustees` (internal, only 1 path) | yes, but n=1 |
+| CLI `run_scan` (trustees) | scan-wide `scan_sid_names`, now incl. share-overlay SIDs | **no** |
+| CLI `run_scan` (engine explanation path) | the same map via `PermissionEvaluationInput.sid_names` | unchanged |
+| GUI Analyze (trustees) | per-call, n=1 | yes, but n=1 |
+| GUI Scan (trustees) | scan-wide `scan_sid_names`, now incl. share-overlay SIDs | **no** |
 
-Die scanweite Map deckt jetzt **drei Konsumenten** ab statt zwei: Engine-Erklärungspfad, GUI-/HTML-Render der Trustees, JSON-Export der Trustees.
+The scan-wide map now covers **three consumers** instead of two: engine explanation path, GUI/HTML trustee render, JSON trustee export.
 
 ### Tests
 
-Drei neue Unit-Tests sichern die Invarianten:
+Three new unit tests guard the invariants:
 
-| Test | Was er garantiert |
+| Test | What it guarantees |
 |---|---|
-| `caller_owned_map_sets_display_names` | ACE-Display-Namen werden aus der uebergebenen Map gesetzt. |
-| `caller_owned_map_does_not_touch_diagnostics` | Diagnose-Eintraege (NULL DACL, Share-Read-Fehler) werden NICHT mit einem fremden Display-Name ueberschrieben. |
-| `collect_ace_sids_for_resolution_covers_ntfs_and_share` | Helper sammelt NTFS-ACE-SIDs UND Share-Overlay-ACE-SIDs; Diagnose-Eintraege werden uebersprungen. |
+| `caller_owned_map_sets_display_names` | ACE display names are taken from the passed-in map. |
+| `caller_owned_map_does_not_touch_diagnostics` | Diagnostic entries (NULL DACL, share-read failure) are NOT overwritten with a foreign display name. |
+| `collect_ace_sids_for_resolution_covers_ntfs_and_share` | Helper collects NTFS ACE SIDs AND share-overlay ACE SIDs; diagnostic entries are skipped. |
 
-## Konsequenzen / Consequences
+## Consequences
 
-### Positiv
+### Positive
 
-- **Performance bei großen Scans.** Statt N × M LSA-Lookups (N Pfade × M SIDs pro Pfad) jetzt M_unique LSA-Lookups pro Scan. Für die Stars-Standardfälle (großer Dateibaum, wenige unique SIDs) bedeutet das eine drei- bis vierstellige Reduktion des LSA-Round-Trips.
-- **Konsistenz zwischen Engine-Erklärungspfad und Trustee-Display.** Beide Konsumenten teilen jetzt dieselbe Map — eine Identität, ein Display-Name, kein Aliasing-Risiko.
-- **Sichtbare Abhängigkeit.** Der Scan-Caller sieht im Code, dass er einen LSA-Lookup macht. Das ist semantisch ehrlicher: das Trustee-Modul ist datentransformierend, der LSA-Aufruf ist Infrastruktur.
-- **Share-Overlay-SIDs werden jetzt mit aufgelöst.** Vorher waren Share-Overlay-SIDs in der scanweiten Map nicht enthalten (sie kam nur aus `fso.dacl`). Jetzt sammelt der Helper aus beiden Quellen.
-- **Plattform-unabhängige Tests.** `caller_owned_map_*`-Tests laufen auf CI-Linux durch, weil sie keine echte LSA brauchen — sie übergeben eine BTreeMap und prüfen die Map-Anwendung.
+- **Performance on large scans.** Instead of N × M LSA lookups (N paths × M SIDs per path), we now do M_unique LSA lookups per scan. For Stars' standard cases (large file tree, few unique SIDs) this is a three- to four-digit reduction in LSA round trips.
+- **Consistency between the engine explanation path and the trustee display.** Both consumers now share the same map — one identity, one display name, no aliasing risk.
+- **Visible dependency.** The scan caller sees in the code that it does an LSA lookup. That is semantically more honest: the trustee module is data-transforming, the LSA call is infrastructure.
+- **Share-overlay SIDs are now resolved as well.** Previously share-overlay SIDs were not in the scan-wide map (it came only from `fso.dacl`). Now the helper collects from both sources.
+- **Platform-independent tests.** The `caller_owned_map_*` tests run through on CI Linux because they don't need a real LSA — they pass a BTreeMap and verify the map application.
 
-### Negativ / Trade-offs
+### Negative / trade-offs
 
-- **API-Erweiterung.** Eine zusätzliche Funktion (`build_path_trustees_with_share_and_names`) und ein zusätzlicher Helper (`collect_ace_sids_for_resolution`). Im Workspace sauber gekapselt, Re-Export aus `exporter::lib` und `gui::worker`.
-- **Per-Aufruf-Map bleibt für die einfache Form.** `build_path_trustees_with_share` baut intern eine eigene per-Aufruf-Map auf — für den Analyze-Pfad (n=1) ist das exakt der frühere Aufwand, kein Regress, aber auch keine Verbesserung. Die Map-Variante ist die Optimierung für die N-Pfad-Fälle.
-- **Scan-Loop-Initialisierung etwas mehr Code.** Der Scan-Caller muss SIDs sammeln und die Map aufbauen, bevor er die Pfade verarbeitet. Das ist explizit so gewollt — die Sichtbarkeit der Abhängigkeit ist ein Ziel, nicht ein Trade-off.
+- **API extension.** One additional function (`build_path_trustees_with_share_and_names`) and one additional helper (`collect_ace_sids_for_resolution`). Cleanly encapsulated in the workspace, re-exported from `exporter::lib` and `gui::worker`.
+- **Per-call map stays for the simple form.** `build_path_trustees_with_share` still builds its own per-call map internally — for the analyze path (n=1) this is exactly the previous cost, no regression but no improvement either. The map variant is the optimization for the N-paths cases.
+- **Scan-loop initialization gains a bit of code.** The scan caller has to collect SIDs and build the map before processing the paths. That is deliberate — making the dependency visible is a goal, not a trade-off.
 
-### Beziehung zu anderen ADRs
+### Relationship to other ADRs
 
-- **ADR 0036** (Unified Principal Resolution Pipeline): „eine Datenquelle, beide Konsumenten" — diese ADR setzt dasselbe Prinzip für die Trustee-SID-Auflösung um.
-- **ADR 0044** (Pfadzentrische Trustees als shared module): das Modul wird hier erweitert, nicht verändert. Die Schnittstelle bleibt für Analyze-Konsumenten kompatibel.
-- **ADR 0047** (SmbAuditContext): die Share-Overlay-SIDs, die jetzt in die Map einfließen, kommen aus dem Overlay, der über `SmbAuditContext` aufgebaut wird — beide Round-10-Fixes greifen sauber ineinander.
+- **ADR 0036** (unified principal resolution pipeline): "one data source, both consumers" — this ADR applies the same principle to trustee SID resolution.
+- **ADR 0044** (path-centric trustees as a shared module): the module is extended here, not changed. The interface stays compatible for analyze consumers.
+- **ADR 0047** (SmbAuditContext): the share-overlay SIDs that now flow into the map come from the overlay, which is built via `SmbAuditContext` — both Round-10 fixes mesh cleanly.

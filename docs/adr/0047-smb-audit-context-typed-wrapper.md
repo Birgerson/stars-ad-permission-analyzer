@@ -1,11 +1,11 @@
-# ADR 0047 — `SmbAuditContext`: typisierter Wrapper als einzige Quelle für Server/Share-Ableitung
+# ADR 0047 — `SmbAuditContext`: typed wrapper as the single source for server/share derivation
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-06
+**Status:** Accepted
+**Date:** 2026-06-06
 
-## Kontext / Context
+## Context
 
-Stars muss an mehreren Stellen aus einem Pfad und optionalen expliziten Flags ableiten, **welcher SMB-Server** und **welcher Share** für eine Share-DACL-Abfrage gelten. Diese Ableitung wurde bisher mit zwei separaten Helfern getragen:
+Stars has to derive at several places — from a path plus optional explicit flags — **which SMB server** and **which share** apply to a share-DACL query. This derivation was previously carried by two separate helpers:
 
 ```rust
 // crates/validation/src/path.rs
@@ -13,7 +13,7 @@ pub fn parse_unc_components(path: &str) -> Option<(String, String)>;
 pub fn effective_smb_target(path: &str, explicit_smb_server: Option<&str>) -> Option<String>;
 ```
 
-Verschiedene Aufrufstellen kombinieren diese Funktionen jeweils per Hand, um aus Pfad + Server-Flag + Share-Flag die finalen `(server, share)`-Strings zu bilden:
+Different call sites combined these functions by hand to build the final `(server, share)` strings from path + server flag + share flag:
 
 ```rust
 // CLI: resolve_scan_share_status
@@ -31,39 +31,39 @@ let share = match share_name {
 };
 ```
 
-Review-Runde 10 Finding 1 hat aufgedeckt, dass die neue Trustee-Overlay-Erzeugung (`build_path_trustees`, `read_share_overlay`) dieselbe Ableitung **nicht** dupliziert hat:
+Review round 10 finding 1 revealed that the new trustee-overlay creation (`build_path_trustees`, `read_share_overlay`) **did not** duplicate the same derivation:
 
 ```rust
-// CLI: run_analyze (vorher)
+// CLI: run_analyze (before)
 let trustees = exporter::build_path_trustees(
     &fso,
-    smb_server.as_deref(),       // <-- nur das explizite Flag,
-    share_name.as_deref(),       // <-- KEIN UNC-Fallback
+    smb_server.as_deref(),       // <-- only the explicit flag,
+    share_name.as_deref(),       // <-- NO UNC fallback
 );
 
-// CLI: run_scan (vorher)
+// CLI: run_scan (before)
 #[cfg(windows)]
 let scan_share_overlay = match (smb_server.as_deref(), share_name.as_deref()) {
     (Some(server), Some(name)) if !server.is_empty() && !name.is_empty() => {
         Some(exporter::read_share_overlay(server, name))
     }
-    _ => None,                    // <-- bei reinem UNC ohne Flags: nichts
+    _ => None,                    // <-- bare UNC without flags: nothing
 };
 ```
 
-Konsequenz: Ein Aufruf wie
+Consequence: a call like
 
 ```
 adpa scan --path \\fs01\data --user alice --output report.json
 ```
 
-lieferte die *korrekte* `share_status`-Maske (`resolve_scan_share_status` nutzte den UNC-Fallback), aber die `path_trustees`-Liste enthielt **nur die NTFS-Schicht**. Das war eine stille Daten-Asymmetrie innerhalb desselben Reports — der Auditor sah zwei verschiedene „Wahrheiten" über denselben Pfad.
+produced the *correct* `share_status` mask (`resolve_scan_share_status` used the UNC fallback), but the `path_trustees` list contained **only the NTFS layer**. That was a silent data asymmetry within the same report — the auditor saw two different "truths" about the same path.
 
-Drei eigenständige Stellen mit drei eigenständigen Implementierungen derselben Ableitung sind **per se eine Bug-Klasse**: jede Stelle kann unabhängig falsch werden, und Review muss sie alle einzeln verifizieren.
+Three independent sites with three independent implementations of the same derivation is **a bug class by itself**: each site can drift independently and reviewers have to verify each one separately.
 
-## Entscheidung / Decision
+## Decision
 
-Wir führen einen **typisierten Wrapper** `SmbAuditContext` ein, der zur einzigen Quelle der Wahrheit für die Server/Share-Ableitung wird:
+We introduce a **typed wrapper** `SmbAuditContext` that becomes the single source of truth for the server/share derivation:
 
 ```rust
 // crates/validation/src/path.rs
@@ -82,60 +82,60 @@ impl SmbAuditContext {
 }
 ```
 
-### Design-Entscheidungen
+### Design decisions
 
-1. **Pro Feld: explizit > UNC-Komponente.** Wenn `--smb-server fs02` angegeben ist, gewinnt der explizite Server auch bei einem UNC-Pfad `\\fs01\…`. Begründet in einem Audit-Szenario, wo die Share-DACL auf einem anderen Server liegt als der NTFS-Pfad (z. B. DR-Replikation).
-2. **Beide Felder oder gar nichts (`Option<Self>`).** Wenn nur der Server bestimmbar ist (zum Beispiel `--smb-server fs01` mit lokalem Pfad `C:\data` ohne `--share-name`), liefert `resolve` `None`. Begründung: für einen DACL-Lookup braucht man **beides**. Halbe Information führte zu silently-failing-Calls mit leerem Share-Namen.
-3. **Leere String-Flags zählen als „nicht gesetzt".** `Some("")` und `Some("   ")` werden wie `None` behandelt. Begründung: CLI-Frontends und GUI-Bindings geben oft `Some("")` statt `None`, wenn ein Feld nicht ausgefüllt wurde. Das war Quelle für falsche Trustee-Lookups in der GUI vor v1.5.14.
+1. **Per field: explicit > UNC component.** When `--smb-server fs02` is supplied, the explicit server wins even on a UNC path `\\fs01\…`. Motivated by audit scenarios where the share DACL lives on a different server from the NTFS path (e.g. DR replication).
+2. **Either both fields or nothing (`Option<Self>`).** If only the server can be determined (for example `--smb-server fs01` with the local path `C:\data` without `--share-name`), `resolve` returns `None`. Rationale: a DACL lookup needs **both**. Half information led to silently failing calls with an empty share name.
+3. **Empty string flags count as "not set".** `Some("")` and `Some("   ")` are treated like `None`. Rationale: CLI frontends and GUI bindings often pass `Some("")` instead of `None` when a field was left blank. This was a source of wrong trustee lookups in the GUI before v1.5.14.
 
-### Wo der Wrapper verwendet wird
+### Where the wrapper is used
 
-Mit Round 10 wird `SmbAuditContext::resolve` zur zentralen Stelle für die drei Pfade, die vorher entweder auseinanderdrifteten oder doppelten Code trugen:
+With Round 10, `SmbAuditContext::resolve` becomes the central site for the three paths that previously drifted apart or carried duplicated code:
 
-| Aufrufstelle | Vorher | Nachher |
+| Call site | Before | After |
 |---|---|---|
-| `cli::main::run_analyze` (Trustee-Overlay) | nur explizite Flags, kein UNC-Fallback | `SmbAuditContext::resolve(...)` |
-| `cli::main::run_scan` (Trustee-Overlay) | nur explizite Flags, kein UNC-Fallback | `SmbAuditContext::resolve(...)` |
-| `cli::main::resolve_scan_share_status` | manuelle Kombination `effective_smb_target` + `parse_unc_components` | `SmbAuditContext::resolve(...)` |
-| `gui::worker::sweep_one_root` (Trustee-Overlay) | manuelle Kombination | `SmbAuditContext::resolve(...)` |
-| `gui::worker::compute_share_mask_for_analyze` | manuelle Kombination | `SmbAuditContext::resolve(...)` |
+| `cli::main::run_analyze` (trustee overlay) | only explicit flags, no UNC fallback | `SmbAuditContext::resolve(...)` |
+| `cli::main::run_scan` (trustee overlay) | only explicit flags, no UNC fallback | `SmbAuditContext::resolve(...)` |
+| `cli::main::resolve_scan_share_status` | manual combination `effective_smb_target` + `parse_unc_components` | `SmbAuditContext::resolve(...)` |
+| `gui::worker::sweep_one_root` (trustee overlay) | manual combination | `SmbAuditContext::resolve(...)` |
+| `gui::worker::compute_share_mask_for_analyze` | manual combination | `SmbAuditContext::resolve(...)` |
 
-Damit haben CLI-Analyze, CLI-Scan und GUI-Scan **garantiert** dieselbe Sicht auf den SMB-Kontext. Mask-Berechnung und Trustee-Overlay sind nicht mehr ableitungs-asymmetrisch.
+This **guarantees** that CLI analyze, CLI scan, and GUI scan see the same SMB context. Mask computation and trustee overlay are no longer derivation-asymmetric.
 
-### Wo der Wrapper bewusst NICHT verwendet wird
+### Where the wrapper deliberately is NOT used
 
-`effective_smb_target` bleibt für Aufrufer erhalten, die nur den Server brauchen (z. B. `compute_local_group_memberships_for_analyze` für lokale Gruppen — Share-Name irrelevant). Das ist semantisch eine andere Frage und sollte typisiert separat bleiben.
+`effective_smb_target` stays for callers that only need the server (e.g. `compute_local_group_memberships_for_analyze` for local groups — share name irrelevant). That is semantically a different question and should stay typed separately.
 
-`parse_unc_components` bleibt für Aufrufer erhalten, die explizit nur die Roh-Komponenten des UNC-Pfads brauchen (zum Beispiel in Validierungsfehlermeldungen).
+`parse_unc_components` stays for callers that explicitly need only the raw components of the UNC path (for example inside validation error messages).
 
 ### Tests
 
-Sechs Tests im `validation::path::tests`-Modul decken die Invarianten ab:
+Six tests in the `validation::path::tests` module cover the invariants:
 
-| Test | Was er garantiert |
+| Test | What it guarantees |
 |---|---|
-| `smb_audit_context_from_unc_alone` | Reiner UNC ohne Flags → beide Felder aus dem Pfad. **Direktes Round-10-Finding-1-Verhalten.** |
-| `smb_audit_context_explicit_flags_override_unc` | Explizite Flags gewinnen pro Feld. |
-| `smb_audit_context_local_path_yields_none` | Lokaler Pfad ohne Flags → `None`. Schützt vor dem `C:` als Server-Bug. |
-| `smb_audit_context_server_without_share_yields_none` | Halb-Kontext (Server explizit, kein Share) → `None`. Schützt vor `get_share_dacl`-Calls mit leerem Share. |
-| `smb_audit_context_mixed_explicit_server_unc_share` | Mischform: Server explizit, Share aus UNC. |
-| `smb_audit_context_empty_explicit_flags_are_treated_as_none` | `Some("")` zählt als nicht gesetzt — defensive gegen GUI-Frontends. |
+| `smb_audit_context_from_unc_alone` | Bare UNC without flags → both fields from the path. **Direct Round-10 finding-1 behaviour.** |
+| `smb_audit_context_explicit_flags_override_unc` | Explicit flags win per field. |
+| `smb_audit_context_local_path_yields_none` | Local path without flags → `None`. Guards against the `C:`-as-server bug. |
+| `smb_audit_context_server_without_share_yields_none` | Half context (server explicit, no share) → `None`. Guards against `get_share_dacl` calls with an empty share. |
+| `smb_audit_context_mixed_explicit_server_unc_share` | Mixed form: server explicit, share from UNC. |
+| `smb_audit_context_empty_explicit_flags_are_treated_as_none` | `Some("")` counts as not set — defensive against GUI frontends. |
 
-## Konsequenzen / Consequences
+## Consequences
 
-### Positiv
+### Positive
 
-- **Bug-Klasse eliminiert.** Drei Stellen, die Server/Share unabhängig ableiteten, sind durch eine geteilte Quelle ersetzt. Jede zukünftige Korrektur an der Ableitung wirkt automatisch überall.
-- **Typsystem statt Konvention.** `SmbAuditContext` ist als Struct mit `server: String, share: String` so klar wie möglich. Wer es hat, weiß, dass **beide** Felder valide sind.
-- **Datensymmetrie zwischen Mask und Trustees.** Ein und derselbe Report sieht nicht mehr zwei verschiedene Server/Share-Wahrheiten in der Mask-Berechnung und der Trustee-Liste.
-- **Test-Abdeckung erweitert.** Sechs neue Unit-Tests im `validation`-Crate sichern die Invarianten plattform-unabhängig.
+- **Bug class eliminated.** Three sites that derived server/share independently are replaced by a shared source. Any future correction in the derivation now takes effect everywhere automatically.
+- **Type system instead of convention.** `SmbAuditContext` as a struct with `server: String, share: String` is as clear as possible. Whoever holds one knows that **both** fields are valid.
+- **Data symmetry between mask and trustees.** The same report no longer shows two different server/share truths in the mask computation and the trustee list.
+- **Test coverage broadened.** Six new unit tests in the `validation` crate guard the invariants platform independently.
 
-### Negativ / Trade-offs
+### Negative / trade-offs
 
-- `Option<SmbAuditContext>` muss vom Aufrufer entpackt werden. Bisher hätte ein Halbkontext (nur Server) einen DACL-Call mit leerem Share-Namen ausgelöst und intern gescheitert. Jetzt scheitert die Ableitung früher und sauberer — aber Aufrufer, die vorher implizit mit dem Halbkontext gerechnet haben, müssen jetzt explizit den `None`-Fall behandeln. Im aktuellen Workspace ist das auf vier Aufrufstellen begrenzt und überall korrekt umgesetzt.
-- Eine zusätzliche Typ-Definition in der Public-API von `validation`. Kostet etwas mehr Doku-Aufmerksamkeit, ist aber semantisch wertvoll.
+- `Option<SmbAuditContext>` has to be unpacked by the caller. Previously a half context (only server) would have triggered a DACL call with an empty share name and failed internally. Now the derivation fails earlier and more cleanly — but callers that previously implicitly relied on the half context now have to handle the `None` case explicitly. In the current workspace that is limited to four call sites and correctly implemented everywhere.
+- One additional type definition in the public API of `validation`. Costs a bit more documentation attention but is semantically valuable.
 
-### Beziehung zu anderen ADRs
+### Relationship to other ADRs
 
-- **ADR 0043** (AccessContext mit SMB-Hints): `AccessContext::for_path_with_smb` bekommt die SMB-Hinweise vom Aufrufer. Wer `SmbAuditContext::resolve` benutzt, übergibt direkt `(server, share)` weiter — kein Doppel-Lookup nötig.
-- **ADR 0044** (`exporter::trustees` als shared module): das Modul nimmt `Option<&str>, Option<&str>` für die SMB-Hints. Aufrufer in CLI und GUI füllen diese Felder jetzt aus `SmbAuditContext`.
+- **ADR 0043** (AccessContext with SMB hints): `AccessContext::for_path_with_smb` receives the SMB hints from the caller. Whoever uses `SmbAuditContext::resolve` passes `(server, share)` straight on — no double lookup needed.
+- **ADR 0044** (`exporter::trustees` as a shared module): the module accepts `Option<&str>, Option<&str>` for the SMB hints. Callers in CLI and GUI now fill these fields from `SmbAuditContext`.
