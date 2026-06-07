@@ -16,6 +16,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (4, include_str!("schema_v4.sql")),
     (5, include_str!("schema_v5.sql")),
     (6, include_str!("schema_v6.sql")),
+    (7, include_str!("schema_v7.sql")),
 ];
 
 /// Wendet alle ausstehenden Migrationen in aufsteigender Reihenfolge an.
@@ -56,18 +57,19 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 7);
     }
 
     #[test]
     fn migration_adds_diagnostic_columns() {
         let conn = in_memory();
         run_migrations(&conn).unwrap();
-        // Die neuen Spalten aus v2–v6 müssen abfragbar sein.
-        // The new columns from v2–v6 must be queryable.
+        // Die neuen Spalten aus v2–v7 müssen abfragbar sein.
+        // The new columns from v2–v7 must be queryable.
         conn.query_row(
             "SELECT share_status, share_error, contributing_sids, unsupported_ace_count,
-                    matched_aces, local_group_status, local_group_error, diagnostics
+                    matched_aces, local_group_status, local_group_error, diagnostics,
+                    identity_name, identity_domain, identity_kind, identity_disabled
              FROM effective_permissions LIMIT 1",
             [],
             |_| Ok(()),
@@ -76,7 +78,7 @@ mod tests {
             rusqlite::Error::QueryReturnedNoRows => Ok(()),
             other => Err(other),
         })
-        .expect("v2–v6 columns must exist on effective_permissions");
+        .expect("v2–v7 columns must exist on effective_permissions");
     }
 
     #[test]
@@ -109,20 +111,20 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 7);
     }
 
-    /// Schrittweise Migration: v1-Daten überleben das Upgrade auf v6
+    /// Schrittweise Migration: v1-Daten überleben das Upgrade auf v7
     /// und alle neuen Spalten erhalten ihre Default-Werte. Ohne diesen
     /// Test wäre nicht garantiert, dass ein in-place-Upgrade einer alten
     /// Datenbank ohne Datenverlust läuft.
     ///
-    /// Step-wise migration: v1 data survives the upgrade to v6 and all new
+    /// Step-wise migration: v1 data survives the upgrade to v7 and all new
     /// columns receive their default values. Without this test, an in-place
     /// upgrade of an old database is not guaranteed to survive without data
     /// loss.
     #[test]
-    fn v1_data_survives_full_migration_to_v6() {
+    fn v1_data_survives_full_migration_to_v7() {
         let conn = in_memory();
 
         // Schritt 1: nur v1-Schema anwenden und PRAGMA user_version=1 setzen,
@@ -167,7 +169,7 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 6, "migration must end at v6");
+        assert_eq!(v, 7, "migration must end at v7");
 
         // Schritt 4: v1-Werte überleben unverändert.
         // Step 4: v1 values survive unchanged.
@@ -223,5 +225,36 @@ mod tests {
         assert_eq!(defaults.5, "NotQueried");
         assert_eq!(defaults.6, None);
         assert_eq!(defaults.7, "[]");
+
+        // Schritt 6 (Code Review 2026-06-07, Finding 1): v7-Backfill aus
+        // identities-Tabelle. Die Legacy-Identitaet (legacy.user,
+        // OLDCORP, User, disabled=false) muss in den neuen Snapshot-
+        // Spalten landen, damit die historische Permission ohne JOIN
+        // gegen identities lesbar bleibt.
+        // Step 6 (code review 2026-06-07, finding 1): v7 backfill from
+        // the identities table. The legacy identity (legacy.user,
+        // OLDCORP, User, disabled=false) must land in the new snapshot
+        // columns so the historical permission stays readable without
+        // joining against identities.
+        let snapshot: (Option<String>, Option<String>, String, i64) = conn
+            .query_row(
+                "SELECT identity_name, identity_domain, identity_kind, identity_disabled
+                 FROM effective_permissions WHERE scan_run_id = 'run-legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("v7 snapshot columns must read back");
+        assert_eq!(
+            snapshot.0.as_deref(),
+            Some("legacy.user"),
+            "name must be backfilled from identities cache"
+        );
+        assert_eq!(
+            snapshot.1.as_deref(),
+            Some("OLDCORP"),
+            "domain must be backfilled from identities cache"
+        );
+        assert_eq!(snapshot.2, "User", "kind must be backfilled");
+        assert_eq!(snapshot.3, 0, "disabled flag must be backfilled");
     }
 }

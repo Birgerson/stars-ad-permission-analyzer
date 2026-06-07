@@ -179,14 +179,30 @@ impl<'a> ScanStore<'a> {
                 }
             };
 
+        // Code Review 2026-06-07 Finding 1: Identity-Snapshot pro
+        // Permission-Zeile. Vorher wurde die Identity (Name/Domain/
+        // Kind/Disabled) nur in der globalen `identities`-Tabelle
+        // gehalten und beim Lesen per JOIN aufgeloest — d.h. ein
+        // spaeterer Upsert konnte alte Runs rueckwirkend anders aussehen
+        // lassen. Die Snapshot-Spalten machen die Permission-Zeile
+        // unveraenderlich gegenueber spaeteren Identity-Updates.
+        // Code review 2026-06-07 finding 1: identity snapshot per
+        // permission row. Previously the identity (name/domain/kind/
+        // disabled) lived only in the global `identities` table and was
+        // resolved on read via JOIN — meaning a later upsert could
+        // retroactively change how earlier runs looked. The snapshot
+        // columns make the permission row immutable against later
+        // identity updates.
         self.conn
             .execute(
                 "INSERT INTO effective_permissions
                      (scan_run_id, sid, path, ntfs_mask, share_mask, effective_mask,
                       explanation, share_status, share_error, contributing_sids,
                       unsupported_ace_count, matched_aces,
-                      local_group_status, local_group_error, diagnostics)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                      local_group_status, local_group_error, diagnostics,
+                      identity_name, identity_domain, identity_kind, identity_disabled)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                         ?16, ?17, ?18, ?19)",
                 params![
                     scan_run_id.to_string(),
                     perm.identity.sid.0,
@@ -203,6 +219,10 @@ impl<'a> ScanStore<'a> {
                     local_group_status,
                     local_group_error,
                     diagnostics,
+                    perm.identity.name,
+                    perm.identity.domain,
+                    kind_to_str(&perm.identity.kind),
+                    perm.identity.disabled as i32,
                 ],
             )
             .map_err(|e| CoreError::Database(format!("insert_permission failed: {e}")))?;
@@ -311,6 +331,26 @@ impl<'a> ScanStore<'a> {
         &self,
         scan_run_id: &Uuid,
     ) -> Result<Vec<EffectivePermission>, CoreError> {
+        // Code Review 2026-06-07 Finding 1: Identity ausschliesslich aus
+        // dem Snapshot pro Permission-Zeile lesen — kein JOIN gegen die
+        // globale `identities`-Tabelle mehr. Damit ist die Historie
+        // wirklich unveraenderlich: ein spaeterer Scan, der dieselbe
+        // SID mit anderen Identity-Werten upsertet, kann die alten Runs
+        // beim Re-Read nicht mehr veraendern. Backfill-Faelle (alte
+        // v1..v6-Zeilen ohne identities-Eintrag zum Backfill-Zeitpunkt)
+        // erscheinen mit name=NULL/domain=NULL/kind='Unknown'; das ist
+        // die ehrliche Antwort "wir wissen es nicht mehr", statt einen
+        // potenziell veraenderten Wert zu zeigen.
+        // Code review 2026-06-07 finding 1: read identity exclusively
+        // from the per-permission snapshot — no more JOIN against the
+        // global `identities` table. This makes history truly
+        // immutable: a later scan that upserts the same SID with
+        // different identity values can no longer change how earlier
+        // runs look when reloaded. Backfill cases (old v1..v6 rows
+        // without an identities entry at backfill time) appear as
+        // name=NULL/domain=NULL/kind='Unknown'; that is the honest
+        // "we no longer know" answer instead of showing a potentially
+        // mutated value.
         let mut stmt = self
             .conn
             .prepare(
@@ -320,9 +360,9 @@ impl<'a> ScanStore<'a> {
                          ep.unsupported_ace_count, ep.matched_aces,
                          ep.local_group_status, ep.local_group_error,
                          ep.diagnostics,
-                         i.name, i.domain, i.kind, i.disabled
+                         ep.identity_name, ep.identity_domain,
+                         ep.identity_kind, ep.identity_disabled
                  FROM effective_permissions ep
-                 LEFT JOIN identities i ON i.sid = ep.sid
                  WHERE ep.scan_run_id = ?1",
             )
             .map_err(|e| CoreError::Database(format!("prepare get_permissions: {e}")))?;
@@ -343,10 +383,16 @@ impl<'a> ScanStore<'a> {
                 let local_group_status_str: String = row.get(11)?;
                 let local_group_error: Option<String> = row.get(12)?;
                 let diagnostics_json: Option<String> = row.get(13)?;
+                // Identity-Snapshot (v7): einzige Quelle. Kein Fallback.
+                // Identity snapshot (v7): single source. No fallback.
+                // identity_kind ist NOT NULL DEFAULT 'Unknown', daher String
+                // statt Option<String>; identity_disabled ist NOT NULL DEFAULT 0.
+                // identity_kind is NOT NULL DEFAULT 'Unknown', so String not
+                // Option<String>; identity_disabled is NOT NULL DEFAULT 0.
                 let name: Option<String> = row.get(14)?;
                 let domain: Option<String> = row.get(15)?;
-                let kind_str: Option<String> = row.get(16)?;
-                let disabled: Option<i32> = row.get(17)?;
+                let kind_str: String = row.get(16)?;
+                let disabled: i32 = row.get(17)?;
 
                 let steps: Vec<String> = serde_json::from_str(&expl).unwrap_or_default();
                 let contributing_sids: Vec<ContributingAce> =
@@ -376,10 +422,7 @@ impl<'a> ScanStore<'a> {
                     ),
                     _ => adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 };
-                let kind = kind_str
-                    .as_deref()
-                    .map(kind_from_str)
-                    .unwrap_or(IdentityKind::Unknown);
+                let kind = kind_from_str(&kind_str);
 
                 Ok(EffectivePermission {
                     identity: Identity {
@@ -387,7 +430,7 @@ impl<'a> ScanStore<'a> {
                         name,
                         domain,
                         kind,
-                        disabled: disabled.unwrap_or(0) != 0,
+                        disabled: disabled != 0,
                         // UPN wird derzeit nicht persistiert; er ist nur für
                         // Live-AD-/NetAPI-Aufrufe relevant, nicht für historische Reports.
                         // UPN is not persisted today; it's only relevant for live AD/NetAPI
@@ -930,6 +973,85 @@ mod tests {
         // newest first: target2 should come before target0
         assert!(runs[0].started_at >= runs[1].started_at);
         assert!(runs[1].started_at >= runs[2].started_at);
+    }
+
+    /// Code Review 2026-06-07 Finding 1: Historische Scan-Daten muessen
+    /// gegen spaetere Identity-Upserts immun sein. Vor v7 hat
+    /// `insert_permission` `identities` per Upsert ueberschrieben, und
+    /// `get_permissions` jointe gegen die aktuelle `identities`-Zeile —
+    /// d.h. Run A zeigte beim Re-Read den Identity-Stand zum Zeitpunkt
+    /// des SPAETEREN Run B, nicht den eigenen Stand zum Scan-Zeitpunkt.
+    /// Mit den v7-Snapshot-Spalten muss Run A unveraendert bleiben,
+    /// auch nachdem Run B dieselbe SID mit anderem Namen/Disabled-Status
+    /// gespeichert hat. Ohne diesen Test ist die Audit-Integritaet nicht
+    /// geschuetzt.
+    /// Code review 2026-06-07 finding 1: historical scan data must be
+    /// immune against later identity upserts. Before v7,
+    /// `insert_permission` upserted `identities` and `get_permissions`
+    /// joined against the current `identities` row — meaning run A
+    /// showed, on reload, the identity state from the LATER run B, not
+    /// its own state at scan time. With the v7 snapshot columns, run A
+    /// must stay unchanged after run B persisted the same SID with a
+    /// different name/disabled status. Without this test, audit
+    /// integrity is not protected.
+    #[test]
+    fn run_a_immutable_against_later_identity_upsert_in_run_b() {
+        let conn = setup();
+        let store = ScanStore::new(&conn);
+        let run_a = make_run("target-a");
+        let run_b = make_run("target-b");
+        store.insert_scan_run(&run_a).unwrap();
+        store.insert_scan_run(&run_b).unwrap();
+
+        // Run A: SID S-1-5-21-…-1000, Name "alice.old", aktiv (disabled=false).
+        // Run A: SID S-1-5-21-…-1000, name "alice.old", active (disabled=false).
+        let mut perm_a = make_perm("S-1-5-21-7-7-7-1000", r"C:\X", 0x1, None, 0x1);
+        perm_a.identity.name = Some("alice.old".to_owned());
+        perm_a.identity.domain = Some("OLD-DOMAIN".to_owned());
+        perm_a.identity.kind = IdentityKind::User;
+        perm_a.identity.disabled = false;
+        store.insert_permission(&run_a.id, &perm_a).unwrap();
+
+        // Run B (spaeter): gleiche SID, jetzt deaktiviert, anderer Name,
+        // andere Domain. Der historische Pattern war: identities-Upsert
+        // ueberschreibt globale Zeile, JOIN beim Read von Run A liefert
+        // die neuen Werte -> Audit-Verfaelschung.
+        // Run B (later): same SID, now disabled, different name, different
+        // domain. Historic pattern: identities upsert overwrites the
+        // global row, JOIN on read of run A returns the new values ->
+        // audit corruption.
+        let mut perm_b = make_perm("S-1-5-21-7-7-7-1000", r"C:\Y", 0x1, None, 0x1);
+        perm_b.identity.name = Some("alice.new".to_owned());
+        perm_b.identity.domain = Some("NEW-DOMAIN".to_owned());
+        perm_b.identity.kind = IdentityKind::User;
+        perm_b.identity.disabled = true;
+        store.insert_permission(&run_b.id, &perm_b).unwrap();
+
+        // Run A muss seine eigenen Werte zurueckgeben.
+        // Run A must return its own values.
+        let perms_a = store.get_permissions(&run_a.id).unwrap();
+        assert_eq!(perms_a.len(), 1);
+        assert_eq!(
+            perms_a[0].identity.name.as_deref(),
+            Some("alice.old"),
+            "Run A name must NOT be overwritten by Run B identity upsert — closes Finding 1"
+        );
+        assert_eq!(
+            perms_a[0].identity.domain.as_deref(),
+            Some("OLD-DOMAIN"),
+            "Run A domain must NOT be overwritten by Run B"
+        );
+        assert!(
+            !perms_a[0].identity.disabled,
+            "Run A disabled flag must stay false — was active at scan time"
+        );
+
+        // Run B sieht naturgemaess seine eigenen Werte.
+        // Run B sees its own values by construction.
+        let perms_b = store.get_permissions(&run_b.id).unwrap();
+        assert_eq!(perms_b[0].identity.name.as_deref(), Some("alice.new"));
+        assert_eq!(perms_b[0].identity.domain.as_deref(), Some("NEW-DOMAIN"));
+        assert!(perms_b[0].identity.disabled);
     }
 
     #[test]
