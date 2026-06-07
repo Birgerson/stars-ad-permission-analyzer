@@ -194,51 +194,56 @@ adpa.exe analyze --path "\\fileserver\Buchhaltung\Bilanzen" --user S-1-5-21-...
 ```
 Stars erkennt den UNC-Pfad automatisch und bezieht die Share-Berechtigung in die Berechnung ein.
 
-### GUI — Ansichten
+### GUI — die vier Tabs
 
-#### Analyze-Tab
+Stars hat genau **vier Tabs:** `Analyze`, `Scan Tree`, `Delta`, `Info`. „Identität", „Trustees" und „Risk Findings" sind keine eigenen Tabs, sondern Sektionen innerhalb der vier echten Tabs.
+
+#### Tab `Analyze`
 
 Gibt die effektive Berechtigung für **einen einzelnen Pfad** zurück.
 
 Eingaben:
 - **Pfad** (lokal oder UNC) — beim Start vorbelegt mit `C:\Windows\SYSVOL\sysvol` (der wichtigste Pfad zum Auditieren auf jedem Domain Controller). Frei überschreibbar.
-- **Benutzer/Gruppe** — Klartextname mit Live-Suche (siehe „Benutzereingabe" unten)
-- **Benutzer-SID** — wird vom Namensfeld befüllt, kann auch direkt eingegeben werden
-- Optional: LDAP-Verbindungsdaten für Gruppenauflösung (auf einem DC nicht nötig — die SAM/LSA reicht)
+- **Benutzer/Gruppe** — Klartextname mit Live-Suche (siehe „Benutzereingabe" unten).
+- **Benutzer-SID** — wird vom Namensfeld befüllt, kann auch direkt eingegeben werden.
+- Optional: LDAP-Verbindungsdaten für Gruppenauflösung (auf einem DC nicht nötig — die SAM/LSA reicht).
 
-Ausgabe:
-- NTFS-Berechtigung, Share-Berechtigung (falls vorhanden), effektive Berechtigung
-- Vollständiger Berechtigungspfad mit allen Schritten
+Aktionen:
+- **Analysieren** — identitätsbezogene Auswertung (NTFS- und Share-Recht, effektive Berechtigung, Erklärungspfad).
+- **Wer hat Zugriff?** — pfadzentrische Trustee-Tabelle aller ACEs (NTFS und Share getrennt).
 
-#### Scan Tree-Tab
+#### Tab `Scan Tree`
 
 Scannt einen **gesamten Verzeichnisbaum** rekursiv.
 
 Eingaben:
-- **Wurzelpfad** (lokal oder UNC) — wie Analyze-Tab mit `C:\Windows\SYSVOL\sysvol` vorbelegt
-- **Benutzer/Gruppe + SID** — wie Analyze-Tab, dieselbe Live-Suche
-- Optional: maximale Tiefe, SMB-Server/Share-Name, LDAP-Daten
+- **Wurzelpfad** (lokal oder UNC) — wie im `Analyze`-Tab mit `C:\Windows\SYSVOL\sysvol` vorbelegt.
+- **Benutzer/Gruppe + SID** — wie `Analyze`, dieselbe Live-Suche.
+- Optional: maximale Tiefe, SMB-Server/Share-Name, LDAP-Daten.
 
 Ausgabe:
-- Tabelle: Pfad | Berechtigung | Maske
-- Jede Zeile aufklappbar mit vollständiger Erklärung (Klartextnamen statt nur SIDs)
-- Fehlerprotokoll (Zugriff verweigert, nicht gefunden etc.)
-- Filter nach Pfad-Teilstring
-- Risikobefunde mit Severity-Farbcode
-- HTML-Bericht-Export
+- Tabelle: Pfad | Berechtigung | Maske, jede Zeile aufklappbar mit vollständiger Erklärung.
+- Fehlerprotokoll (Zugriff verweigert, nicht gefunden etc.).
+- Filter nach Pfad-Teilstring.
+- Risk-Findings-Sektion mit Severity-Farbcode.
+- HTML-/JSON-/CSV-Berichts-Export.
 
-#### Delta-Tab
+#### Tab `Delta`
 
-Vergleicht zwei persistierte Scan-Läufe und zeigt, was sich verändert hat.
+Vergleicht zwei persistierte Scan-Läufe und zeigt, was sich verändert hat — nicht nur am effektiven Recht, sondern auch an NTFS/Share-Komposition, Status (z. B. `ReadFailed`) und Diagnose-Markern.
 
 Eingaben:
-- „📂 Scan-Historie laden" liest aus der lokalen SQLite-DB
-- Je eine Zeile als „Alt" und „Neu" anhaken
+- „📂 Scan-Historie laden" liest aus der lokalen SQLite-DB.
+- Je eine Zeile als „Alt" und „Neu" anhaken.
 
 Ausgabe:
-- Liste mit Pfad, Änderungsart (Hinzugefügt / Entfernt / Geändert), Rechte vorher/nachher
-- Farbcode: grün = Hinzugefügt, rot = Entfernt, gelb = Geändert
-- Zähl-Headline pro Lauf
+- Liste mit Pfad, Änderungsart (Hinzugefügt / Entfernt / Geändert), Rechte vorher/nachher.
+- Spalte „Geändert (...)" benennt die konkreten Aenderungsursachen (z. B. „NTFS mask + share status").
+- Farbcode: grün = Hinzugefügt, rot = Entfernt, gelb = Geändert.
+
+#### Tab `Info`
+
+Versionsstand, Plattform-Status („verifiziert gegen Server 2022 und 2025"), Lizenz, KI-Urheberschaft und Links zur Online-Doku. Kein interaktiver Inhalt.
 
 ### Benutzereingabe — Name oder SID
 
@@ -569,51 +574,56 @@ adpa.exe analyze --path "\\fileserver\Accounting\Reports" --user S-1-5-21-...
 ```
 Stars detects the UNC path automatically and factors the share permission into the calculation.
 
-### GUI — Views
+### GUI — the four tabs
 
-#### Analyze tab
+Stars has exactly **four tabs:** `Analyze`, `Scan Tree`, `Delta`, `Info`. "Identity", "Trustees", and "Risk findings" are not separate tabs — they are sections inside the four real tabs.
+
+#### `Analyze` tab
 
 Returns the effective permission for **a single path**.
 
 Inputs:
 - **Path** (local or UNC) — pre-filled at startup with `C:\Windows\SYSVOL\sysvol` (the most important path to audit on any domain controller). Freely overwritable.
-- **User/group** — plain-text name with live search (see "Identity input" below)
-- **User SID** — populated by the name field; can also be entered directly
-- Optional: LDAP connection settings for group resolution (not needed on a DC — SAM/LSA is enough)
+- **User/group** — plain-text name with live search (see "Identity input" below).
+- **User SID** — populated by the name field; can also be entered directly.
+- Optional: LDAP connection settings for group resolution (not needed on a DC — SAM/LSA is enough).
 
-Output:
-- NTFS permission, share permission (if available), effective permission
-- Full permission path with every step
+Actions:
+- **Analyze** — identity-bound evaluation (NTFS and share rights, effective permission, full explanation chain).
+- **Who has access?** — path-centric trustee table of all ACEs (NTFS and share separated).
 
-#### Scan Tree tab
+#### `Scan Tree` tab
 
 Scans a **whole directory tree** recursively.
 
 Inputs:
-- **Root path** (local or UNC) — pre-filled with `C:\Windows\SYSVOL\sysvol` like the Analyze tab
-- **User/group + SID** — same as Analyze, same live search
-- Optional: maximum depth, SMB server / share name, LDAP data
+- **Root path** (local or UNC) — pre-filled with `C:\Windows\SYSVOL\sysvol` like the `Analyze` tab.
+- **User/group + SID** — same as `Analyze`, same live search.
+- Optional: maximum depth, SMB server / share name, LDAP data.
 
 Output:
-- Table: Path | Permission | Mask
-- Each row is expandable with a complete explanation (plain-text names instead of just SIDs)
-- Error log (access denied, not found, etc.)
-- Filter by path substring
-- Risk findings color-coded by severity
-- HTML report export
+- Table: Path | Permission | Mask, each row expandable with a complete explanation.
+- Error log (access denied, not found, etc.).
+- Filter by path substring.
+- Risk findings section, color-coded by severity.
+- HTML / JSON / CSV report export.
 
-#### Delta tab
+#### `Delta` tab
 
-Compares two persisted scan runs and shows what has changed.
+Compares two persisted scan runs and shows what has changed — not just the effective right, but also NTFS/share composition, status (e.g. `ReadFailed`), and diagnostic markers.
 
 Inputs:
-- "📂 Load scan history" reads from the local SQLite DB
-- Mark one run as "Old" and one as "New"
+- "📂 Load scan history" reads from the local SQLite DB.
+- Mark one run as "Old" and one as "New".
 
 Output:
-- List of path, change kind (Added / Removed / Changed), rights before and after
-- Color code: green = Added, red = Removed, yellow = Changed
-- Count headline per run
+- List of path, change kind (Added / Removed / Changed), rights before and after.
+- "Changed (...)" column names the concrete reasons (e.g. "NTFS mask + share status").
+- Color code: green = Added, red = Removed, yellow = Changed.
+
+#### `Info` tab
+
+Version, platform status ("verified against Server 2022 and 2025"), license, AI authorship, and links to the online documentation. No interactive content.
 
 ### Identity input — name or SID
 

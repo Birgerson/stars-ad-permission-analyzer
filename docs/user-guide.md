@@ -16,7 +16,7 @@ SMB permissions **without changing anything**.
 1. [What can Stars do?](#what-can-stars-do)
 2. [Installation and prerequisites](#installation-and-prerequisites)
 3. [First run — the GUI](#first-run--the-gui)
-4. [The five GUI tabs](#the-five-gui-tabs)
+4. [The four GUI tabs](#the-four-gui-tabs)
 5. [Identity input forms](#identity-input-forms)
 6. [Active Directory binding (optional)](#active-directory-binding-optional)
 7. [Local paths vs. SMB shares](#local-paths-vs-smb-shares)
@@ -112,36 +112,49 @@ access).
 
 ## First run — the GUI
 
-After starting Stars the main window shows five tabs. **Recommended
-first workflow:**
+After starting Stars the main window shows **four tabs:** `Analyze`,
+`Scan Tree`, `Delta`, `Info`. **Recommended first workflow:**
 
-1. **Identity tab** — pick or type *who* should be analyzed.
-2. **Analyze tab** — type a single path, hit "Analyze".
-3. Read the result: effective right, explanation, diagnostic markers.
+1. Open the **`Analyze`** tab — type an identity (user/group + SID)
+   and a path. Hit "Analyze".
+2. Read the result: effective right, full explanation chain,
+   diagnostic markers.
+3. Optional: "Who has access?" for the path-centric trustee table.
 
 If you only want to see what Stars can do at all, start with any local
 folder and your own user SID — that works without LDAP configuration
 and shows the engine in action.
 
+> **Important on terminology:** "Identity", "Trustees", and "Risk
+> findings" are **not separate tabs**. They are sections inside the
+> four real tabs. Earlier versions of this guide accidentally listed
+> them as five tabs — this is the corrected wording.
+
 ---
 
-## The five GUI tabs
+## The four GUI tabs
 
-### Analyze — single-path analysis
+### `Analyze` tab — single-path analysis
 
 **Purpose:** You have a specific path and want to know what a given
 user can effectively do there.
 
-**Fields:**
+**Fields (sections inside the tab):**
 
-- **Path** — local (`C:\data\…`) or UNC (`\\server\share\…`).
-- **User** — see [Identity input forms](#identity-input-forms).
-- **SMB server** and **share name** (optional) — auto-detected for
-  UNC paths. Set manually on local paths if you also want the share
-  mask evaluated.
-- **Analyze** — runs the evaluation.
+- **Target** — path, local (`C:\data\…`) or UNC (`\\server\share\…`).
+- **Identity resolution** — user/group via live search or direct
+  SID, plus mode (Off = SAM/LSA, LDAPS, plaintext LDAP). See
+  [Identity input forms](#identity-input-forms).
+- **SMB share (optional)** — SMB server and share name. Auto-detected
+  for UNC paths; on local paths on a share, set manually if you also
+  want the share mask evaluated.
+- **Analyze** — runs the identity-bound evaluation.
+- **Who has access?** — runs the **path-centric trustee table**
+  instead: all trustees with their ACEs, NTFS and share separated.
+  A share-DACL read failure appears as a typed diagnostic entry
+  (`entry_kind: "diagnostic"`), never silently dropped.
 
-**Result:** one report per path with:
+**Result of "Analyze":**
 
 - effective right (Read / Write / Modify / Full Control),
 - NTFS and share rights separately,
@@ -149,49 +162,26 @@ user can effectively do there.
   (`User → Group → … → ACE → normalized right`),
 - all diagnostic markers.
 
-### Scan — recursive directory scan
+### `Scan Tree` tab — recursive directory scan
 
 **Purpose:** Audit a whole directory tree — typical for the periodic
 "how does Q3 look right now?" question.
 
 **Fields:**
 
-- **Root path**, **User**, **SMB server** / **share name** as in
-  Analyze.
+- **Root path**, **identity**, **SMB server** / **share name** as in
+  `Analyze`.
 - **Maximum scan depth** — protects against runaway walks; empty =
   unbounded.
 - **Start scan** — cancellable any time via the cancel button; the
   GUI stays responsive during the scan.
 
-**Result:** a table of all paths, their effective rights, and a
-per-path trustee list. The result is automatically persisted into the
-SQLite scan history.
+**Result:** a table of all paths, their effective rights, a per-path
+trustee table, and a **risk findings section** with the rules that
+fired per path. Auto-persisted to the SQLite scan history.
 
-### Trustees — who-has-access view
-
-**Purpose:** Unlike Analyze (which shows one user per path), Trustees
-lists **all** trustees of a path with their ACEs — NTFS and Share
-separated through the `TrusteeCategory::Ntfs` / `Share` column.
-
-**For SMB paths:** Stars reads the share DACL once and shows it on
-top of the NTFS entries. Read errors appear as a visible pseudo-row
-— never silently dropped.
-
-### Delta — what changed?
-
-**Purpose:** Compare two scan runs. Stars shows per path what changed
-about the effective right.
-
-**Fields:**
-
-- **Left run** and **right run** selected from the scan history.
-- **Compare** — table with `Before → After` per path.
-
-Unchanged paths are hidden so only the relevant entries remain.
-
-### Risk — risk rules and findings
-
-**Purpose:** Stars applies six built-in risk rules to every finding:
+**Risk findings:** Stars applies six built-in risk rules to every
+finding:
 
 - **FullControlRule** (Critical) — user has Full Control.
 - **WriteAccessRule** (High) — user has write rights.
@@ -206,6 +196,28 @@ Unchanged paths are hidden so only the relevant entries remain.
 
 Findings carry `incomplete = true` when the underlying finding is
 incomplete — see the diagnostic markers.
+
+### `Delta` tab — what changed?
+
+**Purpose:** Compare two scan runs. Stars shows per path what changed
+in the audit picture — not just the effective right, but also
+composition (NTFS/share), status (e.g. flip to `ReadFailed`), and
+diagnostic markers.
+
+**Fields:**
+
+- **Left run** and **right run** selected from the scan history.
+- **Compare** — table with `Before → After` per path, including a
+  "Changed (...)" column with concrete change reasons (e.g. "NTFS
+  mask + share status").
+
+Unchanged paths are hidden so only the relevant entries remain.
+
+### `Info` tab — about Stars
+
+Shows version, platform status (e.g. "verified against Server 2022
+and 2025"), license, AI authorship (Co-Author Claude Opus), and
+links to the online documentation. No interactive content.
 
 ---
 
@@ -288,7 +300,8 @@ identities.
 
 ### LDAP configuration
 
-In the identity tab under **"LDAP mode"**:
+In the **"Identity resolution"** section (inside the `Analyze` and
+`Scan Tree` tabs) under **"LDAP mode"**:
 
 - **0 — Off (SAM/LSA)**: no LDAP, only local APIs.
 - **1 — LDAPS (encrypted, port 636)** — standard for production

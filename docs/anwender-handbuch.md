@@ -16,7 +16,7 @@ SMB-Berechtigungen auditieren wollen, ohne dabei etwas zu verändern.
 1. [Was kann Stars?](#was-kann-stars)
 2. [Installation und Voraussetzungen](#installation-und-voraussetzungen)
 3. [Erster Start — die GUI](#erster-start--die-gui)
-4. [Die fünf Tabs der GUI](#die-fünf-tabs-der-gui)
+4. [Die vier Tabs der GUI](#die-vier-tabs-der-gui)
 5. [Identitäten eingeben](#identitäten-eingeben)
 6. [Active Directory anbinden (optional)](#active-directory-anbinden-optional)
 7. [Lokale Pfade vs. SMB-Freigaben](#lokale-pfade-vs-smb-freigaben)
@@ -112,89 +112,77 @@ Lesezugriff).
 
 ## Erster Start — die GUI
 
-Nach dem Start erscheint das Hauptfenster mit fünf Tabs. **Empfohlener
-Erst-Workflow:**
+Nach dem Start erscheint das Hauptfenster mit **vier Tabs:** `Analyze`,
+`Scan Tree`, `Delta`, `Info`. **Empfohlener Erst-Workflow:**
 
-1. **Tab „Identität"** — Wählen oder eingeben, *wer* analysiert werden
-   soll.
-2. **Tab „Analyze"** — Einzelnen Pfad eingeben, „Analyze" drücken.
-3. Ergebnis lesen: das effektive Recht, die Erklärung, die
+1. **Tab `Analyze`** öffnen — Identität (Benutzer/Gruppe + SID)
+   eingeben und einen Pfad. „Analysieren" drücken.
+2. Ergebnis lesen: effektives Recht, vollständiger Erklärungspfad,
    Diagnose-Marker.
+3. Optional: „Wer hat Zugriff?" für die pfadzentrische Trustee-Tabelle.
 
 Wer schnell sehen will, was Stars überhaupt kann, beginnt mit einem
 beliebigen lokalen Ordner und der eigenen User-SID — das funktioniert
 ohne LDAP-Konfiguration und zeigt die Engine in Aktion.
 
+> **Wichtig zur Begrifflichkeit:** „Identität", „Trustees" und
+> „Risk Findings" sind **keine eigenen Tabs**, sondern Sektionen
+> innerhalb der vier echten Tabs. Frühere Versionen dieses Handbuchs
+> hatten das versehentlich als sechs Tabs gelistet — der korrekte
+> Stand ist hier.
+
 ---
 
-## Die fünf Tabs der GUI
+## Die vier Tabs der GUI
 
-### Tab „Analyze" — Einzelpfad-Analyse
+### Tab `Analyze` — Einzelpfad-Analyse
 
 **Wofür:** Sie haben einen konkreten Pfad und wollen wissen, was ein
 bestimmter Benutzer dort effektiv darf.
 
-**Felder:**
+**Felder (im Tab als Sektionen):**
 
-- **Pfad** — lokal (`C:\data\…`) oder UNC (`\\server\share\…`).
-- **User** — siehe [Identitäten eingeben](#identitäten-eingeben).
-- **SMB-Server** und **Share-Name** (optional) — werden bei
-  UNC-Pfaden automatisch erkannt. Bei lokalen Pfaden auf einer Freigabe
-  manuell setzen, wenn Sie zusätzlich die Share-Maske auswerten wollen.
-- **Analyze** — startet die Auswertung.
+- **Ziel / Target** — Pfad lokal (`C:\data\…`) oder UNC (`\\server\share\…`).
+- **Identitätsauflösung** — Benutzer/Gruppe per Live-Suche oder direkte
+  SID, plus Modus (Aus = SAM/LSA, LDAPS, LDAP-Klartext). Siehe
+  [Identitäten eingeben](#identitäten-eingeben).
+- **SMB-Freigabe (optional)** — SMB-Server und Share-Name. Bei UNC-Pfaden
+  automatisch befüllt; bei lokalen Pfaden auf einer Freigabe manuell
+  setzen, wenn Sie zusätzlich die Share-Maske auswerten wollen.
+- **Analysieren** — startet die identitätsbezogene Auswertung.
+- **Wer hat Zugriff?** — zeigt stattdessen die **pfadzentrische
+  Trustee-Tabelle**: alle Trustees mit ihren ACEs, NTFS und Share
+  getrennt. Lesefehler an der Share-DACL erscheinen als typisierter
+  Diagnostic-Eintrag (`entry_kind: "diagnostic"`), kein stilles Weglassen.
 
-**Ergebnis:** ein Bericht pro Pfad mit:
+**Ergebnis von „Analysieren":**
 
-- effektivem Recht (Read / Write / Modify / Full Control),
+- effektives Recht (Read / Write / Modify / Full Control),
 - NTFS- und Share-Recht getrennt,
-- erklärbarem Berechtigungspfad
+- erklärbarer Berechtigungspfad
   (`User → Gruppe → … → ACE → normalisiertes Recht`),
-- allen Diagnose-Markern.
+- alle Diagnose-Marker.
 
-### Tab „Scan" — Rekursiver Verzeichnis-Scan
+### Tab `Scan Tree` — Rekursiver Verzeichnis-Scan
 
-**Wofür:** Sie wollen einen kompletten Verzeichnisbaum analysieren —
-typisch für die Periodische Audit-Frage „wie sieht Q3 jetzt aus?".
+**Wofür:** Kompletten Verzeichnisbaum analysieren — typisch für die
+periodische Audit-Frage „wie sieht Q3 jetzt aus?".
 
 **Felder:**
 
-- **Wurzelpfad**, **User**, **SMB-Server**/**Share-Name** wie bei
-  Analyze.
+- **Wurzelpfad**, **Identität**, **SMB-Server/Share-Name** wie bei
+  `Analyze`.
 - **Maximale Scan-Tiefe** — schützt vor Endlos-Walks; leer = unbegrenzt.
-- **Scan starten** — der Scan ist jederzeit über das **Cancel**-Symbol
-  abbrechbar; die GUI bleibt während des Scans bedienbar.
+- **Scan starten** — jederzeit über das **Cancel**-Symbol abbrechbar;
+  die GUI bleibt während des Scans bedienbar.
 
-**Ergebnis:** Tabelle mit allen Pfaden, ihren effektiven Rechten, und
-einer eigenen Trustee-Tabelle pro Pfad. Das Ergebnis wird automatisch
-in die Scan-Historie (SQLite) persistiert.
+**Ergebnis:** Tabelle mit allen Pfaden, ihren effektiven Rechten, einer
+Trustee-Tabelle pro Pfad, und einer **Risk-Findings-Sektion** mit den
+ausgelösten Risikoregeln pro Pfad. Das Ergebnis wird automatisch in die
+Scan-Historie (SQLite) persistiert.
 
-### Tab „Trustees" — Wer-hat-Zugriff-Sicht
-
-**Wofür:** Anders als Analyze (das einen Benutzer pro Pfad zeigt)
-listet Trustees pro Pfad **alle** Trustees mit ihren ACEs auf — NTFS
-und Share getrennt mit `TrusteeCategory::Ntfs` / `Share`-Spalte.
-
-**Bei SMB-Pfaden:** Stars liest die Share-DACL einmal und zeigt sie
-zusätzlich zu den NTFS-Einträgen. Lesefehler werden als sichtbare
-Pseudo-Zeile dargestellt — kein stilles Weglassen.
-
-### Tab „Delta" — Was hat sich geändert?
-
-**Wofür:** Zwei Scan-Läufe gegeneinander vergleichen. Stars zeigt
-pro Pfad, was sich am effektiven Recht geändert hat.
-
-**Felder:**
-
-- **Linker Lauf** und **Rechter Lauf** aus der Scan-Historie wählen.
-- **Vergleichen** — zeigt Tabelle mit `Vorher → Nachher` pro Pfad.
-
-Pfade ohne Änderung werden ausgeblendet, damit nur das Relevante übrig
-bleibt.
-
-### Tab „Risk" — Risikoregeln und Findings
-
-**Wofür:** Stars wendet sechs eingebaute Risikoregeln auf jeden Befund
-an:
+**Risk-Findings:** Stars wendet sechs eingebaute Risikoregeln auf jeden
+Befund an:
 
 - **FullControlRule** (Critical) — User hat Full Control.
 - **WriteAccessRule** (High) — User hat Schreibrechte.
@@ -206,6 +194,29 @@ an:
   Gruppe).
 - **SensitivePathRule** (Variabel) — Pfad enthält sensitive
   Schlüsselwörter (`password`, `credentials`, …).
+
+### Tab `Delta` — Was hat sich geändert?
+
+**Wofür:** Zwei Scan-Läufe gegeneinander vergleichen. Stars zeigt pro
+Pfad, was sich am Audit-Bild geändert hat — nicht nur am effektiven
+Recht, sondern auch an Komposition (NTFS/Share), Status (z. B. Wechsel
+auf `ReadFailed`) und Diagnose-Markern.
+
+**Felder:**
+
+- **Linker Lauf** und **Rechter Lauf** aus der Scan-Historie wählen.
+- **Vergleichen** — zeigt Tabelle mit `Vorher → Nachher` pro Pfad,
+  inklusive einer Spalte „Geändert (...)" mit den konkreten
+  Aenderungsursachen (z. B. „NTFS mask + share status").
+
+Pfade ohne Änderung werden ausgeblendet, damit nur das Relevante übrig
+bleibt.
+
+### Tab `Info` — Über Stars
+
+Zeigt Version, Plattform-Status (z. B. „verifiziert gegen Server 2022
+und 2025"), Lizenz, KI-Urheberschaft (Co-Author Claude Opus) und
+Links zur Online-Dokumentation. Kein interaktiver Inhalt.
 
 Findings tragen `incomplete = true`, wenn der zugrundeliegende Befund
 unvollständig ist — siehe Diagnose-Marker.
@@ -293,7 +304,8 @@ hunderttausenden Konten flüssig.
 
 ### LDAP-Konfiguration
 
-Im Identitäts-Tab unter **„LDAP-Modus"**:
+In der Sektion **„Identitätsauflösung"** (innerhalb von `Analyze` und
+`Scan Tree`) unter **„LDAP-Modus"**:
 
 - **0 — Aus (SAM/LSA)**: kein LDAP, nur lokale APIs.
 - **1 — LDAPS (verschlüsselt, Port 636)** — Standard für produktive
