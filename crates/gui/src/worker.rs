@@ -1706,12 +1706,40 @@ fn compute_delta(
                     old_rights: entry.old_perm.map(format_rights).unwrap_or_default(),
                     new_rights: String::new(),
                 },
-                DeltaKind::Changed { old_mask, new_mask } => DeltaRow {
-                    path: entry.path.0,
-                    kind_label: "Geändert".into(),
-                    old_rights: format_mask(old_mask.0),
-                    new_rights: format_mask(new_mask.0),
-                },
+                DeltaKind::Changed {
+                    old_mask,
+                    new_mask,
+                    reasons,
+                } => {
+                    // Code Review 2026-06-07 Finding 3: zeige zusaetzlich
+                    // zur effektiven Maske die konkreten Aenderungsursachen
+                    // ("NTFS mask + share status"), damit Audit-relevante
+                    // Aenderungen mit gleichbleibender Endmaske sichtbar
+                    // werden — sonst wuerde die Zeile zwar erscheinen,
+                    // aber alt/neu im UI gleich aussehen.
+                    // Code review 2026-06-07 finding 3: in addition to the
+                    // effective mask, show the concrete change reasons
+                    // ("NTFS mask + share status") so audit-relevant
+                    // changes with an unchanged final mask become
+                    // visible — without this the row would appear but
+                    // old/new would look identical in the UI.
+                    let reasons_label = reasons
+                        .iter()
+                        .map(|r| r.label())
+                        .collect::<Vec<_>>()
+                        .join(" + ");
+                    let kind_label = if reasons_label.is_empty() {
+                        "Geändert".into()
+                    } else {
+                        format!("Geändert ({reasons_label})")
+                    };
+                    DeltaRow {
+                        path: entry.path.0,
+                        kind_label,
+                        old_rights: format_mask(old_mask.0),
+                        new_rights: format_mask(new_mask.0),
+                    }
+                }
             }
         })
         .collect())
