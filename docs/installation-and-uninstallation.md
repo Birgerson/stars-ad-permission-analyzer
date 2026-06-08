@@ -34,7 +34,7 @@ Requirement: [Rust toolchain](https://rustup.rs/) for Windows (MSVC target). The
 
 ### Uninstallation
 
-Stars is removed via **"Programs and Features"** (`appwiz.cpl`) or the start menu entry **"Stars deinstallieren"**. The uninstaller runs in the current user profile — **administrator rights are not required.**
+Stars is removed via **"Programs and Features"** (`appwiz.cpl`) or the start menu entry **"Uninstall Stars"**. The uninstaller runs in the current user profile — **administrator rights are not required.**
 
 > **Before uninstalling:** close Stars. If `Stars.exe` is still running, the uninstaller aborts with a notice instead of failing partway.
 
@@ -52,4 +52,4 @@ Both therefore survive a reinstall — the audit history is evidence and should 
 
 #### Remove everything
 
-To remove everything completely: on the uninstaller's component page, check the additional **"Audit-Historie und Logs entfernen"** option. It is deliberately **off by default** — the decision must be made explicitly.
+To remove everything completely: on the uninstaller's component page, check the additional **"Remove audit history and logs"** option. It is deliberately **off by default** — the decision must be made explicitly.

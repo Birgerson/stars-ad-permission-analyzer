@@ -67,7 +67,7 @@ pub fn read_share_overlay(server: &str, share_name: &str) -> ShareTrusteeOverlay
         Err(e) => {
             trustees.push(PathTrusteeEntry::diagnostic(
                 TrusteeCategory::Share,
-                format!("Share-DACL nicht lesbar / share DACL not readable: {e}"),
+                format!("share DACL not readable: {e}"),
             ));
         }
     }
@@ -477,7 +477,7 @@ mod tests {
         });
         let diag = PathTrusteeEntry::diagnostic(
             TrusteeCategory::Share,
-            "Share-DACL nicht lesbar: timeout",
+            "share DACL not readable: timeout",
         );
 
         let ace_json = serde_json::to_string(&ace_entry).expect("serialize Ace");
@@ -492,7 +492,7 @@ mod tests {
             "Diagnostic must carry entry_kind=diagnostic, got: {diag_json}"
         );
         assert!(
-            diag_json.contains("Share-DACL nicht lesbar"),
+            diag_json.contains("share DACL not readable"),
             "Diagnostic message must be present"
         );
     }

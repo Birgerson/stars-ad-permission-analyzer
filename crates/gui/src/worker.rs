@@ -1112,7 +1112,7 @@ async fn handle_search(
         },
     )
     .await
-    .map_err(|e| format!("Suche fehlgeschlagen: {e}"))?;
+    .map_err(|e| format!("search failed: {e}"))?;
 
     let mut results = Vec::new();
     for entry in entries {
@@ -1305,9 +1305,9 @@ fn kind_to_icon(kind: &IdentityKind, domain: &str) -> &'static str {
 /// state regardless.
 fn delete_scan_run(db: &Database, run_id: &str) -> Result<(), String> {
     let id =
-        Uuid::parse_str(run_id).map_err(|e| format!("Ungültige Scan-Run-ID '{run_id}': {e}"))?;
+        Uuid::parse_str(run_id).map_err(|e| format!("Invalid scan-run ID '{run_id}': {e}"))?;
     db.delete_scan_run(&id)
-        .map_err(|e| format!("Löschen fehlgeschlagen: {e}"))?;
+        .map_err(|e| format!("delete failed: {e}"))?;
     Ok(())
 }
 
@@ -1446,7 +1446,7 @@ pub fn trustee_row_for_display(entry: &adpa_core::model::PathTrusteeEntry) -> Tr
             TrusteeRow {
                 sid: String::new(),
                 display_name: format!("\u{26A0} {}", message),
-                kind: "Diagnose".to_owned(),
+                kind: "Diagnostic".to_owned(),
                 rights_label: "—".to_owned(),
                 mask_hex: "—".to_owned(),
                 source: "—".to_owned(),
@@ -1513,12 +1513,12 @@ fn compute_delta(
     new_run_id: &str,
 ) -> Result<Vec<DeltaRow>, String> {
     let old_id =
-        Uuid::parse_str(old_run_id).map_err(|e| format!("Ungültige alte Scan-Run-ID: {e}"))?;
+        Uuid::parse_str(old_run_id).map_err(|e| format!("Invalid old scan-run ID: {e}"))?;
     let new_id =
-        Uuid::parse_str(new_run_id).map_err(|e| format!("Ungültige neue Scan-Run-ID: {e}"))?;
+        Uuid::parse_str(new_run_id).map_err(|e| format!("Invalid new scan-run ID: {e}"))?;
     let entries = db
         .compare_scans(&old_id, &new_id)
-        .map_err(|e| format!("Vergleich fehlgeschlagen: {e}"))?;
+        .map_err(|e| format!("comparison failed: {e}"))?;
 
     Ok(entries
         .into_iter()
@@ -1527,13 +1527,13 @@ fn compute_delta(
             match entry.kind {
                 DeltaKind::Added => DeltaRow {
                     path: entry.path.0,
-                    kind_label: "Hinzugefügt".into(),
+                    kind_label: "Added".into(),
                     old_rights: String::new(),
                     new_rights: entry.new_perm.map(format_rights).unwrap_or_default(),
                 },
                 DeltaKind::Removed => DeltaRow {
                     path: entry.path.0,
-                    kind_label: "Entfernt".into(),
+                    kind_label: "Removed".into(),
                     old_rights: entry.old_perm.map(format_rights).unwrap_or_default(),
                     new_rights: String::new(),
                 },
@@ -1559,9 +1559,9 @@ fn compute_delta(
                         .collect::<Vec<_>>()
                         .join(" + ");
                     let kind_label = if reasons_label.is_empty() {
-                        "Geändert".into()
+                        "Changed".into()
                     } else {
-                        format!("Geändert ({reasons_label})")
+                        format!("Changed ({reasons_label})")
                     };
                     DeltaRow {
                         path: entry.path.0,

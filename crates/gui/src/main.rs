@@ -644,16 +644,16 @@ slint::slint! {
                                     GridBox {
                                         spacing: Theme.spacing-sm;
                                         Row {
-                                            Text { text: "Pfad:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: "Path:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "C:\\Ordner  oder  \\\\server\\share\\Ordner";
+                                                placeholder-text: "C:\\Folder  or  \\\\server\\share\\Folder";
                                                 text <=> root.a-path;
                                             }
                                         }
                                         Row {
                                             Text { text: "User/group:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "DOMAIN\\user  oder  user@domain.lab  oder  S-1-5-21-...  (Domain-User vollstaendig eintippen)";
+                                                placeholder-text: "DOMAIN\\user  or  user@domain.lab  or  S-1-5-21-...  (type the full domain user)";
                                                 text <=> root.a-name;
                                                 edited(s) => { root.analyze-name-edited(s); }
                                                 accepted(s) => { root.resolve-name-clicked(); }
@@ -662,7 +662,7 @@ slint::slint! {
                                         Row {
                                             Text { text: ""; }
                                             Text {
-                                                text: "Vorschlagsliste zeigt nur lokale Konten der Maschine. Fuer Domain-User: DOMAIN\\user oder UPN tippen, dann 'SID aufloesen' klicken.";
+                                                text: "Suggestion list shows local accounts only. For domain users: type DOMAIN\\user or UPN, then click 'Resolve SID'.";
                                                 color: Theme.text-muted;
                                                 font-size: 11px;
                                                 wrap: word-wrap;
@@ -728,7 +728,7 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Benutzer-SID:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: "User SID:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "S-1-5-21-...   (type directly or resolve above)";
                                                 text <=> root.a-sid;
@@ -757,7 +757,7 @@ slint::slint! {
                                         }
                                         ComboBox {
                                             model: [
-                                                "Aus — SAM/LSA nutzen (empfohlen auf DC)",
+                                                "Off — use SAM/LSA (recommended on a DC)",
                                                 "LDAPS — verschlüsselt, Port 636",
                                                 "LDAP unverschlüsselt — Port 389 (nur Test)",
                                             ];
@@ -765,7 +765,7 @@ slint::slint! {
                                             horizontal-stretch: 1;
                                         }
                                         HelpTip {
-                                            tip: "Wie sollen Identität und Gruppen aufgelöst werden?\n\n• Aus (empfohlen): nutzt die lokale Windows-LSA/SAM. Auf einem Domain Controller liefert das vollständige Daten (User, globale Gruppen, lokale Gruppen). Keine Konfiguration, kein Zertifikat nötig.\n\n• LDAPS: verschlüsselte LDAP-Verbindung über Port 636. Setzt voraus, dass der DC ein gültiges LDAPS-Zertifikat hat (AD Certificate Services oder manuell installiert).\n\n• LDAP unverschlüsselt: Port 389, ohne TLS. Nur für Testumgebungen — überträgt Passwort im Klartext.";
+                                            tip: "How should identity and groups be resolved?\n\n• Off (recommended): uses the local Windows LSA/SAM. On a domain controller this returns complete data (users, global groups, local groups). No configuration, no certificate needed.\n\n• LDAPS: encrypted LDAP connection on port 636. Requires the DC to have a valid LDAPS certificate (AD Certificate Services or manually installed).\n\n• Plain LDAP: port 389, no TLS. For test environments only — transmits the password in cleartext.";
                                         }
                                     }
 
@@ -778,7 +778,7 @@ slint::slint! {
                                                 text <=> root.a-ldap-server;
                                             }
                                             HelpTip {
-                                                tip: "Vollqualifizierter Hostname (FQDN) des Domain Controllers.\n\nBeispiel: dc01.firma.local\n\nKein Schema-Präfix (kein ldap:// oder ldaps://) eintragen — das ergibt sich aus dem Modus.";
+                                                tip: "Fully qualified hostname (FQDN) of the domain controller.\n\nExample: dc01.company.local\n\nDo not enter a scheme prefix (no ldap:// or ldaps://) — the mode determines it.";
                                             }
                                         }
                                         Row {
@@ -788,7 +788,7 @@ slint::slint! {
                                                 text <=> root.a-ldap-base-dn;
                                             }
                                             HelpTip {
-                                                tip: "Distinguished Name der Domänenwurzel.\n\nBeispiel: DC=firma,DC=local\n\nKomma-getrennt, keine Leerzeichen nach den Kommas. Aus der DNS-Domäne ableitbar: aus 'firma.local' wird 'DC=firma,DC=local'.";
+                                                tip: "Distinguished Name of the domain root.\n\nExample: DC=company,DC=local\n\nComma-separated, no spaces after the commas. Derivable from the DNS domain: 'company.local' becomes 'DC=company,DC=local'.";
                                             }
                                         }
                                         Row {
@@ -798,7 +798,7 @@ slint::slint! {
                                                 text <=> root.a-ldap-bind-dn;
                                             }
                                             HelpTip {
-                                                tip: "Vollständiger DN des Service- oder Auditor-Kontos zum Anmelden gegen LDAP.\n\nNicht nur der Benutzername — der ganze Pfad bis zum Objekt:\nCN=Max Muster,OU=Benutzer,DC=firma,DC=local\n\nFür ein dediziertes Read-only-Service-Konto empfohlen, nicht der Domain-Admin.";
+                                                tip: "Full DN of the service or auditor account used to bind against LDAP.\n\nNot just the username — the full path to the object:\nCN=Max Muster,OU=Users,DC=company,DC=local\n\nA dedicated read-only service account is recommended, not the domain admin.";
                                             }
                                         }
                                         Row {
@@ -808,7 +808,7 @@ slint::slint! {
                                                 text <=> root.a-ldap-password;
                                             }
                                             HelpTip {
-                                                tip: "Passwort des Bind-DN-Kontos.\n\nWird nicht gespeichert, nur für die laufende Sitzung im Speicher gehalten. Bei 'Unverschlüsseltes LDAP' geht es im Klartext über das Netz — deshalb nur in Testumgebungen verwenden.";
+                                                tip: "Password for the bind-DN account.\n\nNot persisted, only held in memory for the running session. With 'Plain LDAP' it crosses the wire in cleartext — use only in test environments.";
                                             }
                                         }
                                     }
@@ -877,7 +877,7 @@ slint::slint! {
                             }
 
                             if root.a-rights-label != "": GroupBox {
-                                title: "Ergebnis";
+                                title: "Result";
                                 VerticalBox {
                                     spacing: 4px;
                                     Text {
@@ -982,14 +982,14 @@ slint::slint! {
                                         Row {
                                             Text { text: "Wurzelpfad:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "C:\\Daten  oder  \\\\server\\share\\Daten";
+                                                placeholder-text: "C:\\Data  or  \\\\server\\share\\Data";
                                                 text <=> root.s-root;
                                             }
                                         }
                                         Row {
                                             Text { text: "User/group:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "DOMAIN\\user  oder  user@domain.lab  oder  S-1-5-21-...  (Domain-User vollstaendig eintippen)";
+                                                placeholder-text: "DOMAIN\\user  or  user@domain.lab  or  S-1-5-21-...  (type the full domain user)";
                                                 text <=> root.s-name;
                                                 edited(s) => { root.scan-name-edited(s); }
                                                 accepted(s) => { root.resolve-scan-name-clicked(); }
@@ -998,7 +998,7 @@ slint::slint! {
                                         Row {
                                             Text { text: ""; }
                                             Text {
-                                                text: "Vorschlagsliste zeigt nur lokale Konten der Maschine. Fuer Domain-User: DOMAIN\\user oder UPN tippen, dann 'SID aufloesen' klicken.";
+                                                text: "Suggestion list shows local accounts only. For domain users: type DOMAIN\\user or UPN, then click 'Resolve SID'.";
                                                 color: Theme.text-muted;
                                                 font-size: 11px;
                                                 wrap: word-wrap;
@@ -1064,7 +1064,7 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Benutzer-SID:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: "User SID:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "S-1-5-21-...   (type directly or resolve above)";
                                                 text <=> root.s-sid;
@@ -1132,7 +1132,7 @@ slint::slint! {
                                         }
                                         ComboBox {
                                             model: [
-                                                "Aus — SAM/LSA nutzen (empfohlen auf DC)",
+                                                "Off — use SAM/LSA (recommended on a DC)",
                                                 "LDAPS — verschlüsselt, Port 636",
                                                 "LDAP unverschlüsselt — Port 389 (nur Test)",
                                             ];
@@ -1140,7 +1140,7 @@ slint::slint! {
                                             horizontal-stretch: 1;
                                         }
                                         HelpTip {
-                                            tip: "Wie sollen Identität und Gruppen aufgelöst werden?\n\n• Aus (empfohlen): nutzt die lokale Windows-LSA/SAM. Auf einem Domain Controller liefert das vollständige Daten (User, globale Gruppen, lokale Gruppen). Keine Konfiguration, kein Zertifikat nötig.\n\n• LDAPS: verschlüsselte LDAP-Verbindung über Port 636. Setzt voraus, dass der DC ein gültiges LDAPS-Zertifikat hat (AD Certificate Services oder manuell installiert).\n\n• LDAP unverschlüsselt: Port 389, ohne TLS. Nur für Testumgebungen — überträgt Passwort im Klartext.";
+                                            tip: "How should identity and groups be resolved?\n\n• Off (recommended): uses the local Windows LSA/SAM. On a domain controller this returns complete data (users, global groups, local groups). No configuration, no certificate needed.\n\n• LDAPS: encrypted LDAP connection on port 636. Requires the DC to have a valid LDAPS certificate (AD Certificate Services or manually installed).\n\n• Plain LDAP: port 389, no TLS. For test environments only — transmits the password in cleartext.";
                                         }
                                     }
 
@@ -1153,7 +1153,7 @@ slint::slint! {
                                                 text <=> root.s-ldap-server;
                                             }
                                             HelpTip {
-                                                tip: "Vollqualifizierter Hostname (FQDN) des Domain Controllers.\n\nBeispiel: dc01.firma.local\n\nKein Schema-Präfix (kein ldap:// oder ldaps://) eintragen — das ergibt sich aus dem Modus.";
+                                                tip: "Fully qualified hostname (FQDN) of the domain controller.\n\nExample: dc01.company.local\n\nDo not enter a scheme prefix (no ldap:// or ldaps://) — the mode determines it.";
                                             }
                                         }
                                         Row {
@@ -1163,7 +1163,7 @@ slint::slint! {
                                                 text <=> root.s-ldap-base-dn;
                                             }
                                             HelpTip {
-                                                tip: "Distinguished Name der Domänenwurzel.\n\nBeispiel: DC=firma,DC=local\n\nKomma-getrennt, keine Leerzeichen nach den Kommas. Aus der DNS-Domäne ableitbar: aus 'firma.local' wird 'DC=firma,DC=local'.";
+                                                tip: "Distinguished Name of the domain root.\n\nExample: DC=company,DC=local\n\nComma-separated, no spaces after the commas. Derivable from the DNS domain: 'company.local' becomes 'DC=company,DC=local'.";
                                             }
                                         }
                                         Row {
@@ -1173,7 +1173,7 @@ slint::slint! {
                                                 text <=> root.s-ldap-bind-dn;
                                             }
                                             HelpTip {
-                                                tip: "Vollständiger DN des Service- oder Auditor-Kontos zum Anmelden gegen LDAP.\n\nNicht nur der Benutzername — der ganze Pfad bis zum Objekt:\nCN=Max Muster,OU=Benutzer,DC=firma,DC=local\n\nFür ein dediziertes Read-only-Service-Konto empfohlen, nicht der Domain-Admin.";
+                                                tip: "Full DN of the service or auditor account used to bind against LDAP.\n\nNot just the username — the full path to the object:\nCN=Max Muster,OU=Users,DC=company,DC=local\n\nA dedicated read-only service account is recommended, not the domain admin.";
                                             }
                                         }
                                         Row {
@@ -1183,7 +1183,7 @@ slint::slint! {
                                                 text <=> root.s-ldap-password;
                                             }
                                             HelpTip {
-                                                tip: "Passwort des Bind-DN-Kontos.\n\nWird nicht gespeichert, nur für die laufende Sitzung im Speicher gehalten. Bei 'Unverschlüsseltes LDAP' geht es im Klartext über das Netz — deshalb nur in Testumgebungen verwenden.";
+                                                tip: "Password for the bind-DN account.\n\nNot persisted, only held in memory for the running session. With 'Plain LDAP' it crosses the wire in cleartext — use only in test environments.";
                                             }
                                         }
                                     }
@@ -1241,14 +1241,14 @@ slint::slint! {
 
                             if root.s-done || root.s-is-running: GroupBox {
                                 title: "Ergebnisse (" + root.s-total + " Pfade, "
-                                    + root.s-error-count + " Fehler)";
+                                    + root.s-error-count + " errors)";
                                 VerticalBox {
                                     spacing: Theme.spacing-sm;
                                     HorizontalBox {
                                         spacing: Theme.spacing-sm;
                                         Text { text: "Filter:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                         LineEdit {
-                                            placeholder-text: "Teilstring im Pfad";
+                                            placeholder-text: "Path substring filter";
                                             text <=> root.s-filter;
                                             edited(s) => { root.scan-filter-changed(); }
                                         }
@@ -1332,13 +1332,13 @@ slint::slint! {
                             }
 
                             if root.s-errors.length > 0: GroupBox {
-                                title: "Fehler beim Scan";
+                                title: "Scan errors";
                                 VerticalBox {
                                     spacing: 2px;
                                     for err[i] in root.s-errors: HorizontalBox {
                                         spacing: Theme.spacing-sm;
                                         Text {
-                                            text: err.path != "" ? err.path : "(ohne Pfad)";
+                                            text: err.path != "" ? err.path : "(no path)";
                                             color: Theme.error;
                                             width: 320px;
                                             overflow: elide;
@@ -1429,8 +1429,8 @@ slint::slint! {
 
                             Text {
                                 text: "Compare two scan runs — show paths "
-                                    + "die hinzugekommen, entfernt oder mit anderen "
-                                    + "Rechten gespeichert sind.";
+                                    + "that were added, removed, or saved with different "
+                                    + "rights.";
                                 wrap: word-wrap;
                                 color: Theme.text-secondary;
                             }
@@ -1468,7 +1468,7 @@ slint::slint! {
                                             font-weight: 700;
                                         }
                                         Text {
-                                            text: "Scan-Lauf";
+                                            text: "Scan run";
                                             horizontal-stretch: 1;
                                             font-weight: 700;
                                         }
@@ -1530,7 +1530,7 @@ slint::slint! {
                                     padding: Theme.spacing-md;
                                     spacing: Theme.spacing-sm;
                                     Text {
-                                        text: "Scan-Lauf wirklich entfernen?";
+                                        text: "Really remove this scan run?";
                                         font-weight: 700;
                                         color: #5c4500;
                                     }
@@ -1576,7 +1576,7 @@ slint::slint! {
                                     HorizontalBox {
                                         spacing: Theme.spacing-sm;
                                         Text {
-                                            text: "Pfad";
+                                            text: "Path";
                                             font-weight: 700;
                                             horizontal-stretch: 1;
                                         }
@@ -1786,7 +1786,7 @@ slint::slint! {
                             }
 
                             GroupBox {
-                                title: "Urheber und Lizenz";
+                                title: "Author and license";
                                 VerticalLayout {
                                     spacing: Theme.spacing-sm;
                                     padding: Theme.spacing-sm;
@@ -1812,7 +1812,7 @@ slint::slint! {
                                         wrap: word-wrap;
                                     }
                                     Text {
-                                        text: "Diese Software wurde ueberwiegend KI-gestuetzt implementiert: Code with Anthropic Claude Opus. Birger Labinsch ist Prompt Engineer, nicht Code-Autor.";
+                                        text: "This software is predominantly AI-assisted: code by Anthropic Claude Opus. Birger Labinsch is the prompt engineer, not the code author.";
                                         color: Theme.text-secondary;
                                         font-size: Theme.font-sm;
                                         wrap: word-wrap;
@@ -1826,17 +1826,17 @@ slint::slint! {
                                     spacing: Theme.spacing-sm;
                                     padding: Theme.spacing-sm;
                                     Text {
-                                        text: "1. Read-only. Stars schreibt nie an NTFS, SMB-Shares oder Active Directory. Es wird auch in keinem zukuenftigen Release Schreibfunktionen bekommen.";
+                                        text: "1. Read-only. Stars never writes to NTFS, SMB shares, or Active Directory. No future release will gain write functions.";
                                         color: Theme.text-primary;
                                         wrap: word-wrap;
                                     }
                                     Text {
-                                        text: "2. Kein Agent auf Zielsystemen. Stars laeuft auf einer Audit-Workstation oder einem Audit-DC. Es installiert nichts auf Fileservern oder anderen DCs.";
+                                        text: "2. No agent on target systems. Stars runs on an audit workstation or an audit DC. It installs nothing on file servers or other DCs.";
                                         color: Theme.text-primary;
                                         wrap: word-wrap;
                                     }
                                     Text {
-                                        text: "3. Keine Backdoor-Authentifizierung. Stars bindet per LDAP (idealerweise LDAPS), sonst nichts. Keine versteckte Telemetrie, keine Update-Beacons ohne Signaturpruefung.";
+                                        text: "3. No backdoor authentication. Stars binds via LDAP (ideally LDAPS), nothing else. No hidden telemetry, no update beacons without signature verification.";
                                         color: Theme.text-primary;
                                         wrap: word-wrap;
                                     }
@@ -1844,17 +1844,17 @@ slint::slint! {
                             }
 
                             GroupBox {
-                                title: "Backup-Pflicht und Haftungsausschluss";
+                                title: "Backup duty and disclaimer";
                                 VerticalLayout {
                                     spacing: Theme.spacing-sm;
                                     padding: Theme.spacing-sm;
                                     Text {
-                                        text: "Vor jeder Nutzung in einer produktiven Umgebung ist ein vollstaendiges, getestetes Backup der betroffenen Systeme verpflichtend — auch wenn Stars architektonisch ausschliesslich lesend arbeitet. Treiberbugs, Antivirus-Eingriffe oder Lastspitzen koennen auch bei einem reinen Read-only-Tool Stoerungen verursachen.";
+                                        text: "Before any use in a production environment, a complete tested backup of the affected systems is mandatory — even though Stars architecturally only reads. Driver bugs, antivirus interference, or load spikes can cause disruption even with a pure read-only tool.";
                                         color: Theme.text-primary;
                                         wrap: word-wrap;
                                     }
                                     Text {
-                                        text: "Die Nutzung erfolgt auf eigene Verantwortung. Birger Labinsch uebernimmt keine Haftung fuer Schaeden, Datenverluste, falsche Audit-Ergebnisse oder Folgen aus der Nutzung dieser Software. Vollstaendiger Haftungsausschluss in README.md (Abschnitt 'Haftungsausschluss').";
+                                        text: "Use is at your own risk. Birger Labinsch assumes no liability for damages, data loss, incorrect audit results, or consequences arising from the use of this software. Full disclaimer in README.md (section 'Disclaimer').";
                                         color: Theme.text-primary;
                                         wrap: word-wrap;
                                     }
@@ -1862,7 +1862,7 @@ slint::slint! {
                             }
 
                             GroupBox {
-                                title: "Kontakt und weiterfuehrende Doku";
+                                title: "Contact and further documentation";
                                 VerticalLayout {
                                     spacing: Theme.spacing-sm;
                                     padding: Theme.spacing-sm;
@@ -1877,13 +1877,13 @@ slint::slint! {
                                         wrap: word-wrap;
                                     }
                                     Text {
-                                        text: "Entscheidungshilfe vor Einsatz: docs/can-stars-help-you.md im Repo (DE + EN).";
+                                        text: "Decision guide before use: docs/can-stars-help-you.md in the repo.";
                                         color: Theme.text-secondary;
                                         font-size: Theme.font-sm;
                                         wrap: word-wrap;
                                     }
                                     Text {
-                                        text: "Build verifiziert gegen Windows Server 2022 Standard und Windows Server 2025 Standard (3-Forest-Lab-Smoke-Test, 2026-06-07).";
+                                        text: "Build verified against Windows Server 2022 Standard and Windows Server 2025 Standard (3-forest lab smoke test, 2026-06-07).";
                                         color: Theme.text-secondary;
                                         font-size: Theme.font-sm;
                                         wrap: word-wrap;
@@ -1942,9 +1942,9 @@ fn main() {
                 .unwrap_or_else(|| "<unknown>".to_string());
             tracing::error!(target: "stars-gui", "panic at {location}: {payload}");
             show_fatal_dialog(
-                "Stars — Absturz beim Start",
+                "Stars — crash at startup",
                 &format!(
-                    "Die Anwendung ist abgestürzt.\n\nOrt: {location}\nGrund: {payload}\n\nDetails: {}",
+                    "The application has crashed.\n\nLocation: {location}\nReason: {payload}\n\nDetails: {}",
                     log_path.display()
                 ),
             );
@@ -1973,7 +1973,7 @@ fn main() {
         show_fatal_dialog(
             "Stars — Start fehlgeschlagen",
             &format!(
-                "Das GUI-Backend konnte nicht initialisiert werden.\n\nGrund: {e}\n\nDetails: {}",
+                "The GUI backend could not be initialized.\n\nReason: {e}\n\nDetails: {}",
                 log_path.display()
             ),
         );
@@ -2126,7 +2126,7 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         let sid = ui.get_a_sid().to_string();
 
         if path.trim().is_empty() || sid.trim().is_empty() {
-            ui.set_a_status("Pfad und SID müssen angegeben werden.".into());
+            ui.set_a_status("Path and SID are required.".into());
             ui.set_a_status_is_error(true);
             return;
         }
@@ -2169,7 +2169,7 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             share_name,
         }) {
             ui.set_a_is_running(false);
-            ui.set_a_status(format!("Worker nicht erreichbar: {e}").into());
+            ui.set_a_status(format!("Worker not reachable: {e}").into());
             ui.set_a_status_is_error(true);
         }
     });
@@ -2183,7 +2183,7 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             let Some(ui) = weak.upgrade() else { return };
             let path = ui.get_a_path().to_string();
             if path.trim().is_empty() {
-                ui.set_a_status("Pfad muss angegeben werden.".into());
+                ui.set_a_status("Path is required.".into());
                 ui.set_a_status_is_error(true);
                 return;
             }
@@ -2205,7 +2205,7 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
                 share_name,
             }) {
                 ui.set_a_trustees_running(false);
-                ui.set_a_status(format!("Worker nicht erreichbar: {e}").into());
+                ui.set_a_status(format!("Worker not reachable: {e}").into());
                 ui.set_a_status_is_error(true);
             }
         });
@@ -2240,7 +2240,7 @@ fn handle_trustees_done(ui: &MainWindow, result: Result<Vec<TrusteeRow>, String>
             let len = vms.len();
             ui.set_a_trustees(slint::ModelRc::new(slint::VecModel::from(vms)));
             ui.set_a_has_trustees(true);
-            ui.set_a_status(format!("{} ACE-Einträge auf diesem Pfad gefunden.", len).into());
+            ui.set_a_status(format!("{} ACE entries found on this path.", len).into());
             ui.set_a_status_is_error(false);
         }
         Err(e) => {
@@ -2278,7 +2278,7 @@ fn apply_analyze_result(
             // Delta tab.
             let (status, is_error) = match (scan_run_id, persistence_error) {
                 (Some(_), _) => (
-                    "Analyse abgeschlossen — in der Scan-Historie gespeichert.".to_string(),
+                    "Analysis complete — saved to scan history.".to_string(),
                     false,
                 ),
                 (None, Some(reason)) => (
@@ -2315,7 +2315,7 @@ fn format_share_line(perm: &EffectivePermission) -> String {
             format!("Share hat NULL-DACL (keine Beschränkung über SMB) — effektiv folgt NTFS = {ntfs_label}.")
         }
         ShareEvalStatus::ReadFailed(reason) => {
-            format!("Share-DACL-Lesen fehlgeschlagen: {reason} — Ergebnis kann unvollständig sein.")
+            format!("Share DACL read failed: {reason} — result may be incomplete.")
         }
     }
 }
@@ -2380,7 +2380,7 @@ fn wire_scan_tab(
             let sid = ui.get_s_sid().to_string();
 
             if root.trim().is_empty() || sid.trim().is_empty() {
-                ui.set_s_status("Wurzelpfad und SID müssen angegeben werden.".into());
+                ui.set_s_status("Root path and SID are required.".into());
                 ui.set_s_status_is_error(true);
                 return;
             }
@@ -2449,7 +2449,7 @@ fn wire_scan_tab(
                 ldap,
             }) {
                 ui.set_s_is_running(false);
-                ui.set_s_status(format!("Worker nicht erreichbar: {e}").into());
+                ui.set_s_status(format!("Worker not reachable: {e}").into());
                 ui.set_s_status_is_error(true);
             }
         });
@@ -2506,7 +2506,7 @@ fn wire_scan_tab(
             ui.set_s_export_message("Export läuft...".into());
             ui.set_s_export_is_error(false);
             if let Err(e) = req_tx.send(WorkerRequest::ExportHtml { output_path }) {
-                ui.set_s_export_message(format!("Worker nicht erreichbar: {e}").into());
+                ui.set_s_export_message(format!("Worker not reachable: {e}").into());
                 ui.set_s_export_is_error(true);
             }
         });
@@ -2623,7 +2623,7 @@ fn handle_scan_done(
 
     let mut parts: Vec<String> = Vec::new();
     if cancelled {
-        parts.push("Scan abgebrochen — Ergebnisse sind unvollständig.".to_string());
+        parts.push("Scan cancelled — results are incomplete.".to_string());
     } else {
         parts.push("Scan abgeschlossen.".to_string());
     }
@@ -2695,7 +2695,7 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
             ui.set_d_status_is_error(false);
             if let Err(e) = req_tx.send(WorkerRequest::ListScanRuns) {
                 ui.set_d_is_loading(false);
-                ui.set_d_status(format!("Worker nicht erreichbar: {e}").into());
+                ui.set_d_status(format!("Worker not reachable: {e}").into());
                 ui.set_d_status_is_error(true);
             }
         });
@@ -2750,12 +2750,12 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
                 (s.selected_old.clone(), s.selected_new.clone())
             });
             let (Some(old_id), Some(new_id)) = (old_id, new_id) else {
-                ui.set_d_status("Bitte je einen Scan-Lauf für 'Alt' und 'Neu' auswählen.".into());
+                ui.set_d_status("Please select one scan run for 'Old' and one for 'New'.".into());
                 ui.set_d_status_is_error(true);
                 return;
             };
             if old_id == new_id {
-                ui.set_d_status("'Alt' und 'Neu' müssen unterschiedliche Läufe sein.".into());
+                ui.set_d_status("'Old' and 'New' must be different runs.".into());
                 ui.set_d_status_is_error(true);
                 return;
             }
@@ -2768,7 +2768,7 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
                 new_run_id: new_id,
             }) {
                 ui.set_d_is_loading(false);
-                ui.set_d_status(format!("Worker nicht erreichbar: {e}").into());
+                ui.set_d_status(format!("Worker not reachable: {e}").into());
                 ui.set_d_status_is_error(true);
             }
         });
@@ -2787,10 +2787,10 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
             if id_str.is_empty() {
                 return;
             }
-            ui.set_d_status("Lösche Scan-Lauf...".into());
+            ui.set_d_status("Deleting scan run...".into());
             ui.set_d_status_is_error(false);
             if let Err(e) = req_tx.send(WorkerRequest::DeleteScanRun { run_id: id_str }) {
-                ui.set_d_status(format!("Worker nicht erreichbar: {e}").into());
+                ui.set_d_status(format!("Worker not reachable: {e}").into());
                 ui.set_d_status_is_error(true);
             }
         });
@@ -2835,7 +2835,7 @@ fn handle_scan_runs_loaded(ui: &MainWindow, result: Result<Vec<ScanRunSummary>, 
                     .map(|r| ScanRunSummaryUi {
                         id: r.id,
                         label: format!(
-                            "{}  —  {}  ({} Fehler)",
+                            "{}  —  {}  ({} errors)",
                             r.started_at, r.target, r.error_count
                         ),
                     })
@@ -2852,7 +2852,7 @@ fn handle_scan_runs_loaded(ui: &MainWindow, result: Result<Vec<ScanRunSummary>, 
             });
             refresh_delta_runs(ui);
             ui.set_d_status(
-                "Scan-Läufe geladen. Je einen für 'Alt' und 'Neu' anhaken, dann vergleichen."
+                "Scan runs loaded. Check one for 'Old' and one for 'New', then compare."
                     .into(),
             );
             ui.set_d_status_is_error(false);
@@ -2883,7 +2883,7 @@ fn handle_scan_run_deleted(ui: &MainWindow, run_id: &str, result: Result<(), Str
                 }
             });
             refresh_delta_runs(ui);
-            ui.set_d_status("Scan-Lauf entfernt.".into());
+            ui.set_d_status("Scan run removed.".into());
             ui.set_d_status_is_error(false);
             // ausblenden.
             // If a delta result was still visible in the frame, it might
@@ -2942,12 +2942,12 @@ fn handle_delta_computed(ui: &MainWindow, result: Result<Vec<DeltaRow>, String>)
             ui.set_d_changed_count(changed);
             ui.set_d_rows(slint::ModelRc::new(slint::VecModel::from(vms)));
             ui.set_d_has_result(true);
-            ui.set_d_status("Vergleich abgeschlossen.".into());
+            ui.set_d_status("Comparison complete.".into());
             ui.set_d_status_is_error(false);
         }
         Err(e) => {
             ui.set_d_has_result(false);
-            ui.set_d_status(format!("Vergleich fehlgeschlagen: {e}").into());
+            ui.set_d_status(format!("Comparison failed: {e}").into());
             ui.set_d_status_is_error(true);
         }
     }
@@ -3099,7 +3099,7 @@ fn resolve_name_to_sid(
             on_sid(sid.0);
             on_error(String::new());
         }
-        Err(e) => on_error(format!("'{trimmed}' konnte nicht aufgelöst werden: {e}")),
+        Err(e) => on_error(format!("'{trimmed}' could not be resolved: {e}")),
     }
 }
 

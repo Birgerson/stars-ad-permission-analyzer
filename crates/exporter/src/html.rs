@@ -216,9 +216,6 @@ fn write_permissions_table(
             .map(|s| format!("<div class=\"step\">• {}</div>", escape_html(s)))
             .collect();
 
-        //   2. Share-DACL nicht lesbar (ReadFailed).
-        //   4. Strukturierte Diagnose-Marker (Folge-Befund 3) — derzeit
-        //
         // The diagnostics column unifies four incompleteness sources:
         //   1. Parser gap: unevaluated ACE types.
         //   2. Share DACL unreadable (ReadFailed).
@@ -364,22 +361,20 @@ fn write_html_foot(s: &mut String) {
 /// Renders the path-centric trustee table per path — answers the second
 /// audit question "who can access this path at all?".
 fn write_trustees_table(s: &mut String, entries: &[PathTrustees]) -> Result<(), CoreError> {
-    s.push_str("<h2>Wer hat Zugriff (Trustees pro Pfad)</h2>\n");
+    s.push_str("<h2>Who has access (trustees per path)</h2>\n");
     for entry in entries {
         if entry.trustees.is_empty() {
             continue;
         }
         writeln!(
             s,
-            "<details><summary><strong>{}</strong> &nbsp;<span style=\"color:#6c7a89\">({} Eintr&auml;ge)</span></summary>",
+            "<details><summary><strong>{}</strong> &nbsp;<span style=\"color:#6c7a89\">({} entries)</span></summary>",
             escape_html(&entry.path.0),
             entry.trustees.len()
         )
         .map_err(|e| CoreError::Export(e.to_string()))?;
-        s.push_str("<table><thead><tr><th>Trustee</th><th>Art</th><th>Rechte</th><th>Maske</th><th>Quelle</th><th>Anwendung</th><th>Schicht</th></tr></thead><tbody>\n");
+        s.push_str("<table><thead><tr><th>Trustee</th><th>Kind</th><th>Rights</th><th>Mask</th><th>Source</th><th>Applies to</th><th>Layer</th></tr></thead><tbody>\n");
         for entry_ref in &entry.trustees {
-            // Round-10 Finding 4: zwei Render-Pfade — Diagnostic-Zeilen
-            // werden visuell anders dargestellt (gelblicher Hintergrund,
             // Round-10 finding 4: two render paths — diagnostic rows are
             // visually different (yellowish background, italic, no
             // Allow/Deny label) so auditors immediately see this is not
@@ -392,7 +387,7 @@ fn write_trustees_table(s: &mut String, entries: &[PathTrustees]) -> Result<(), 
                     };
                     writeln!(
                         s,
-                        "<tr style=\"background-color:#fff7d6\"><td colspan=\"6\"><em>&#9888; Diagnose: {}</em></td><td>{}</td></tr>",
+                        "<tr style=\"background-color:#fff7d6\"><td colspan=\"6\"><em>&#9888; Diagnostic: {}</em></td><td>{}</td></tr>",
                         escape_html(message),
                         category_label,
                     )

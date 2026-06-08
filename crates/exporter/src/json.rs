@@ -236,7 +236,7 @@ mod tests {
                     }),
                     PathTrusteeEntry::diagnostic(
                         TrusteeCategory::Share,
-                        "Share-DACL nicht lesbar: timeout",
+                        "share DACL not readable: timeout",
                     ),
                 ],
             }],
@@ -279,7 +279,7 @@ mod tests {
             entries[1]["message"]
                 .as_str()
                 .unwrap_or("")
-                .contains("nicht lesbar"),
+                .contains("not readable"),
             "diagnostic message must carry the reason text"
         );
         assert!(
