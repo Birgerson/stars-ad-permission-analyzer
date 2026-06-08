@@ -10,6 +10,63 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+(No unreleased changes — see v1.5.17 below for the latest release.)
+
+---
+
+## [1.5.17] — 2026-06-08
+
+**Engine correctness patch.** Closes two real bugs found by an external ChatGPT review in the NTFS + SMB combination Stars is built to audit. v1.5.16 users should upgrade.
+
+### Finding 1 (High) — BroadGroupWriteRule false positive on NTFS + Share Read
+
+`crates/risk_engine/src/rules.rs` gated the rule on `effective_mask & MASK_WRITE != 0`. `MASK_WRITE` includes `READ_CONTROL` and `SYNCHRONIZE`, which a Read-only final mask also satisfies. Concrete scenario: NTFS grants Everyone Modify but the SMB share caps the final effective permission to Read. The engine correctly computed Read, but `BroadGroupWriteRule` reported a critical `BROAD_GROUP_WRITE` finding anyway. This was exactly the NTFS + SMB audit case Stars advertises.
+
+Fix:
+
+- Gate on write-specific effective bits (`effective_mask & WRITE_SPECIFIC_BITS`).
+- Require both the contributing SID's mask AND the final effective mask to overlap on write-specific bits, so a contribution whose write bits got capped away by the share layer no longer triggers.
+- New regression test `ntfs_modify_via_everyone_but_share_read_no_broad_group_write`.
+
+### Finding 2 (Medium) — `collect_contributing_sids` over-attributed bits
+
+`crates/permission_engine/src/engine.rs` recomputed permission provenance via plain mask overlap against the final NTFS result, ignoring stored ACE order. Two consequences:
+
+1. **Allow specific-group Modify followed by Allow Everyone Modify**: the later Everyone ACE decided no new bit but was still recorded as contributing Modify. Plumbed forward into a false `BROAD_GROUP_WRITE` for paths where Everyone in fact only inherited bits a specific group had already granted.
+2. **Deny Everyone Write followed by Allow Everyone Modify**: the denied write bits were recorded as contributed Allow bits. Wrong provenance in CSV/JSON; risk rules consuming `contributing_sids` could mis-attribute.
+
+Fix: rewrite `collect_contributing_sids` as a stored-order walk that mirrors `evaluate_dacl_ordered`. Per right-bit, the first ACE wins; only the actually-decided `bits` value is recorded against the Allow ACE's SID. Deny ACEs consume bits without crediting any SID.
+
+Three new regression tests:
+
+- `stored_order_later_everyone_allow_does_not_contribute_if_already_granted`
+- `stored_order_first_everyone_read_contributes_only_read_bits`
+- `stored_order_deny_first_excludes_denied_bits_from_contribution`
+
+### Finding 3 — Language gate misses and remaining DE
+
+- Duplicated "Deutsche Sektion" of the Info tab in `crates/gui/src/main.rs` (a copy of the English Info section that crept back in with a "— Deutsch —" marker and a German GroupBox title). Removed.
+- Scan-tab labels `"Tiefe:"` / `"Tiefe begrenzen"` → `"Depth:"` / `"Limit depth"`.
+- Slint title `"Ergebnisse (N Pfade)"` → `"Results (N paths)"`.
+- `crates/permission_engine/src/mask.rs` module doc and section headers collapsed to English-only.
+- Various doc-comment leftovers in `ad_resolver`, `core`, `fs_scanner`, `gui/worker`, `Cargo.toml`.
+- `scripts/check-language.py` denylist extended (Cache-Treffer, Verwaiste, Spezifische, Erweiterte, Synchronisationspunkt, Eingabeformen, Walk-Fehler, Schliesst, Tiefe, Ziel, Modus) so this regression class is caught at CI time.
+
+### Tests
+
+- **`cargo test --workspace`: 530 passed** (was 526; +4 new regression tests from findings 1 and 2). 0 failed, 7 ignored.
+- `cargo fmt --all --check`: clean.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- `python scripts/check-language.py`: passes.
+
+### Documentation
+
+Version notes in `README.md`, `docs/user-guide.md` and the download examples set to `v1.5.17`.
+
+---
+
+## [1.5.16] — 2026-06-06
+
 **Code review response (2026-06-07).** Four findings from an external ChatGPT review implemented — not symptom fixes, but structural corrections with regression tests. Plus lab verification on Windows Server 2025 Standard and a first README restructuring pass for GitHub visitors.
 
 ### Finding 1 (High) — audit integrity: identity snapshot per permission row
