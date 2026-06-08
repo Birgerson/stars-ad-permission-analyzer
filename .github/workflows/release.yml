@@ -56,10 +56,6 @@ jobs:
       - name: Build NSIS installer
         run: |
           $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
-          # Version aus dem Tag ableiten: v0.2.0-rc15 -> 0.2.0-rc15.
-          # Wird per /DAPP_VERSION an makensis uebergeben, damit der
-          # Eintrag in "Programme und Features" die echte Release-Version
-          # zeigt statt des Hardcoded-Werts.
           # Derive the version from the tag: v0.2.0-rc15 -> 0.2.0-rc15.
           # Passed to makensis via /DAPP_VERSION so the "Programs and
           # Features" entry shows the real release version instead of a
@@ -75,11 +71,6 @@ jobs:
           Move-Item installer-build\Stars-Setup.exe "Stars-${tag}-Setup.exe"
 
       - name: Compute SHA256 checksum
-        # Stars hat (Stand jetzt) kein Code-Signing-Zertifikat —
-        # der Installer triggert SmartScreen "Unknown publisher". Damit
-        # Anwender die Datei wenigstens auf Integritaet pruefen koennen,
-        # legen wir einen SHA256-Hash als `<exe>.sha256` daneben. Format
-        # ist sha256sum-kompatibel: "<hash>  <dateiname>".
         # Stars currently has no code-signing certificate — the installer
         # triggers SmartScreen "Unknown publisher". To let users at least
         # verify file integrity we drop a SHA256 hash next to the binary
@@ -89,7 +80,6 @@ jobs:
           $tag = "${{ github.ref_name }}"
           $exe = "Stars-${tag}-Setup.exe"
           $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
-          # Doppel-Leerzeichen ist das sha256sum(1)-Format.
           # Double space is the sha256sum(1) format.
           "$hash  $exe" | Out-File -FilePath "$exe.sha256" -Encoding ascii -NoNewline
           Write-Host "Computed: $hash"

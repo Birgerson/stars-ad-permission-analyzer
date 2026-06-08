@@ -45,7 +45,6 @@ const CONTAINER_INHERIT_ACE: u8 = 0x02;
 const NO_PROPAGATE_INHERIT_ACE: u8 = 0x04;
 const INHERIT_ONLY_ACE: u8 = 0x08;
 
-/// `inheritance_flags` (OI|CI — welche Kinder erben) und
 /// `propagation_flags` (NP|IO — wie/ob es weiterpropagiert).
 ///
 /// Splits `ACE_HEADER::AceFlags` into the .NET-equivalent fields
@@ -81,10 +80,8 @@ unsafe fn sid_ptr_to_string(sid: *const core::ffi::c_void) -> Result<String, Cor
     Ok(sid_string)
 }
 
-/// Liest Attribute, Owner-SID und DACL eines Pfades.
 /// Reads attributes, owner SID and DACL for a path.
 ///
-/// (`\\?\C:\…` bzw. `\\?\UNC\server\share\…`) umgewandelt, damit Pfade
 ///
 /// The input path is converted into long-path form (`\\?\C:\…` or
 /// `\\?\UNC\server\share\…`) before any Win32 call, so paths longer than
@@ -165,9 +162,7 @@ pub fn read_file_system_object(path: &str) -> Result<FileSystemObject, CoreError
         unsafe { sid_ptr_to_string(psid_owner) }.ok().map(Sid)
     };
 
-    // NULL-DACL und leere DACL fachlich trennen:
     // - NULL-DACL → null_dacl = true, dacl leer (Engine wertet als Vollzugriff).
-    // - DACL vorhanden, aber leer → null_dacl = false, dacl leer (Deny-All).
     // Distinguish NULL DACL from empty DACL:
     // - NULL DACL → null_dacl = true, dacl empty (engine treats as full access).
     // - DACL present but empty → null_dacl = false, dacl empty (deny all).
@@ -179,7 +174,6 @@ pub fn read_file_system_object(path: &str) -> Result<FileSystemObject, CoreError
         (entries, unsupported, false)
     };
 
-    // Vererbungsschutz: SE_DACL_PROTECTED im Security-Descriptor-Control-Feld.
     // Inheritance protection: SE_DACL_PROTECTED in the Security Descriptor control field.
     let inheritance_disabled = if p_sd.is_null() {
         false
@@ -220,7 +214,6 @@ pub fn read_file_system_object(path: &str) -> Result<FileSystemObject, CoreError
     })
 }
 
-/// Ergebnis eines einzelnen ACE-Parse-Versuchs.
 /// Result of a single ACE parse attempt.
 enum ParseAceOutcome {
     Entry(AceEntry),
@@ -230,7 +223,6 @@ enum ParseAceOutcome {
     Skip,
 }
 
-/// Liest alle ACEs aus einem DACL.
 /// Reads all ACEs from a DACL.
 ///
 /// Returns `(supported ACEs, unsupported ACEs)`.
@@ -328,7 +320,6 @@ unsafe fn parse_ace(ace_ptr: *mut core::ffi::c_void) -> ParseAceOutcome {
             }
         }
         _ => {
-            // Alle Standard-ACE-Typen (0–15+) haben Mask direkt nach dem ACE_HEADER.
             // All standard ACE types (0–15+) have Mask immediately after ACE_HEADER.
             // SAFETY: Mask field position is identical across all standard Windows ACE types.
             let ace = &*(ace_ptr as *const ACCESS_ALLOWED_ACE);
@@ -341,7 +332,6 @@ unsafe fn parse_ace(ace_ptr: *mut core::ffi::c_void) -> ParseAceOutcome {
     }
 }
 
-/// Ruft GetLastError auf — Hilfsfunktion zur Lesbarkeit.
 /// Calls GetLastError — helper for readability.
 #[inline]
 unsafe fn get_last_error() -> u32 {
@@ -445,7 +435,7 @@ mod tests {
         assert_eq!(prop, 0);
     }
 
-    /// Synthetischer Test: ein ACE mit unbekanntem Typ (z.B. SYSTEM_AUDIT_ACE_TYPE = 2)
+    /// Synthetic test: an ACE with an unknown type (e.g. SYSTEM_AUDIT_ACE_TYPE = 2).
     ///
     /// Synthetic test: an ACE with an unknown type (e.g. SYSTEM_AUDIT_ACE_TYPE = 2)
     /// is recorded as UnsupportedAce with type and mask, not silently dropped.

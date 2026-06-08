@@ -3,7 +3,6 @@
 
 use adpa_core::{error::CoreError, model::Sid};
 
-/// Validierte SID — muss dem Format S-1-... entsprechen
 /// Validated SID — must match the S-1-... format
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedSid(pub String);

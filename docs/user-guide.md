@@ -616,5 +616,5 @@ the configuration for you**. That's your call.
 
 ## Deutsche Version
 
-Eine deutsche Fassung dieses Handbuchs liegt unter
+
 **[anwender-handbuch.md](anwender-handbuch.md)**.

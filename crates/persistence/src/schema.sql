@@ -1,5 +1,4 @@
--- Migration v1: Initiales Schema / initial schema
--- Ausgeführt einmalig; PRAGMA user_version wird danach auf 1 gesetzt.
+-- Migration v1: initial schema.
 -- Applied once; PRAGMA user_version is set to 1 afterwards.
 
 CREATE TABLE IF NOT EXISTS scan_runs (

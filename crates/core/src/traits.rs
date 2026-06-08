@@ -15,7 +15,6 @@ pub struct ScanRequest {
     pub target: String,
 }
 
-/// Ergebnis eines Scans: rohe Dateisystemobjekte plus Fehler beim Lesen.
 /// Result of a scan: raw file system objects plus errors encountered while reading.
 /// Effective permission computation happens afterwards in the evaluator — the
 /// scanner only produces the input data.
@@ -29,7 +28,6 @@ pub struct PermissionEvaluationInput {
     pub group_memberships: Vec<GroupMembership>,
     /// The file system object to analyze, including DACL and owner.
     pub file_system_object: FileSystemObject,
-    /// „Lesen fehlgeschlagen" eindeutig unterscheidbar.
     /// Status of the share side (no SMB / applied with mask / read failed).
     /// Replaces the former `Option<AccessMask>` and makes "no context"
     /// unambiguously distinguishable from "read failed".
@@ -42,35 +40,28 @@ pub struct PermissionEvaluationInput {
     /// as incomplete (see [`LocalGroupEvalStatus`]). The caller sets this; the
     /// engine forwards it unchanged.
     pub local_group_status: LocalGroupEvalStatus,
-    /// Zugriffskontext (lokal interaktiv / remote SMB / nicht spezifiziert).
-    /// Steuert, welche Well-Known-SIDs implizit in den Token aufgenommen
     /// Access context (local interactive / remote SMB / unspecified).
     /// Controls which well-known SIDs are added to the token implicitly
     /// (e.g. `NETWORK` for SMB, `INTERACTIVE` for local). The default
     /// (`Unspecified`) behaves as before — only `Everyone` and
     /// `Authenticated Users` are added.
     pub access_context: AccessContext,
-    /// konnte (z. B. Object-, Callback- oder herstellerspezifische ACEs).
     /// Engine pusht bei >0 einen `PermissionDiagnostic::UnsupportedShareAces`
-    /// als `incomplete` markiert. Default 0 (keine).
     /// Number of share ACEs the share DACL parser could not interpret
     /// (e.g. object, callback or vendor-specific ACEs). When >0 the
     /// engine pushes a `PermissionDiagnostic::UnsupportedShareAces`
     /// into the result; risk findings derived from this permission are
     /// then flagged `incomplete`. Default 0 (none).
     pub unsupported_share_ace_count: usize,
-    /// den `PermissionPath::steps` auftaucht (User, Gruppen, ACE-Trustees),
     /// Optional SID-to-name lookup table for the explanation text. The
     /// key is the canonical SID string (same as `Sid::0`), the value is
     /// the display name (e.g. `Domain Admins` or
     /// `BUILTIN\Administrators`). The engine consults this table for every
     /// SID that appears in `PermissionPath::steps` (user, groups, ACE
-    /// trustees); when the SID is missing or the table is empty it falls
     /// back to showing the raw SID. Defaulting to empty keeps existing
     /// callers compatible.
     pub sid_names: BTreeMap<String, String>,
-    /// `PermissionDiagnostic::DomainGroupRecursionIncomplete` ins Ergebnis,
-    /// kompatibel. Schliesst Review-Befund 6.
+    /// compatible. Closes review finding 6.
     /// `true` when group resolution runs through the SAM/LSA fallback
     /// (`NetUserGetGroups`) instead of LDAP. In that case **nested domain
     /// groups are not recursively resolved** and the token SID set may be
@@ -81,28 +72,26 @@ pub struct PermissionEvaluationInput {
     /// compatible. Closes review finding 6.
     pub group_resolution_via_sam_fallback: bool,
     /// `PermissionDiagnostic::IdentityNotInConfiguredLdapBase`. Default
-    /// `false`. Schliesst Review-Befund 2026-06-04 Runde 2 Finding 1.
+    /// `false`. Closes review finding 1, 2026-06-04 round 2.
     /// `true` when the identity was resolved via LSA but the configured
     /// LDAP `base_dn` does not index that SID (typical in multi-domain
     /// forests). The engine then pushes a
     /// `PermissionDiagnostic::IdentityNotInConfiguredLdapBase`. Default
     /// `false`. Closes review 2026-06-04 round 2 finding 1.
     pub identity_not_in_configured_ldap_base: bool,
-    /// Default `false`. Schliesst Review-Befund 2026-06-04 Runde 2 Finding 5.
+    /// Default `false`. Closes review finding 5, 2026-06-04 round 2.
     /// `true` when the `disabled` flag on the identity could not be
     /// reliably determined (e.g. SAM path without `NetUserGetInfo`).
     /// Default `false`. Closes review 2026-06-04 round 2 finding 5.
     pub identity_disabled_status_unknown: bool,
-    /// `PermissionDiagnostic::IdentityLookupFailed { reason }`. Die
     /// Risk-Engine markiert abgeleitete Findings als
     /// `incomplete = true`. Default `None`. Schliesst
-    /// Review-Befund 2026-06-04 Runde 4 Finding 1.
+    /// Review finding 1, 2026-06-04 round 4.
     /// `Some(reason)` when the LDAP identity lookup failed with a
     /// technical error. The engine pushes an `IdentityLookupFailed`
     /// marker; risk findings are flagged incomplete. Default `None`.
     pub identity_lookup_failure_reason: Option<String>,
     /// Engine pusht dann einen
-    /// `PermissionDiagnostic::GroupResolutionFailed { reason }`. Die
     /// Risk-Engine markiert abgeleitete Findings als
     /// `incomplete = true`. Default `None`.
     /// `Some(reason)` when recursive group resolution failed or was
@@ -115,12 +104,7 @@ pub struct RiskContext {
     pub findings: Vec<EffectivePermission>,
 }
 
-/// Ziel eines Export-Aufrufs. Round-8-Folgereview Finding 1: der
-/// Audit-Berichte truncaten koennen.
 ///
-///   Zieldatei bereits existiert (`OpenOptions::create_new`). Genau
-///   existierende Datei. CLI mit `--force` waehlt diesen Pfad bewusst,
-///   die GUI nutzt ihn nie.
 ///
 /// Export call target. Round-8 follow-up finding 1: the `Exporter`
 /// trait now carries the overwrite policy itself so direct trait
@@ -162,7 +146,6 @@ pub trait IdentityResolver: Send + Sync {
     /// Resolves a SID to a full identity (name, domain, kind, status).
     async fn resolve_identity(&self, sid: &Sid) -> Result<Identity, CoreError>;
 
-    /// Ermittelt alle Gruppenmitgliedschaften rekursiv (direkt und transitiv).
     /// Determines all group memberships recursively (direct and transitive).
     async fn resolve_group_memberships(&self, sid: &Sid)
         -> Result<Vec<GroupMembership>, CoreError>;
@@ -178,7 +161,6 @@ pub trait RiskRule {
     fn evaluate(&self, context: &RiskContext) -> Vec<RiskFinding>;
 }
 
-/// Exportiert Analyseergebnisse in ein Zielformat.
 /// Exports analysis results to a target format.
 pub trait Exporter {
     fn export(&self, result: &AnalysisResult, target: ExportTarget) -> Result<(), CoreError>;

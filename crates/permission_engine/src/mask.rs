@@ -16,18 +16,14 @@ use serde::{Deserialize, Serialize};
 // Specific file rights (bits 0–8) — from WinNT.h
 // ---------------------------------------------------------------------------
 
-/// Datei lesen / Verzeichnisinhalt auflisten
 pub const FILE_READ_DATA: u32 = 0x0000_0001;
-/// Datei schreiben / Datei in Verzeichnis anlegen
 pub const FILE_WRITE_DATA: u32 = 0x0000_0002;
 pub const FILE_APPEND_DATA: u32 = 0x0000_0004;
-/// Erweiterte Attribute lesen
 pub const FILE_READ_EA: u32 = 0x0000_0008;
 /// Erweiterte Attribute schreiben
 pub const FILE_WRITE_EA: u32 = 0x0000_0010;
 pub const FILE_EXECUTE: u32 = 0x0000_0020;
 pub const FILE_DELETE_CHILD: u32 = 0x0000_0040;
-/// Basis-Attribute lesen
 pub const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
 /// Basis-Attribute schreiben
 pub const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
@@ -38,7 +34,6 @@ pub const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
 // ---------------------------------------------------------------------------
 
 pub const FILE_DELETE: u32 = 0x0001_0000;
-/// Security-Descriptor lesen (READ_CONTROL)
 pub const FILE_READ_CONTROL: u32 = 0x0002_0000;
 pub const FILE_WRITE_DAC: u32 = 0x0004_0000;
 pub const FILE_WRITE_OWNER: u32 = 0x0008_0000;
@@ -46,7 +41,7 @@ pub const FILE_WRITE_OWNER: u32 = 0x0008_0000;
 pub const FILE_SYNCHRONIZE: u32 = 0x0010_0000;
 
 // ---------------------------------------------------------------------------
-// Generische Rechte (Bits 28–31) — Windows mapped sie auf spezifische Rechte
+// Generic rights (bits 28–31) — Windows maps them to specific rights
 // Generic rights (bits 28–31) — Windows maps them to specific rights
 // ---------------------------------------------------------------------------
 
@@ -71,9 +66,7 @@ pub const FILE_GENERIC_EXECUTE: u32 = 0x0012_00A0;
 // (OI|CI) and propagation_flags (NP|IO).
 // ---------------------------------------------------------------------------
 
-/// OI — Sub-Dateien erben diesen ACE.
 pub const OBJECT_INHERIT_ACE: u32 = 0x01;
-/// CI — Sub-Verzeichnisse erben diesen ACE.
 pub const CONTAINER_INHERIT_ACE: u32 = 0x02;
 pub const NO_PROPAGATE_INHERIT_ACE: u32 = 0x04;
 pub const INHERIT_ONLY_ACE: u32 = 0x08;
@@ -82,8 +75,6 @@ pub const INHERITED_ACE: u32 = 0x10;
 pub const INHERITANCE_FLAGS_MASK: u32 = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
 pub const PROPAGATION_FLAGS_MASK: u32 = NO_PROPAGATE_INHERIT_ACE | INHERIT_ONLY_ACE;
 
-/// spezifischen Datei-Bits. Muss vor jeder Allow-/Deny-Auswertung erfolgen,
-///
 /// Expands generic rights bits (GENERIC_READ/WRITE/EXECUTE/ALL) into the
 /// specific file bits. Must be applied before any allow/deny evaluation;
 /// otherwise generic ACEs effectively vanish from the calculation (bits
@@ -173,8 +164,6 @@ impl NormalizedRights {
         self.has(FILE_WRITE_ATTRIBUTES)
     }
 
-    // --- Standardrechte / standard rights ---
-
     pub fn delete(&self) -> bool {
         self.has(FILE_DELETE)
     }
@@ -223,7 +212,6 @@ impl NormalizedRights {
 
     /// Returns the highest matching icacls short name.
     ///
-    /// Reihenfolge: F > M > RX > R, W > (special)
     /// Order: F > M > RX > R, W > (special)
     pub fn label(&self) -> &'static str {
         if self.is_full_control() {

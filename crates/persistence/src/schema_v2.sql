@@ -1,8 +1,5 @@
--- Migration v2: Sicherheitsrelevante Bewertungsdetails persistieren.
 -- Migration v2: Persist security-relevant evaluation details.
 --
--- Ergänzt effective_permissions um Share-Auswertungsstatus, Share-Fehlertext
--- und die beitragenden SIDs, damit historische Scans roundtrip-fähig bleiben.
 -- Extends effective_permissions with share evaluation status, share error text,
 -- and contributing SIDs so historical scans round-trip faithfully.
 

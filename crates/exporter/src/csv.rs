@@ -28,7 +28,6 @@ const HEADERS: &[&str] = &[
     "explanation",
     // Diagnostic: count of unevaluated ACE types on this path (0 = complete).
     "unsupported_aces",
-    // Status der Share-Auswertung: not_applicable / applied / unrestricted / read_failed:<grund>.
     // Share evaluation status: not_applicable / applied / unrestricted / read_failed:<reason>.
     "share_status",
     // Local group resolution status — flags the result as incomplete when
@@ -41,12 +40,10 @@ const HEADERS: &[&str] = &[
     // inherited). For structured audit pipelines that don't want the
     // full JSON export.
     "matched_aces_json",
-    // beigetragen haben (sid, beigetragene Maske).
     // Compact JSON list of ACEs that actually contributed to the NTFS
     // result (sid, contributed mask).
     "contributing_sids_json",
-    // Strukturierte Diagnose-Marker (Folge-Befund 3) — z. B.
-    // {"kind":"NonCanonicalDaclOrder","at_index":N}. Leere Liste: "[]".
+    // Structured diagnostic markers (follow-up finding 3) — e.g.
     // Structured diagnostic markers (follow-up finding 3) — e.g.
     // {"kind":"NonCanonicalDaclOrder","at_index":N}. Empty list: "[]".
     "diagnostics_json",
@@ -140,7 +137,6 @@ fn local_group_status_fields(status: &LocalGroupEvalStatus) -> (String, String) 
 }
 
 /// Serialisiert `matched_aces` als kompaktes JSON-Array. Audit-Pipelines,
-/// parsen — wer den vollen Detailbaum will, nutzt den JSON-Export.
 /// Serializes `matched_aces` as a compact JSON array. Audit pipelines
 /// needing structured access to the matched ACEs can parse this field
 /// directly — for the full detail tree use the JSON exporter.
@@ -262,7 +258,7 @@ mod tests {
         assert_eq!(rows[0][16], "local_group_error");
         assert_eq!(rows[0][17], "matched_aces_json");
         assert_eq!(rows[0][18], "contributing_sids_json");
-        // Folge-Befund 3: strukturierte Diagnose-Marker.
+        // Follow-up finding 3: structured diagnostic markers.
         // Follow-up finding 3: structured diagnostic markers.
         assert_eq!(rows[0][19], "diagnostics_json");
     }
@@ -448,8 +444,6 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
-    // --- Finding 9: Diagnose-Spalten ---
-
     #[test]
     fn local_group_status_applied_serialized_correctly() {
         let mut perm = make_perm(
@@ -471,7 +465,6 @@ mod tests {
 
     #[test]
     fn local_group_status_not_available_records_reason_separately() {
-        // Filter auf den Status weiterhin funktionieren.
         let mut perm = make_perm(
             "C:\\Share",
             "S-1-5-21-1-2-3-1000",
@@ -638,7 +631,6 @@ mod tests {
         assert!(matches!(err, CoreError::Export(_)));
     }
 
-    /// Round-8-Folgereview Finding 1: CSV-Exporter darf eine existierende
     /// Round-8 follow-up finding 1: CSV exporter must not overwrite an
     /// existing target file when called with `ExportTarget::File`.
     #[test]

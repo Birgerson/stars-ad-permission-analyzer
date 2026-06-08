@@ -16,9 +16,6 @@ pub use trustees::{
     collect_ace_sids_for_resolution, read_share_overlay, ShareTrusteeOverlay,
 };
 
-/// Zentrale Overwrite-Policy fuer alle Datei-basierten Exporter.
-/// Implementiert Round-8-Folgereview Finding 1: der Trait-Default
-/// `FileOverwrite`-Pfad truncatet bewusst. Die jeweiligen Exporter
 ///
 /// Centralised overwrite policy for every file-based exporter.
 /// Implements round-8 follow-up finding 1: the trait default refuses

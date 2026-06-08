@@ -7,7 +7,6 @@
 use adpa_core::error::CoreError;
 use rusqlite::Connection;
 
-/// Jede Migration ist ein (Zielversion, SQL)-Paar.
 /// Each migration is a (target_version, SQL) pair.
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("schema.sql")),
@@ -19,7 +18,6 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (7, include_str!("schema_v7.sql")),
 ];
 
-/// Wendet alle ausstehenden Migrationen in aufsteigender Reihenfolge an.
 /// Applies all pending migrations in ascending order.
 pub fn run_migrations(conn: &Connection) -> Result<(), CoreError> {
     let current: u32 = conn
@@ -215,7 +213,6 @@ mod tests {
         assert_eq!(defaults.7, "[]");
 
         // Schritt 6 (Code Review 2026-06-07, Finding 1): v7-Backfill aus
-        // identities-Tabelle. Die Legacy-Identitaet (legacy.user,
         // gegen identities lesbar bleibt.
         // Step 6 (code review 2026-06-07, finding 1): v7 backfill from
         // the identities table. The legacy identity (legacy.user,

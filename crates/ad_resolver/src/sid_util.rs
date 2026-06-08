@@ -17,7 +17,6 @@ use adpa_core::error::CoreError;
 
 /// Converts a SID string into LDAP-escaped bytes for use in a search filter.
 ///
-/// Beispiel / Example:
 /// `"S-1-5-18"` → `"\01\01\00\00\00\00\00\05\12\00\00\00"`
 pub fn sid_str_to_ldap_filter(sid: &str) -> Result<String, CoreError> {
     let bytes = sid_str_to_bytes(sid)?;

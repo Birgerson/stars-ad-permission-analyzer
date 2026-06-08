@@ -3,7 +3,6 @@
 
 //! Inventory of visible identities for the UX search helper.
 //!
-//! Hilfe im Namensfeld („du tippst, ich schlage vor").
 //!
 //! Returns a flat list of `IdentitySnapshot` entries with name, type,
 //! domain and an optional description. **Not** used for permission
@@ -43,7 +42,6 @@ pub struct IdentitySnapshot {
     /// for non-domain well-knowns like `Everyone`.
     pub domain: String,
     pub kind: IdentityKind,
-    /// Beschreibung aus den NetAPI-Strukturen (`usri10_comment`,
     /// Description from the NetAPI structs (`usri10_comment`,
     /// `grpi1_comment`, `lgrpi1_comment`) or a short hand-written gloss
     /// for well-knowns. Empty when none.
@@ -51,7 +49,6 @@ pub struct IdentitySnapshot {
 }
 
 impl IdentitySnapshot {
-    /// auch `BUILTIN\Administrators` matcht.
     /// Classifies the entry as "does the search string match me?".
     /// Case-insensitive search over name + domain so e.g. `bui` matches
     /// `BUILTIN\Administrators`.
@@ -107,7 +104,6 @@ pub fn enumerate_all() -> Vec<IdentitySnapshot> {
 }
 
 // ---------------------------------------------------------------------------
-// NetUserEnum — Level 10 liefert Name, Komment und Full Name
 // ---------------------------------------------------------------------------
 
 fn list_users(server: Option<&str>, domain: &str) -> Result<Vec<IdentitySnapshot>, CoreError> {
@@ -133,7 +129,7 @@ fn list_users(server: Option<&str>, domain: &str) -> Result<Vec<IdentitySnapshot
             NetUserEnum(
                 server_ptr,
                 10,                    // Level 10 = USER_INFO_10
-                FILTER_NORMAL_ACCOUNT, // nur "normale" User, keine Trust- oder Service-Konten
+                FILTER_NORMAL_ACCOUNT, // "normal" users only, no trust or service accounts
                 buf.out_ptr().cast(),
                 MAX_PREFERRED_LENGTH,
                 &mut entries_read,
@@ -143,15 +139,11 @@ fn list_users(server: Option<&str>, domain: &str) -> Result<Vec<IdentitySnapshot
         };
 
         if !buf.is_null() && entries_read > 0 {
-            // SAFETY: buf.as_ptr() verweist auf `entries_read`
-            // allokiert wurden.
             // SAFETY: buf.as_ptr() references `entries_read` consecutive
             // USER_INFO_10 structs allocated by NetAPI.
             let entries =
                 unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };
             for entry in entries {
-                // SAFETY: alle Felder sind null-terminierte UTF-16-Strings
-                // im NetApi-Puffer.
                 // SAFETY: all fields are null-terminated UTF-16 strings in
                 // the NetApi buffer.
                 let name = unsafe { wide_ptr_to_string(entry.usri10_name) };
@@ -169,7 +161,6 @@ fn list_users(server: Option<&str>, domain: &str) -> Result<Vec<IdentitySnapshot
                 });
             }
         }
-        // NetApiBufferFree — egal ob danach `break` oder ein neuer Loop.
         // `buf` is dropped at the end of the iteration and calls
         // NetApiBufferFree — regardless of subsequent break or new loop.
 
@@ -324,7 +315,6 @@ fn list_local_groups(server: Option<&str>) -> Result<Vec<IdentitySnapshot>, Core
 }
 
 // ---------------------------------------------------------------------------
-// Well-Known-Tabelle
 // ---------------------------------------------------------------------------
 
 /// A hard-coded list of audit-relevant well-known SIDs that NetUserEnum /
@@ -339,31 +329,31 @@ fn well_known_table() -> Vec<IdentitySnapshot> {
             name: "Everyone".into(),
             domain: String::new(),
             kind: g.clone(),
-            description: "Jeder, inkl. anonymer Zugriffe in bestimmten Konfigurationen".into(),
+            description: "Everyone, including anonymous access in certain configurations".into(),
         },
         IdentitySnapshot {
             name: "Authenticated Users".into(),
             domain: "NT AUTHORITY".into(),
             kind: g.clone(),
-            description: "Jeder authentifizierte Benutzer (kein Anonymous Logon)".into(),
+            description: "Every authenticated user (excludes anonymous logon)".into(),
         },
         IdentitySnapshot {
             name: "ANONYMOUS LOGON".into(),
             domain: "NT AUTHORITY".into(),
             kind: g.clone(),
-            description: "Unauthentifizierte Zugriffe".into(),
+            description: "Unauthenticated access".into(),
         },
         IdentitySnapshot {
             name: "SYSTEM".into(),
             domain: "NT AUTHORITY".into(),
             kind: g.clone(),
-            description: "Lokales System — Dienste laufen darunter".into(),
+            description: "Local System — services run under this identity".into(),
         },
         IdentitySnapshot {
             name: "LOCAL SERVICE".into(),
             domain: "NT AUTHORITY".into(),
             kind: g.clone(),
-            description: "Lokaler Dienste-Account, kein Netz-Auth".into(),
+            description: "Local service account, no network authentication".into(),
         },
         IdentitySnapshot {
             name: "NETWORK SERVICE".into(),
@@ -375,13 +365,13 @@ fn well_known_table() -> Vec<IdentitySnapshot> {
             name: "NETWORK".into(),
             domain: "NT AUTHORITY".into(),
             kind: g.clone(),
-            description: "Implizit jeder Zugriff via SMB/Netz".into(),
+            description: "Implicit for any access via SMB/network".into(),
         },
         IdentitySnapshot {
             name: "INTERACTIVE".into(),
             domain: "NT AUTHORITY".into(),
             kind: g.clone(),
-            description: "Lokal angemeldete Benutzer".into(),
+            description: "Users logged on locally".into(),
         },
         IdentitySnapshot {
             name: "CREATOR OWNER".into(),
@@ -400,7 +390,6 @@ fn well_known_table() -> Vec<IdentitySnapshot> {
 /// workgroup host this returns the computer name instead of a domain —
 /// either way is usable for our UX.
 fn local_netbios_domain() -> Option<String> {
-    // RAII-Guard fuer WKSTA_INFO_100.
     // RAII guard for WKSTA_INFO_100.
     let mut buf: NetApiBuffer<WKSTA_INFO_100> = NetApiBuffer::null();
     // NetApiBuffer<WKSTA_INFO_100> owns the allocated buffer.
@@ -412,7 +401,6 @@ fn local_netbios_domain() -> Option<String> {
     }
     // SAFETY: buf.as_ptr() refers to a WKSTA_INFO_100 struct.
     let info = unsafe { &*buf.as_ptr() };
-    // SAFETY: wki100_langroup ist ein null-terminierter UTF-16-String.
     // SAFETY: wki100_langroup is a null-terminated UTF-16 string.
     let name = unsafe { wide_ptr_to_string(info.wki100_langroup) };
     if name.is_empty() {
@@ -482,7 +470,6 @@ mod tests {
         assert!(!s.matches("krbtgt"));
     }
 
-    /// CI-Runner andere lokale Konten haben.
     /// On a real Windows host enumeration returns at least the well-known
     /// entries + local groups. `#[ignore]` because CI runners have
     /// different local account layouts.
@@ -491,7 +478,6 @@ mod tests {
     fn enumerate_returns_at_least_well_known_and_local_groups() {
         let all = enumerate_all();
         assert!(all.iter().any(|i| i.name == "Everyone"));
-        // Lokale Gruppen tragen Authority "BUILTIN" in unserer UX.
         assert!(all.iter().any(|i| i.domain == "BUILTIN"));
     }
 }

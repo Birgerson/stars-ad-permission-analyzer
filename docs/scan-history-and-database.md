@@ -30,7 +30,7 @@ If `%APPDATA%` is not set, the application falls back to the directory next to t
 
 - **Created automatically on first start;** migration scripts (schema v1 → current) run idempotently.
 - **Separate per user profile** — every Windows user has their own history.
-- **Survives uninstallation** — by default the uninstaller removes only its install directory; the audit history stays. To get rid of it, delete `%APPDATA%\Stars\` manually, or use the uninstaller's optional component (see [Installation and uninstallation](installation-und-deinstallation.md)).
+- **Survives uninstallation** — by default the uninstaller removes only its install directory; the audit history stays. To get rid of it, delete `%APPDATA%\Stars\` manually, or use the uninstaller's optional component (see [Installation and uninstallation](installation-and-uninstallation.md)).
 - **Snapshot-stable:** Historical scan data has been immutable against later identity updates since v1.5.16. If a user gets disabled between two scans, the older scan still shows their state at scan time when reloaded (see schema migration v7).
 - **No password, no encryption.** Anyone with access to the user profile can read the data. Protect the profile path itself (NTFS permissions, BitLocker) for sensitive audit data.
 - **Inspectable with any SQLite tool** (DB Browser for SQLite, DBeaver, `sqlite3.exe`) — read-only, without Stars running.

@@ -8,7 +8,6 @@
 //!   SID is the primary technical identity, not the display name.
 //!   Disabled users are detected and marked.
 //!   Orphaned SIDs (no AD object found) are marked as Unknown.
-//!   `memberOf`-Range-Retrieval (das AD bei > ~1500 Werten abschneidet)
 //!   Transitive group membership is resolved server-side via
 //!   `LDAP_MATCHING_RULE_IN_CHAIN`, which avoids `memberOf` range
 //!   retrieval (AD truncates beyond ~1500 values) and the per-level
@@ -55,7 +54,6 @@ impl LdapResolver {
         }
     }
 
-    /// Roh-LDAP-Lookup per UPN — liefert `(Sid, Identity)` ohne
     /// Raw LDAP UPN lookup. Consumed by [`crate::principal`].
     pub async fn lookup_by_upn_raw(&self, upn: &str) -> Result<Option<(Sid, Identity)>, CoreError> {
         ldap_client::with_timeout(
@@ -85,8 +83,6 @@ impl LdapResolver {
         .await
     }
 
-    /// Roh-LDAP-Lookup per sAMAccountName — liefert ALLE Treffer.
-    /// Aufrufer entscheidet, ob > 1 ein Eindeutigkeitsfehler ist.
     /// Raw LDAP SAM lookup — returns all matches.
     pub async fn lookup_all_by_sam_raw(
         &self,
@@ -133,7 +129,7 @@ impl LdapResolver {
             }
         }
 
-        // (Review-Befund 5).
+        // (review finding 5).
         // Bound the whole operation against the configured timeout
         // (review finding 5).
         let identity = ldap_client::with_timeout(
@@ -148,7 +144,6 @@ impl LdapResolver {
                 Ok(match result? {
                     Some(entry) => parse_identity_from_entry(&entry, sid),
                     None => {
-                        // Verwaiste SID — kein AD-Objekt gefunden
                         // Orphaned SID — no AD object found
                         warn!("Verwaiste SID / Orphaned SID: {}", sid.0);
                         Identity {
@@ -166,11 +161,6 @@ impl LdapResolver {
         .await?;
 
         // Review 2026-06-04 Runde 3 Finding 1 (Cache-Vergiftung):
-        // `Orphaned`-Identities durften vorher in den Cache. Ein
-        // dieselbe SID bekam wieder die unvollstaendige `Orphaned`.
-        // Konsequenz: keine `Orphaned`-Persistierung. Beim naechsten
-        // Aufruf darf der Resolver/PrincipalResolver erneut entscheiden,
-        // ob LSA die SID inzwischen anders klassifiziert.
         //
         // Review 2026-06-04 round 3 finding 1 (cache poisoning):
         // `Orphaned` identities were cached unconditionally. A
@@ -189,8 +179,7 @@ impl LdapResolver {
     }
 
     ///
-    /// `complete = false` mit Quelle [`MembershipPathSource::LdapMatchingRule`]
-    /// konkrete Weg jedoch nicht.
+    /// `complete = false` with source [`MembershipPathSource::LdapMatchingRule`]
     ///
     /// Resolves all group memberships transitively — server-side via
     /// `LDAP_MATCHING_RULE_IN_CHAIN`, plus the primary group (which is not
@@ -209,7 +198,7 @@ impl LdapResolver {
         &self,
         sid: &Sid,
     ) -> Result<Vec<GroupMembership>, CoreError> {
-        // absichern (Review-Befund 5).
+        // — guard for review finding 5.
         // Bound the whole membership resolution against the configured
         // timeout (review finding 5).
         ldap_client::with_timeout(
@@ -239,7 +228,6 @@ impl LdapResolver {
         let primary_group_sid =
             resolve_primary_group(&entry, &self.config.base_dn, &mut ldap).await;
 
-        // 3) Transitive Mitgliedschaft des Principals serverseitig holen.
         // 3) Server-side transitive membership of the principal.
         let transitive_groups = ldap_client::search_transitive_groups_for_member(
             &mut ldap,
@@ -273,7 +261,6 @@ impl LdapResolver {
 
         // 5) Forward-Graph aufbauen: group_dn → Liste von Eltern-DNs (aus
         //    deren `memberOf`-Attribut). Eine Kante G_x → G_y bedeutet
-        //    SID- und Name-Indizes parallel pflegen.
         // 5) Build the forward graph: group_dn → list of parent DNs (from
         //    its `memberOf` attribute). Edge G_x → G_y means "G_x is a
         //    direct member of G_y", i.e. "G_y contains G_x". SID and name
@@ -313,7 +300,6 @@ impl LdapResolver {
             register_group_entry(e);
         }
 
-        //    bekannt). Beide gelten als Hop-1 vom Benutzer aus.
         // 6) BFS starting nodes: the user's direct groups (`memberOf` of
         //    the principal) plus the primary group (if known). Both count
         //    as hop 1 from the user.
@@ -325,8 +311,7 @@ impl LdapResolver {
 
         let primary_dn_lc: Option<String> = pg_entry.as_ref().map(|e| e.dn.to_ascii_lowercase());
 
-        // 7) BFS von allen Startknoten gleichzeitig — pro Ziel-DN den
-        //    konkreten DN-Ketten rekonstruieren.
+        //    reconstruct the concrete DN chains.
         // 7) Multi-source BFS — track each reached DN's predecessor in
         //    `came_from`. Concrete DN chains can then be reconstructed.
         let mut came_from: HashMap<String, Option<String>> = HashMap::new();
@@ -368,7 +353,6 @@ impl LdapResolver {
             .or_else(|| entry.first_attr("cn"))
             .map(str::to_owned);
 
-        // erreichbar war.
         // Helper closure: reconstruct the BFS path to group_dn as a SID
         // chain prefixed with the user. Returns None when group_dn was
         // not reached.
@@ -424,7 +408,6 @@ impl LdapResolver {
             }
         }
 
-        // 8b) Transitive Mitgliedschaften des Principals.
         // 8b) Transitive memberships of the principal.
         for group_entry in &transitive_groups {
             let group_sid = match extract_sid_from_entry(group_entry) {
@@ -449,14 +432,13 @@ impl LdapResolver {
                     complete: true,
                 },
                 None => {
-                    // unbekannt — typischerweise wegen trunkiertem
                     // Transitive membership is certain (it is in the
                     // result set) but intermediate hops are unknown —
                     // typically due to a truncated memberOf in an
                     // intermediate group.
                     debug!(
                         target_dn = %group_entry.dn,
-                        "Konkreter Mitgliedschaftspfad nicht rekonstruierbar / could not reconstruct concrete membership path"
+                        "could not reconstruct concrete membership path"
                     );
                     MembershipPath {
                         nodes: vec![sid.clone(), group_sid.clone()],
@@ -534,7 +516,6 @@ impl IdentityResolver for LdapResolver {
 
 // --- Hilfsfunktionen / Helper functions ---
 
-/// Parst eine Identity aus einem LDAP-Eintrag.
 /// Parses an Identity from an LDAP entry.
 fn parse_identity_from_entry(entry: &RawEntry, sid: &Sid) -> Identity {
     let name = entry
@@ -573,10 +554,8 @@ fn parse_identity_from_entry(entry: &RawEntry, sid: &Sid) -> Identity {
     }
 }
 
-/// Bestimmt den IdentityKind aus den objectClass-Werten.
 /// Determines the IdentityKind from objectClass values.
 fn classify_identity(object_classes: &[&str]) -> IdentityKind {
-    // Order matters: computers also have "user" in objectClass
     if object_classes.contains(&"computer") {
         IdentityKind::Computer
     } else if object_classes.contains(&"group") {
@@ -594,7 +573,7 @@ pub fn extract_sid_from_entry(entry: &RawEntry) -> Option<Sid> {
     match bytes_to_sid_str(bytes) {
         Ok(sid_str) => Some(Sid(sid_str)),
         Err(e) => {
-            warn!("SID-Konvertierung fehlgeschlagen / SID conversion failed: {e}");
+            warn!("SID conversion failed: {e}");
             None
         }
     }
@@ -645,7 +624,6 @@ async fn resolve_primary_group(
     let domain_sid_prefix = parts[..parts.len() - 1].join("-");
     let primary_group_sid_str = format!("{domain_sid_prefix}-{primary_group_id}");
 
-    // Validieren, ob diese Gruppe wirklich existiert
     // Validate that this group actually exists
     match ldap_client::search_by_sid(ldap, base_dn, &primary_group_sid_str).await {
         Ok(Some(_)) => Some(Sid(primary_group_sid_str)),
@@ -694,18 +672,17 @@ mod tests {
         let Some(cfg) = test_config() else { return };
         let base_dn = cfg.base_dn.clone();
         let resolver = LdapResolver::new(cfg.clone());
-        // Administrator-SID beginnt immer mit S-1-5-21-...-500
+        // Administrator SID always starts with S-1-5-21-...-500
         // Administrator SID always ends with -500
         // We first search by sAMAccountName to get the SID
         let mut ldap = ldap_client::connect(&cfg).await.unwrap();
         let entry = ldap_client::search_by_samaccount(&mut ldap, &base_dn, "Administrator")
             .await
             .unwrap()
-            .expect("Administrator muss existieren / Administrator must exist");
+            .expect("Administrator must exist");
         ldap_client::disconnect(ldap).await;
 
-        let sid = extract_sid_from_entry(&entry)
-            .expect("Administrator muss SID haben / Administrator must have SID");
+        let sid = extract_sid_from_entry(&entry).expect("Administrator must have SID");
         let identity = resolver.resolve_identity(&sid).await.unwrap();
 
         assert_eq!(identity.kind, IdentityKind::User);
@@ -724,7 +701,7 @@ mod tests {
         let entry = ldap_client::search_by_samaccount(&mut ldap, &base_dn, "max.mustermann")
             .await
             .unwrap()
-            .expect("max.mustermann muss existieren");
+            .expect("max.mustermann must exist");
         ldap_client::disconnect(ldap).await;
 
         let sid = extract_sid_from_entry(&entry).unwrap();
@@ -762,9 +739,7 @@ mod tests {
         //   GRP_IT_Admins  → GRP_FullAccess_FS    (nested)
         //   GRP_Development → GRP_ShareAccess_SMB (nested)
         //
-        // Diese Asserts setzen voraus, dass Finding 8 wirkt — die transitive
         // These asserts depend on Finding 8 — transitive resolution now runs
-        // server-side via LDAP_MATCHING_RULE_IN_CHAIN.
         assert!(
             group_names.contains(&"GRP_IT_Admins".to_string()),
             "GRP_IT_Admins (direkt) fehlt — vorhandene Gruppen: {group_names:?}"
@@ -804,22 +779,22 @@ mod tests {
         assert_eq!(
             direct_by_name.get("GRP_IT_Admins"),
             Some(&true),
-            "GRP_IT_Admins muss direct=true sein"
+            "GRP_IT_Admins must be direct=true"
         );
         assert_eq!(
             direct_by_name.get("GRP_Development"),
             Some(&true),
-            "GRP_Development muss direct=true sein"
+            "GRP_Development must be direct=true"
         );
         assert_eq!(
             direct_by_name.get("GRP_FullAccess_FS"),
             Some(&false),
-            "GRP_FullAccess_FS muss direct=false (transitiv) sein"
+            "GRP_FullAccess_FS must be direct=false (transitive)"
         );
         assert_eq!(
             direct_by_name.get("GRP_ShareAccess_SMB"),
             Some(&false),
-            "GRP_ShareAccess_SMB muss direct=false (transitiv) sein"
+            "GRP_ShareAccess_SMB must be direct=false (transitive)"
         );
     }
 
@@ -891,7 +866,6 @@ mod tests {
 
     #[test]
     fn classify_computer_over_user() {
-        // Computer objects also have "user" in objectClass — Computer takes precedence
         assert_eq!(
             classify_identity(&["top", "person", "user", "computer"]),
             IdentityKind::Computer

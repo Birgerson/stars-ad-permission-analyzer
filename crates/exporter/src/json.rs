@@ -4,8 +4,6 @@
 //! JSON-Berichtsexport — stabil strukturiertes, maschinenlesbares Ausgabeformat.
 //! JSON report export — stable, structured, machine-readable output format.
 //!
-//! orientierten Listen entsprechen den `Serialize`-Implementierungen von
-//! Strukturen wie `share_status`, `local_group_status`, `incomplete` und
 //!
 //! Writes a top-level object with `version`, `permissions`,
 //! `risk_findings`, and `path_trustees`. Both identity-oriented lists
@@ -14,7 +12,6 @@
 //! like `share_status`, `local_group_status`, `incomplete`, and
 //! `matched_aces`. The path-oriented `path_trustees` list was added in
 //! round-8 follow-up finding 2 so the second audit question "who has any
-//! access?" is also available in the machine-readable format.
 
 use adpa_core::{
     error::CoreError,
@@ -23,9 +20,6 @@ use adpa_core::{
 };
 use serde::Serialize;
 
-/// * v2 (Round-8-Folge): neues Feld `path_trustees` ergaenzt.
-///   tagged Union (`{"kind":"ace",...}` oder `{"kind":"diagnostic",...}`)
-///   statt einer flachen `PathTrustee`-Struct. Diagnose-Hinweise
 ///   Allow/Deny-ACE unterscheidbar.
 ///
 /// Version number of the JSON schema — bump it on structural changes.
@@ -178,7 +172,6 @@ mod tests {
             body.contains("ReadFailed"),
             "ReadFailed variant missing in JSON: {body}"
         );
-        // local_group_status ebenfalls strukturiert.
         // local_group_status structured too.
         assert!(
             body.contains("\"local_group_status\""),
@@ -266,9 +259,6 @@ mod tests {
         // The inner Allow/Deny value stays under `kind`.
         assert_eq!(entries[0]["kind"], "Allow");
 
-        // Diagnostic-Variante: getrennt erkennbar, KEIN Allow-ACE getarnt.
-        // `entry_kind` ist snake_case (vom Enum-rename_all), `category`
-        // bleibt PascalCase ("Ntfs"/"Share") wie das bestehende
         // TrusteeCategory-Schema seit v2.
         // `entry_kind` is snake_case (from the enum rename_all),
         // `category` stays PascalCase ("Ntfs"/"Share") as in the
@@ -288,7 +278,6 @@ mod tests {
         );
     }
 
-    /// ist Ueberschreiben explizit erlaubt.
     /// Round-8 follow-up finding 1: the JSON exporter must NOT overwrite an
     /// existing target file when called with `ExportTarget::File`. With
     /// `ExportTarget::FileOverwrite` overwriting is explicitly allowed.

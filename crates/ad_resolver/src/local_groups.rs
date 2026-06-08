@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Lokale Gruppenmitgliedschaften eines Benutzers auf einem Zielserver.
+//! Local group memberships of a user on a target server.
 //! Local group memberships for a user on a target server.
 //!
 //!
@@ -31,7 +31,6 @@ use windows_sys::Win32::Security::LookupAccountNameW;
 /// User-Not-Found-Statuscode aus lmerr.h / NERR_UserNotFound from lmerr.h.
 const NERR_USER_NOT_FOUND: u32 = 2221;
 
-/// Heuristik: tragt der Domain-String wie ein DNS-Suffix aussehende
 /// Bestandteile (mindestens ein `.`)? In Trust-/Multi-Domain-Szenarien
 /// als UPN-Suffix valide.
 /// Heuristic: does the domain string look like a DNS suffix (contains a
@@ -46,8 +45,7 @@ fn looks_like_dns_domain(domain: &str) -> bool {
 ///
 /// blind `name@domain`, was bei NetBIOS-Domains (`alice@TRUSTED` statt
 ///
-/// Reihenfolge:
-///    DNS-Domains — der robusteste klassische NetAPI-Form).
+/// Order:
 ///    konstruiert.
 /// 4. `name` (rein) — lokale Konten ohne Domain.
 ///
@@ -88,16 +86,12 @@ pub fn format_account_candidates_for_local_groups(identity: &Identity) -> Vec<St
     candidates
 }
 
-/// Convenience-Wrapper, der den **ersten** Kandidaten aus
-/// NetBIOS-Identities nicht still durchfallen.
-/// Convenience wrapper returning the **first** candidate.
 pub fn format_account_for_local_groups(identity: &Identity) -> Option<String> {
     format_account_candidates_for_local_groups(identity)
         .into_iter()
         .next()
 }
 
-/// Ergebnis eines `NetUserGetLocalGroups`-Aufrufs — trennt explizit
 /// (Review Runde 5 Finding 1).
 /// `NetUserGetLocalGroups` outcome — separates **"user not found"**
 /// from **"user found but has no group memberships"**.
@@ -105,34 +99,26 @@ pub fn format_account_for_local_groups(identity: &Identity) -> Option<String> {
 pub enum LocalGroupLookupOutcome {
     /// Account was found; the returned vector is the actual group set.
     WithGroups(Vec<Sid>),
-    /// gefunden (`NERR_USER_NOT_FOUND`). Aufrufer entscheidet, ob das
-    /// Hinweis (anderen Kandidaten probieren) gewertet wird.
     /// Account was not known on the target server.
     UserNotFoundOnServer,
 }
 
 ///
-/// `server`: Zielserver (Hostname oder IP). `None` = lokaler Rechner.
-/// `account`: typischerweise `DOMAIN\username` oder `username@domain`.
 ///
 /// Returns the SIDs of all local groups on `server` in which `account` is a
 /// direct or transitive member (`LG_INCLUDE_INDIRECT`).
 ///
-/// `server`: target server (host name or IP). `None` = local machine.
 /// `account`: typically `DOMAIN\username` or `username@domain`.
 pub fn resolve_local_group_sids(
     server: Option<&str>,
     account: &str,
 ) -> Result<Vec<Sid>, CoreError> {
-    // Backward-compatible wrapper around the strict variant.
     match resolve_local_group_sids_strict(server, account)? {
         LocalGroupLookupOutcome::WithGroups(v) => Ok(v),
         LocalGroupLookupOutcome::UserNotFoundOnServer => Ok(Vec::new()),
     }
 }
 
-/// **„User gefunden, leere Gruppenliste"**. Aufrufer (z. B.
-/// [`resolve_local_group_sids_for_identity`]) brauchen diese
 /// Unterscheidung, um Kandidatenlisten durchzuprobieren ohne stille
 /// Skips.
 /// Strict variant — distinguishes "not found" from "found, no groups".
@@ -144,7 +130,6 @@ pub fn resolve_local_group_sids_strict(
     let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let account_w = to_wide_null(account);
 
-    // RAII-Guard: gibt den LOCALGROUP_USERS_INFO_0-Puffer in jedem Pfad frei.
     // RAII guard: frees the LOCALGROUP_USERS_INFO_0 buffer in every path.
     let mut buf: NetApiBuffer<LOCALGROUP_USERS_INFO_0> = NetApiBuffer::null();
     let mut entries_read: u32 = 0;
@@ -210,17 +195,10 @@ pub fn resolve_local_group_sids_strict(
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
-/// und probiert dabei mehrere Account-Namensformen
 /// ([`format_account_candidates_for_local_groups`]) durch.
 ///
-/// - `Ok(Vec<Sid>)` bei mindestens einem erkannten Kandidaten — der erste
-///   keine lokalen Gruppen).
-/// - `Err(CoreError::Validation(reason))`, wenn **kein** Kandidat erkannt
-///   wurde (alle `UserNotFoundOnServer`). Aufrufer setzen dann
 /// - `Err(...)` bei anderen technischen Fehlern (Access Denied, NetAPI-
-///   Fehler) — sofort propagiert, kein Weiterprobieren.
 ///
-/// Servergruppen blieben unsichtbar ohne Incomplete-Marker.
 ///
 /// Tries to resolve local groups for `identity` on `server`, iterating
 /// over candidate account name forms.
@@ -265,7 +243,6 @@ pub fn resolve_local_group_sids_for_identity(
     )))
 }
 
-/// `NetLocalGroupGetMembers` den Namen erwartet.
 /// Entry in the `NetUserGetLocalGroups` response with both name and SID. The
 /// plain `resolve_local_group_sids` variant discards the name; for chain
 /// reconstruction we need both because `NetLocalGroupGetMembers` requires
@@ -289,7 +266,6 @@ pub struct LocalGroupMember {
     pub display_name: Option<String>,
 }
 
-/// Variant of [`resolve_local_group_sids`] that also returns the group
 /// name. Required for chain reconstruction.
 pub fn resolve_local_groups(
     server: Option<&str>,
@@ -358,7 +334,6 @@ pub fn resolve_local_groups(
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
-/// `NetLocalGroupGetMembers` Level 2. Liefert pro Mitglied SID + Anzeige­name.
 /// Lists the direct members of a local group via `NetLocalGroupGetMembers`
 /// level 2. Returns SID + display name per member.
 pub fn get_local_group_members(
@@ -369,14 +344,12 @@ pub fn get_local_group_members(
     let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let group_w = to_wide_null(group_name);
 
-    // RAII-Guard fuer den NetLocalGroupGetMembers-Puffer.
     // RAII guard for the NetLocalGroupGetMembers buffer.
     let mut buf: NetApiBuffer<LOCALGROUP_MEMBERS_INFO_2> = NetApiBuffer::null();
     let mut entries_read: u32 = 0;
     let mut total_entries: u32 = 0;
     let mut resume: usize = 0;
 
-    // der Guard gibt ihn im Drop frei.
     // SAFETY: server_ptr is null or a valid PCWSTR; group_w is a valid
     // null-terminated UTF-16 sequence; NetApi populates the buffer and the
     // guard frees it on drop.
@@ -406,7 +379,7 @@ pub fn get_local_group_members(
 
     let mut members = Vec::with_capacity(entries_read as usize);
     if !buf.is_null() && entries_read > 0 {
-        // SAFETY: NetApi liefert genau entries_read konsekutive Strukturen.
+        // SAFETY: NetApi returns exactly entries_read consecutive structs.
         // SAFETY: NetApi returns exactly entries_read consecutive structs.
         let entries = unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };
         for e in entries {
@@ -431,7 +404,6 @@ pub fn get_local_group_members(
                     }
                 }
             };
-            // UTF-16-Sequenz im NetApi-Buffer (oder null).
             // SAFETY: lgrmi2_domainandname is a null-terminated UTF-16
             // sequence inside the NetApi buffer (or null).
             let name = unsafe { wide_ptr_to_string(e.lgrmi2_domainandname) };
@@ -445,14 +417,11 @@ pub fn get_local_group_members(
 }
 
 ///
-/// Vorgehen pro lokaler Gruppe `L`:
 /// 1. Mitglieder von `L` via [`get_local_group_members`] holen.
 ///    `complete = true`, Quelle `LocalGroup`.
-///    gelieferte Domain-Gruppe) als Mitglied gelistet → Kette
 ///    `[user → vermittler → L]`, `complete = true`.
-/// 4. Sonst Kette `[user, L]`, `complete = false` mit Quelle `LocalGroup`
+/// 4. Otherwise chain `[user, L]`, `complete = false` with source `LocalGroup`
 ///
-/// `SID-String → Anzeigename`. Wird genutzt, um den Vermittler-Schritt 3
 ///
 /// Reconstructs concrete membership chains for every local group in which
 /// `user_sid` is a direct or transitive member.
@@ -506,8 +475,8 @@ pub fn resolve_local_group_chains(
             }
         };
 
-        //   1. user_sid direkt → Kette mit 2 Knoten
-        //      Kette mit 3 Knoten (user → vermittler → L)
+        //   1. user_sid direct → chain with 2 nodes
+        //      chain with 3 nodes (user → mediator → L)
         // Candidate member SIDs in order of preference:
         //   1. user_sid directly → 2-node chain
         //   2. a known token SID (own or a domain group) → 3-node chain
@@ -563,11 +532,9 @@ pub fn resolve_local_group_chains(
 }
 
 /// Kandidaten-Loop analog zu [`resolve_local_group_sids_for_identity`].
-/// Liefert `Vec<GroupMembership>` mit `MembershipPathSource::LocalGroup`,
+/// Returns `Vec<GroupMembership>` with `MembershipPathSource::LocalGroup`,
 /// `Member of BUILTIN\\Administrators [source: LocalGroup]` ausweisen
-/// kann.
 ///
-/// Pfade.
 ///
 /// Identity-aware variant of [`resolve_local_group_chains`] using the
 /// same candidate-list loop as [`resolve_local_group_sids_for_identity`].
@@ -591,7 +558,6 @@ pub fn resolve_local_group_chains_for_identity(
     let mut last_err: Option<CoreError> = None;
     for candidate in &candidates {
         tried.push(candidate.clone());
-        // NOT_FOUND klar von "gefunden, keine Gruppen" trennt.
         // Probe via the strict variant first to separate
         // UserNotFoundOnServer from "found, no groups".
         match resolve_local_group_sids_strict(server, candidate) {
@@ -612,8 +578,6 @@ pub fn resolve_local_group_chains_for_identity(
                             .map(|(group_sid, group_name, path)| GroupMembership {
                                 member_sid: identity.sid.clone(),
                                 group_sid,
-                                // Gruppe; bei Mediator-Pfad (3 Knoten) ist
-                                // sie transitiv.
                                 // direct = 2-node complete path; mediator
                                 // chain (3 nodes) is transitive.
                                 direct: path.nodes.len() == 2 && path.complete,
@@ -626,7 +590,6 @@ pub fn resolve_local_group_chains_for_identity(
                     Err(e) => {
                         last_err = Some(e);
                         // Kandidaten technisch gescheitert (z. B.
-                        // NetLocalGroupGetMembers-Fehler). Wir versuchen
                         // chains call failed for this candidate (e.g.
                         // NetLocalGroupGetMembers error); try next.
                         continue;
@@ -639,7 +602,6 @@ pub fn resolve_local_group_chains_for_identity(
             }
         }
     }
-    // Fehler hatten, geben wir den weiter; sonst Validation.
     // No candidate matched — propagate technical error if any.
     if let Some(e) = last_err {
         return Err(e);
@@ -673,7 +635,6 @@ fn to_wide_null(s: &str) -> Vec<u16> {
 }
 
 /// # Safety
-/// oder null.
 /// `p` must be a valid pointer to a null-terminated UTF-16 sequence, or null.
 unsafe fn wide_ptr_to_string(p: *const u16) -> String {
     if p.is_null() {
@@ -691,7 +652,7 @@ fn lookup_account_sid(system: Option<&str>, name: &str) -> Option<String> {
     let system_ptr = system_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let name_w = to_wide_null(name);
 
-    // Zwei-Schritt-Pattern: erst Groessen ermitteln, dann mit allokierten Puffern aufrufen.
+    // Two-step pattern: query sizes first, then call again with allocated buffers.
     // Two-call pattern: query required sizes first, then call with the allocated buffers.
     let mut sid_size: u32 = 0;
     let mut domain_size: u32 = 0;
@@ -747,7 +708,6 @@ fn lookup_account_sid(system: Option<&str>, name: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// lokalen Gruppe `Administrators` (`BUILTIN\Administrators`, SID
     /// `S-1-5-32-544`).
     ///
     ///
@@ -817,7 +777,6 @@ mod tests {
             candidates.contains(&"max.mustermann@testdomain.local".to_string()),
             "DNS-style domain must also produce the UPN-form fallback; got {candidates:?}"
         );
-        // Convenience-Wrapper liefert den ersten Kandidaten.
         assert_eq!(
             format_account_for_local_groups(&id).as_deref(),
             Some("testdomain.local\\max.mustermann")

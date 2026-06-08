@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Rekursiver Verzeichnis-Walker mit Fehlertoleranz.
+//! Recursive directory walker with error tolerance.
 //! Recursive directory walker with error tolerance.
 //!
-//! ein typischer SYSVOL-Junction-Pfad
 //! (`C:\Windows\SYSVOL\sysvol\<domain>` → `C:\Windows\SYSVOL\domain`)
 //! Junctions braucht.
 //!
@@ -39,7 +38,6 @@ pub struct WalkError {
     pub error: CoreError,
 }
 
-/// Ergebnis eines Walk-Vorgangs.
 /// Result of a walk operation.
 pub struct WalkResult {
     pub objects: Vec<FileSystemObject>,
@@ -51,7 +49,6 @@ pub struct WalkResult {
 /// Reads a directory subtree recursively, collecting FSOs and errors separately.
 ///
 /// - Access-denied errors on individual paths are recorded; the scan continues.
-///   sichtbaren Eintrag in `errors` — keine stillen Skips.
 /// - Reparse points are followed by default with loop detection via
 ///   canonicalized targets. Cycles or unresolvable targets produce a visible
 ///   entry in `errors` — never silent skips.
@@ -115,7 +112,6 @@ fn walk_dir(
     errors: &mut Vec<WalkError>,
     visited_canonical: &mut HashSet<String>,
 ) {
-    // Kooperativer Abbruchpunkt vor jedem Pfad. / Cooperative cancellation point before each path.
     if cancel.is_cancelled() {
         return;
     }
@@ -133,13 +129,10 @@ fn walk_dir(
             debug!(path, is_dir, is_reparse, depth = current_depth, "Read FSO");
             objects.push(fso);
 
-            // weiteres Hineinlaufen eine Schleife erzeugen — wir markieren
-            // Stelle ab. Misslingt die Kanonisierung komplett, geben wir
             // For a reparse point we try to determine the canonical target.
             // If it is already part of the current walk, descending further
             // would create a cycle — we surface that as a visible error and
             // stop the recursion at this point. If canonicalization fails
-            // entirely, we also give the operator an explanatory error.
             if is_reparse {
                 match canonicalize_path(path) {
                     None => {
@@ -321,8 +314,7 @@ mod tests {
 
     // --- Finding 5: long path support ---
 
-    /// Baut unter TEMP eine Verzeichniskette, deren Gesamtpfad sicher
-    /// auf langen Pfaden fehlgeschlagen.
+    /// Builds a directory chain under TEMP whose total path is reliably
     ///
     /// Builds a directory chain under TEMP whose full path is clearly
     /// beyond MAX_PATH (260), scans it, and verifies the walker reaches
@@ -376,7 +368,7 @@ mod tests {
 
         assert!(
             result.errors.is_empty(),
-            "Walker darf auf Long-Path keine Fehler haben — bekam: {:?}",
+            "Walker must produce no errors on long paths — got: {:?}",
             result
                 .errors
                 .iter()
@@ -392,12 +384,8 @@ mod tests {
         );
 
         let max_len = result.objects.iter().map(|o| o.path.0.len()).max().unwrap();
-        assert!(
-            max_len > 260,
-            "Tiefster Pfad muss > 260 sein, war: {max_len}"
-        );
+        assert!(max_len > 260, "Deepest path must be > 260, was: {max_len}");
 
-        // Reports sollen menschenlesbar bleiben (siehe acl.rs).
         for obj in &result.objects {
             assert!(
                 !obj.path.0.starts_with(r"\\?\"),
@@ -408,7 +396,6 @@ mod tests {
     }
 
     // ----------------------------------------------------------------
-    // Reparse-Point-Verhalten / reparse point behaviour
     // ----------------------------------------------------------------
 
     /// Creates a small structure under TEMP where `link → target` is a
@@ -465,11 +452,10 @@ mod tests {
         let inside_via_link = link.join("inside").to_string_lossy().to_ascii_lowercase();
         assert!(
             paths.iter().any(|p| p == &inside_via_link),
-            "Walker muss durch die Junction laufen und 'link\\inside' finden — bekam: {paths:?}"
+            "Walker must traverse the junction and find 'link\\inside' — got: {paths:?}"
         );
     }
 
-    /// im Ergebnis erzeugt — kein stilles Skippen, kein Stack-Overflow.
     /// Creates a circular junction structure (`b → a`) and verifies that the
     /// walker detects the cycle and surfaces a *visible* error in the result
     /// — no silent skip, no stack overflow.
@@ -515,7 +501,7 @@ mod tests {
 
         assert!(
             !result.errors.is_empty(),
-            "Schleifen-Junction muss einen Fehler im Ergebnis erzeugen, hatte 0"
+            "Loop junction must produce an error in the result, got 0"
         );
         let loop_msg = result.errors.iter().any(|e| {
             let msg = format!("{}", e.error);

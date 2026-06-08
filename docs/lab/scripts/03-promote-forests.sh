@@ -34,7 +34,6 @@ try {
 PSEOF
 }
 
-# NetBIOS-Namen unterscheiden sich bewusst vom Hostnamen, sonst lehnt der
 # Promote check rejected: "The NetBIOS name TIER0 is already in use."
 write_promote_ps "tier0.lab" "T0LAB" /tmp/promote-100.ps1
 write_promote_ps "tier1.lab" "T1LAB" /tmp/promote-101.ps1

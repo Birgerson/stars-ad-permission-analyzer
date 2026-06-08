@@ -15,12 +15,7 @@ use uuid::Uuid;
 
 use crate::scan_store::load_permissions_for_run;
 
-/// Audit-relevante Felder einer Permission, zusammengefasst zum
-/// Vergleich. Code Review 2026-06-07 Finding 3: vor diesem Patch
 /// vergleicht `compare_scans` nur `effective_mask` — d.h. audit-
-/// relevante Aenderungen mit gleichbleibender Endmaske (NTFS/Share-
-/// Komposition, share_status wechselt auf ReadFailed, neue
-/// Diagnostics) verschwinden still aus dem Delta-Bericht.
 ///
 /// Audit-relevant fields of a permission, bundled for comparison.
 /// Code review 2026-06-07 finding 3: before this patch, `compare_scans`
@@ -95,7 +90,6 @@ impl PermissionSignature {
     }
 }
 
-/// Konkrete Aenderungsursache zwischen zwei Permissions. Mehrere
 /// Concrete reason for a change between two permissions. Multiple
 /// reasons can co-occur — e.g. an NTFS mask shift that does not flip
 /// the effective mask.
@@ -124,7 +118,6 @@ impl DeltaReason {
     }
 }
 
-/// erkannte Aenderung. Leeres Vec = identisch.
 /// Compares two signatures and yields every reason for a detected
 /// change. Empty vec = identical.
 fn signature_diff(old: &PermissionSignature, new: &PermissionSignature) -> Vec<DeltaReason> {
@@ -156,12 +149,10 @@ fn signature_diff(old: &PermissionSignature, new: &PermissionSignature) -> Vec<D
 /// Type of change between two scans.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeltaKind {
-    /// Pfad neu — war im alten Scan nicht vorhanden.
     /// Path is new — was not present in the old scan.
     Added,
     /// Path removed — no longer present in the new scan.
     Removed,
-    /// fuer Kompatibilitaet erhalten; `reasons` listet ab dem
     /// 2026-06-07-Patch alle erkannten Aenderungsursachen.
     /// Permission changed. `old_mask`/`new_mask` are kept for backwards
     /// compatibility; `reasons` lists every detected change cause as of
@@ -327,7 +318,6 @@ mod tests {
         {
             assert_eq!(old_mask.0, MASK_READ);
             assert_eq!(new_mask.0, MASK_MODIFY);
-            // mk_perm setzt ntfs_mask = effective_mask, also fallen
             // beide Trigger gleichzeitig an.
             // mk_perm sets ntfs_mask = effective_mask, so both
             // triggers fire at the same time.
@@ -343,8 +333,6 @@ mod tests {
         assert!(diff_permission_lists(old, new).is_empty());
     }
 
-    /// Code Review 2026-06-07 Finding 3: gleiche `effective_mask`, aber
-    /// Beispiel: alt NTFS=Modify, Share=Read, Effective=Read; neu
     /// NTFS=Read, Share=Full, Effective=Read. Effektiver Zugriff
     /// Code review 2026-06-07 finding 3: identical `effective_mask` but
     /// different NTFS or share mask must be reported as Changed. Example:
@@ -380,8 +368,7 @@ mod tests {
         );
     }
 
-    /// Code Review 2026-06-07 Finding 3: `share_status` wechselt von
-    /// Maske zufaellig gleich bleibt, meldet altes Delta nichts.
+    /// Code review 2026-06-07 finding 3: `share_status` flips from
     /// Code review 2026-06-07 finding 3: `share_status` flips from
     /// `Applied` to `ReadFailed`. The engine then keeps
     /// `Effective = NTFS` and sets a diagnostic/incompleteness. If the
@@ -428,7 +415,7 @@ mod tests {
         assert!(reasons.contains(&DeltaReason::DiagnosticsChanged));
     }
 
-    /// Code Review 2026-06-07 Finding 3: `local_group_status` wechselt
+    /// Code review 2026-06-07 finding 3: `local_group_status` flips
     /// es eine Vollstaendigkeits-Aussage betrifft.
     /// Code review 2026-06-07 finding 3: `local_group_status` flips
     /// from `Applied` to `NotAvailable` — relevant for audit because it
@@ -449,7 +436,6 @@ mod tests {
     }
 
     /// Code Review 2026-06-07 Finding 3: `unsupported_ace_count`
-    /// wechselt — Hinweis auf neue/verschwundene exotische ACEs.
     /// Code review 2026-06-07 finding 3: `unsupported_ace_count`
     /// flips — signals new/disappeared exotic ACEs.
     #[test]

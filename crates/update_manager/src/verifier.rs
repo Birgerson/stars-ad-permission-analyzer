@@ -4,7 +4,6 @@
 //! Signature verification as a pluggable trait.
 //!
 //! kryptografischen Verifikation (algorithmus-spezifisch). Ein produktiver
-//! hinter diesem Trait implementiert; bis dahin steht ein Reject-By-Default-
 //!
 //! We separate manifest schema validation (purely structural) from
 //! cryptographic verification (algorithm-specific). A production verifier
@@ -21,7 +20,6 @@ use sha2::{Digest, Sha256};
 use crate::manifest::{ManifestFile, TargetPlatform, UpdateManifest};
 use crate::UpdateChannel;
 
-/// kryptografischen Algorithmus (Ed25519, RSA-PSS, …) und tragen den
 /// Public-Key.
 ///
 /// Signature verification backend. Implementations choose the cryptographic
@@ -31,8 +29,6 @@ pub trait SignatureVerifier: Send + Sync {
     fn verify(&self, body: &[u8], signature_b64: &str) -> Result<(), CoreError>;
 }
 
-/// genutzt, solange kein produktiver Verifier konfiguriert ist. Verhindert,
-/// dass ein nicht konfiguriertes System versehentlich Updates akzeptiert.
 ///
 /// Reject-by-default verifier — refuses any signature. Used as the default
 /// while no production verifier is configured. Prevents an unconfigured
@@ -91,7 +87,6 @@ pub fn verify_file_bytes(entry: &ManifestFile, content: &[u8]) -> Result<(), Cor
 /// The caller supplies file bytes as `(path, content)` pairs; missing
 /// files produce an error.
 ///
-/// war).
 /// Closes ChatGPT code review 2026-05-31 finding 7 (formerly
 /// `verify_manifest`, which was misleadingly described as a "complete
 /// check").
@@ -121,7 +116,6 @@ pub fn verify_manifest_integrity<V: SignatureVerifier>(
 }
 
 ///
-/// konkrete Zielsystem: Plattform, Kanal, Versions-Reihenfolge und
 /// [`verify_update_policy`].
 ///
 /// Policy context for releasing a manifest for installation.
@@ -136,13 +130,10 @@ pub struct UpdatePolicyContext {
     /// Aktuell installierte Version (dotted numeric, z. B. `1.0.0`).
     /// Currently installed version (dotted numeric, e.g. `1.0.0`).
     pub current_version: String,
-    /// Plattform der laufenden Installation.
     /// Platform of the running installation.
     pub current_platform: TargetPlatform,
-    /// Vom Aufrufer freigegebener Update-Kanal.
     /// Update channel released by the caller.
     pub allowed_channel: UpdateChannel,
-    /// abgelehnt (kein Downgrade, kein Re-Install).
     /// When `false`, manifests with a lower or equal version are rejected
     /// (no downgrade, no re-install).
     pub allow_downgrade: bool,
@@ -153,17 +144,14 @@ pub struct UpdatePolicyContext {
     /// Maximum `now - issued_at` distance; older manifests are rejected.
     /// Negative values are illegal.
     pub max_age: Duration,
-    /// liegende Manifeste werden abgelehnt (Clock-Skew-Toleranz).
     /// Maximum `issued_at - now` distance; manifests issued further in
     /// the future are rejected (clock-skew tolerance).
     pub max_future_skew: Duration,
 }
 
 ///
-/// Diese Funktion ersetzt nicht [`verify_manifest_integrity`] — beide
-/// Sie validiert in dieser Reihenfolge:
+/// It validates in this order:
 ///
-/// 4. `issued_at` ist ISO-8601-parsebar.
 ///    Zukunft.
 ///
 /// Checks whether an integrity-verified manifest applies to the running
@@ -224,7 +212,6 @@ pub fn verify_update_policy(
 }
 
 /// Vergleicht zwei punktgetrennte numerische Versionsstrings (z. B.
-/// `major.minor.patch`-Versionen ausliefert. Nicht-numerische Segmente
 ///
 /// Compares two dotted-numeric version strings (e.g. `1.10.0` vs
 /// `1.9.5`). Pre-release suffixes after `-` are dropped for comparison
@@ -369,7 +356,6 @@ mod tests {
         let content: &[u8] = b"hello world";
         let mut m = manifest_for("stars.exe", content);
         m.signature = String::new();
-        // Schema-Validierung greift bereits vor dem Signatur-Verifier.
         // Schema validation triggers before the signature verifier.
         let err = verify_manifest_integrity(&m, &AcceptAnyVerifier, &[("stars.exe", content)])
             .unwrap_err();
@@ -476,9 +462,7 @@ mod tests {
 
     #[test]
     fn policy_rejects_equal_version() {
-        // Update.
         // A re-install must not slip through — `current == manifest` is not
-        // an update.
         let m = policy_manifest("1.0.0", "2026-06-01T11:00:00Z");
         let err = verify_update_policy(&m, &base_policy()).unwrap_err();
         assert!(format!("{err}").contains("not newer"));
@@ -550,7 +534,6 @@ mod tests {
 
     #[test]
     fn compare_dotted_versions_strips_prerelease_for_compare() {
-        // Vereinfachung, bis das Projekt echte SemVer-Pre-Releases ausliefert.
         // `1.1.0-rc1` and `1.1.0` compare as equal — deliberate simplification
         // until the project ships real SemVer pre-releases.
         assert_eq!(

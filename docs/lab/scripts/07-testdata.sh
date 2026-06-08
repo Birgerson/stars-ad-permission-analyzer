@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Lab Phase 7 — Test-OUs, Test-User, verschachtelte Gruppen, Test-Pfad mit ACL inkl. Cross-Forest-FSP.
 set -eu
 : "${LAB_ADMIN_PASSWORD:?Please export LAB_ADMIN_PASSWORD}"
 
@@ -91,7 +90,7 @@ run_ps 100 /tmp/td-tier0.ps1 "test-data tier0.lab"
 run_ps 101 /tmp/td-tier1.ps1 "test-data tier1.lab"
 run_ps 102 /tmp/td-tier2.ps1 "test-data tier2.lab"
 
-# Cross-Forest FSP ACE: T1LAB\bob auf tier0 C:\TestShare
+# Cross-forest FSP ACE: T1LAB\bob on tier0 C:\TestShare
 cat > /tmp/fsp-tier0.ps1 <<'PSEOF'
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"

@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Lab Block C.4 — Stars Performance-Benchmark gegen 5105 Ordner / 500 Users
-# auf tier0 mit Live-LDAP-Resolve und CSV-Output.
 set -eu
 : "${LAB_ADMIN_PASSWORD:?Please export LAB_ADMIN_PASSWORD}"
 
@@ -21,7 +19,6 @@ if (Test-Path \$out) { Remove-Item \$out }
 & 'C:\\Stars\\adpa.exe' scan \`
     --path 'C:\\Data' \`
     --user 'T0LAB\\mm0001' \`
-    --server 'tier0.tier0.lab' \`
     --base-dn 'DC=tier0,DC=lab' \`
     --bind-dn 'CN=Administrator,CN=Users,DC=tier0,DC=lab' \`
     --insecure-ldap \`
@@ -45,7 +42,6 @@ cat > /tmp/analyze.ps1 <<PSEOF
 & 'C:\\Stars\\adpa.exe' analyze \`
     --path 'C:\\Data\\Sales\\Project05\\Folder25' \`
     --user 'T0LAB\\mm0001' \`
-    --server 'tier0.tier0.lab' \`
     --base-dn 'DC=tier0,DC=lab' \`
     --bind-dn 'CN=Administrator,CN=Users,DC=tier0,DC=lab' \`
     --insecure-ldap 2>&1 | Select-Object -Last 25

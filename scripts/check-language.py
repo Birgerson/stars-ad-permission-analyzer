@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Language check — verifies the repository stays US-English only.
 
-Catches German text in any tracked file by looking for umlauts and the
-eszett (ä ö ü Ä Ö Ü ß), which never appear in English words. Uses
-character-level (UTF-8 decoded) matching, not byte regex — so emoji and
-em-dashes are not false positives.
+Two passes:
+
+1. Umlaut/eszett scan (`[äöüÄÖÜß]`). Catches the obvious German.
+2. ASCII word denylist. Catches German words that have no umlauts —
+   "Hell", "Dunkel", "Berechtigungspfad", "Abbrechen", "fehlgeschlagen",
+   etc. The previous version only ran pass 1, which gave false
+   confidence (review 2026-06-08 finding 6).
+
+Both passes use character-level UTF-8 matching, not byte regex, so
+emoji and em-dashes are not false positives.
 
 Historical ADRs 0001–0044 are excluded because they predate the
 English-only convention; their migration is tracked separately.
@@ -26,6 +32,87 @@ import sys
 UMLAUT_RE = re.compile(r"[äöüÄÖÜß]")
 
 
+# Whole-word ASCII denylist for German words that cannot collide with
+# English. These are matched case-insensitively as standalone words
+# (word boundary on both sides). Add new entries here when they show up
+# in a finding; remove an entry only when it is proven to collide with a
+# legitimate English usage somewhere in the repo.
+DE_WORDS = [
+    # Theme-toggle and obvious GUI labels
+    "Hell", "Dunkel", "Abbrechen", "Schliessen",
+    # German compound nouns from Stars' GUI that have no English meaning
+    "Berechtigungspfad", "Berechtigungen", "Berechtigung",
+    "Zieldatei", "Zielordner", "Berichte",
+    "Eintraege",
+    "Schemaversion", "Spaltenwert", "Hilfsspalten",
+    "Geschaeftsleitung",
+    "Datenbankschema",
+    "Vorpruefung",
+    "Sichtbarkeit",
+    "Reihenfolge",
+    # German verbs/participles that cannot be English words
+    "fehlgeschlagen", "abgeschlossen", "gespeichert",
+    "angemeldete", "angemeldet",
+    "geprueft", "pruefen", "Pruefe",
+    "Anhaken",
+    "Implizit", "Implizite",
+    "Jeder",
+    "Unauthentifizierte", "Unauthentifiziert",
+    "Authentifizierte",
+    "Stoerungen", "Stoerung",
+    "Notbetrieb",
+    "Vorgaenge",
+    "Pflicht", "Pflichten",
+    # Additional DE-only nouns and verbs found in remaining comments
+    "Freigabe", "Freigaben",
+    "Befund", "Befunde",
+    "listet", "liefert", "lieferte",
+    "durchreichen", "weiterreichen",
+    "Enumerationsreihenfolge", "Auswertungsreihenfolge",
+    "Aenderungsursache",
+    "rekonstruieren", "rekonstruierbar",
+    "Mitgliedschaftspfad",
+    "ausgefiltert",
+    "Aenderung", "Aenderungen",
+    "vorpruefen", "Vorpruefung",
+    "Validierungsfehler",
+    "konservativ", "konservativen",
+    "Schlieber",
+    "Komposition",
+    "Endmaske",
+    "wechselt",
+    "Validierungs",
+    # High-frequency German stopwords / particles. These never appear in
+    # natural English sentences. Each one matched as a standalone word
+    # catches German prose that has no umlauts (e.g. "der Scan" vs.
+    # "the scan").
+    "der", "die", "das", "dass", "den", "dem", "des",
+    "und", "oder", "aber", "doch", "denn",
+    "ist", "sind", "war", "waren", "wird", "wurden", "werden",
+    "nicht", "nichts", "kein", "keine", "keinen", "keiner",
+    "auf", "fuer", "ueber", "unter", "neben", "zwischen",
+    "mit", "vom", "zum", "zur", "beim", "am", "im",
+    "noch", "schon", "auch", "sowie", "sondern",
+    "weil", "wenn", "damit", "sobald",
+    "dieser", "diese", "dieses", "diesem", "diesen",
+    "sein", "seine", "seiner", "seinem", "seinen",
+    "ihr", "ihre", "ihrer", "ihrem", "ihren",
+    "wir", "ihr", "sie", "uns", "euch",
+    # German verbs that clash too rarely with English to be a problem
+    "haben", "hatte", "hatten", "habe",
+    "kann", "kannst", "koennen", "konnte", "konnten",
+    "muss", "muessen", "musste", "mussten",
+    "soll", "sollen", "sollte", "sollten",
+    "darf", "duerfen", "durfte", "durften",
+    "moechte", "moechten",
+]
+
+DE_WORDS_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(w) for w in DE_WORDS) + r")\b",
+    re.IGNORECASE,
+)
+
+
 # Paths that legitimately contain umlauts in tracked content. Each entry
 # is a (path-suffix, optional substring) tuple. When a new legitimate
 # need shows up, add it here with a short comment why.
@@ -45,14 +132,19 @@ ALLOWLIST = [
     # names that Stars correctly resolves on a Server 2025 trust.
     ("docs/lab/verification.md", "VORDEFINIERT"),
     ("docs/lab/verification.md", "Domänen-Benutzer"),
-    # This script itself describes the umlauts it checks for.
+    # This script itself describes the German words it checks for.
     ("scripts/check-language.py", None),
+    # Real test fixture data: the lab uses a German user name as a
+    # legacy identity (max.mustermann); these scripts have to mention
+    # it for testdata generation.
+    ("docs/testing/integration-test-setup.md", "mustermann"),
+    ("scripts/test-env/02-setup-ad-objects.ps1", "mustermann"),
 ]
 
 
-# Historical ADRs are kept in German for now — tracked in
-# docs/adr/README.md and project_en_migration_pending memory.
-HISTORICAL_ADR = re.compile(r"^docs/adr/00(0[1-9]|[1-3][0-9]|4[0-4])-.+\.md$")
+# Historical ADRs are kept in their original prose for now — tracked
+# in docs/adr/README.md.
+HISTORICAL_ADR = re.compile(r"^docs/adr/00(1[6-9]|[2-3][0-9]|4[0-4])-.+\.md$")
 
 
 def is_allowlisted(path: str, line_text: str) -> bool:
@@ -71,7 +163,10 @@ def is_allowlisted(path: str, line_text: str) -> bool:
 
 def tracked_files():
     """Return tracked text files we care about (skip binaries)."""
-    extensions = (".rs", ".md", ".toml", ".yml", ".yaml", ".sh", ".ps1", ".nsi")
+    extensions = (
+        ".rs", ".md", ".toml", ".yml", ".yaml",
+        ".sh", ".ps1", ".nsi", ".sql", ".manifest",
+    )
     out = subprocess.check_output(
         ["git", "ls-files"], encoding="utf-8", errors="replace"
     )
@@ -97,7 +192,7 @@ def check():
         try:
             with open(path, "r", encoding="utf-8") as f:
                 for line_no, line in enumerate(f, start=1):
-                    if UMLAUT_RE.search(line):
+                    if UMLAUT_RE.search(line) or DE_WORDS_RE.search(line):
                         if not is_allowlisted(path, line):
                             hits.append((path, line_no, line.rstrip("\n")))
         except (UnicodeDecodeError, OSError):
@@ -105,18 +200,18 @@ def check():
             continue
 
     if not hits:
-        print("Language check passed: no German umlauts in non-historical tracked files.")
+        print("Language check passed: no German content in non-historical tracked files.")
         return 0
 
     print(
-        f"Language check: {len(hits)} line(s) contain German umlauts.",
+        f"Language check: {len(hits)} line(s) contain German content.",
         file=sys.stderr,
     )
     if args.list:
-        for path, line_no, text in hits[:200]:
+        for path, line_no, text in hits[:500]:
             print(f"{path}:{line_no}: {text}", file=sys.stderr)
-        if len(hits) > 200:
-            print(f"... and {len(hits) - 200} more.", file=sys.stderr)
+        if len(hits) > 500:
+            print(f"... and {len(hits) - 500} more.", file=sys.stderr)
     else:
         print(
             "Tip: run `python scripts/check-language.py --list` to see the offending lines.",

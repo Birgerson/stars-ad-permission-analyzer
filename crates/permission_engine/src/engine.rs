@@ -1,16 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Berechnung effektiver NTFS-Berechtigungen.
 //! Calculation of effective NTFS permissions.
-//!
-//! Algorithmus / Algorithm:
-//!   1. Alle SIDs des Benutzers sammeln (eigene SID + alle Gruppen-SIDs).
-//!   2. DACL in gespeicherter ACE-Reihenfolge auswerten (Windows-AccessCheck-
-//!      Semantik): erste Entscheidung pro Recht-Bit gewinnt. INHERIT_ONLY-
-//!      auf spezifische Datei-Bits expandiert.
-//!      das entspricht dem Verhalten des Windows-AccessChecks.
-//!   5. Effektiv = restriktivere Kombination aus NTFS und Share (bitweise AND).
 //!
 //! Evaluation walks the DACL in its stored order (Windows AccessCheck
 //! semantics): the first decision per right-bit wins. INHERIT_ONLY ACEs are
@@ -19,6 +10,9 @@
 //! evaluation. Non-canonical DACL orderings are detected and logged as a
 //! warning; evaluation still follows the stored order, which matches the
 //! actual Windows AccessCheck behavior.
+//!
+//! Final effective right = the more restrictive combination of NTFS and share
+//! (bitwise AND).
 
 use std::collections::{HashMap, HashSet};
 
@@ -55,7 +49,6 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             input.access_context,
         );
 
-        // Eine leere DACL (dacl == [] && null_dacl == false) hingegen verweigert alles.
         // NULL DACL means "no access control" — Windows grants everyone full access.
         // An empty DACL (dacl == [] && null_dacl == false) by contrast denies everything.
         let (mut ntfs_raw, denied_raw) = if input.file_system_object.null_dacl {
@@ -76,7 +69,6 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         }
 
         // Share-Status auswerten: NotApplicable → effektiv = NTFS;
-        // Applied → effektiv = NTFS ∩ Share; ReadFailed → effektiv = NTFS, aber
         // Evaluate the share status: NotApplicable → effective = NTFS;
         // Applied → effective = NTFS ∩ Share; ReadFailed → effective = NTFS but
         // the result carries the ReadFailed marker (incomplete).
@@ -86,8 +78,6 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             ShareMaskStatus::Applied(mask) => {
                 (Some(*mask), ShareEvalStatus::Applied, ntfs_raw & mask.0)
             }
-            // NULL-Share-DACL: SMB schraenkt nicht ein → effektiv = NTFS.
-            // share_mask bleibt None, damit Reports keine kuenstliche Maske
             // NULL share DACL: SMB does not restrict → effective = NTFS.
             // share_mask stays None so reports do not display an artificial
             // mask 0xFFFFFFFF. The Unrestricted status cleanly separates this
@@ -115,8 +105,6 @@ impl PermissionEvaluator for DefaultPermissionEngine {
 
         let matched_aces = collect_matched_aces(&input.file_system_object.dacl, &user_sids);
 
-        // Strukturierte Diagnose-Marker.
-        //  - Folge-Befund 3 (NTFS): nicht-kanonische DACL-Reihenfolge.
         // Structured diagnostic markers.
         //  - Follow-up finding 3 (NTFS): non-canonical DACL ordering. A
         //    NULL DACL has no ACEs to order — only the real DACL.
@@ -136,7 +124,6 @@ impl PermissionEvaluator for DefaultPermissionEngine {
                 count: input.unsupported_share_ace_count,
             });
         }
-        // Finding 6: SAM-Fallback ohne LDAP — verschachtelte Domain-Gruppen
         // Finding 6: SAM fallback without LDAP — nested domain groups are
         // not recursively resolved.
         if input.group_resolution_via_sam_fallback {
@@ -154,15 +141,12 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if input.identity_not_in_configured_ldap_base {
             diagnostics.push(PermissionDiagnostic::IdentityNotInConfiguredLdapBase);
         }
-        // Review 2026-06-04 Runde 2 Finding 5: disabled-Status nicht
         // ermittelbar.
         // Review 2026-06-04 round 2 finding 5: disabled status could not be
         // determined.
         if input.identity_disabled_status_unknown {
             diagnostics.push(PermissionDiagnostic::IdentityDisabledStatusUnknown);
         }
-        // Review 2026-06-04 Runde 4 Finding 1: technischer LDAP-Fehler beim
-        // sichtbar tragen, statt mit Platzhalter-Identity "sauber"
         // auszusehen.
         // Review 2026-06-04 round 4 finding 1: a technical LDAP identity
         // lookup failure is incompleteness; the report must surface it
@@ -204,7 +188,6 @@ impl PermissionEvaluator for DefaultPermissionEngine {
 
 /// Builds the token SID set for a user.
 ///
-/// Windows-Access-Token vorhanden sind.
 ///
 /// Contains the user SID, all group SIDs, and the implicit well-known principals
 /// `Everyone` (S-1-1-0) and `Authenticated Users` (S-1-5-11), which are present
@@ -213,8 +196,6 @@ impl PermissionEvaluator for DefaultPermissionEngine {
 /// Use this function everywhere a SID set is needed — CLI output, GUI share mask,
 /// and the permission engine — so all three stay consistent.
 ///
-/// daher keine kontextspezifischen Well-Knowns wie `NETWORK` hinzu.
-/// Backwards-compatible wrapper: uses `AccessContext::Unspecified` and
 /// therefore does not add context-specific well-knowns like `NETWORK`.
 pub fn build_token_sids(user_sid: &str, memberships: &[GroupMembership]) -> HashSet<String> {
     build_token_sids_with_context(user_sid, memberships, &[], AccessContext::Unspecified)
@@ -223,8 +204,6 @@ pub fn build_token_sids(user_sid: &str, memberships: &[GroupMembership]) -> Hash
 /// Like [`build_token_sids`], plus additional SIDs of local groups on the target
 /// server (e.g. `BUILTIN\Administrators`) in which the user is a member.
 ///
-/// daher keine kontextspezifischen Well-Knowns hinzu — bei SMB-Pfaden fehlt
-/// dann z. B. `NETWORK` im Token, was Share-ACEs gegen `NETWORK` unsichtbar
 /// explizitem `AccessContext::for_path(path)` nutzen.
 ///
 /// **Deprecated:** implicitly uses `AccessContext::Unspecified` and therefore
@@ -252,12 +231,9 @@ pub fn build_token_sids_with_local(
     )
 }
 
-/// Server-Gruppen, universelle Well-Knowns (`Everyone`, `Authenticated
-/// Users`) und kontextspezifische Well-Knowns:
 ///
 /// - `RemoteSmb` → `NETWORK` (S-1-5-2)
 /// - `LocalInteractive` → `INTERACTIVE` (S-1-5-4) + `LOCAL` (S-1-2-0)
-/// - `Unspecified` → keine weiteren Well-Knowns
 ///
 /// Full token construction: own SID, AD groups, local server groups, the
 /// universal well-knowns (`Everyone`, `Authenticated Users`), and the
@@ -313,7 +289,6 @@ fn collect_user_sids(
 
 /// Checks whether an ACE applies to the current object.
 ///
-/// Engine z. B. einem Verzeichnis Rechte zusprechen, die Windows beim
 ///
 /// ACEs flagged with INHERIT_ONLY_ACE apply only to children and must not
 /// contribute to the effective permission on the current object. Without
@@ -326,7 +301,6 @@ fn ace_applies_to_current_object(ace: &AceEntry) -> bool {
 /// Collects allow ACEs that contributed at least one bit to the NTFS result, with the actually
 /// contributed bits per SID (accumulated across multiple ACEs of the same SID).
 ///
-/// (Everyone, Authenticated Users) zustande kam — und welche Bits diese genau beitrugen.
 /// Used by the risk engine to detect whether write access originated from broad principals
 /// (Everyone, Authenticated Users) — and exactly which bits they contributed.
 fn collect_contributing_sids(
@@ -376,7 +350,6 @@ fn collect_matched_aces(dacl: &[AceEntry], user_sids: &HashSet<String>) -> Vec<A
 
 /// Evaluates the DACL in its stored order.
 ///
-/// Pro Recht-Bit gewinnt die erste passende Entscheidung — analog zum
 ///
 /// For each right-bit the first matching decision wins — analogous to
 /// Windows `AccessCheck`. Before evaluation, generic rights (GENERIC_*) are
@@ -395,10 +368,8 @@ fn evaluate_dacl_ordered(
     user_sids: &HashSet<String>,
     _path: &str,
 ) -> (u32, u32) {
-    // Diagnose-Erkennung (inkl. warn-Log) erfolgt zentral in `collect_diagnostics`
-    // `EffectivePermission.diagnostics`-Liste landet (Folge-Befund 3).
+    // lands in the `EffectivePermission.diagnostics` list (follow-up finding 3).
     // Diagnostic detection (incl. warn log) lives centrally in
-    // `collect_diagnostics` on the `evaluate` path so the marker also surfaces
     // in the structured `EffectivePermission.diagnostics` list (follow-up
     // finding 3).
     let mut granted: u32 = 0;
@@ -428,7 +399,6 @@ fn evaluate_dacl_ordered(
 /// Exports.
 ///
 /// Collects structured diagnostic markers attached to an effective permission
-/// (follow-up finding 3). Detects non-canonical DACL orderings and also
 /// emits a `warn!` — the structured list flows into
 /// `EffectivePermission.diagnostics` and from there into DB history and
 /// exports.
@@ -446,10 +416,6 @@ fn collect_diagnostics(dacl: &[AceEntry], path: &str) -> Vec<PermissionDiagnosti
     out
 }
 
-/// Kanonische DACL-Reihenfolge (Windows): pro ACE eine monotone Phase
-/// 0 (explizit Deny) → 1 (explizit Allow) → 2 (inherited Deny) → 3 (inherited Allow).
-/// Liefert den Index des ersten ACEs, der diese Reihenfolge verletzt.
-///
 /// Windows-canonical DACL order: each ACE has a monotonically increasing
 /// phase 0 (explicit deny) → 1 (explicit allow) → 2 (inherited deny) →
 /// 3 (inherited allow). Returns the index of the first ACE that violates it.
@@ -497,13 +463,9 @@ fn display_for_sid<'a>(
     sid.0.clone()
 }
 
-/// Formatiert einen einzelnen Membership-Schritt im Berechtigungspfad.
-/// kann den Weg vom Benutzer zur ACE-tragenden Gruppe direkt ablesen
-/// (Finding 1 aus Review 2026-05-31).
-///
 /// Formats a single membership step in the explanation path. When the
 /// membership carries a concrete chain (`gm.path`), the chain is rendered
-/// as an ordered sequence „A → B → C" — the auditor can read the path
+/// as an ordered sequence "A → B → C" — the auditor can read the path
 /// from the user to the ACE-bearing group directly (finding 1 from the
 /// 2026-05-31 review).
 fn format_membership_step(
@@ -520,7 +482,6 @@ fn format_membership_step(
     };
 
     let Some(path) = gm.path.as_ref() else {
-        // Kein konkreter Pfad bekannt — alter Anzeigeformat als Fallback.
         // No concrete path known — fall back to the legacy format.
         let via = if gm.direct { "direct" } else { "transitive" };
         return format!("Member of {target_display} [{via}]");
@@ -529,7 +490,6 @@ fn format_membership_step(
     let source = source_label(&path.source);
 
     if !path.complete {
-        // rekonstruierbar — explizit kennzeichnen, damit Audits den
         // Transitive membership confirmed, exact route not
         // reconstructable — flag explicitly so audits can tell apart
         // from a fully reconstructed chain.
@@ -539,7 +499,6 @@ fn format_membership_step(
     }
 
     if path.nodes.len() <= 2 {
-        // Zwei Knoten = direkter Sprung; keine Zwischenstufen.
         // Two nodes = direct hop; no intermediates.
         return format!("Member of {target_display} [direct, source: {source}]");
     }
@@ -632,8 +591,6 @@ fn build_explanation(
         }
     }
 
-    // 3b. Deny-Aggregation explizit: macht sichtbar, dass die anschliessende
-    // unterdrueckt wurden (besonders verwirrend bei "Special (0x00100000)" =
     // nur SYNCHRONIZE uebrig).
     // 3b. Explicit deny aggregation step: makes it visible that the NTFS
     // mask below was reduced by Deny ACEs. Without it the reader has to
@@ -657,7 +614,6 @@ fn build_explanation(
         ntfs_raw
     ));
 
-    // 5. Share + Kombination (falls vorhanden / if present)
     if let Some(share) = share_mask {
         let share_rights = NormalizedRights::new(share.0);
         steps.push(format!(
@@ -955,7 +911,6 @@ mod tests {
 
     #[test]
     fn deny_one_group_allow_another_group() {
-        // GROUP_A: Deny Read, GROUP_B: Allow Read → beide Gruppen → kein Read
         let p = eval(
             user(USER),
             vec![membership(USER, GROUP_A), membership(USER, GROUP_B)],
@@ -1029,8 +984,6 @@ mod tests {
         );
         assert!(NormalizedRights::new(p.ntfs_mask.0).is_read());
     }
-
-    // --- Keine Rechte / no rights ---
 
     #[test]
     fn empty_dacl_yields_no_access() {
@@ -1115,7 +1068,7 @@ mod tests {
         assert_eq!(p.effective_mask.0, p.ntfs_mask.0);
     }
 
-    // --- Berechtigungspfad / permission path ---
+    // --- permission path ---
 
     #[test]
     fn explanation_contains_user_and_ace_info() {
@@ -1219,7 +1172,6 @@ mod tests {
 
     #[test]
     fn matched_aces_capture_user_and_group_aces() {
-        // Ein expliziter Benutzer-ACE und ein geerbter Gruppen-ACE; ein fremder ACE
         let p = eval(
             user(USER),
             vec![membership(USER, GROUP_A)],
@@ -1256,11 +1208,9 @@ mod tests {
         assert!(p.matched_aces.is_empty());
     }
 
-    // --- NULL-DACL vs. leere DACL ---
-
     #[test]
     fn null_dacl_grants_full_control_to_any_user() {
-        // Windows-Semantik: NULL-DACL = kein Zugriffsschutz = jeder hat Vollzugriff.
+        // Windows semantics: NULL DACL = no access protection = everyone has full control.
         let p = eval(user(USER), vec![], fso_null_dacl(), None);
         assert!(
             NormalizedRights::new(p.ntfs_mask.0).is_full_control(),
@@ -1271,7 +1221,6 @@ mod tests {
 
     #[test]
     fn empty_dacl_still_denies_access() {
-        // Regression: leere DACL (null_dacl=false, dacl=[]) bleibt Deny-All.
         let p = eval(user(USER), vec![], fso(None, vec![]), None);
         assert_eq!(p.ntfs_mask.0, 0);
         assert_eq!(p.effective_mask.0, 0);
@@ -1282,8 +1231,6 @@ mod tests {
         let p = eval(user(OTHER), vec![], fso_null_dacl(), None);
         assert!(NormalizedRights::new(p.ntfs_mask.0).is_full_control());
     }
-
-    // --- ShareMaskStatus-Ein-/Ausgabe / share mask status input/output ---
 
     #[test]
     fn share_read_failed_propagates_and_keeps_ntfs_mask() {
@@ -1342,7 +1289,6 @@ mod tests {
         assert_eq!(p.share_mask.unwrap().0, MASK_READ);
     }
 
-    /// NULL-Share-DACL → effective = NTFS, kein kuenstlicher `Applied(0xFFFFFFFF)`.
     /// NULL share DACL → effective = NTFS, no fake `Applied(0xFFFFFFFF)`.
     #[test]
     fn share_unrestricted_keeps_ntfs_and_clears_share_mask() {
@@ -1374,8 +1320,6 @@ mod tests {
             "Unrestricted must not surface a fake share mask"
         );
     }
-
-    // --- Lokale Server-Gruppen / local server groups ---
 
     #[test]
     fn local_group_ace_grants_rights() {
@@ -1441,7 +1385,6 @@ mod tests {
 
     #[test]
     fn inherit_only_allow_does_not_grant_to_current_object() {
-        // darf er keine Rechte beitragen.
         // An ACE flagged IO applies only to children; it must not contribute
         // rights to the current object itself.
         let p = eval(
@@ -1510,7 +1453,6 @@ mod tests {
 
     #[test]
     fn inherit_only_ace_not_listed_as_contributing() {
-        // aktuellen Objekt nichts beigetragen hat.
         let p = eval(
             user(USER),
             vec![],
@@ -1529,7 +1471,6 @@ mod tests {
         );
     }
 
-    // --- Finding 3: Generische Bits (GENERIC_*) im NTFS-Pfad expandieren ---
     // --- Finding 3: expand generic bits (GENERIC_*) in the NTFS path ---
 
     #[test]
@@ -1565,7 +1506,6 @@ mod tests {
 
     #[test]
     fn generic_all_intersects_with_share_correctly() {
-        // Vorher: GENERIC_ALL & Share-Maske ergab 0. Erwartet: korrekte
         // Schnittmenge nach Expansion.
         // Previously: GENERIC_ALL & share_mask was 0. Expected: correct
         // intersection after expansion.
@@ -1584,7 +1524,6 @@ mod tests {
 
     #[test]
     fn generic_all_deny_blocks_full_control() {
-        // der Roh-Deny-Bit 0x10000000 nichts spezifisches geblockt.
         // GENERIC_ALL deny must block all bits — before Finding 3 the raw
         // deny bit 0x10000000 would not have blocked any specific bit.
         let p = eval(
@@ -1605,13 +1544,11 @@ mod tests {
         );
     }
 
-    // --- Finding 2: ACE-Reihenfolge / nicht-kanonische DACLs ---
+    // --- Finding 2: ACE ordering / non-canonical DACLs ---
     // --- Finding 2: ACE order / non-canonical DACLs ---
 
     #[test]
     fn non_canonical_allow_before_deny_first_wins() {
-        // Windows-AccessCheck wertet in Reihenfolge aus → erstes Allow gewinnt.
-        //
         // Non-canonical (allow before deny for same trustee+bit). Windows
         // AccessCheck walks in order → the first allow wins. The old bucket
         // algorithm would have incorrectly produced "deny wins".
@@ -1635,7 +1572,6 @@ mod tests {
 
     #[test]
     fn inherited_deny_after_explicit_allow_does_not_revoke() {
-        // basierte Logik exakt die alte Vorrangregel reproduziert.
         // Canonical case, asserted explicitly to confirm the order-based
         // logic reproduces the prior precedence rule.
         let p = eval(
@@ -1800,7 +1736,6 @@ mod tests {
 
     // --- Explanation path: name resolution via sid_names + group_name ---
 
-    /// Memberships mit gesetztem `group_name` sollen den Namen im Step
     /// Memberships carrying `group_name` should inject the name into the
     /// step text without requiring anything from `sid_names`.
     #[test]
@@ -1868,7 +1803,6 @@ mod tests {
 
     /// `Allow ACE for BUILTIN\Administrators (S-1-5-32-544) → Modify`
     /// statt nur `Allow ACE for S-1-5-32-544 → Modify` erscheint.
-    /// ACE trustees should also display the name from `sid_names`, so
     /// `Allow ACE for BUILTIN\Administrators (S-1-5-32-544) → Modify`
     /// appears instead of just `Allow ACE for S-1-5-32-544 → Modify`.
     #[test]
@@ -1984,7 +1918,6 @@ mod tests {
 
     #[test]
     fn network_ace_does_not_apply_in_local_interactive_context() {
-        // NETWORK-ACE darf nichts beitragen.
         // Local interactive access: NETWORK is NOT in the token. A NETWORK
         // ACE must not contribute.
         let p = eval_with_context(
@@ -2002,7 +1935,6 @@ mod tests {
 
     #[test]
     fn network_ace_does_not_apply_in_unspecified_context() {
-        // Default-Kontext: keine kontextspezifischen Well-Knowns. NETWORK-ACE
         // Default context: no context-specific well-knowns. NETWORK ACE has
         // no effect — same behavior as pre-Finding 4 for callers that don't
         // set a context yet.
@@ -2065,7 +1997,6 @@ mod tests {
 
     #[test]
     fn network_deny_blocks_user_allow_in_remote_smb_context() {
-        // Direkter Audit-Use-Case: ein „Deny NETWORK" muss bei SMB greifen
         // Direct audit use case: a "Deny NETWORK" must apply over SMB and
         // override an allow for the user — pre-Finding 4 this was ignored
         // because NETWORK was not in the token.
@@ -2091,7 +2022,6 @@ mod tests {
 
     #[test]
     fn build_token_sids_with_context_includes_universal_well_knowns_for_unspecified() {
-        // Universal well-knowns (Everyone, Authenticated Users) sind immer da,
         let token =
             super::build_token_sids_with_context(USER, &[], &[], AccessContext::Unspecified);
         assert!(token.contains("S-1-1-0"), "Everyone must be present");
@@ -2144,7 +2074,6 @@ mod tests {
     // Finding 1 / Review 2026-05-31 — Membership path in the explanation
     // ------------------------------------------------------------------
 
-    /// Reihenfolge enthalten — Kernforderung aus Finding 1.
     /// Builds a nested membership with a concrete path. The resulting
     /// explanation must contain the intermediate groups in the correct
     /// order — core requirement from finding 1.
@@ -2234,8 +2163,7 @@ mod tests {
 
     #[test]
     fn explanation_contains_nested_chain_in_order() {
-        // User → GRP_A → GRP_B → ACE auf GRP_B → Modify.
-        // (kein Splitten erlaubt).
+        // User → GRP_A → GRP_B → ACE on GRP_B → Modify.
         // User → GRP_A → GRP_B → ACE on GRP_B → Modify. The explanation
         // text must contain "GRP_A → GRP_B" exactly in that order — in
         // a single step (no splitting allowed).
@@ -2438,9 +2366,6 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 Runde 4 Finding 1: ein technischer LDAP-Fehler
-    /// `PermissionDiagnostic::IdentityLookupFailed { reason }` im
-    /// Diagnose-Vector erscheinen — sonst sieht ein leerer-Token-Befund
     /// "sauber" aus.
     /// Round 4 finding 1: an LDAP identity lookup error must surface.
     #[test]
@@ -2480,7 +2405,6 @@ mod tests {
     }
 
     /// Review 2026-06-04 Runde 4 Finding 1: ein gescheiterter
-    /// Gruppen-Lookup nach erfolgreichem Identity-Hit produziert einen
     /// `GroupResolutionFailed { reason }`-Marker.
     /// Round 4 finding 1: failed group resolution after identity hit.
     #[test]
@@ -2519,8 +2443,6 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-05 Runde 6 Finding 1: ein GroupMembership mit
-    /// `Member of …`-Step mit Mediator-Kette erscheinen. Vorher landete
     /// Round 6 finding 1: a LocalGroup-sourced GroupMembership must
     /// render as a Member-of step with mediator chain in the
     /// explanation path.
@@ -2528,7 +2450,6 @@ mod tests {
     fn local_group_membership_renders_in_explanation_path() {
         use adpa_core::model::{MembershipPath, MembershipPathSource};
 
-        // Konstruiere Domain-Gruppen-Mediator: User → Domain Admins →
         // BUILTIN\Administrators.
         // Build mediator chain: User → Domain Admins → BUILTIN\Administrators.
         const BUILTIN_ADMINS: &str = "S-1-5-32-544";
@@ -2580,7 +2501,6 @@ mod tests {
             })
             .unwrap();
 
-        // Pfad muss matchen → effective_mask = MASK_MODIFY.
         assert_eq!(result.effective_mask.0, MASK_MODIFY);
 
         // Kette enthalten.
@@ -2601,7 +2521,6 @@ mod tests {
         );
     }
 
-    /// Round 6 finding 1: ein `complete: false`-Pfad (Member-Liste der
     /// Unvollstaendigkeit sieht.
     /// Round 6 finding 1: `complete: false` paths must render as
     /// "exact chain unknown" so the auditor sees the incompleteness.
@@ -2658,7 +2577,6 @@ mod tests {
         );
     }
 
-    /// Erklaerungspfad auftauchen — sonst sieht ein Wald-und-Wiesen-Admin
     /// Block A verification 2026-06-05: a Deny ACE that overrides an Allow
     /// must surface as its own "Deny aggregation" step. Otherwise the reader
     /// only sees "Effective: Special (0x...)" without grasping that Deny
@@ -2692,8 +2610,6 @@ mod tests {
             })
             .unwrap();
 
-        // Deny gewinnt — alle Modify-Bits sind blockiert, ausser den Bits
-        // beide Seiten gleich, daher 0 fuer alle Modify-Bits).
         // Deny wins for all overlapping bits → effective is 0.
         assert_eq!(
             result.effective_mask.0, 0,
@@ -2701,7 +2617,6 @@ mod tests {
             result.effective_mask.0
         );
 
-        // Erklaerung muss den Deny-Aggregation-Step enthalten.
         let deny_step = result
             .path_explanation
             .steps
@@ -2760,7 +2675,6 @@ mod tests {
         );
     }
 
-    /// dafuer, dass `AccessContext::for_path_with_smb` ueberhaupt Wirkung
     /// zeigt.
     /// Round-7 finding 1 (end-to-end): with `AccessContext::RemoteSmb` the
     /// `NETWORK` well-known (S-1-5-2) must land in the token and an Allow
@@ -2778,9 +2692,6 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: Vec::new(),
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
-                // Schluesselsetting: lokaler Pfad, aber explizit RemoteSmb,
-                // wie CLI/GUI es jetzt via for_path_with_smb setzen, sobald
-                // --smb-server / --share-name vorhanden ist.
                 // Key setting: local-looking input, explicit RemoteSmb —
                 // mirrors what CLI/GUI now produce via for_path_with_smb
                 // when --smb-server / --share-name is provided.
@@ -2801,8 +2712,6 @@ mod tests {
         );
     }
 
-    /// Falsch-Ergebnis fuer lokalen Pfad + SMB-Kontext — Pfad allein
-    /// erzeugte LocalInteractive, NETWORK fehlte im Token, der Auditor
     /// Counterpart: under `LocalInteractive` a NETWORK Allow ACE must NOT
     /// take effect — that was the silent-wrong outcome for local-path +
     /// SMB-context before the round-7 fix.

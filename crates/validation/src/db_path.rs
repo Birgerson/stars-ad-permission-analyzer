@@ -4,7 +4,6 @@
 //! Validierung von Datenbank-Zielpfaden.
 //! Validation of database target paths.
 //!
-//! Policy-Anspruch wie Exportpfade: absoluter Pfad, bekannte Endung,
 //! existierendes Zielverzeichnis.
 //! The database path is a write target and therefore subject to the same
 //! policy as export paths: absolute path, known extension, existing parent
@@ -21,11 +20,8 @@ pub struct ValidatedDbPath(pub PathBuf);
 /// Allowed file extensions for SQLite databases.
 const ALLOWED_EXTENSIONS: &[&str] = &["db", "sqlite", "sqlite3"];
 
-/// Validiert einen vom Benutzer angegebenen Datenbankpfad.
 /// Validates a user-supplied database path.
 ///
-/// - nicht leer, keine Null-Bytes / not empty, no null bytes
-/// - absoluter Pfad (Laufwerksbuchstabe oder UNC) / absolute path (drive letter or UNC)
 /// - bekannte Endung (.db, .sqlite, .sqlite3) / recognized extension
 /// - Zielverzeichnis existiert / parent directory exists
 pub fn validate_db_path(input: &str) -> Result<ValidatedDbPath, CoreError> {
@@ -41,7 +37,6 @@ pub fn validate_db_path(input: &str) -> Result<ValidatedDbPath, CoreError> {
         ));
     }
 
-    // Absoluter Pfad: Laufwerksbuchstabe (C:\) oder UNC (\\server\share).
     // Absolute path: drive letter (C:\) or UNC (\\server\share).
     let is_unc = trimmed.starts_with(r"\\");
     let is_drive_absolute = trimmed.len() >= 3

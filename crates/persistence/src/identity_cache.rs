@@ -94,9 +94,6 @@ impl<'a> IdentityCache<'a> {
                     // evaluation; the cache only carries the membership
                     // topology.
                     group_name: None,
-                    // Wie group_name auch: konkrete Mitgliedschafts-Pfade
-                    // persistiert, weil sie pro Lauf neu rekonstruiert
-                    // werden.
                     // Like group_name: concrete membership paths are a
                     // live-resolution concern and are not persisted here —
                     // they are reconstructed on every run.

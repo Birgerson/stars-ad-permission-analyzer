@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! HTML-Berichtsexport — selbst enthaltene Datei mit eingebettetem CSS.
 //! HTML report export — single self-contained file with embedded CSS.
 
 use std::fmt::Write as FmtWrite;
@@ -79,7 +78,7 @@ pub fn render_html(result: &AnalysisResult) -> Result<String, CoreError> {
 
 fn write_html_head(s: &mut String, timestamp: &str) {
     s.push_str(r#"<!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -144,8 +143,6 @@ fn write_summary(
     card(s, critical, "Critical", "critical");
     card(s, high, "High", "high");
     card(s, medium, "Medium", "medium");
-    // Gruppen, non-canonical DACL, unsupported Share-ACEs). Audit-Leser
-    // erkennt sofort, ob Findings auf belastbarer Datenbasis stehen.
     //
     // Diagnostics card: number of paths with at least one incompleteness
     // marker (parser gap, unreadable share DACL, missing local groups,
@@ -433,8 +430,6 @@ fn write_trustees_table(s: &mut String, entries: &[PathTrustees]) -> Result<(), 
     Ok(())
 }
 
-/// Windows-typische „Applies to"-Bezeichnung aus den Inheritance-/Propagation-
-/// Flags. Identisch zur GUI-Logik (siehe `gui/src/worker.rs::applies_to_label`).
 /// Windows-style "Applies to" label from the inheritance / propagation flags.
 /// Mirrors the GUI logic (see `gui/src/worker.rs::applies_to_label`).
 fn applies_to_label(inheritance_flags: u32, propagation_flags: u32) -> String {
@@ -605,7 +600,6 @@ mod tests {
         );
     }
 
-    /// `LocalGroupEvalStatus::NotAvailable` war im HTML-Diagnostics-Cell vorher
     /// `LocalGroupEvalStatus::NotAvailable` was previously not surfaced in the
     /// HTML diagnostics cell — gap from before follow-up finding 3.
     #[test]
@@ -646,7 +640,6 @@ mod tests {
         assert!(s.contains("5 unsupported share ACE(s)"));
     }
 
-    /// ein Auditor die Diagnostik-Spalte jedes einzelnen Pfads abscannen,
     ///
     /// The summary header must include a Diagnostics card showing how many
     /// paths carry incompleteness markers. Without it an auditor would have
@@ -697,7 +690,6 @@ mod tests {
         );
     }
 
-    /// Round-8-Folgereview Finding 1: HTML-Exporter darf existierende Datei
     /// Round-8 follow-up finding 1: HTML exporter must not overwrite an
     /// existing target file when called with `ExportTarget::File`.
     #[test]

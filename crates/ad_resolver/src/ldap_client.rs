@@ -4,8 +4,6 @@
 //! Low-Level-LDAP-Operationen gegen Active Directory.
 //! Low-level LDAP operations against Active Directory.
 //!
-//! Kapselt alle ldap3-Aufrufe. Keine fachliche Logik — nur Verbindung,
-//! Authentifizierung und rohe Suchergebnisse.
 //!
 //! Encapsulates all ldap3 calls. No domain logic — only connection,
 //! authentication, and raw search results.
@@ -17,7 +15,6 @@ use ldap3::adapters::{Adapter, EntriesOnly, PagedResults};
 use ldap3::{Ldap, LdapConnAsync, Scope, SearchEntry};
 use tracing::{debug, warn};
 
-/// Kompromiss aus Round-Trip-Zahl und Server-Last.
 ///
 /// Default page size for AD paged search. 1000 matches the AD default
 /// `MaxPageSize` and balances round-trip count against server load.
@@ -32,9 +29,6 @@ use adpa_core::error::CoreError;
 
 use crate::config::LdapConfig;
 
-/// Review-Befund 5: `LdapConfig::timeout_secs` war zwar konfigurierbar, wurde
-/// aber an keiner Stelle wirklich angewendet — produktiv konnte ein
-/// unerreichbarer DC die Analyse beliebig lange blockieren.
 ///
 /// Wraps an LDAP operation in `tokio::time::timeout`. Closes review finding 5:
 /// `LdapConfig::timeout_secs` was configurable but never actually enforced —
@@ -52,7 +46,6 @@ where
     }
 }
 
-/// Bequemer Konvertierer: aus den Sekunden in `LdapConfig` ein
 /// Convenience: build a `Duration` for the timeout wrappers from the
 /// seconds field on `LdapConfig`.
 pub fn ldap_timeout(config: &LdapConfig) -> Duration {
@@ -89,7 +82,6 @@ const MEMBERSHIP_ATTRS: &[&str] = &[
     "distinguishedName",
 ];
 
-/// Roher LDAP-Eintrag nach einer Suche.
 /// Raw LDAP entry after a search.
 #[derive(Debug)]
 pub struct RawEntry {
@@ -127,7 +119,6 @@ impl RawEntry {
 /// Establishes an authenticated LDAP connection.
 ///
 /// TLS-Modus / TLS mode:
-/// - `Ldaps` (Standard): ldaps://server:636 — TLS ab dem ersten Byte, empfohlen.
 ///   `Ldaps` (default): ldaps://server:636 — TLS from the first byte, recommended.
 ///   `Insecure`: ldap://server:389 — password in plaintext, test environments only.
 pub async fn connect(config: &LdapConfig) -> Result<Ldap, CoreError> {
@@ -144,7 +135,6 @@ pub async fn connect(config: &LdapConfig) -> Result<Ldap, CoreError> {
     })
     .await?;
 
-    // Verbindungs-Task im Hintergrund treiben
     // Drive connection task in background
     tokio::spawn(async move {
         if let Err(e) = conn.drive().await {
@@ -168,7 +158,6 @@ pub async fn connect(config: &LdapConfig) -> Result<Ldap, CoreError> {
     Ok(ldap)
 }
 
-/// Sucht ein AD-Objekt anhand seiner SID.
 /// Searches for an AD object by its SID.
 pub async fn search_by_sid(
     ldap: &mut Ldap,
@@ -190,7 +179,6 @@ pub async fn search_by_sid(
     Ok(rs.into_iter().next().map(RawEntry::from_search_entry))
 }
 
-/// Sucht ein AD-Objekt anhand seines Distinguished Name.
 /// Searches for an AD object by its distinguished name.
 pub async fn search_by_dn(
     ldap: &mut Ldap,
@@ -214,7 +202,6 @@ pub async fn search_by_dn(
     Ok(rs.into_iter().next().map(RawEntry::from_search_entry))
 }
 
-/// Sucht Gruppenmitglieder anhand des sAMAccountName. Liefert nur den ersten
 /// Searches for group members by sAMAccountName. Returns only the first hit —
 /// historic API, complemented by `search_all_by_samaccount` for the
 /// uniqueness check (review finding 3).
@@ -227,7 +214,7 @@ pub async fn search_by_samaccount(
     Ok(all.into_iter().next())
 }
 
-/// Eindeutigkeitsfehler ausgeben — schliesst Review-Befund 3 (`DOMAIN\user`
+/// Raises a uniqueness error — closes review finding 3 (`DOMAIN\user`
 /// Searches for **all** AD entries with a given sAMAccountName and returns
 /// them as a vector. Callers can detect multi-match and surface a uniqueness
 /// error — closes review finding 3 (`DOMAIN\user` was accepted but the
@@ -252,8 +239,7 @@ pub async fn search_all_by_samaccount(
     Ok(rs.into_iter().map(RawEntry::from_search_entry).collect())
 }
 
-/// Sucht ein AD-Objekt anhand seines `userPrincipalName` (UPN, Form
-/// (Review-Befund 3).
+/// (review finding 3).
 /// Searches for an AD object by its `userPrincipalName` (UPN, form
 /// `user@domain.tld`). UPNs are unique forest-wide — prevents the
 /// ambiguity `sAMAccountName` exhibits in multi-domain forests (review
@@ -277,10 +263,8 @@ pub async fn search_by_upn(
     Ok(rs.into_iter().next().map(RawEntry::from_search_entry))
 }
 
-/// Sucht Benutzer und Gruppen anhand eines Teilstring-Suchbegriffs (max. 50 Treffer).
 /// Searches users and groups by a partial name substring (max 50 results).
 ///
-/// (`MaxPageSize`, Standard 1000) das Ergebnis stillschweigend abschneidet.
 ///
 /// Searches sAMAccountName, displayName, and cn. Uses paged search so that
 /// the server-side `MaxPageSize` (default 1000) cannot silently truncate
@@ -304,10 +288,7 @@ pub async fn search_by_query(
     search_paged_with_limit(ldap, base_dn, &filter, IDENTITY_ATTRS, Some(50)).await
 }
 
-/// verschachtelte Gruppen) Mitglied ist. Nutzt AD-spezifisches
-/// `LDAP_MATCHING_RULE_IN_CHAIN` (OID `1.2.840.113556.1.4.1941`) — der
 ///
-/// werden.
 ///
 /// Transitively finds all groups in which `member_dn` is a member (directly
 /// or through nested groups). Uses the AD-specific
@@ -331,9 +312,7 @@ pub async fn search_transitive_groups_for_member(
     search_paged_with_limit(ldap, base_dn, &filter, MEMBERSHIP_ATTRS, None).await
 }
 
-/// (Cookie wird verworfen).
 ///
-/// Paged-search wrapper: runs the LDAP search with the paged-results
 /// control so that results larger than `MaxPageSize` are not silently
 /// truncated. An optional `client_limit` stops collection once enough
 /// entries are gathered.

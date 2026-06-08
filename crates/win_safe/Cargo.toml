@@ -5,12 +5,6 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-# Konzept: dieser Crate kapselt Windows-API-Ressourcen mit RAII-Guards,
-# sodass jeder Erfolgs-Pfad UND jeder early-return-Pfad (insbesondere
-# `?`) die Ressource korrekt freigibt. Eingefuehrt fuer Review-Runde 10
-# Finding 3 (NetApi-Pufferleak bei DACL-Parse-Fehler), bewusst als
-# eigenstaendiger Crate damit zukuenftige Windows-Ressourcen (HANDLE,
-# LSA-Buffer, LocalAlloc, ...) konsistent ergaenzt werden koennen ohne
 # eine fachliche Crate zu verwaessern.
 #
 # Concept: this crate wraps Windows API resources in RAII guards so

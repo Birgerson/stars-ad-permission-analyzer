@@ -13,7 +13,6 @@ const MAX_SHARE_LEN: usize = 80;
 const MAX_DN_LEN: usize = 1024;
 const MAX_QUERY_LEN: usize = 256;
 
-/// Validierter Server-/Hostname (SMB oder LDAP).
 /// Validated server/host name (SMB or LDAP).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedServerName(pub String);
@@ -23,7 +22,6 @@ pub struct ValidatedServerName(pub String);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedShareName(pub String);
 
-/// Validierter Distinguished Name (Base-DN oder Bind-DN).
 /// Validated distinguished name (base DN or bind DN).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedDn(pub String);
@@ -71,7 +69,6 @@ pub fn validate_smb_server(input: &str) -> Result<ValidatedServerName, CoreError
     Ok(ValidatedServerName(trimmed.to_string()))
 }
 
-/// Verbindung verwendet wird.
 /// Validates an LDAP endpoint (host name or IP) before it is used for the
 /// connection.
 pub fn validate_ldap_endpoint(input: &str) -> Result<ValidatedServerName, CoreError> {
@@ -80,7 +77,6 @@ pub fn validate_ldap_endpoint(input: &str) -> Result<ValidatedServerName, CoreEr
     Ok(ValidatedServerName(trimmed.to_string()))
 }
 
-/// Validiert einen SMB-Freigabenamen.
 /// Validates an SMB share name.
 ///
 /// Share names must not contain path separators or Windows-reserved characters
@@ -113,7 +109,6 @@ pub fn validate_share_name(input: &str) -> Result<ValidatedShareName, CoreError>
 
 /// Validates a distinguished name (base DN or bind DN).
 ///
-/// fehlgeformte DNs, bevor sie an den LDAP-Server gehen.
 /// Checks form and length; rejects control characters and obviously
 /// malformed DNs before they reach the LDAP server.
 pub fn validate_dn(input: &str) -> Result<ValidatedDn, CoreError> {
@@ -133,7 +128,7 @@ pub fn validate_dn(input: &str) -> Result<ValidatedDn, CoreError> {
             "Distinguished name must not contain control characters".into(),
         ));
     }
-    // Ein DN besteht aus 'attribut=wert'-Komponenten; mindestens ein '=' ist Pflicht.
+    // A DN is composed of 'attribute=value' parts; at least one '=' is mandatory.
     // A DN consists of 'attribute=value' components; at least one '=' is required.
     if !trimmed.contains('=') {
         return Err(CoreError::Validation(format!(
@@ -150,7 +145,6 @@ pub fn validate_dn(input: &str) -> Result<ValidatedDn, CoreError> {
 
 /// Validates a query for the AD identity search.
 ///
-/// keine Steuerzeichen.
 /// The value is checked before filter escaping: non-empty, length-bounded,
 /// no control characters.
 pub fn validate_identity_query(input: &str) -> Result<ValidatedIdentityQuery, CoreError> {
@@ -176,8 +170,6 @@ pub fn validate_identity_query(input: &str) -> Result<ValidatedIdentityQuery, Co
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // --- SMB server ---
 
     #[test]
     fn smb_server_hostname_accepted() {

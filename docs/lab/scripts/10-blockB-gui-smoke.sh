@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Lab Block B — GUI boot-smoke auf tier0.
+# Lab Block B — GUI boot smoke on tier0.
 # Prerequisites:
-#   - C:\Stars\adpa-gui.exe ist auf VMID 100 vorhanden.
 #
 # What this does: start the process, wait 15s, check that it still exists,
 # sauber beenden. Volle UI-Validierung bleibt manueller Schritt (qm guest
-# exec hat keinen interaktiven Desktop fuer Screenshots).
 set -eu
 
 cat > /tmp/gui-smoke.ps1 <<'PSEOF'

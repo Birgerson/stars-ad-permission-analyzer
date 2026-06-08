@@ -23,12 +23,10 @@ fn contains_null(s: &str) -> bool {
     s.contains('\0')
 }
 
-/// Validierter UNC-Pfad (z. B. \\server\share\folder)
 /// Validated UNC path (e.g. \\server\share\folder)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedUncPath(pub String);
 
-/// Validierter lokaler Windows-Pfad
 /// Validated local Windows path
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedLocalPath(pub String);
@@ -147,7 +145,6 @@ pub fn validate_local_path(input: &str) -> Result<ValidatedLocalPath, CoreError>
             "Local path must not exceed {MAX_PATH_LEN} characters"
         )));
     }
-    // Absoluter Pfad: Laufwerksbuchstabe gefolgt von `:\` (z. B. C:\).
     // Absolute path: drive letter followed by `:\` (e.g. C:\).
     let is_absolute_drive = trimmed.len() >= 3
         && trimmed.as_bytes()[0].is_ascii_alphabetic()
@@ -166,9 +163,6 @@ pub fn validate_local_path(input: &str) -> Result<ValidatedLocalPath, CoreError>
 }
 
 ///
-/// Akzeptiert:
-/// - UNC-Pfade `\\server\share\…`
-/// - absolute lokale Pfade `X:\…`
 /// - Windows-Long-Path-Form `\\?\X:\…` (lokal)
 /// - Windows-Long-Path-UNC-Form `\\?\UNC\server\share\…`
 ///
@@ -176,7 +170,6 @@ pub fn validate_local_path(input: &str) -> Result<ValidatedLocalPath, CoreError>
 /// Validates a user-supplied path and returns the canonical display form.
 ///
 /// Accepts:
-/// - UNC paths `\\server\share\…`
 /// - absolute local Windows paths `X:\…`
 /// - Windows long-path form `\\?\X:\…` (local)
 /// - Windows long-path UNC form `\\?\UNC\server\share\…`
@@ -187,8 +180,6 @@ pub fn validate_local_path(input: &str) -> Result<ValidatedLocalPath, CoreError>
 /// APIs re-adds it via [`to_windows_api_path`] — that function is idempotent.
 pub fn validate_path(input: &str) -> Result<NormalizedPath, CoreError> {
     let trimmed = input.trim();
-    // \\?\UNC\server\share\… → kanonische UNC-Form \\server\share\…
-    // \\?\UNC\server\share\… → canonical UNC form \\server\share\…
     if let Some(rest) = trimmed.strip_prefix(r"\\?\UNC\") {
         let canonical = format!(r"\\{rest}");
         return validate_unc_path(&canonical).map(Into::into);
@@ -218,8 +209,6 @@ impl From<ValidatedUncPath> for NormalizedPath {
 }
 
 ///
-/// Win32-ANSI-/Wide-APIs wie `GetFileAttributesW` und
-/// 32.767 Zeichen — passend zu unserer Validierungs-Obergrenze.
 ///
 /// Long-path-prefixed Windows API path. Win32 ANSI/Wide APIs such as
 /// `GetFileAttributesW` and `GetNamedSecurityInfoW` are limited to
@@ -248,8 +237,6 @@ impl From<&ValidatedUncPath> for WindowsApiPath {
 }
 
 ///
-/// Akzeptierte Eingabeformen:
-/// - `\\server\share\…` (klassisches UNC)
 /// - `//server/share/…` (POSIX-Variante)
 /// - `\\?\UNC\server\share\…` (Long-Path-UNC)
 ///
@@ -259,7 +246,6 @@ impl From<&ValidatedUncPath> for WindowsApiPath {
 /// share lookup is started with a drive letter as the server name.
 ///
 /// Accepted input forms:
-/// - `\\server\share\…` (classic UNC)
 /// - `//server/share/…` (POSIX variant)
 /// - `\\?\UNC\server\share\…` (long-path UNC)
 ///
@@ -269,7 +255,6 @@ impl From<&ValidatedUncPath> for WindowsApiPath {
 /// function is the *single* source of truth for both CLI and GUI.
 pub fn parse_unc_components(path: &str) -> Option<(String, String)> {
     // Server. Lokale Long-Path-Form (`\\?\C:\…`) bleibt ausgeschlossen,
-    // statt mit `\\`.
     // Normalize long-path UNC first — otherwise the split would treat `?`
     // as the server. Local long-path form (`\\?\C:\…`) is excluded by the
     // strip because it starts with a drive letter, not `\\`.
@@ -297,8 +282,7 @@ pub fn parse_unc_components(path: &str) -> Option<(String, String)> {
 }
 
 /// Share-DACL-Abfragen. Ein explizit gesetzter `smb_server` hat
-/// Vorrang vor dem aus dem Pfad abgeleiteten UNC-Server — sonst werden
-/// Override-Server kommt (Review-Befund 2: Token-Mismatch).
+/// override server is given (review finding 2: token mismatch).
 ///
 /// Returns the effective SMB target server for local-group and share-DACL
 /// lookups. An explicit `smb_server` takes precedence over the server
@@ -313,11 +297,8 @@ pub fn effective_smb_target(path: &str, explicit_smb_server: Option<&str>) -> Op
 }
 
 /// Typisierter SMB-Audit-Kontext: enthaelt **beide** Bausteine
-/// `\\fs01\data\foo\bar` liefert `("fs01", "data")`; ein lokaler Pfad
-/// ohne explizite SMB-Flags liefert `None`.
+/// without explicit SMB flags returns `None`.
 ///
-/// abgeleitet, das fuehrte dazu, dass `path_trustees` bei einem reinen
-/// stillschweigend wegliess, waehrend `share_status` sie korrekt
 ///
 /// Typed SMB audit context: holds **both** building blocks (`server`,
 /// `share`) needed to read a share DACL or build a share overlay. A
@@ -337,11 +318,8 @@ pub struct SmbAuditContext {
 }
 
 impl SmbAuditContext {
-    /// Leitet den effektiven SMB-Kontext aus Pfad und optionalen
-    /// expliziten Flags ab. Prioritaet pro Feld: **explizit > UNC**.
     ///
-    /// Wichtige Eigenschaft (vgl. Review-Runde 10 Finding 1): liefert
-    /// `None`, der Aufrufer sieht klar „kein SMB-Kontext bestimmbar".
+    /// Important property (cf. review round 10 finding 1): returns
     ///
     /// Derives the effective SMB context from path and optional
     /// explicit flags. Per-field priority: **explicit > UNC**.
@@ -369,7 +347,6 @@ impl SmbAuditContext {
     }
 }
 
-/// [`to_windows_api_path`]; wird genutzt, um `FileSystemObject.path`
 /// Pfaden arbeitet.
 ///
 /// Strips the long-path prefix (`\\?\` or `\\?\UNC\`) and returns the
@@ -378,7 +355,6 @@ impl SmbAuditContext {
 /// prefix-free even when the walker passes prefixed paths internally.
 pub fn strip_long_path_prefix(path: &str) -> String {
     if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
-        // "\\?\UNC\server\share\..." → "\\server\share\..."
         return format!(r"\\{rest}");
     }
     if let Some(rest) = path.strip_prefix(r"\\?\") {
@@ -389,14 +365,12 @@ pub fn strip_long_path_prefix(path: &str) -> String {
 }
 
 ///
-/// - UNC `\\server\share\…` → `\\?\UNC\server\share\…`
 /// - Lokal `C:\…` → `\\?\C:\…`
 ///
 /// Converts a path into the long-path form required by Win32 wide APIs
 /// for paths exceeding `MAX_PATH`:
 ///
 /// - Already prefixed (`\\?\…`) → returned as-is
-/// - UNC `\\server\share\…` → `\\?\UNC\server\share\…`
 /// - Local `C:\…` → `\\?\C:\…`
 /// - Other (e.g. relative) → returned as-is (no meaningful conversion;
 ///   validation should have rejected these already)
@@ -539,7 +513,6 @@ mod tests {
 
     #[test]
     fn unc_path_with_invalid_share_name_rejected() {
-        // Share-Name darf laut validate_share_name kein '*' enthalten.
         // Share name may not contain '*' per validate_share_name.
         assert!(validate_unc_path(r"\\dc\bad*share\sub").is_err());
     }
@@ -650,7 +623,6 @@ mod tests {
 
     #[test]
     fn strip_and_to_api_path_roundtrip_local() {
-        // Roundtrip: lokaler Pfad → API-Form → wieder Strip → Original.
         let original = r"C:\Users\test\file.txt";
         let api = to_windows_api_path(original);
         assert_eq!(strip_long_path_prefix(&api), original);
@@ -687,7 +659,6 @@ mod tests {
 
     #[test]
     fn validate_path_accepts_overlong_local_with_prefix() {
-        // solange er unter MAX_PATH_LEN (32767) bleibt.
         // A path > MAX_PATH (260) must be accepted in long-path form as long as
         // it stays under MAX_PATH_LEN (32767).
         let long = format!(r"\\?\C:\{}", "a".repeat(400));
@@ -718,7 +689,6 @@ mod tests {
 
     #[test]
     fn validate_path_rejects_long_unc_prefix_without_share() {
-        // `\\?\UNC\server` hat keine Share-Komponente.
         // `\\?\UNC\server` lacks a share component.
         assert!(validate_path(r"\\?\UNC\server").is_err());
     }
@@ -748,7 +718,6 @@ mod tests {
 
     #[test]
     fn parse_unc_components_rejects_local_paths() {
-        // landet `C:\Windows` als NetShareGetInfo("C:", "Windows") im
         // share_scanner.
         // Finding 1: local paths must not pass as UNC, otherwise
         // `C:\Windows` ends up as NetShareGetInfo("C:", "Windows") in the
@@ -774,7 +743,6 @@ mod tests {
 
     #[test]
     fn parse_unc_components_handles_long_path_unc() {
-        // Share=`UNC` zerfallen — vorher genau dieser Bug.
         // Finding 4: \\?\UNC\server\share\folder must not decompose into
         // Server=`?`, Share=`UNC` — that was exactly the bug.
         assert_eq!(
@@ -803,8 +771,6 @@ mod tests {
 
     #[test]
     fn effective_smb_target_prefers_explicit_server_for_local_path() {
-        // Finding 2: lokaler Pfad mit explizit gesetztem SMB-Server →
-        // vom lokalen Rechner.
         // Finding 2: local path with explicit SMB server → local groups
         // must come from the override server, not from the local machine.
         assert_eq!(
@@ -815,7 +781,6 @@ mod tests {
 
     #[test]
     fn effective_smb_target_prefers_explicit_server_for_unc() {
-        // Finding 2: UNC-Pfad PLUS expliziter Override → Override gewinnt,
         // Finding 2: UNC path PLUS explicit override → override wins, so
         // the user can deliberately test against a different server.
         assert_eq!(
@@ -826,7 +791,6 @@ mod tests {
 
     #[test]
     fn effective_smb_target_falls_back_to_unc_server() {
-        // Ohne expliziten Override aus dem UNC-Pfad ableiten.
         // Without an explicit override, derive from the UNC path.
         assert_eq!(
             effective_smb_target(r"\\fs01\Daten\sub", None),
@@ -840,7 +804,6 @@ mod tests {
 
     #[test]
     fn effective_smb_target_returns_none_for_local_path_without_override() {
-        // Lokaler Pfad ohne Override → kein SMB-Ziel → kein Share-Lookup.
         // Local path without override → no SMB target → no share lookup.
         // This is exactly what prevents the original `C:` as server bug.
         assert_eq!(effective_smb_target(r"C:\Windows\SYSVOL", None), None);
@@ -849,7 +812,6 @@ mod tests {
 
     // --- SmbAuditContext: Review-Runde 10 Finding 1 ---
 
-    /// Reine UNC ohne explizite Flags → beide Komponenten aus dem Pfad.
     /// `path_trustees` einfloss.
     /// Bare UNC without explicit flags → both fields from the path.
     /// This was the main case that didn't reach `path_trustees`
@@ -862,7 +824,6 @@ mod tests {
         assert_eq!(ctx.share, "data");
     }
 
-    /// Explizite Flags ueberschreiben die UNC-Komponenten — wichtig
     /// Explicit flags override the UNC components — important for
     /// audit scenarios where the share DACL lives on a server
     /// different from the path itself.
@@ -878,7 +839,6 @@ mod tests {
         assert_eq!(ctx.share, "backup");
     }
 
-    /// Lokaler Pfad ohne Flags → kein SMB-Kontext (kein stillschweigendes
     /// `("C", "Windows")` aus `C:\Windows\…`).
     /// Local path without flags → no SMB context (no silent
     /// `("C", "Windows")` derived from `C:\Windows\…`).
@@ -890,8 +850,6 @@ mod tests {
         );
     }
 
-    /// Nur Server explizit, Pfad lokal, kein Share → `None`. Vorher haetten
-    /// dem dann `get_share_dacl` mit leerem Share-Namen aufgerufen worden
     /// waere.
     /// Server only explicit, path local, no share → `None`. Previously
     /// individual helpers would have built a half-context here, leading

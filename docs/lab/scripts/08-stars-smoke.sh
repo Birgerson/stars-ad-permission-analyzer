@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Lab phase 8 — Stars CLI smoke tests against the lab.
-# Prerequisite: adpa.exe liegt auf VMID 100 unter C:\Stars\adpa.exe.
 # Upload example (from the control machine with tier0's local admin):
 #   net use \\192.168.11.100\c$ /user:T0LAB\Administrator <lab-pw>
 #   mkdir \\192.168.11.100\c$\Stars
@@ -23,7 +22,6 @@ run_test() {
 & 'C:\Stars\adpa.exe' analyze \`
     --path 'C:\TestShare' \`
     --user '${user}' \`
-    --server '${server}' \`
     --base-dn '${base_dn}' \`
     --bind-dn '${bind_dn}' \`
     --insecure-ldap 2>&1

@@ -12,7 +12,6 @@ use crate::acl;
 pub struct NtfsScanner;
 
 impl Scanner for NtfsScanner {
-    /// `permission_engine`-Crate auf Basis dieses Ergebnisses.
     /// Reads the DACL and attributes of the target path and returns them as a
     /// `FileSystemObject`. Permission evaluation runs on this result in the
     /// `permission_engine` crate.
@@ -37,7 +36,6 @@ mod tests {
 
     #[test]
     fn scan_returns_target_object() {
-        // statt eine leere Liste.
         // F5 regression: a successful scan must return the read FSO instead of
         // an empty list.
         let result = NtfsScanner

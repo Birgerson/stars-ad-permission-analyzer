@@ -3,7 +3,6 @@
 
 //! adpa-gui — Graphical interface for the AD Permission Analyzer (Slint).
 //!
-//! Logfile, Panic-Hook und MessageBox-Fallback bleiben aus den eframe-
 //! Logfile, panic hook and MessageBox fallback are kept from the eframe
 //! predecessors — they are independent of the GUI toolkit and reliably
 //! surface startup problems on a bare server.
@@ -40,7 +39,7 @@ slint::slint! {
     } from "std-widgets.slint";
 
     // ============================================================
-    // Theme — globale Designsprache mit Light/Dark-Umschaltung.
+    // Theme — global design tokens with light/dark switching.
     // Theme — global design language with light/dark toggle.
     // ============================================================
     // gepflegt. Komponenten referenzieren `Theme.bg-app`, `Theme.accent`,
@@ -53,10 +52,6 @@ slint::slint! {
         in-out property <bool> dark: false;
 
         // --- Backgrounds ---
-        // Neutraler, sehr leicht abgesetzter App-Hintergrund, damit
-        // Slint-Standard-Widgets (GroupBox-Titel, LineEdit-Text) mit
-        // ihren systemnahen Default-Farben gut lesbar bleiben.
-        // blassen System-Texte verschwinden — siehe ChatGPT-Feedback.
         // Neutral, only slightly off-white app background so Slint
         // default widgets stay legible with their system-default text.
         out property <color> bg-app:    dark ? #1a1a24 : #eef0f5;
@@ -73,14 +68,12 @@ slint::slint! {
         out property <color> text-inverse:   #ffffff;
 
         // --- Borders ---
-        // Eingabefelder sich vom hellen Hintergrund klar abheben.
         // Slightly darker default border so cards and inputs stand out
         // clearly against the light background.
         out property <color> border:        dark ? #3a3a4a : #a8b1c2;
         out property <color> border-strong: dark ? #4a4a5c : #7a8499;
 
         // --- Accent (Stars-Blau) ---
-        // Hex-Werte vermeiden bewusst das Muster „Ziffer(n) direkt vor
         // interpretiert (`#2563EB` bricht ab — `2563E` erwartet
         // denen nach einer Ziffer ein Buchstabe ≠ e/E kommt.
         // Hex values deliberately avoid "digit(s) directly followed by
@@ -117,7 +110,6 @@ slint::slint! {
         out property <length> font-xxl: 20px;
     }
 
-    // PrimaryButton — Akzent-Hintergrund, weisser Text. Fuer
     // Haupt-Aktionen wie Analyze, Scan starten, Vergleichen.
     // PrimaryButton — accent background, white text. For main actions.
     //
@@ -202,9 +194,7 @@ slint::slint! {
         }
     }
 
-    // ThemeToggle — Sun/Mond-Umschalter fuer Light/Dark.
     // ThemeToggle — sun/moon switcher for light/dark.
-    // Glyphen wie U+263E (☾) / U+2600 (☀) nicht zuverlaessig rendert.
     // klickbare Schaltflaeche.
     // Theme toggle — deliberately uses a text label instead of a sole
     // Unicode glyph, because Slint's software backend on Windows Server
@@ -232,7 +222,7 @@ slint::slint! {
                 vertical-alignment: center;
             }
             Text {
-                text: Theme.dark ? "Hell" : "Dunkel";
+                text: Theme.dark ? "Light" : "Dark";
                 font-size: Theme.font-sm;
                 color: Theme.text-primary;
                 vertical-alignment: center;
@@ -315,7 +305,6 @@ slint::slint! {
     }
 
     // Wiederverwendbares ⓘ-Help-Icon. Bei Hover erscheint ein kleiner
-    // dunkler Tooltip-Kasten mit Erklaerungstext direkt rechts neben
     // Reusable ⓘ help icon. On hover a small dark tooltip box appears
     // right next to the icon. The tooltip is only shown while hovered,
     // overlays its neighbors (Slint renders children over siblings)
@@ -374,14 +363,12 @@ slint::slint! {
         category: string,
     }
 
-    // Eine Zeile im Scan-Ergebnis.
     // A row in the scan result.
     export struct ScanRowVm {
         path: string,
         rights_label: string,
         mask_hex: string,
         steps: [string],
-        // Berechtigungspfad angezeigt.
         // Path-centric trustee list (every ACE resolved). Shown in the
         // expanded state alongside the identity-based explanation path.
         trustees: [TrusteeRowVm],
@@ -438,18 +425,11 @@ slint::slint! {
         min-width: 800px;
         min-height: 560px;
         background: Theme.bg-app;
-        // Stars laeuft ausschliesslich auf Windows-Server-Systemen
-        // System-Schrift, die je nach Edition unterschiedlich aussieht.
         // Stars only runs on Windows Server hosts (see AGENTS.md).
         // Arial is guaranteed and renders consistently across editions.
         default-font-family: "Arial";
 
         // Slint-Standard-Widgets (GroupBox-Titel, LineEdit-Text,
-        // ComboBox-Inhalt …) leiten ihre Schriftfarbe per Default vom
-        // Slint dadurch helle Schrift auf unserem hellen App-Hintergrund
-        // rendern — unlesbar. Wir koppeln die Slint-Palette-Color-Scheme
-        // hart an unseren Theme-Toggle: dunkle Schrift auf hellem
-        // Hintergrund, helle Schrift auf dunklem Hintergrund.
         // Pin Slint widget palette to our explicit toggle so the
         // host theme cannot override readability. Reactive binding via
         // a tracking property + `changed` callback (Slint 1.6+).
@@ -468,14 +448,12 @@ slint::slint! {
         // ============================================================
         // Analyze-Tab Properties / Analyze tab properties
         // ============================================================
-        // audit-relevant (Group Policy Templates, Login-Skripte) und
         // Pre-fill the SYSVOL directory: exists on every default
         // Windows Server DC install, is audit-relevant (Group Policy
         // templates, login scripts) and saves the first keystroke. The
         // user can overwrite the path at any time — the property is
         // `in-out`.
         in-out property <string> a-path: "C:\\Windows\\SYSVOL\\sysvol";
-        // Benutzer-/Gruppen-Name als komfortable Alternative zur SID-
         // User/group name as a convenient alternative to typing a SID
         // directly. `resolve-name-clicked` translates the name via LSA
         // into the SID and writes it to the SID field. The user can
@@ -485,7 +463,7 @@ slint::slint! {
         in property <[IdentitySuggestionVm]> a-suggestions;
         in-out property <string> a-sid;
 
-        // LDAP-Modus: 0 = Aus (SAM/LSA, empfohlen auf DC),
+        // LDAP mode: 0 = off (SAM/LSA, recommended on a DC),
         //              1 = LDAPS (verschluesselt, Port 636),
         //              2 = LDAP unverschluesselt (Port 389, nur Test).
         // LDAP mode: 0 = off (SAM/LSA, recommended on DC),
@@ -524,10 +502,8 @@ slint::slint! {
         // ============================================================
         // Scan-Tab Properties / Scan tab properties
         // ============================================================
-        // Wurzelpfad analog zum Analyze-Tab auf SYSVOL vorbelegt.
         // Root path pre-filled to SYSVOL, analogous to the Analyze tab.
         in-out property <string> s-root: "C:\\Windows\\SYSVOL\\sysvol";
-        // Analog zum Analyze-Tab: Name → SID-Hilfe.
         // Analogous to the Analyze tab: name → SID helper.
         in-out property <string> s-name;
         in property <string> s-name-error;
@@ -537,7 +513,6 @@ slint::slint! {
         in-out property <bool>   s-limit-depth;
         in-out property <int>    s-max-depth: 5;
 
-        // LDAP-Modus analog zum Analyze-Tab. 0 = Aus (SAM/LSA),
         // 1 = LDAPS, 2 = LDAP unverschluesselt.
         // LDAP mode analogous to the Analyze tab. 0 = off (SAM/LSA),
         // 1 = LDAPS, 2 = plain LDAP.
@@ -613,7 +588,6 @@ slint::slint! {
                 version-text: root.app-version;
             }
 
-            // Standard-Look, bekommt aber etwas Atemraum.
             // Content area with consistent padding around the TabWidget;
             // the TabWidget keeps its Slint default look but gets some air.
             Rectangle {
@@ -816,7 +790,7 @@ slint::slint! {
                             }
 
                             GroupBox {
-                                title: "SMB-Freigabe (optional, kombiniert NTFS ∩ Share)";
+                                title: "SMB share (optional, combines NTFS ∩ share)";
                                 VerticalBox {
                                     spacing: Theme.spacing-sm;
                                     CheckBox {
@@ -852,7 +826,6 @@ slint::slint! {
                                     clicked => { root.analyze-clicked(); }
                                 }
                                 // Zweite Audit-Frage: pfadzentrierte
-                                // weil sie alle ACEs des Pfads zeigt.
                                 // Second audit question: path-centric
                                 // trustee view. Needs no identity because
                                 // it lists every ACE on the path.
@@ -893,7 +866,7 @@ slint::slint! {
                                         color: Theme.text-secondary;
                                     }
                                     Text {
-                                        text: "Berechtigungspfad:";
+                                        text: "Permission path:";
                                         font-size: 14px;
                                     }
                                     for step[i] in root.a-explanation: Text {
@@ -903,7 +876,6 @@ slint::slint! {
                                 }
                             }
 
-                            // Trustee-Sicht: zeigt alle ACEs auf dem Pfad,
                             // Trustee view: shows every ACE on the path,
                             // independent of any identity token. Complement
                             // to the identity-based effective analysis above.
@@ -914,11 +886,11 @@ slint::slint! {
                                     HorizontalBox {
                                         spacing: Theme.spacing-sm;
                                         Text { text: "Trustee"; font-weight: 700; horizontal-stretch: 2; }
-                                        Text { text: "Art"; font-weight: 700; width: 70px; }
-                                        Text { text: "Rechte"; font-weight: 700; width: 220px; }
-                                        Text { text: "Quelle"; font-weight: 700; width: 80px; }
-                                        Text { text: "Anwendung"; font-weight: 700; width: 220px; }
-                                        Text { text: "Schicht"; font-weight: 700; width: 70px; }
+                                        Text { text: "Kind"; font-weight: 700; width: 70px; }
+                                        Text { text: "Rights"; font-weight: 700; width: 220px; }
+                                        Text { text: "Source"; font-weight: 700; width: 80px; }
+                                        Text { text: "Applies to"; font-weight: 700; width: 220px; }
+                                        Text { text: "Layer"; font-weight: 700; width: 70px; }
                                     }
                                     for t[i] in root.a-trustees: HorizontalBox {
                                         spacing: Theme.spacing-sm;
@@ -1071,7 +1043,6 @@ slint::slint! {
                                             }
                                         }
                                         // Tiefe-Begrenzen-Reihe als regulaere
-                                        // GridBox-Row. Die HorizontalLayout
                                         // bekommt `horizontal-stretch: 1`,
                                         // Depth limit row stretches its
                                         // second-column container so the
@@ -1102,7 +1073,6 @@ slint::slint! {
                                                         height: 30px;
                                                     }
                                                 }
-                                                // Inhalte links-buendig stehen
                                                 // verbreitern.
                                                 // Spacer to keep contents left-
                                                 // aligned without inflating.
@@ -1191,7 +1161,7 @@ slint::slint! {
                             }
 
                             GroupBox {
-                                title: "SMB-Freigabe (optional)";
+                                title: "SMB share (optional)";
                                 VerticalBox {
                                     spacing: Theme.spacing-sm;
                                     CheckBox {
@@ -1295,7 +1265,6 @@ slint::slint! {
                                                 }
                                             }
 
-                                            // Pfadzentrierte Trustee-Tabelle —
                                             // Path-centric trustee table —
                                             // the second audit question "who
                                             // can access this path at all?"
@@ -1310,8 +1279,8 @@ slint::slint! {
                                                 HorizontalBox {
                                                     spacing: Theme.spacing-sm;
                                                     Text { text: "Trustee"; font-weight: 700; horizontal-stretch: 2; color: Theme.text-secondary; }
-                                                    Text { text: "Art"; font-weight: 700; width: 60px; color: Theme.text-secondary; }
-                                                    Text { text: "Rechte"; font-weight: 700; width: 180px; color: Theme.text-secondary; }
+                                                    Text { text: "Kind"; font-weight: 700; width: 60px; color: Theme.text-secondary; }
+                                                    Text { text: "Rights"; font-weight: 700; width: 180px; color: Theme.text-secondary; }
                                                     Text { text: "Quelle"; font-weight: 700; width: 70px; color: Theme.text-secondary; }
                                                     Text { text: "Anwendung"; font-weight: 700; width: 200px; color: Theme.text-secondary; }
                                                     Text { text: "Schicht"; font-weight: 700; width: 60px; color: Theme.text-secondary; }
@@ -1395,9 +1364,9 @@ slint::slint! {
                                     spacing: Theme.spacing-sm;
                                     HorizontalBox {
                                         spacing: Theme.spacing-sm;
-                                        Text { text: "Zieldatei:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                        Text { text: "Target file:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                         LineEdit {
-                                            placeholder-text: "C:\\Berichte\\scan.html";
+                                            placeholder-text: "C:\\Reports\\scan.html";
                                             text <=> root.s-export-path;
                                         }
                                         PrimaryButton {
@@ -1549,7 +1518,7 @@ slint::slint! {
                                         spacing: Theme.spacing-sm;
                                         alignment: end;
                                         Button {
-                                            text: "Abbrechen";
+                                            text: "Cancel";
                                             clicked => {
                                                 root.d-pending-delete-id = "";
                                                 root.d-pending-delete-label = "";
@@ -1569,7 +1538,7 @@ slint::slint! {
 
                             if root.d-has-result: GroupBox {
                                 title: "Delta (" + root.d-added-count + " added, "
-                                    + root.d-removed-count + " entfernt, "
+                                    + root.d-removed-count + " removed, "
                                     + root.d-changed-count + " changed)";
                                 VerticalBox {
                                     spacing: 2px;
@@ -1581,7 +1550,7 @@ slint::slint! {
                                             horizontal-stretch: 1;
                                         }
                                         Text {
-                                            text: "Art";
+                                            text: "Kind";
                                             font-weight: 700;
                                             width: 110px;
                                         }
@@ -1806,7 +1775,7 @@ slint::slint! {
                                         wrap: word-wrap;
                                     }
                                     Text {
-                                        text: "Quellcode (AGPL-Pflicht): https://github.com/Birgerson/stars-ad-permission-analyzer";
+                                        text: "Source code (required by AGPL): https://github.com/Birgerson/stars-ad-permission-analyzer";
                                         color: Theme.text-secondary;
                                         font-size: Theme.font-sm;
                                         wrap: word-wrap;
@@ -1900,7 +1869,6 @@ slint::slint! {
     }
 }
 
-/// Liefert das Log-Verzeichnis (`%LOCALAPPDATA%\Stars\logs`).
 /// Returns the log directory (`%LOCALAPPDATA%\Stars\logs`).
 fn log_dir() -> PathBuf {
     let base = std::env::var_os("LOCALAPPDATA")
@@ -1962,7 +1930,6 @@ fn main() {
     // Force fluent style so default widget text colors stay legible
     // regardless of the host system theme.
     std::env::set_var("SLINT_STYLE", "fluent");
-    // App-Hintergrund. SLINT_COLOR_SCHEME fixiert den Wert hart auf
     // Slint normally derives the std-widget color scheme from the OS
     // theme. On Windows Server hosts that yields a dark palette and
     // light grey text disappears on our light background. Pin it.
@@ -1971,7 +1938,7 @@ fn main() {
     if let Err(e) = run_ui(&log_path) {
         tracing::error!(error = %e, "Slint UI failed");
         show_fatal_dialog(
-            "Stars — Start fehlgeschlagen",
+            "Stars — startup failed",
             &format!(
                 "The GUI backend could not be initialized.\n\nReason: {e}\n\nDetails: {}",
                 log_path.display()
@@ -2024,14 +1991,10 @@ thread_local! {
 fn run_ui(_log_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let ui = MainWindow::new()?;
 
-    // App-Version aus Cargo-Metadaten an die GUI durchreichen. Slint
-    // Aufruf bleibt das Badge per `if version-text != ""` ausgeblendet.
     // App version from Cargo metadata into the GUI. Without this the
     // HeaderBar version badge stays hidden behind its `if != ""` guard.
     ui.set_app_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
 
-    // notify-Callback: weckt den GUI-Thread, sobald der Worker ein Event
-    // gesendet hat. Slints `invoke_from_event_loop` darf aus jedem Thread
     // notify callback: wakes the GUI thread once the worker has sent an
     // event. Slint's `invoke_from_event_loop` is callable from any thread
     // and runs the closure on the UI thread.
@@ -2071,7 +2034,6 @@ fn run_ui(_log_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>>
 // ---------------------------------------------------------------------------
 
 fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest>) {
-    // Name → SID: LSA-Lookup direkt im UI-Thread (LookupAccountNameW ist
     // Name → SID: LSA lookup directly on the UI thread (LookupAccountNameW
     // is sub-millisecond, no worker round-trip needed).
     {
@@ -2087,8 +2049,6 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         });
     }
 
-    // Live-Suche: bei jedem Tastendruck im Namensfeld die Cache-Liste
-    // verschwindet die Vorschlagsliste automatisch (length == 0).
     // Live search: filter the cache on every keystroke and push the result
     // to the Slint property. An empty query auto-hides the suggestion
     // list (length == 0).
@@ -2174,7 +2134,6 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         }
     });
 
-    // „Wer hat Zugriff?" — pfadzentrierte Trustee-Sicht. Braucht keine SID.
     // "Wer hat Zugriff?" — path-centric trustee view. Needs no SID.
     {
         let weak = ui.as_weak();
@@ -2245,7 +2204,7 @@ fn handle_trustees_done(ui: &MainWindow, result: Result<Vec<TrusteeRow>, String>
         }
         Err(e) => {
             ui.set_a_has_trustees(false);
-            ui.set_a_status(format!("Trustee-Auswertung fehlgeschlagen: {e}").into());
+            ui.set_a_status(format!("Trustee evaluation failed: {e}").into());
             ui.set_a_status_is_error(true);
         }
     }
@@ -2272,8 +2231,6 @@ fn apply_analyze_result(
                 .map(|s| slint::SharedString::from(s.as_str()))
                 .collect();
             ui.set_a_explanation(slint::ModelRc::new(slint::VecModel::from(steps)));
-            // sie im Delta-Tab vergleichbar ist.
-            // Status now also reflects whether the evaluation was written to
             // the scan history — required for it to be comparable in the
             // Delta tab.
             let (status, is_error) = match (scan_run_id, persistence_error) {
@@ -2282,16 +2239,16 @@ fn apply_analyze_result(
                     false,
                 ),
                 (None, Some(reason)) => (
-                    format!("Analyse abgeschlossen, aber Persistenz fehlgeschlagen: {reason}"),
+                    format!("Analysis complete, but persistence failed: {reason}"),
                     true,
                 ),
-                (None, None) => ("Analyse abgeschlossen.".to_string(), false),
+                (None, None) => ("Analysis complete.".to_string(), false),
             };
             ui.set_a_status(status.into());
             ui.set_a_status_is_error(is_error);
         }
         Err(e) => {
-            ui.set_a_status(format!("Analyse fehlgeschlagen: {e}").into());
+            ui.set_a_status(format!("Analysis failed: {e}").into());
             ui.set_a_status_is_error(true);
         }
     }
@@ -2331,7 +2288,6 @@ fn wire_scan_tab(
     req_tx: std::sync::mpsc::Sender<WorkerRequest>,
     cancel: CancellationToken,
 ) {
-    // Name → SID Hilfsfunktion (analog zum Analyze-Tab).
     // Name → SID helper (analogous to the Analyze tab).
     {
         let weak = ui.as_weak();
@@ -2346,7 +2302,6 @@ fn wire_scan_tab(
         });
     }
 
-    // Live-Suche analog zum Analyze-Tab.
     // Live search analogous to the Analyze tab.
     {
         let weak = ui.as_weak();
@@ -2398,7 +2353,6 @@ fn wire_scan_tab(
                 None
             };
 
-            // LDAP-Modus analog zum Analyze-Tab.
             // LDAP mode analogous to the Analyze tab.
             let ldap = match ui.get_s_ldap_mode() {
                 1 | 2 => Some(LdapParams {
@@ -2501,7 +2455,7 @@ fn wire_scan_tab(
             let Some(ui) = weak.upgrade() else { return };
             let output_path = ui.get_s_export_path().to_string();
             if output_path.trim().is_empty() {
-                ui.set_s_export_message("Bitte Zieldatei angeben.".into());
+                ui.set_s_export_message("Please specify a target file.".into());
                 ui.set_s_export_is_error(true);
                 return;
             }
@@ -2529,7 +2483,6 @@ fn nth_matching_index(all: &[ScanRowVm], filter: &str, n: usize) -> Option<usize
         .map(|(i, _)| i)
 }
 
-/// Rendert die Zeilen-Property neu aus dem Master-Stand + aktuellem Filter.
 /// Re-renders the rows property from the master state + current filter.
 fn refresh_rows(ui: &MainWindow) {
     let filter = ui.get_s_filter().to_string().trim().to_lowercase();
@@ -2627,10 +2580,10 @@ fn handle_scan_done(
     if cancelled {
         parts.push("Scan cancelled — results are incomplete.".to_string());
     } else {
-        parts.push("Scan abgeschlossen.".to_string());
+        parts.push("Scan complete.".to_string());
     }
     if let Some(err) = persistence_error {
-        parts.push(format!("Persistenz fehlgeschlagen: {err}"));
+        parts.push(format!("Persistence failed: {err}"));
     }
     let is_error = cancelled || parts.iter().any(|p| p.starts_with("Persistenz"));
     ui.set_s_status(parts.join(" ").into());
@@ -2663,7 +2616,7 @@ fn handle_export_done(ui: &MainWindow, result: Result<(), String>) {
             ui.set_s_export_is_error(false);
         }
         Err(e) => {
-            ui.set_s_export_message(format!("✗ Export fehlgeschlagen: {e}").into());
+            ui.set_s_export_message(format!("✗ Export failed: {e}").into());
             ui.set_s_export_is_error(true);
         }
     }
@@ -2684,7 +2637,6 @@ fn severity_visual(severity: &RiskSeverity) -> (&'static str, slint::Color) {
 // ---------------------------------------------------------------------------
 
 fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest>) {
-    // liefern. Antwort kommt asynchron als WorkerEvent::ScanRunsLoaded.
     // delta-load-runs-clicked: asks the worker for the scan history. The
     // answer arrives asynchronously as WorkerEvent::ScanRunsLoaded.
     {
@@ -2740,7 +2692,6 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
         });
     }
 
-    // delta-compare-clicked: zwei IDs lesen, Worker beauftragen.
     // delta-compare-clicked: read the two ids and dispatch to the worker.
     {
         let weak = ui.as_weak();
@@ -2776,7 +2727,6 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
         });
     }
 
-    // Worker — die Folge­aktionen (Selektion bereinigen, Liste neu laden)
     // delta-delete-confirmed: fired by the confirmation dialog after the
     // follow-up actions (clearing selection, reloading the list) are
     // handled by the event handler on WorkerEvent::ScanRunDeleted.
@@ -2859,7 +2809,7 @@ fn handle_scan_runs_loaded(ui: &MainWindow, result: Result<Vec<ScanRunSummary>, 
             ui.set_d_status_is_error(false);
         }
         Err(e) => {
-            ui.set_d_status(format!("Laden fehlgeschlagen: {e}").into());
+            ui.set_d_status(format!("Loading failed: {e}").into());
             ui.set_d_status_is_error(true);
         }
     }
@@ -3064,7 +3014,6 @@ fn handle_identities_loaded(_ui: &MainWindow, result: Result<Vec<IdentitySuggest
             tracing::info!(target: "stars-gui", count, "identity cache populated");
         }
         Err(e) => {
-            // Cache bleibt leer; Live-Suche zeigt einfach keine
             // Cache stays empty; the live search just shows no
             // because it only uses LookupAccountNameW.
             tracing::warn!(target: "stars-gui", error = %e, "identity enumeration failed — live search disabled");
@@ -3088,9 +3037,9 @@ fn resolve_name_to_sid(
     let trimmed = name.trim();
     if trimmed.is_empty() {
         on_error(
-            "Bitte einen Benutzer- oder Gruppennamen eingeben. \
-             Akzeptierte Formate: DOMAIN\\user, user@domain.lab, \
-             reiner sAMAccountName (mit LDAP-Server), oder rohe SID (S-1-5-21-…)."
+            "Please enter a user or group name. \
+             Accepted formats: DOMAIN\\user, user@domain.lab, \
+             plain sAMAccountName (with LDAP server), or a raw SID (S-1-5-21-…)."
                 .to_string(),
         );
         return;
@@ -3113,7 +3062,6 @@ fn resolve_name_to_sid(
     on_error("Name → SID resolution needs Windows (LSA API).".to_string());
 }
 
-/// Modaler Fehler-Dialog (Windows) bzw. stderr-Ausgabe (andere Plattformen).
 /// Modal error dialog (Windows) or stderr output (other platforms).
 #[cfg(windows)]
 fn show_fatal_dialog(title: &str, message: &str) {

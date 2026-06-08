@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Lab Block D (v1.5.9) — Verifikation Round-7 Finding 1:
-# lokaler NTFS-Pfad + expliziter SMB-Kontext muss `NETWORK` in den Token
-# packen, damit Share-DACL-ACEs gegen NETWORK korrekt aggregiert werden.
 #
-# Setup auf tier0:
+# Setup on tier0:
 #   - C:\TestShare\NetworkBlock (Subordner, NTFS Modify via GroupB inherited)
 #   - SMB-Share TestShareNetBlock -> C:\TestShare\NetworkBlock
-#     mit Share-Permission "Everyone = Full" + "NETWORK = Full Deny"
+#     with share permission "Everyone = Full" + "NETWORK = Full Deny"
 #
 # Stars-Tests:
 #   E4a: local path, no SMB hint        -> NETWORK Deny ignored (NTFS dominates)
@@ -51,7 +49,6 @@ write_test() {
 & 'C:\\Stars\\adpa.exe' analyze \`
     --path '${path_arg}' \`
     --user 'T0LAB\\alice' \`
-    --server 'tier0.tier0.lab' \`
     --base-dn 'DC=tier0,DC=lab' \`
     --bind-dn 'CN=Administrator,CN=Users,DC=tier0,DC=lab' \`
     --insecure-ldap ${extra} 2>&1 | Select-String -Pattern 'Result|NTFS|Share|NETWORK' -Context 0,1 | ForEach-Object { \$_.ToString() }

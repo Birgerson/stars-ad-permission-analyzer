@@ -3,7 +3,6 @@
 
 //! Manifest schema for signed update packages.
 //!
-//! Manifest. Die eigentliche Krypto-Backend-Wahl (Ed25519 / RSA-PSS / …)
 //!
 //! A manifest fully describes an update: target version, channel, platform
 //! constraint, file list with SHA-256 hashes, and a separately stored Base64
@@ -32,12 +31,8 @@ const RESERVED_DEVICE_NAMES: &[&str] = &[
 
 /// Pfadangriffe.
 ///
-/// Akzeptiert: `bin/stars.exe`, `bin\stars.exe`, `docs/de/handbuch.html`.
 ///
 /// Lehnt ab:
-/// - leere Pfade
-/// - leere Segmente (`a//b`, `a\\\\b`) — verhindert UNC-Spoofing
-/// - Zeichen aus [`FORBIDDEN_PATH_CHARS`] und Steuerzeichen
 /// - Null-Bytes
 ///
 ///
@@ -149,11 +144,9 @@ pub enum TargetPlatform {
     WindowsAarch64,
 }
 
-/// Eintrag pro Datei innerhalb eines Update-Pakets.
 /// Per-file entry inside an update package.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestFile {
-    /// Relativer Zielpfad innerhalb des Installationsverzeichnisses.
     /// Relative target path inside the installation directory.
     pub path: String,
     /// SHA-256 als lowercase-Hex-String (64 Zeichen).
@@ -167,7 +160,7 @@ pub struct ManifestFile {
 /// Complete, validatable update manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateManifest {
-    /// Schemaversion des Manifests selbst — entkoppelt von Anwendungsversion.
+    /// Schema version of the manifest itself — decoupled from the application version.
     /// Manifest schema version itself — decoupled from app version.
     pub manifest_version: u32,
     /// Target application version (SemVer recommended, not enforced).
@@ -184,7 +177,6 @@ pub struct UpdateManifest {
 }
 
 impl UpdateManifest {
-    /// Parst und validiert ein Manifest aus JSON.
     /// Parses and validates a manifest from JSON.
     pub fn from_json(input: &str) -> Result<Self, CoreError> {
         let parsed: Self = serde_json::from_str(input)
@@ -193,7 +185,7 @@ impl UpdateManifest {
         Ok(parsed)
     }
 
-    /// Strukturelle Validierung — vor jeder weiteren Verarbeitung.
+    /// Structural validation — before any further processing.
     /// Structural validation — runs before any further processing.
     ///
     /// Pure schema check; signature and file hashes are the verifier's job.
@@ -222,7 +214,6 @@ impl UpdateManifest {
             ));
         }
         for f in &self.files {
-            // und verbotene Zeichen.
             // Windows-safe path validation: blocks absolute paths, drive
             // letters, UNC/long-path prefixes, `.`/`..`, empty segments,
             // `:` (drive/ADS), reserved device names and forbidden chars.
@@ -255,7 +246,6 @@ impl UpdateManifest {
     pub fn signable_bytes(&self) -> Result<Vec<u8>, CoreError> {
         let mut clone = self.clone();
         clone.signature = String::new();
-        // serde_json schreibt Felder in Struktur-Reihenfolge — bei festen
         // serde_json writes fields in struct order — for fixed structs that
         // is deterministic enough for our purposes.
         serde_json::to_vec(&clone)
@@ -319,7 +309,6 @@ mod tests {
     fn rejects_path_traversal() {
         let json = valid_manifest_json().replace("stars.exe", "../etc/payload.exe");
         let err = UpdateManifest::from_json(&json).unwrap_err();
-        // Neue Fehlermeldung aus validate_manifest_relative_path; Inhalt ist
         // New error message from validate_manifest_relative_path; phrased
         // more precisely than the old "path traversal" substring.
         assert!(format!("{err}").contains("traversal"));
@@ -365,9 +354,7 @@ mod tests {
 
     #[test]
     fn relative_path_rejects_drive_relative_with_colon() {
-        // `C:evil.exe` ist Windows-„drive-relative": kein klassischer
         // `C:evil.exe` is Windows "drive-relative": not absolute in the
-        // classic sense, but also not relative to the install target.
         for bad in &["C:evil.exe", "c:foo", "Z:weird"] {
             assert!(
                 validate_manifest_relative_path(bad).is_err(),
@@ -410,7 +397,6 @@ mod tests {
 
     #[test]
     fn relative_path_rejects_ads_notation() {
-        // versteckten Stream schreiben — im Manifest ein klares Nein.
         // Alternate Data Streams: `file.txt:ads` would write to a hidden
         // NTFS stream — clear no in a manifest.
         let err = validate_manifest_relative_path("file.txt:ads").unwrap_err();

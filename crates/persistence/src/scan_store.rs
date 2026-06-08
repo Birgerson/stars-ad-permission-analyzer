@@ -41,7 +41,6 @@ impl<'a> ScanStore<'a> {
         Ok(())
     }
 
-    /// Setzt den Endzeitstempel eines Scan-Laufs.
     /// Sets the finish timestamp of a scan run.
     pub fn finish_scan_run(&self, id: &Uuid, finished_at: DateTime<Utc>) -> Result<(), CoreError> {
         self.conn
@@ -60,7 +59,6 @@ impl<'a> ScanStore<'a> {
     /// via `PRAGMA foreign_keys = ON` in this codebase, so we explicitly
     /// delete the dependent rows.
     ///
-    /// nicht existiert; 1 bei Erfolg).
     /// Returns the number of removed scan-run rows (0 if the ID does not
     /// exist; 1 on success).
     pub fn delete_scan_run(&self, id: &Uuid) -> Result<usize, CoreError> {
@@ -165,8 +163,6 @@ impl<'a> ScanStore<'a> {
             };
 
         // Code Review 2026-06-07 Finding 1: Identity-Snapshot pro
-        // gehalten und beim Lesen per JOIN aufgeloest — d.h. ein
-        // spaeterer Upsert konnte alte Runs rueckwirkend anders aussehen
         // unveraenderlich gegenueber spaeteren Identity-Updates.
         // Code review 2026-06-07 finding 1: identity snapshot per
         // permission row. Previously the identity (name/domain/kind/
@@ -174,7 +170,6 @@ impl<'a> ScanStore<'a> {
         // resolved on read via JOIN — meaning a later upsert could
         // retroactively change how earlier runs looked. The snapshot
         // columns make the permission row immutable against later
-        // identity updates.
         self.conn
             .execute(
                 "INSERT INTO effective_permissions
@@ -211,7 +206,6 @@ impl<'a> ScanStore<'a> {
         Ok(())
     }
 
-    /// Speichert einen Scan-Fehler.
     /// Stores a scan error.
     pub fn insert_error(&self, scan_run_id: &Uuid, error: &ScanError) -> Result<(), CoreError> {
         self.conn
@@ -310,9 +304,6 @@ impl<'a> ScanStore<'a> {
         scan_run_id: &Uuid,
     ) -> Result<Vec<EffectivePermission>, CoreError> {
         // Code Review 2026-06-07 Finding 1: Identity ausschliesslich aus
-        // wirklich unveraenderlich: ein spaeterer Scan, der dieselbe
-        // beim Re-Read nicht mehr veraendern. Backfill-Faelle (alte
-        // v1..v6-Zeilen ohne identities-Eintrag zum Backfill-Zeitpunkt)
         // potenziell veraenderten Wert zu zeigen.
         // Code review 2026-06-07 finding 1: read identity exclusively
         // from the per-permission snapshot — no more JOIN against the
@@ -356,10 +347,7 @@ impl<'a> ScanStore<'a> {
                 let local_group_status_str: String = row.get(11)?;
                 let local_group_error: Option<String> = row.get(12)?;
                 let diagnostics_json: Option<String> = row.get(13)?;
-                // Identity-Snapshot (v7): einzige Quelle. Kein Fallback.
                 // Identity snapshot (v7): single source. No fallback.
-                // identity_kind ist NOT NULL DEFAULT 'Unknown', daher String
-                // statt Option<String>; identity_disabled ist NOT NULL DEFAULT 0.
                 // identity_kind is NOT NULL DEFAULT 'Unknown', so String not
                 // Option<String>; identity_disabled is NOT NULL DEFAULT 0.
                 let name: Option<String> = row.get(14)?;
@@ -372,7 +360,6 @@ impl<'a> ScanStore<'a> {
                     serde_json::from_str(&contributing_json).unwrap_or_default();
                 let matched_aces: Vec<AceEntry> =
                     serde_json::from_str(&matched_aces_json).unwrap_or_default();
-                // Spaltenwert geben NULL → leere Liste.
                 // diagnostics is new (follow-up finding 3); older rows
                 // without a column value return NULL → empty list.
                 let diagnostics: Vec<adpa_core::model::PermissionDiagnostic> = diagnostics_json
@@ -563,7 +550,6 @@ mod tests {
             )
             .unwrap();
 
-        // Sanity: alles ist drin.
         // Sanity: everything is present.
         assert_eq!(store.list_scan_runs().unwrap().len(), 1);
         assert_eq!(store.get_permissions(&run.id).unwrap().len(), 1);
@@ -942,10 +928,6 @@ mod tests {
         assert!(runs[1].started_at >= runs[2].started_at);
     }
 
-    /// Code Review 2026-06-07 Finding 1: Historische Scan-Daten muessen
-    /// `insert_permission` `identities` per Upsert ueberschrieben, und
-    /// d.h. Run A zeigte beim Re-Read den Identity-Stand zum Zeitpunkt
-    /// des SPAETEREN Run B, nicht den eigenen Stand zum Scan-Zeitpunkt.
     /// geschuetzt.
     /// Code review 2026-06-07 finding 1: historical scan data must be
     /// immune against later identity upserts. Before v7,
@@ -975,9 +957,6 @@ mod tests {
         store.insert_permission(&run_a.id, &perm_a).unwrap();
 
         // Run B (spaeter): gleiche SID, jetzt deaktiviert, anderer Name,
-        // andere Domain. Der historische Pattern war: identities-Upsert
-        // ueberschreibt globale Zeile, JOIN beim Read von Run A liefert
-        // die neuen Werte -> Audit-Verfaelschung.
         // Run B (later): same SID, now disabled, different name, different
         // domain. Historic pattern: identities upsert overwrites the
         // global row, JOIN on read of run A returns the new values ->
@@ -989,7 +968,6 @@ mod tests {
         perm_b.identity.disabled = true;
         store.insert_permission(&run_b.id, &perm_b).unwrap();
 
-        // Run A muss seine eigenen Werte zurueckgeben.
         // Run A must return its own values.
         let perms_a = store.get_permissions(&run_a.id).unwrap();
         assert_eq!(perms_a.len(), 1);
@@ -1008,7 +986,6 @@ mod tests {
             "Run A disabled flag must stay false — was active at scan time"
         );
 
-        // Run B sieht naturgemaess seine eigenen Werte.
         // Run B sees its own values by construction.
         let perms_b = store.get_permissions(&run_b.id).unwrap();
         assert_eq!(perms_b[0].identity.name.as_deref(), Some("alice.new"));

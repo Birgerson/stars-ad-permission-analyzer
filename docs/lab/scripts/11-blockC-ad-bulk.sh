@@ -8,13 +8,7 @@
 #       tier1.lab: 0501..0800 (300)
 #       tier2.lab: 0801..1000 (200)
 #
-# Cross-Forest-FSPs (50 Stueck) sind in diesem Skript bewusst auskommentiert —
-# der ForeignSecurityPrincipal-Container in tier0.lab muss fuer die Variante
-# mit Add-ADGroupMember + Cross-Forest-SID erst per dsadd oder New-ADObject
-# foreignSecurityPrincipal vorbereitet werden. Das ist ein Lab-Setup-Quirk,
-# kein Stars-Bug — Stars liest existierende FSPs korrekt (see Test T2 in
-# verification.md). Wer das Lab-Setup vervollstaendigen will, ergaenzt den
-# FSP-Step manuell auf tier0.
+# FSP step done manually on tier0.
 set -eu
 : "${LAB_ADMIN_PASSWORD:?Please export LAB_ADMIN_PASSWORD}"
 

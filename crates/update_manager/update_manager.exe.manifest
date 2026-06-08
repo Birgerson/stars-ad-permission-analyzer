@@ -9,7 +9,7 @@
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
-        <!-- asInvoker: kein UAC-Elevation; Programm läuft mit den Rechten des aufrufenden Prozesses -->
+        <!-- asInvoker: no UAC elevation; runs with the rights of the calling process -->
         <!-- asInvoker: no UAC elevation; program runs with the calling process privileges -->
         <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
       </requestedPrivileges>

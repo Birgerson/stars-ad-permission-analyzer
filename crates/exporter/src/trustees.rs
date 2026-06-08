@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Aufbau der pfadzentrischen Trustee-Listen (`PathTrustee` /
 //! `EffectivePermission`-Berechnung.
 //!
 //! Builds the path-centric trustee lists (`PathTrustee` / `PathTrustees`)
@@ -19,7 +18,6 @@
 use adpa_core::model::{PathTrustee, PathTrusteeEntry, TrusteeCategory};
 use share_scanner::get_share_dacl;
 
-/// Pfade unterhalb dieses Shares angehaengt wird. Schliesst Review
 ///
 /// Optional share overlay, read once per share and attached to every
 /// path below that share. Closes round-3 finding 3 (no silent skips of
@@ -74,8 +72,6 @@ pub fn read_share_overlay(server: &str, share_name: &str) -> ShareTrusteeOverlay
     ShareTrusteeOverlay { trustees }
 }
 
-/// Baut die rohe Trustee-Liste aus einem bereits gelesenen
-/// werden.
 ///
 /// Builds the raw trustee list from an already-loaded `FileSystemObject`.
 /// If an SMB context is given the share DACL is read once per call —
@@ -83,9 +79,6 @@ pub fn read_share_overlay(server: &str, share_name: &str) -> ShareTrusteeOverlay
 /// via [`read_share_overlay`] and pass it via
 /// [`build_path_trustees_with_share`].
 ///
-/// Diese Variante macht **selbst** eine SID→Name-Aufloesung pro Aufruf —
-/// sinnvoll fuer den Analyze-Pfad (genau ein Objekt). Scan-Pfade
-/// sollten stattdessen [`build_path_trustees_with_share_and_names`]
 ///
 /// This variant performs SID→name resolution **itself** per call —
 /// appropriate for the analyze path (exactly one object). Scan paths
@@ -112,7 +105,6 @@ pub fn build_path_trustees_with_share(
     fso: &adpa_core::model::FileSystemObject,
     share_overlay: Option<&ShareTrusteeOverlay>,
 ) -> Vec<PathTrusteeEntry> {
-    // resultierende Map. So bleibt die alte Schnittstelle erhalten.
     // Round-10 finding 2: the simple form now delegates to the
     // caller-owned-map variant with an **empty** map — no duplication.
     // To keep the `with_share` form resolving SIDs itself, we do the
@@ -130,7 +122,6 @@ pub fn build_path_trustees_with_share(
     build_path_trustees_with_share_and_names(fso, share_overlay, &sid_names)
 }
 
-/// werden uebersprungen. Leere SIDs (z. B. aus historischen
 ///
 /// Collects all ACE SIDs from FSO DACL and share overlay that need an
 /// LSA lookup. Diagnostic entries carry no SID and are skipped. Empty
@@ -161,11 +152,8 @@ pub fn collect_ace_sids_for_resolution(
     out
 }
 
-/// sammelt einmal pro Scan alle SIDs (siehe
 /// [`collect_ace_sids_for_resolution`]), ruft **einmal**
-/// jeden Pfad-Aufruf.
 ///
-/// Hintergrund (Review-Runde 10 Finding 2): die einfache Form macht
 ///
 /// Like [`build_path_trustees_with_share`] but with a **pre-built**
 /// SID→name map. This is the scan variant: the caller collects all
@@ -213,8 +201,6 @@ pub fn build_path_trustees_with_share_and_names(
         out.extend(overlay.trustees.iter().cloned());
     }
 
-    // Round-10 Finding 2: ACE-Display-Names aus der vorgegebenen Map
-    // angefasst — sie tragen die Begruendung selbst.
     // Round-10 finding 2: set ACE display names from the supplied map —
     // NO LSA call per path. Diagnostic entries are NOT touched — they
     // carry their own reason.
@@ -259,8 +245,6 @@ mod tests {
         }
     }
 
-    /// Round-9 Finding 1: build_path_trustees_with_share schreibt fuer
-    /// nicht vermischt.
     /// Round-9 finding 1: build_path_trustees_with_share emits the same
     /// list for GUI and CLI. Here without share overlay — only NTFS DACL
     /// contributes.
@@ -292,7 +276,6 @@ mod tests {
         );
     }
 
-    /// Diagnose-Variante, nicht mehr ein synthetisches Allow-ACE.
     /// Round-10 finding 4: NULL DACL is now a dedicated diagnostic
     /// variant, no longer a synthetic Allow ACE.
     #[test]
@@ -324,8 +307,7 @@ mod tests {
         }
     }
 
-    /// Mit Share-Overlay: NTFS-Trustees + Share-Trustees, beide
-    /// Kategorien werden im Ergebnis getrennt sichtbar.
+    /// With share overlay: NTFS trustees + share trustees, both
     /// With share overlay: NTFS trustees + share trustees, both
     /// categories visible separately.
     #[test]
@@ -354,8 +336,6 @@ mod tests {
         }
     }
 
-    /// Round-10 Finding 2: die Caller-owned-Map-Variante setzt
-    /// uebergebene Display-Namen UND macht keinen eigenen LSA-Aufruf.
     /// Plattform-unabhaengig testbar.
     /// Round-10 finding 2: the caller-owned-map variant applies the
     /// supplied display names AND performs no LSA lookup of its own.
@@ -422,8 +402,6 @@ mod tests {
         }
     }
 
-    /// Round-10 Finding 2: die Helper-Funktion sammelt SIDs aus FSO-DACL
-    /// Scan-Pfad an `build_sid_name_map` weitergibt.
     /// Round-10 finding 2: the helper collects SIDs from FSO DACL AND
     /// share overlay together — exactly the list the scan path hands
     /// to `build_sid_name_map`.

@@ -5,17 +5,15 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Typisierte SID — verhindert Verwechslung mit beliebigen Strings
+/// Typed SID — prevents accidental mix-ups with arbitrary strings
 /// Typed SID — prevents confusion with arbitrary strings
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Sid(pub String);
 
-/// Normalisierter, validierter Pfad
 /// Normalized, validated path
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NormalizedPath(pub String);
 
-/// Windows Access Mask (roher u32-Wert)
 /// Windows Access Mask (raw u32 value)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccessMask(pub u32);
@@ -40,7 +38,6 @@ pub struct Identity {
     pub kind: IdentityKind,
     pub disabled: bool,
     /// userPrincipalName aus AD (z. B. `max.mustermann@testdomain.local`).
-    /// da das `DOMAIN\sAMAccountName`-Format zwingend den NetBIOS-Namen
     /// userPrincipalName from AD (e.g. `max.mustermann@testdomain.local`).
     /// Preferred for Windows NetAPI calls like `NetUserGetLocalGroups`,
     /// since the `DOMAIN\sAMAccountName` form strictly requires the NetBIOS
@@ -60,7 +57,6 @@ pub struct Identity {
 /// to local logons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AccessContext {
-    /// implizit in den Token aufgenommen.
     /// Local interactive evaluation — `INTERACTIVE` and `LOCAL` are added
     /// to the token implicitly.
     LocalInteractive,
@@ -74,7 +70,6 @@ pub enum AccessContext {
 
 impl AccessContext {
     /// Long-Path-Form `\\?\UNC\server\share\…` — gelten als `RemoteSmb`;
-    /// lokale Pfade (inkl. `\\?\C:\…`) gelten als `LocalInteractive`.
     /// Derives the context from the path shape. UNC paths — including the
     /// long-path form `\\?\UNC\server\share\…` — count as `RemoteSmb`;
     /// local paths (incl. `\\?\C:\…`) count as `LocalInteractive`.
@@ -91,8 +86,6 @@ impl AccessContext {
         Self::LocalInteractive
     }
 
-    /// Wie [`Self::for_path`], aber zwingt `RemoteSmb`, sobald ein expliziter
-    /// vorher `LocalInteractive` — `NETWORK` fehlte im Token, Share-DACL-ACEs
     ///
     /// Like [`Self::for_path`], but forces `RemoteSmb` as soon as an explicit
     /// SMB context is supplied (`--smb-server` / `--share-name` on the CLI,
@@ -121,14 +114,12 @@ pub struct GroupMembership {
     pub member_sid: Sid,
     pub group_sid: Sid,
     pub direct: bool,
-    /// (z. B. `Domain Admins` aus LDAP/NetUserGetGroups oder
     /// `BUILTIN\Administrators` aus LookupAccountSidW). `None` bedeutet
     /// kompatibel.
     /// Human-readable group name when the resolver was able to provide
     /// one (e.g. `Domain Admins` from LDAP/NetUserGetGroups or
     /// `BUILTIN\Administrators` from LookupAccountSidW). `None` does not
     /// mean "no name exists" — it means "this resolver did not supply
-    /// one" — and the engine falls back to displaying the SID.
     /// `#[serde(default)]` keeps older cache entries lacking this field
     /// compatible.
     #[serde(default)]
@@ -137,7 +128,6 @@ pub struct GroupMembership {
     /// [`MembershipPath`]). Populated by the live resolver; the SQLite
     /// cache does not store it because it is reconstructed on every
     /// run. `None` means "this resolver did not supply a path" — the
-    /// engine then falls back to the old "direct/transitive" display.
     /// `#[serde(default)]` keeps older cache entries compatible.
     #[serde(default)]
     pub path: Option<MembershipPath>,
@@ -146,8 +136,6 @@ pub struct GroupMembership {
 ///
 ///
 ///
-/// `LDAP_MATCHING_RULE_IN_CHAIN`), die exakte Zwischenstufen-Sequenz
-/// vom Server abgeschnitten wurde.
 ///
 /// Concrete membership chain from an identity to a group.
 ///
@@ -164,7 +152,6 @@ pub struct GroupMembership {
 /// membership is established (e.g. via `LDAP_MATCHING_RULE_IN_CHAIN`)
 /// but the exact intermediate sequence is not — typical when the
 /// `memberOf` of an intermediate group entry was truncated by the
-/// server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MembershipPath {
     pub nodes: Vec<Sid>,
@@ -197,7 +184,6 @@ pub enum MembershipPathSource {
     LdapMatchingRule,
 }
 
-/// Art des ACE
 /// ACE type
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AceKind {
@@ -205,7 +191,6 @@ pub enum AceKind {
     Deny,
 }
 
-/// Einzelner ACL-Eintrag
 /// Single ACL entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AceEntry {
@@ -228,12 +213,10 @@ pub struct UnsupportedAce {
     /// Rohwert von ACE_HEADER.AceFlags.
     /// Raw value from ACE_HEADER.AceFlags.
     pub flags: u8,
-    /// Zugriffsmaske — bei Standard-ACE-Typen (0–15) liegt Mask direkt nach dem Header.
     /// Access mask — for standard ACE types (0–15) Mask is immediately after the header.
     pub mask: u32,
 }
 
-/// Dateisystemobjekt (Ordner oder Datei)
 /// File system object (folder or file)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileSystemObject {
@@ -254,7 +237,7 @@ pub struct FileSystemObject {
     pub null_dacl: bool,
 }
 
-/// SMB-Freigabe
+/// SMB share
 /// SMB share
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Share {
@@ -276,7 +259,6 @@ pub struct SharePermission {
 /// Evaluation status of the share DACL for a result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ShareEvalStatus {
-    /// Kein SMB-Kontext angefragt — Ergebnis zeigt nur NTFS-Rechte (korrekt).
     /// No SMB context requested — result shows NTFS permissions only (correct).
     #[default]
     NotApplicable,
@@ -343,7 +325,6 @@ pub struct ContributingAce {
     pub mask: AccessMask,
 }
 
-/// Normalisierte effektive Berechtigung
 /// Normalized effective permission
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EffectivePermission {
@@ -351,7 +332,6 @@ pub struct EffectivePermission {
     pub path: NormalizedPath,
     pub ntfs_mask: AccessMask,
     pub share_mask: Option<AccessMask>,
-    /// Restriktivere Kombination aus NTFS und Share
     /// More restrictive combination of NTFS and share
     pub effective_mask: AccessMask,
     pub path_explanation: PermissionPath,
@@ -359,7 +339,6 @@ pub struct EffectivePermission {
     #[serde(default)]
     pub share_status: ShareEvalStatus,
 
-    /// Berechtigung sollten `incomplete = true` tragen.
     /// Evaluation status of the local server group resolution. `NotAvailable`
     /// marks the result as incomplete — risk findings derived from this
     /// permission should carry `incomplete = true`.
@@ -407,7 +386,7 @@ pub enum PermissionDiagnostic {
     NonCanonicalDaclOrder { at_index: usize },
 
     ///
-    /// (Folge-Befund 2 aus Review 2026-05-25).
+    /// (follow-up finding 2 from the 2026-05-25 review).
     ///
     /// The share-side DACL parser skipped ACE types (e.g. object,
     /// callback or vendor-specific ACEs). The share mask is therefore
@@ -435,8 +414,6 @@ pub enum PermissionDiagnostic {
     /// Closes ChatGPT code review 2026-06-04 finding 6.
     DomainGroupRecursionIncomplete,
 
-    /// (`userAccountControl`-Bit `ACCOUNTDISABLE`, 0x0002). Die berechneten
-    /// reale Recht nicht verwechselt, taucht dieser Marker bei jedem
     ///
     /// Schliesst ChatGPT-Code-Review 2026-06-04 Finding 7.
     ///
@@ -451,7 +428,6 @@ pub enum PermissionDiagnostic {
     /// Closes ChatGPT code review 2026-06-04 finding 7.
     IdentityDisabled,
 
-    /// konfigurierte LDAP-`base_dn` indexiert diese SID nicht** —
     ///
     /// ChatGPT-Code-Review 2026-06-04 Runde 2 Finding 1.
     ///
@@ -484,7 +460,6 @@ pub enum PermissionDiagnostic {
     /// Closes ChatGPT code review 2026-06-04 round 2 finding 5.
     IdentityDisabledStatusUnknown,
 
-    /// gescheitert (Bind-Fehler, Timeout, DC unerreichbar,
     /// `incomplete = true` ausgewiesen.
     ///
     ///
@@ -499,7 +474,6 @@ pub enum PermissionDiagnostic {
     IdentityLookupFailed { reason: String },
 
     /// `GroupResolutionStatus::NotAttempted` in einem Cross-Domain-
-    /// Marker ist ein Incompleteness-Trigger.
     ///
     ///
     /// Recursive group resolution failed or was skipped. ACEs on
@@ -536,16 +510,12 @@ pub struct ScanError {
 /// Layer of a trustee entry in the path-centric view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrusteeCategory {
-    /// NTFS-DACL des Objekts.
     /// NTFS DACL of the object.
     Ntfs,
-    /// SMB-Freigaben-DACL des umgebenden Shares.
     /// SMB share DACL of the surrounding share.
     Share,
 }
 
-/// Ein pfadzentrierter ACE-Eintrag mit raw-Daten — keine Display-
-/// Formatierung. Render-Code (GUI / HTML / CSV) leitet daraus seine
 ///
 /// A path-centric ACE entry with raw data — no display formatting. Render
 /// code (GUI / HTML / CSV) derives its own representation from this.
@@ -567,7 +537,6 @@ pub struct PathTrustee {
     pub category: TrusteeCategory,
 }
 
-/// gelesen werden", "NULL DACL festgestellt"). Vor Review-Runde 10
 /// `"kind": "diagnostic"`) eindeutig.
 ///
 /// Entry in the path-centric trustee list — either a real ACE or a
@@ -578,9 +547,6 @@ pub struct PathTrustee {
 /// diagnostic looked like a real Allow ACE. With the enum the
 /// distinction is typed and visible in the JSON output via the tag
 /// (`"kind": "ace"` vs. `"kind": "diagnostic"`).
-// `PathTrustee` traegt ein Feld `kind: AceKind` (Allow/Deny). Ein
-// JSON ueberschreiben (Serde wirft hier kein Compile-Error, sondern
-// silently versetzt den Inhalt). Ein eigener Tag-Name vermeidet das.
 // The discriminator is deliberately named `entry_kind`, NOT `kind`.
 // Reason: `PathTrustee` carries a field `kind: AceKind` (Allow/Deny).
 // An internally-tagged enum with `tag = "kind"` would silently
@@ -589,10 +555,8 @@ pub struct PathTrustee {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "entry_kind", rename_all = "snake_case")]
 pub enum PathTrusteeEntry {
-    /// Ein echter ACE aus der DACL.
     /// A real ACE from the DACL.
     Ace(PathTrustee),
-    /// Ein Diagnose-Hinweis. `category` gibt an, welche Schicht
     /// Auditoren lesbare Begruendung.
     /// A diagnostic hint. `category` says which layer (NTFS or share)
     /// it refers to; `message` carries the auditor-readable reason.
@@ -612,7 +576,6 @@ impl PathTrusteeEntry {
         }
     }
 
-    /// Konstruktor fuer Diagnose-Hinweise.
     /// Constructor for diagnostic hints.
     pub fn diagnostic(category: TrusteeCategory, message: impl Into<String>) -> Self {
         PathTrusteeEntry::Diagnostic {

@@ -143,7 +143,6 @@ fn lookup_account_for_sid_ptr(sid_ptr: *mut std::ffi::c_void) -> Result<AccountI
     })
 }
 
-/// `NetUserGetLocalGroups` und liefert keine geerbten Mitgliedschaften
 /// Returns the global (domain) groups `username` is a direct member of.
 /// `NetUserGetGroups` is the domain counterpart to
 /// `NetUserGetLocalGroups` and does not include nested memberships
@@ -156,9 +155,6 @@ pub fn user_global_group_names(
     let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let username_w = to_wide_null(username);
 
-    // RAII-Guard fuer den NetApi-Puffer: jeder Pfad — Erfolg, Status-Fehler,
-    // Slice-Lesen — gibt den Puffer im Drop frei. Vor Review-Runde 10 wurden
-    // die Free-Aufrufe manuell an drei Stellen verstreut.
     // RAII guard for the NetApi buffer: every path — success, status error,
     // slice read — frees the buffer in Drop. Before review round 10 the free
     // calls were sprinkled across three manual sites.
@@ -279,16 +275,6 @@ pub fn lookup_sid_for_account(system: Option<&str>, name: &str) -> Result<Sid, C
     Ok(Sid(s))
 }
 
-///
-/// `Ok(Some(true))`  → Konto ist deaktiviert (`UF_ACCOUNTDISABLE` gesetzt).
-/// `Ok(Some(false))` → Konto ist aktiv.
-///                      gefunden, Access Denied oder anderer Fehler beim
-///                      NetAPI-Aufruf). Aufrufer setzen dann den Marker
-///                      `PermissionDiagnostic::IdentityDisabledStatusUnknown`.
-/// `Err`             → unerwarteter Bibliotheksfehler.
-///
-/// SAM-Pfad `disabled` pauschal auf `false` gesetzt, was deaktivierte
-///
 /// Reads the `disabled` status of a user via `NetUserGetInfo` level 1 and
 /// checks the `UF_ACCOUNTDISABLE` flag.
 ///
@@ -312,7 +298,6 @@ pub fn user_account_disabled(
     let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let username_w = to_wide_null(username);
 
-    // RAII-Guard: gibt den USER_INFO_1-Puffer in jedem Pfad frei.
     // RAII guard: frees the USER_INFO_1 buffer in every path.
     let mut buf: NetApiBuffer<USER_INFO_1> = NetApiBuffer::null();
     // SAFETY: server_ptr is null or a valid null-terminated wide string;
@@ -369,10 +354,8 @@ pub fn user_account_disabled(
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
-/// Convenience-Funktion, die `lookup_account_for_sid` +
 ///
 ///
-/// Convenience wrapper combining `lookup_account_for_sid` +
 /// `user_global_group_names` + `resolve_local_group_sids`, returning the
 /// result in the domain types `Identity` and `GroupMembership`.
 ///
@@ -384,7 +367,6 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
     let account = lookup_account_for_sid(sid_str)?;
     let account_kind = account.kind.clone();
 
-    // privilegierten Konto), markieren wir den Status explizit als
     // Closes review 2026-06-04 round 2 finding 5: for user accounts we
     // try to read the `disabled` flag via `NetUserGetInfo` level 1. If
     // that fails (e.g. access denied for a non-privileged caller) we
@@ -404,7 +386,6 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
             }
         }
     } else {
-        // `disabled`-Status — sie sind per Definition aktiv.
         // Groups, computers, and well-known SIDs have no `disabled`
         // flag — by definition they are active.
         (false, true)
@@ -436,14 +417,11 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
                                 member_sid: member_sid_val.clone(),
                                 group_sid: group_sid.clone(),
                                 direct: true,
-                                // NetUserGetGroups liefert den Namen direkt;
-                                // den geben wir 1:1 weiter.
                                 // NetUserGetGroups returns the name directly;
                                 // we pass it through verbatim.
                                 group_name: Some(group_name.clone()),
-                                // SAM/NetAPI liefert eine flache Liste —
+                                // SAM/NetAPI returns a flat list —
                                 // direkte Kante; verschachtelte Beziehungen
-                                // sichtbar. Pfad bleibt zwei SIDs lang und
                                 // Kante.
                                 // SAM/NetAPI returns a flat list — only the
                                 // user → group direct edge is visible;
@@ -476,8 +454,6 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
             ),
         }
 
-        // Lokale Gruppen-Ketten via NetLocalGroupGetMembers rekonstruieren.
-        // den Vermittler-Schritt (z. B. „Domain Admins → BUILTIN\Administrators")
         // konkret beschriften.
         // Reconstruct local group chains via NetLocalGroupGetMembers. The
         // already-resolved domain groups are passed as token SIDs so the
@@ -527,7 +503,6 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
     })
 }
 
-/// Diagnose-Marker `IdentityDisabledStatusUnknown` zu setzen, falls
 ///
 /// Result of [`resolve_identity_via_sam`]. The `disabled_known` flag
 /// lets callers distinguish a real value of `Identity.disabled` from a
@@ -540,7 +515,6 @@ pub struct SamResolution {
     pub disabled_known: bool,
 }
 
-/// (z. B. ACE-Trustees aus der DACL des Zielobjekts).
 ///
 ///
 /// Builds a SID → name lookup table for the group SIDs in `memberships`
@@ -550,7 +524,6 @@ pub struct SamResolution {
 /// are resolved once via `lookup_account_for_sid` and the result is
 /// stored as `DOMAIN\Name` (or just `Name` when the authority is
 /// empty). SIDs that cannot be resolved are absent from the map — the
-/// engine falls back to displaying the raw SID and never invents a
 /// name in the explanation text.
 pub fn build_sid_name_map<I>(
     memberships: &[GroupMembership],
@@ -631,7 +604,6 @@ unsafe fn wide_ptr_to_string(p: *const u16) -> String {
     String::from_utf16_lossy(std::slice::from_raw_parts(p, len))
 }
 
-/// den dekodierten String.
 /// Strips trailing nulls from a fixed buffer and returns the decoded
 /// string.
 fn wide_buf_to_string(buf: &[u16]) -> String {
@@ -643,8 +615,7 @@ fn wide_buf_to_string(buf: &[u16]) -> String {
 mod tests {
     use super::*;
 
-    /// Well-Known: `S-1-5-32-544` (auf en-US `BUILTIN\Administrators`,
-    /// auf de-DE `VORDEFINIERT\Administratoren`). Beide Felder name +
+    /// Well-known: `S-1-5-32-544` (on en-US `BUILTIN\Administrators`,
     /// Well-known: `S-1-5-32-544` (on en-US `BUILTIN\Administrators`,
     /// on de-DE `VORDEFINIERT\Administratoren`). Both the name and the
     /// domain are localized on German installs — so the test asserts
@@ -689,7 +660,6 @@ mod tests {
         assert_eq!(sid_again.0, "S-1-5-18");
     }
 
-    /// nicht panic'en.
     /// Invalid SID syntax must yield a `SidResolution` error, not a
     /// panic.
     #[test]

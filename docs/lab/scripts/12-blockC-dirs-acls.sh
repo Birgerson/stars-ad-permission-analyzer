@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lab Block C.2 + C.3 — Verzeichnisstruktur + ACLs auf tier0.
+# Lab Block C.2 + C.3 — directory structure + ACLs on tier0.
 # Structure (5 depts × 20 projects × 50 folders = 5000 folder dirs):
 #   C:\Data\<Department>\<Project01..20>\<Folder01..50>
 # ACL-Variation:
@@ -93,4 +93,4 @@ foreach ($d in $departments) {
 "total dirs under $root : $((Get-ChildItem -Path $root -Recurse -Directory | Measure-Object).Count)"
 PSEOF
 
-run_ps 100 /tmp/dirs-acls.ps1 "Block C.2+C.3 — 5000 Ordner + 100 Project-ACLs auf tier0" 1800
+run_ps 100 /tmp/dirs-acls.ps1 "Block C.2+C.3 — 5000 folders + 100 project ACLs on tier0" 1800

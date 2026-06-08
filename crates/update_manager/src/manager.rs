@@ -4,17 +4,13 @@
 //! Update-Manager — Architektur-Platzhalter.
 //! Update manager — architecture placeholder.
 //!
-//! **Status: Nicht implementiert / Not yet implemented.**
 //!
-//! abgeschlossen ist.
 //!
 //! This crate is a planned architectural component (AGENTS.md §13).
 //! Public methods return `Err(UpdateNotYetImplemented)` and must not be called
 //! in production workflows until the implementation is complete.
 //!
 //! Planned requirements, still open:
-//! - Rollback-Pfad bei fehlgeschlagenem Update.
-//! - Keine Zugangsdaten in Update-Logs speichern.
 
 use adpa_core::error::CoreError;
 use serde::{Deserialize, Serialize};

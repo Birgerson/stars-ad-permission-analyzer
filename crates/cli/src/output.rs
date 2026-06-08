@@ -34,7 +34,6 @@ fn section(title: &str) {
 }
 
 ///
-/// - sonst leere DACL → kein Zugriff
 ///
 /// Returns the plain-text description of the DACL state for console display.
 ///
@@ -86,7 +85,6 @@ pub fn print_report(
         println!("      Results may be incomplete.");
     }
 
-    // --- Gruppen / Groups ---
     if !memberships.is_empty() {
         section(&format!("Resolved Groups ({})", memberships.len()));
         for gm in memberships {
@@ -116,7 +114,6 @@ pub fn print_report(
 
     // Alle ACEs anzeigen / show all ACEs
     //
-    // Wichtig: NULL-DACL ≠ leere DACL. NULL-DACL bedeutet "kein Zugriffsschutz"
     // Important: NULL DACL ≠ empty DACL. NULL DACL means "no access control"
     // (full access for everyone), an empty DACL means "no access for anyone".
     if let Some(label) = dacl_state_label(fso.null_dacl, fso.dacl.is_empty()) {
@@ -167,7 +164,6 @@ pub fn print_report(
     }
 
     // --- Strukturierte Diagnose-Marker (ADR 0021 + 0024) ---
-    // fehlten sie. Damit ein CLI-Auditor dieselbe Information bekommt wie
     //
     // Structured diagnostic markers (ADR 0021 + 0024). Previously these
     // were only visible in JSON/CSV/HTML/GUI; the CLI output omitted them.
@@ -228,7 +224,6 @@ pub fn print_report(
     }
 
     // --- Zutreffende ACEs / matching ACEs ---
-    // unsichtbar, obwohl er zum Ergebnis beigetragen hat.
     // Taken from the engine instead of rebuilding via build_token_sids —
     // otherwise local server group SIDs (which only the engine adds to the
     // token) would be missing here and a local-group ACE would be invisible
@@ -259,7 +254,6 @@ pub fn print_report(
         }
     }
 
-    // --- Ergebnis / Result ---
     section("Effective Rights");
     let ntfs = NormalizedRights::new(result.ntfs_mask.0);
     let eff = NormalizedRights::new(result.effective_mask.0);
@@ -305,7 +299,7 @@ pub fn print_risk_findings(findings: &[RiskFinding]) {
             .as_ref()
             .map(|p| p.0.as_str())
             .unwrap_or("(no path)");
-        // Critical aus unvollstaendiger Berechnung wie ein bestaetigter Befund.
+        // Treat 'critical from incomplete computation' like a confirmed finding.
         // Incomplete findings must be flagged — otherwise a Critical derived
         // from an incomplete computation looks like a confirmed finding.
         let incomplete_marker = if f.incomplete { "  [INCOMPLETE]" } else { "" };
@@ -347,7 +341,6 @@ mod tests {
 
     #[test]
     fn populated_dacl_returns_none() {
-        // ACE-Liste vorhanden → Aufrufer rendert die ACEs selbst.
         // ACE list present → caller renders the ACEs itself.
         assert_eq!(dacl_state_label(false, false), None);
     }

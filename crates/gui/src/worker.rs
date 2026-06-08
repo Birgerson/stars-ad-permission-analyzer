@@ -5,7 +5,6 @@
 //!
 //! Runs in a dedicated thread with a Tokio runtime for optional LDAP calls.
 //!
-//! Verdrahtet sind: `Analyze`, `Scan`, `ExportHtml`, `ListScanRuns`,
 //!
 //! Wired up: `Analyze`, `Scan`, `ExportHtml`, `ListScanRuns`,
 //! `ComputeDelta`. `SearchIdentity` is reserved for a later phase (GUI
@@ -76,7 +75,6 @@ pub fn default_db_path() -> String {
 
 /// LDAP connection parameters for optional AD resolution.
 ///
-/// versehentliches `{params:?}` keine Secrets in Logs schreibt.
 /// `Debug` is hand-implemented and masks the password so an accidental
 /// `{params:?}` does not leak secrets into logs.
 #[derive(Clone)]
@@ -115,7 +113,6 @@ pub struct IdentitySearchResult {
     pub kind: adpa_core::model::IdentityKind,
 }
 
-/// Anfrage an den Worker-Thread.
 /// Request to the worker thread.
 pub enum WorkerRequest {
     Analyze {
@@ -133,10 +130,8 @@ pub enum WorkerRequest {
         share_name: Option<String>,
         ldap: Option<LdapParams>,
     },
-    /// Sucht Benutzer und Gruppen im Active Directory.
     /// Searches for users and groups in Active Directory.
     SearchIdentity { query: String, ldap: LdapParams },
-    /// Exportiert den letzten Scan als HTML-Bericht.
     /// Exports the last scan as an HTML report.
     ExportHtml { output_path: String },
     /// Loads the list of all persisted scan runs for the Delta tab.
@@ -153,7 +148,6 @@ pub enum WorkerRequest {
     /// Removes a single scan run including all dependent data from the
     /// SQLite history. Keeps the DB from growing monotonically.
     DeleteScanRun { run_id: String },
-    /// Benutzer Y auf X?".
     /// Lists all trustees with their rights on a path — path-centric
     /// audit view without a fixed identity. Answers the question "Who
     /// has any access to X?" rather than "What can user Y do on X?".
@@ -173,11 +167,9 @@ pub struct ScanRow {
     pub steps: Vec<String>,
     /// Count of unevaluated ACE types on this path (> 0 = diagnostic warning).
     pub unsupported_ace_count: usize,
-    /// Anzahl strukturierter Diagnose-Marker (z. B. nicht-kanonisch sortierte
     /// Count of structured diagnostic markers (e.g. non-canonical DACL,
     /// follow-up finding 3). 0 = unremarkable.
     pub diagnostic_count: usize,
-    /// `steps`-Pfad oben.
     /// Path-centric trustee view — every ACE in the DACL resolved, with
     /// "Applies to" labels and Allow/Deny. Empty when the scan runs
     /// without trustee collection. Complement to the identity-based
@@ -185,11 +177,9 @@ pub struct ScanRow {
     pub trustees: Vec<TrusteeRow>,
 }
 
-/// Ergebnis vom Worker-Thread an die GUI.
 /// Result from the worker thread to the GUI.
 pub enum WorkerEvent {
     AnalyzeDone {
-        /// Eigentliches Auswertungsergebnis (oder Engine-Fehler).
         /// uebrigen Varianten — sonst zieht clippy::large_enum_variant.
         /// Actual evaluation result (or engine error). Boxed because
         /// `EffectivePermission` is significantly larger than the other
@@ -200,7 +190,6 @@ pub enum WorkerEvent {
         /// "Analyze does not persist" gap is gone. `None` when the evaluation did
         /// not happen (engine error) or when the DB is not open.
         scan_run_id: Option<String>,
-        /// Grund, falls trotz erfolgreicher Auswertung die Persistenz fehlschlug.
         /// Reason if persistence failed despite a successful evaluation.
         persistence_error: Option<String>,
     },
@@ -222,7 +211,6 @@ pub enum WorkerEvent {
     /// Risikobefunde nach Abschluss eines Scans.
     /// Risk findings after a scan completes.
     RiskFindings(Vec<RiskFinding>),
-    /// Ergebnis eines HTML-Exports.
     /// Result of an HTML export.
     ExportDone(Result<(), String>),
     /// Search results for the identity search.
@@ -240,7 +228,6 @@ pub enum WorkerEvent {
         run_id: String,
         result: Result<(), String>,
     },
-    /// Ergebnis einer Trustee-Auflistung pro Pfad.
     /// Result of a per-path trustee listing.
     TrusteesDone(Result<Vec<TrusteeRow>, String>),
 }
@@ -249,29 +236,22 @@ pub enum WorkerEvent {
 /// resolved labels for GUI display.
 #[derive(Clone)]
 pub struct TrusteeRow {
-    /// Roh-SID des Trustees.
     /// Raw SID of the trustee.
     pub sid: String,
-    /// Readable label (`DOMAIN\Name`), falls back to the SID.
     pub display_name: String,
-    /// `"Allow"` oder `"Deny"`.
     /// `"Allow"` or `"Deny"`.
     pub kind: String,
-    /// Normalisierte Rechte-Bezeichnung (z. B. `Modify (M)`).
     /// Normalized rights label (e.g. `Modify (M)`).
     pub rights_label: String,
     /// Hex form of the raw access mask for forensic purposes.
     pub mask_hex: String,
-    /// `"explicit"` oder `"inherited"`.
     /// `"explicit"` or `"inherited"`.
     pub source: String,
     /// Windows-typische „Applies to"-Bezeichnung (z. B. „This folder,
-    /// subfolders and files"), abgeleitet aus den Inheritance- und
     /// Propagation-Flags.
     /// Windows-style "Applies to" label (e.g. "This folder, subfolders
     /// and files"), derived from inheritance and propagation flags.
     pub applies_to: String,
-    /// die zwei Schichten unterscheidet.
     /// `"NTFS"` or `"Share"` — surfaced separately so the auditor can
     /// tell the two layers apart.
     pub category: String,
@@ -289,7 +269,6 @@ pub struct ScanRunSummary {
 /// One suggestion in the name fields' live search.
 #[derive(Clone)]
 pub struct IdentitySuggestion {
-    /// Reiner Name (das, was beim Klick ins Namensfeld kommt) — z.B.
     /// `Administrator`.
     /// Plain name (the value pushed into the name field on click) — e.g.
     /// `Administrator`.
@@ -297,7 +276,6 @@ pub struct IdentitySuggestion {
     /// Qualified display name `DOMAIN\Name`, or just `Name` when no
     /// domain is known.
     pub qualified: String,
-    /// (lokale Gruppe), `W` (Well-Known).
     /// One-letter UI marker: `U` (user), `G` (group), `L` (local group),
     /// `W` (well-known).
     pub kind_icon: String,
@@ -322,11 +300,8 @@ pub struct DeltaRow {
 ///
 /// The cancellation token is held by the GUI: `cancel()` acts directly on a running
 /// scan without needing the request channel (which is blocked during a scan).
-/// `WorkerEvent` im Receiver liegt. Bei Slint typischerweise ein Wrapper um
-/// `slint::invoke_from_event_loop`, der den Receiver pollt.
 /// Callback the worker uses to wake the GUI thread once a new
 /// `WorkerEvent` is sitting in the receiver. With Slint this is typically
-/// a wrapper around `slint::invoke_from_event_loop` that drains the
 /// receiver.
 pub type NotifyFn = std::sync::Arc<dyn Fn() + Send + Sync>;
 
@@ -376,8 +351,6 @@ pub fn spawn_worker(
                         smb_server.as_deref(),
                         share_name.as_deref(),
                     ));
-                    // Auswertung nicht" wahrnehmbar war).
-                    // Analyze also persists from v1.1.x onward — a single
                     // EffectivePermission becomes a scan run with exactly one
                     // permission entry. This makes Analyze results comparable
                     // in the Delta tab (previously only ScanTree wrote to the
@@ -431,8 +404,6 @@ pub fn spawn_worker(
                         findings: scan_result.permissions.clone(),
                     });
 
-                    // Persistenz-Ergebnis explizit auswerten: entweder eine Run-ID
-                    // oder ein sichtbarer Fehlergrund.
                     // Evaluate the persistence result explicitly: either a run ID
                     // or a visible failure reason.
                     let persist_outcome = match &db {
@@ -537,14 +508,12 @@ pub fn spawn_worker(
 }
 
 // ---------------------------------------------------------------------------
-// Internes Ergebnis des Scan-Handlers
 // Internal result of the scan handler
 // ---------------------------------------------------------------------------
 
 struct ScanSummary {
     permissions: Vec<EffectivePermission>,
     /// Pfadzentrische Trustee-Auflistung (raw model — ohne Display-
-    /// daneben formatiere `TrusteeRow`-Daten direkt im `ScanRow`.
     /// Path-centric trustee listing (raw model — no display formatting).
     /// Used by the HTML exporter; the GUI separately receives display-
     /// formatted `TrusteeRow` data inside each `ScanRow`.
@@ -558,10 +527,8 @@ struct ScanSummary {
     cancelled: bool,
 }
 
-/// Validiert optionale SMB- und LDAP-Verbindungs-Eingaben zentral, bevor sie
 /// Centrally validates optional SMB and LDAP connection inputs before they are
 /// passed to NetAPI or LDAP calls.
-/// Normalisierte Verbindungs-Eingaben im GUI-Worker (siehe
 /// Normalized connection inputs in the GUI worker.
 pub struct NormalizedConnectionInputs {
     pub smb_server: Option<String>,
@@ -569,9 +536,6 @@ pub struct NormalizedConnectionInputs {
     pub ldap: Option<LdapParams>,
 }
 
-/// einzelnen Felder. Wiederverwendet in `validate_connection_inputs`
-/// Finding 3 (vorher validierte `analyze_trustees` die Felder einzeln
-/// und akzeptierte `Some, None`).
 /// Enforces SMB pair requirement + validates each field. Used by both
 /// `validate_connection_inputs` and `analyze_trustees`.
 pub fn normalize_smb_pair(
@@ -660,14 +624,12 @@ async fn handle_analyze(
     share_name: Option<&str>,
 ) -> Result<adpa_core::model::EffectivePermission, String> {
     info!(path, sid, "Analyze request");
-    // Normalform durchreichen, nicht den Roh-String.
     // Review 2026-06-04 round 2, finding 6: forward the canonical form
     // from here on, not the raw string.
     let normalized_path = validate_path(path)
         .map_err(|e| format!("Invalid path: {e}"))?
         .0;
     let path = normalized_path.as_str();
-    // getrimmten Wert laufen — sonst landet "  S-1-5-21-...  " im
     // Review round 4 finding 2: classify on the trimmed value.
     let sid_trimmed = sid.trim();
     let sid_owned = if sid_trimmed.starts_with("S-1-") {
@@ -710,8 +672,6 @@ async fn handle_analyze(
     let engine_flags = res.engine_flags();
     let identity = res.identity;
     let mut memberships = res.memberships;
-    // Round 6 finding 1: lokale Servergruppen-Memberships mit AD-
-    // Token-Schritt rendert (siehe CLI-Pendant).
     // Round 6 finding 1: merge local group memberships into the
     // engine input so the explanation path renders all token steps.
     memberships.extend(local_group_memberships.iter().cloned());
@@ -735,7 +695,6 @@ async fn handle_analyze(
         .map_err(|e| format!("Permission engine error: {e}"))
 }
 
-/// Finding 2: priorisiert den explizit gesetzten `smb_server` vor dem aus dem
 /// Collects local group SIDs on the analysis target server — see CLI counterpart.
 /// Finding 2: prefers the explicit `smb_server` over the path-derived UNC server
 /// so the token SID set stays consistent.
@@ -830,14 +789,12 @@ async fn handle_scan(
         }
     };
 
-    // Normalform durchreichen, nicht den Roh-String.
     // Review 2026-06-04 round 2, finding 6: forward the canonical form.
     let normalized_root = match validate_path(root) {
         Ok(p) => p.0,
         Err(e) => return make_early_summary(format!("Invalid path: {e}")),
     };
     let root = normalized_root.as_str();
-    // AGENTS.md DoD 11: max_depth zentral validieren, bevor sie in
     // AGENTS.md DoD 11: validate max_depth centrally before it flows into
     // WalkConfig — the GUI widget caps the value visually but does not
     // protect against programmatic callers or future UI refactorings.
@@ -845,8 +802,6 @@ async fn handle_scan(
         Ok(d) => d.map(|s| s.0),
         Err(e) => return make_early_summary(format!("Invalid max_depth: {e}")),
     };
-    // Review 2026-06-04 Runde 4 Finding 2: Klassifikation auf getrimmtem
-    // Wert, sonst landet "  S-1-...  " unvalidiert im else-Zweig.
     // Review round 4 finding 2: classify on the trimmed value.
     let sid_trimmed = sid.trim();
     let sid_owned = if sid_trimmed.starts_with("S-1-") {
@@ -882,17 +837,13 @@ async fn handle_scan(
     let identity = res.identity;
     let memberships = res.memberships;
 
-    // landet. Sammelt Walk-, Eval- und Setup-Fehler analog zum CLI-Pfad.
     // Structured error list that later flows into `scan_errors` via
     // persist_scan. Collects walk, eval, and setup errors mirroring the CLI.
     let mut summary_errors: Vec<ScanError> = Vec::new();
 
-    // Lokale Server-Gruppen pro Scan-Wurzel einmal aufloesen — vor der Share-Maske,
     // Resolve local server groups once per scan root — before the share mask, so
-    // that share ACEs targeting local groups are also taken into account.
     let (local_group_sids, local_group_memberships, local_group_status) =
         collect_local_group_sids_for_path(root, smb_server, &identity, &memberships);
-    // Round 6 finding 1: lokale Servergruppen-Memberships mit AD-
     // Round 6 finding 1: combine AD + local memberships per path.
     let combined_memberships: Vec<GroupMembership> = {
         let mut v = memberships.clone();
@@ -956,7 +907,6 @@ async fn handle_scan(
     let scan_access_context = AccessContext::for_path_with_smb(root, smb_server, share_name);
 
     // `validation::path::SmbAuditContext` — dieselbe Quelle wie CLI
-    // analyze/scan und `resolve_scan_share_status`. Ergebnis: alle
     // Round-10 finding 1: server/share derivation lives centrally in
     // `validation::path::SmbAuditContext` — the same source CLI
     // analyze/scan and `resolve_scan_share_status` use. Result: every
@@ -968,7 +918,6 @@ async fn handle_scan(
     // Build the SID→name table once for the entire scan. Trustee SIDs
     // repeat across all paths — we collect the unique SIDs from every
     // DACL up front and avoid N×M LSA round-trips.
-    // Round-10 finding 2: now also covers share-overlay SIDs and is
     // handed to the trustee build function so it makes NO per-path LSA
     // call.
     #[cfg(windows)]
@@ -993,9 +942,7 @@ async fn handle_scan(
 
     for fso in walk.objects {
         let path = fso.path.0.clone();
-        // Trustees pro Pfad bauen — NTFS aus dem FSO, Share aus dem
         // vorab gelesenen Overlay (Single Read pro Share). Round-10
-        // Finding 2: die scan-weite SID→Name-Map vermeidet LSA pro Pfad.
         // Per-path trustees — NTFS from FSO, share from the pre-read
         // overlay. Round-10 finding 2: scan-wide SID→name map avoids
         // per-path LSA.
@@ -1072,7 +1019,6 @@ async fn handle_search(
     use adpa_core::model::IdentityKind;
 
     // Review 2026-06-04 Runde 3 Finding 2: getrimmte Wrapperwerte
-    // Review round 3 finding 2: forward the trimmed wrapper values, not
     // the raw `ldap` fields.
     let query = validate_identity_query(query)
         .map_err(|e| format!("Invalid search query: {e}"))?
@@ -1093,11 +1039,8 @@ async fn handle_search(
         config.port = 389;
     }
 
-    // `LdapConfig::timeout_secs` versprach. Wir packen Connect + Search +
-    // beobachtbar ist.
     // Review 2026-06-04 round 2, finding 3: the GUI identity search used to
     // bypass the LDAP timeout. connect() is internally guarded; the paged
-    // search_by_query ran without a wrapper, so the picker could block
     // longer than `LdapConfig::timeout_secs` promised. We wrap connect +
     // search + disconnect in a single timeout so the whole operation is
     // observable.
@@ -1150,8 +1093,6 @@ async fn handle_search(
 /// Persists a scan run and returns either the run ID or a human-readable
 /// failure reason.
 ///
-/// Strukturierte Walk-/Eval-Fehler aus `errors` werden via
-/// denselben Audit-Pfad wie CLI-Scans (Finding 6).
 ///
 /// Structured walk/eval errors from `errors` are written to `scan_errors`
 /// via `store.insert_error` — giving GUI scans the same audit trail as
@@ -1241,13 +1182,12 @@ fn export_html(
 // Delta tab: persisted scan runs and comparison
 // ---------------------------------------------------------------------------
 
-/// Delta-Tab-Anzeige (neueste zuerst). Die Vorgabe „neueste zuerst" stammt
 /// Returns persisted scan runs in a compact form for the Delta tab
 /// (newest first). The sort order comes from `Database::list_scan_runs`.
 fn list_scan_run_summaries(db: &Database) -> Result<Vec<ScanRunSummary>, String> {
     let runs = db
         .list_scan_runs()
-        .map_err(|e| format!("Scan-Historie konnte nicht geladen werden: {e}"))?;
+        .map_err(|e| format!("scan history could not be loaded: {e}"))?;
     Ok(runs
         .into_iter()
         .map(|r| ScanRunSummary {
@@ -1310,7 +1250,7 @@ fn delete_scan_run(db: &Database, run_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-// Inheritance / propagation flags wie sie Windows in ACE_HEADER.AceFlags ablegt.
+// Inheritance / propagation flags as Windows stores them in ACE_HEADER.AceFlags.
 // Inheritance / propagation flags as Windows stores them in
 // ACE_HEADER.AceFlags. The `fs_scanner` implementation splits them into two
 // fields (`inheritance_flags`, `propagation_flags`); we re-combine them for
@@ -1345,7 +1285,6 @@ fn applies_to_label(inheritance_flags: u32, propagation_flags: u32) -> String {
     }
 }
 
-/// Namen, normalisierten Rechten und Windows-typischer „Applies to"-
 /// Reads a path's DACL (and optionally the share DACL) and returns a
 /// trustee-centric view: one row per ACE with a resolved name,
 /// normalized rights and Windows-style "Applies to" label. No engine
@@ -1362,21 +1301,15 @@ fn analyze_trustees(
         share_name = ?share_name,
         "AnalyzeTrustees request"
     );
-    // Review 2026-06-04 Runde 2, Finding 6: Normalform durchreichen.
+    // Review 2026-06-04 round 2, finding 6: propagate the normalized form.
     // Review 2026-06-04 round 2, finding 6: propagate the normal form.
     let normalized_path = validate_path(path)
         .map_err(|e| format!("Invalid path: {e}"))?
         .0;
     let path = normalized_path.as_str();
-    // Review 2026-06-04 Runde 3 Finding 2 + Runde 4 Finding 3:
-    // getrimmte Werte weiterreichen UND Paar-Pflicht erzwingen,
-    // Trustees fuehrt.
     // Round 3 finding 2 + round 4 finding 3: trim + enforce pairing.
     let (smb_server, share_name) = normalize_smb_pair(smb_server, share_name)?;
-    // Code-Review 2026-06-07 Finding 2: Bisher wurde `build_trustee_rows`
-    // direkt mit dem normalisierten Paar aufgerufen — bei einem blanken
     // `SmbAuditContext::resolve` (Round-10 Finding 1) — `analyze_trustees`
-    // derselbe UNC-Pfad zeigt im Trustee-Tab dieselben Schichten wie im
     // Scan-Tab.
     // Code review 2026-06-07 finding 2: previously this passed the
     // normalized pair straight to `build_trustee_rows` — a bare UNC path
@@ -1399,7 +1332,6 @@ fn analyze_trustees(
     ))
 }
 
-// Die rohe Trustee-Build-Logik (read_share_overlay,
 // build_path_trustees, build_path_trustees_with_share) liegt seit
 // Review Runde 9 Finding 1 in `crates/exporter/src/trustees.rs` —
 // existierende Aufrufstellen ohne Anpassung weiterlaufen.
@@ -1421,7 +1353,6 @@ pub use exporter::{
 // The local helper block (ShareTrusteeOverlay struct plus three
 // functions) was removed in favour of the shared module above.
 
-/// Allow/Deny-Label aus dem rohen Modell.
 /// Converts a raw `PathTrustee` to the display-formatted `TrusteeRow`
 /// consumed by the Slint UI. Derives "Applies to", mask hex and the
 /// Allow/Deny label from the raw model.
@@ -1430,9 +1361,6 @@ pub fn trustee_row_for_display(entry: &adpa_core::model::PathTrusteeEntry) -> Tr
     use permission_engine::mask::expand_generic_rights;
 
     match entry {
-        // Zeile gerendert — kein Allow/Deny-Label, leere SID-/Maske-Felder,
-        // visuell unterscheidbar (im Slint-Layout via leerem `kind` und
-        // gelblichem Hintergrund auf dem TrusteeRow-Render-Pfad).
         // Round-10 finding 4: diagnostic variant becomes its own row —
         // no Allow/Deny label, empty SID/mask fields, reason text in
         // display_name. The GUI renders it visibly different (in Slint
@@ -1464,8 +1392,6 @@ pub fn trustee_row_for_display(entry: &adpa_core::model::PathTrusteeEntry) -> Tr
                 AceKind::Allow => "Allow",
                 AceKind::Deny => "Deny",
             };
-            // „Share"-Anwendung beibehalten — sonst die Windows-typische
-            // „Applies to"-Bezeichnung aus den Flags.
             // For share entries without an inheritance model keep the static
             // "Share" label — otherwise derive the Windows-style "Applies to"
             // text from the flags.
@@ -1490,8 +1416,6 @@ pub fn trustee_row_for_display(entry: &adpa_core::model::PathTrusteeEntry) -> Tr
     }
 }
 
-/// Legacy-Display-Variante: kombiniert `build_path_trustees` und
-/// vom GUI-Renderer genutzt.
 /// Legacy display variant: combines `build_path_trustees` and
 /// `trustee_row_for_display` in one call — used by the Analyze tab and the
 /// GUI renderer.
@@ -1542,10 +1466,6 @@ fn compute_delta(
                     reasons,
                 } => {
                     // Code Review 2026-06-07 Finding 3: zeige zusaetzlich
-                    // zur effektiven Maske die konkreten Aenderungsursachen
-                    // ("NTFS mask + share status"), damit Audit-relevante
-                    // Aenderungen mit gleichbleibender Endmaske sichtbar
-                    // aber alt/neu im UI gleich aussehen.
                     // Code review 2026-06-07 finding 3: in addition to the
                     // effective mask, show the concrete change reasons
                     // ("NTFS mask + share status") so audit-relevant
@@ -1590,7 +1510,7 @@ fn format_mask(mask: u32) -> String {
 // ---------------------------------------------------------------------------
 
 /// Creates a minimal identity (SID-only) or resolves via LDAP.
-/// (Review-Befund 6).
+/// (review finding 6).
 /// Returns `(Identity, Memberships, used_sam_fallback)`. The flag is `true`
 /// if group resolution used `NetUserGetGroups` (SAM/LSA) instead of LDAP —
 /// in that case the domain group recursion is incomplete and the caller
@@ -1612,9 +1532,6 @@ async fn resolve_identity_sids(
         }
         let resolver = std::sync::Arc::new(LdapResolver::new(config));
         let backend = LdapIdentityBackend::new(resolver);
-        // Zentrale Principal-Pipeline — schliesst Review 2026-06-04
-        // Runde 3 Finding 1, indem der GUI-SID-Pfad denselben
-        // LDAP-/LSA-Crosscheck bekommt wie der CLI-DOMAIN\user-Pfad.
         // Central principal pipeline — closes review round 3 finding 1.
         #[cfg(windows)]
         let principal = PrincipalResolver::new(backend, Some(WindowsLsaBackend));
@@ -1629,7 +1546,6 @@ async fn resolve_identity_sids(
     //
     // Without LDAP: use the local SAM/LSA as the default resolver on Windows.
     // On a domain controller this covers full domain membership; on a
-    // workstation, whatever the LSA has cached. Only if SAM resolution also
     // fails (or we are not on Windows) does the worker fall back to a bare
     // SID identity — then the effective rights are only what direct ACEs on
     // the SID grant.
@@ -1637,7 +1553,6 @@ async fn resolve_identity_sids(
     // Both paths (SAM success and bare SID fallback) are LDAP-free → nested
     // domain groups are not fully resolved, so `used_sam_fallback = true`.
     // Schliesst Review 2026-06-04 Runde 2 Finding 5: `sam_resolve_fallback`
-    // setzen wir `DisabledStatus::Unknown` — die Engine pusht den
     // passenden Diagnose-Marker. Closes review round 2 finding 5.
     let (identity, memberships, disabled_known) = sam_resolve_fallback(sid)?;
     let disabled_status = if disabled_known {
@@ -1655,7 +1570,6 @@ async fn resolve_identity_sids(
         sid: identity.sid.clone(),
         identity,
         memberships,
-        // sichtbar und treibt den passenden Engine-Marker.
         // SAM-only on a DC = local domain → Inside; the flat recursion
         // is signalled separately via SamFlat.
         scope_status: ad_resolver::IdentityScopeStatus::InsideConfiguredLdapBase,
@@ -1688,7 +1602,6 @@ fn sam_resolve_fallback(sid: &str) -> Result<(Identity, Vec<GroupMembership>, bo
         Err(e) => {
             warn!(sid, error = %e, "SAM resolution failed — falling back to bare SID identity");
             let (identity, memberships) = bare_sid_identity(sid);
-            // Bare SID = wir wissen schlicht nichts ueber den User.
             // Bare SID = we know essentially nothing about the user.
             Ok((identity, memberships, false))
         }
@@ -1713,7 +1626,6 @@ fn bare_sid_identity(sid: &str) -> (Identity, Vec<GroupMembership>) {
     (identity, vec![])
 }
 
-/// Berechnet die Share-Maske einmalig vor dem Scan.
 /// Computes the share mask and its evaluation status.
 ///
 /// Returns `NotApplicable` when no SMB context exists, `Applied(mask)` on
@@ -1728,7 +1640,6 @@ fn resolve_share_status(
     access_context: AccessContext,
 ) -> (adpa_core::model::ShareMaskStatus, usize) {
     use adpa_core::model::ShareMaskStatus;
-    // Computation und Trustee-Overlay garantiert konsistent.
     // Round-10 finding 1: server and share derivation come from
     // `SmbAuditContext::resolve` — the same source the trustee overlay
     // build and the CLI paths use. Mask computation and trustee
@@ -1740,9 +1651,7 @@ fn resolve_share_status(
     let server = smb_ctx.server;
     let share = smb_ctx.share;
 
-    // Token-SIDs muessen Share- und NTFS-Auswertung uebereinstimmend abdecken.
-    // bei SMB im Token landet — sonst werden Deny-NETWORK-Share-ACEs
-    // ignoriert (Review-Folge-Befund 1).
+    // ignored (review follow-up finding 1).
     // Token SIDs must cover share and NTFS evaluation consistently. The
     // access context further ensures e.g. NETWORK (S-1-5-2) is in the SMB
     // token, otherwise Deny-NETWORK share ACEs are ignored (follow-up
@@ -1752,7 +1661,6 @@ fn resolve_share_status(
 
     match get_share_dacl(&server, &share) {
         Ok(scan) => {
-            // NULL share DACL → eigener Status, keine kuenstliche 0xFFFFFFFF-Maske.
             // NULL share DACL → dedicated status, no fabricated 0xFFFFFFFF mask.
             let status = match effective_share_mask(&scan.dacl, &user_sids) {
                 Some(mask) => ShareMaskStatus::Applied(mask),
@@ -1777,15 +1685,13 @@ fn resolve_share_status(
 mod tests {
     use super::*;
 
-    // Round-Trip-Smoke-Test, dass der GUI-Worker den Helfer wirklich nutzt
-    // (Sentinel-Bug aus Review-Befund 1).
+    // (sentinel bug from review finding 1).
     // The UNC parsing tests moved to validation::path where the shared
     // helper `parse_unc_components` lives. Here only a smoke test that the
     // GUI worker actually delegates to it (sentinel bug from review
     // finding 1).
     #[test]
     fn share_status_does_not_treat_local_path_as_unc() {
-        // Lokaler Pfad ohne SMB-Override → kein Share-Lookup, NotApplicable.
         // Local path without an SMB override → no share lookup, NotApplicable.
         // Before the fix this would have called `NetShareGetInfo("C:", "Windows")`.
         let dummy_id = Identity {
@@ -1885,8 +1791,6 @@ mod tests {
     }
 
     /// Review 2026-06-04 Runde 3 Finding 3: `build_path_trustees_with_share`
-    /// und beide Kategorien (`Ntfs`, `Share`) im Ergebnis ausweisen.
-    /// Verhindert den Regress, dass der Scan-Pfad Share-Trustees still
     /// weglaesst.
     /// Review round 3 finding 3: the precomputed share overlay must be
     /// attached to the NTFS list and both categories must show up.
@@ -1945,7 +1849,6 @@ mod tests {
         );
     }
 
-    /// nur NTFS-Trustees — identisches Verhalten wie vorher.
     /// Without an overlay (no SMB context) the with-share variant
     /// returns only NTFS trustees — same as before.
     #[test]
@@ -1984,12 +1887,7 @@ mod tests {
     /// Review 2026-06-04 Runde 4 Finding 2: Whitespace-umrahmte SID
     /// `handle_analyze`/`handle_scan` (klassifizieren → validieren),
     /// Review 2026-06-04 Runde 4 Finding 3: `normalize_smb_pair` (von
-    /// `analyze_trustees` und `validate_connection_inputs` geteilt)
-    /// muss halbe SMB-Kontexte ablehnen — sonst entsteht ein stiller
     /// NTFS-only-Fallback.
-    /// Code Review 2026-06-07 Finding 2: `analyze_trustees` muss bei
-    /// einem blanken UNC-Pfad ohne explizite SMB-Felder den Server
-    /// indem er `SmbAuditContext::resolve` direkt aufruft — exakt mit
     /// verwendet.
     /// Code review 2026-06-07 finding 2: `analyze_trustees` must
     /// derive server + share from a bare UNC path without explicit
@@ -2027,7 +1925,6 @@ mod tests {
 
         // Case 4: half-set is filtered by `normalize_smb_pair` before
         // reaching `SmbAuditContext::resolve` (see the test above).
-        // Sanity: `resolve` itself also rejects a half-set on a
         // non-UNC path — the share name has no UNC fallback.
         let ctx = SmbAuditContext::resolve(r"C:\Data", Some("fs01"), None);
         assert!(ctx.is_none(), "half-set on non-UNC path must yield None");
@@ -2050,7 +1947,6 @@ mod tests {
             .expect("matched pair must succeed");
         assert_eq!(s.as_deref(), Some("fileserver"));
         assert_eq!(n.as_deref(), Some("data"));
-        // Beide leer: kein SMB-Kontext, kein Fehler.
         // Both empty: no SMB context, no error.
         let (s, n) = super::normalize_smb_pair(None, None).expect("no SMB context must succeed");
         assert!(s.is_none() && n.is_none());
@@ -2068,14 +1964,12 @@ mod tests {
         let validated = validate_sid(trimmed).expect("trimmed SID must validate");
         assert_eq!(validated.0, "S-1-5-21-1-2-3-4567");
 
-        //    klassifiziert, geht die SID verloren.
         assert!(
             !raw.starts_with("S-1-"),
             "regression guard: raw value must NOT classify as a SID — proves the fix is necessary"
         );
     }
 
-    /// Zieldatei ablehnen statt sie wie bisher still zu kuerzen. CLI
     /// Round-7 finding 2: GUI HTML export must refuse to overwrite an
     /// existing target file instead of silently truncating it. CLI
     /// already enforces this via `check_overwrite_policy`; the GUI worker
@@ -2083,8 +1977,8 @@ mod tests {
     #[test]
     fn export_html_refuses_to_overwrite_existing_file() {
         use std::io::Write;
-        // Mit einem eindeutigen Namen direkt im std::env::temp_dir() —
-        // brauchen keine externe tempfile-Dependency.
+        // Unique file name placed directly in std::env::temp_dir() so
+        // we do not need an external tempfile dependency.
         let unique = format!("adpa-gui-export-overwrite-{}.html", Uuid::new_v4());
         let path = std::env::temp_dir().join(unique);
 

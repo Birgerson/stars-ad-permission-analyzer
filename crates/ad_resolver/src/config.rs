@@ -20,12 +20,10 @@ pub enum TlsMode {
 
 /// Connection parameters for an LDAP/Active Directory server.
 ///
-/// versehentliches `{config:?}` keine Secrets in Logs schreibt.
 /// `Debug` is hand-implemented and masks the bind password so an accidental
 /// `{config:?}` does not leak secrets into logs.
 #[derive(Clone)]
 pub struct LdapConfig {
-    /// LDAP-Server-Adresse (IP oder Hostname).
     /// LDAP server address (IP or hostname).
     pub server: String,
 

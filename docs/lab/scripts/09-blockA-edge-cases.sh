@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # Lab Block A — NTFS-Edge-Cases (Deny + Protect + Share) + Stars-CLI-Smoke.
 # Prerequisites:
-#   - Phases 01..08 sind durchgelaufen.
-#   - C:\Stars\adpa.exe ist auf VMID 100 vorhanden.
 #   - $LAB_ADMIN_PASSWORD is set.
 set -eu
 : "${LAB_ADMIN_PASSWORD:?Please export LAB_ADMIN_PASSWORD}"
@@ -21,7 +19,7 @@ run_ps() {
     echo
 }
 
-# -------- Setup auf tier0 --------
+# -------- Setup on tier0 --------
 cat > /tmp/blockA-setup.ps1 <<'PSEOF'
 $ErrorActionPreference = "Stop"
 $ProgressPreference    = "SilentlyContinue"
@@ -82,7 +80,6 @@ write_stars_test() {
 & 'C:\Stars\adpa.exe' analyze \`
     --path '${path}' \`
     --user '${user}' \`
-    --server 'tier0.tier0.lab' \`
     --base-dn 'DC=tier0,DC=lab' \`
     --bind-dn 'CN=Administrator,CN=Users,DC=tier0,DC=lab' \`
     --insecure-ldap ${extra} 2>&1

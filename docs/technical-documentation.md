@@ -1391,5 +1391,5 @@ Planned for future versions:
 
 ## Deutsche Version
 
-Eine deutsche Fassung dieser technischen Dokumentation liegt unter
+
 **[technische-dokumentation.md](technische-dokumentation.md)**.

@@ -7,10 +7,6 @@ authors.workspace = true
 [dependencies]
 adpa_core = { path = "../core" }
 permission_engine = { path = "../permission_engine" }
-# share_scanner liefert die Share-DACL fuer den optionalen Trustee-
-# Overlay (siehe trustees-Modul, eingefuehrt fuer Review Runde 9
-# Finding 1: CLI-Reports sollen path_trustees genauso befuellen wie
-# die GUI).
 share_scanner = { path = "../share_scanner" }
 thiserror.workspace = true
 serde.workspace = true
@@ -20,7 +16,4 @@ csv.workspace = true
 chrono.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-# Windows-only: LSA-basierte SID -> Name-Aufloesung fuer das
-# Trustee-Modul. Auf Linux/Mac (Tests, CI) sind die Display-Namen
-# einfach None — die Build-Funktionen funktionieren trotzdem.
 ad_resolver = { path = "../ad_resolver" }

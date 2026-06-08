@@ -19,13 +19,11 @@ pub struct CancellationToken {
 }
 
 impl CancellationToken {
-    /// Erstellt ein neues, nicht abgebrochenes Token.
     /// Creates a new, non-cancelled token.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Fordert den Abbruch an. Wirkt auf alle Klone.
     /// Requests cancellation. Affects all clones.
     pub fn cancel(&self) {
         self.flag.store(true, Ordering::Relaxed);
