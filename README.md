@@ -98,13 +98,13 @@ On WSL / Linux / macOS, `sha256sum -c Stars-v1.5.16-Setup.exe.sha256` works dire
 >
 > **Use at your own risk. Make a full backup before any production use.** → [Full disclaimer](#disclaimer)
 
-### Wie Stars entstanden ist
+### How Stars came to be
 
-Stars wurde von einem Fachinformatiker Anwendungsentwicklung gebaut, der die Implementierung an Claude (Anthropic) als Werkzeug delegiert hat — bei voller Steuerung jedes Architektur-Entscheids, jeder Review und jeder Korrektur.
+Stars was built by a certified IT Specialist for Application Development who delegated the implementation to Claude (Anthropic) as a tool — under full control of every architecture decision, every review, and every correction.
 
-Das Ergebnis: ein produktives Audit-Tool, im 3-Forest-Lab gegen 1000 Test-User und 5000 Pfade verifiziert.
+The result: a production-grade audit tool, verified in a 3-forest lab against 1000 test users and 5000 paths.
 
-Wer KI als Verstärker des eigenen Handwerks einsetzt statt als Ersatz, kommt schneller zu Software die hält was sie verspricht.
+Treating AI as an amplifier of your own craft, not a replacement, gets you to software that holds its promises faster.
 
 ### What is Stars?
 
