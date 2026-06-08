@@ -369,7 +369,7 @@ fn well_known_table() -> Vec<IdentitySnapshot> {
             name: "NETWORK SERVICE".into(),
             domain: "NT AUTHORITY".into(),
             kind: g.clone(),
-            description: "Dienste-Account mit Computer-Identität im Netz".into(),
+            description: "Service account with computer identity on the network".into(),
         },
         IdentitySnapshot {
             name: "NETWORK".into(),
@@ -387,7 +387,7 @@ fn well_known_table() -> Vec<IdentitySnapshot> {
             name: "CREATOR OWNER".into(),
             domain: String::new(),
             kind: g,
-            description: "Platzhalter für den Ersteller eines Objekts".into(),
+            description: "Placeholder for the creator of an object".into(),
         },
     ]
 }
@@ -487,7 +487,7 @@ mod tests {
     /// entries + local groups. `#[ignore]` because CI runners have
     /// different local account layouts.
     #[test]
-    #[ignore = "läuft live gegen die LSA/NetAPI — lokal mit `cargo test -- --ignored`"]
+    #[ignore = "runs live against LSA/NetAPI — run locally with `cargo test -- --ignored`"]
     fn enumerate_returns_at_least_well_known_and_local_groups() {
         let all = enumerate_all();
         assert!(all.iter().any(|i| i.name == "Everyone"));

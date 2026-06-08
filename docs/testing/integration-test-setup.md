@@ -1,208 +1,180 @@
-# Integrationstest-Umgebung / Integration Test Environment
+# Integration Test Environment
 
-Stand: 2026-05-25
+Status: 2026-05-25
 
-Dieses Dokument beschreibt den Aufbau einer Test-Domäne (`testdomain.local`) für
-die AD-Integrationstests des DevMS-Analyzers sowie eines Test-Fileservers für
-NTFS- und SMB-Szenarien.
-
-This document describes how to set up a test domain (`testdomain.local`) for the
-AD integration tests of the DevMS analyzer, plus a test file server for NTFS and
-SMB scenarios.
+This document describes how to set up a test domain (`testdomain.local`) for the AD integration tests of the DevMS analyzer, plus a test file server for NTFS and SMB scenarios.
 
 ---
 
-## 1. Warum eine eigene VM nötig ist / Why a dedicated VM is required
+## 1. Why a dedicated VM is required
 
-Die Integrationstests benötigen einen **echten Active-Directory-Domänencontroller**.
+The integration tests need a **real Active Directory domain controller**.
 
-- Ein Domänencontroller setzt die Rolle **Active Directory Domain Services (AD DS)**
-  voraus. Diese Rolle gibt es **ausschließlich auf Windows Server**, nicht auf
-  Windows 10/11 (Client-/Workstation-SKU, `ProductType=1`).
-- Die Heraufstufung (`Install-ADDSForest`) erstellt eine Gesamtstruktur und startet
-  den Rechner neu. Das ist ein tiefgreifender, kaum reversibler Eingriff.
-- Eine Entwickler-Workstation darf **niemals** zum Domänencontroller gemacht werden.
+- A domain controller requires the **Active Directory Domain Services (AD DS)** role. This role only exists on **Windows Server**, not on Windows 10/11 (client/workstation SKU, `ProductType=1`).
+- Promotion (`Install-ADDSForest`) creates a forest and reboots the host. That is a deep, barely reversible change.
+- A developer workstation must **never** be promoted to a domain controller.
 
-A domain controller requires the **AD DS** role, which only exists on Windows
-Server. Promotion (`Install-ADDSForest`) creates a forest and reboots the host —
-never do this on a developer workstation.
+**Recommendation:** an isolated, disposable VM (Hyper-V, VMware, VirtualBox, or similar) with **Windows Server 2019/2022/2025**. Take a snapshot before the setup so a clean rollback is possible.
 
-**Empfehlung / Recommendation:** eine isolierte, wegwerfbare VM
-(Hyper-V, VMware, VirtualBox o. Ä.) mit **Windows Server 2019/2022/2025**.
-Snapshot vor dem Setup anlegen, damit ein sauberer Rückbau möglich ist.
-
-> Hinweis zum Read-only-Prinzip: Der DevMS-Analyzer verändert niemals Zielsysteme.
-> Die Skripte in `scripts/test-env/` sind reine **Testumgebungs-Provisionierung**
-> und gehören nicht zum Analyzer. Sie laufen bewusst nur auf der Test-VM.
+> Read-only note: the DevMS analyzer never modifies target systems. The scripts under `scripts/test-env/` are **test environment provisioning only** and are not part of the analyzer. They are meant to run only on the test VM.
 
 ---
 
-## 2. Voraussetzungen / Prerequisites
+## 2. Prerequisites
 
-| Komponente | Anforderung |
-|------------|-------------|
-| Test-VM | Windows Server 2019 oder neuer, isoliertes Test-Netz |
-| Arbeitsspeicher | ≥ 4 GB für DC + Fileserver kombiniert |
-| Rechte | Lokaler Administrator auf der VM |
-| Rust-Toolchain | nur auf dem Entwicklungsrechner nötig (Tests laufen per LDAP gegen die VM) |
-| Netzwerk | Entwicklungsrechner muss die VM per TCP 389/636 erreichen |
+| Component | Requirement |
+|-----------|-------------|
+| Test VM | Windows Server 2019 or newer, isolated test network |
+| RAM | ≥ 4 GB for DC + file server combined |
+| Privileges | Local administrator on the VM |
+| Rust toolchain | Only needed on the developer machine (tests run against the VM via LDAP) |
+| Network | Developer machine must reach the VM on TCP 389/636 |
 
-DC und Fileserver können auf **derselben** VM liegen — das ist für Tests zulässig.
+DC and file server may live on the **same** VM — that is acceptable for tests.
 
 ---
 
-## 3. Schritt 1 — Domänencontroller einrichten / Set up the domain controller
+## 3. Step 1 — Set up the domain controller
 
-Auf der **Test-VM** in einer administrativen PowerShell:
+In an administrative PowerShell on the **test VM**:
 
 ```powershell
 .\scripts\test-env\01-setup-dc.ps1
 ```
 
-Das Skript:
+The script:
 
-1. installiert die Rolle AD DS,
-2. stuft die VM zur Gesamtstruktur `testdomain.local` (NetBIOS `TESTDOMAIN`) hoch,
-3. fordert ein DSRM-Passwort an,
-4. **startet die VM neu**.
+1. installs the AD DS role,
+2. promotes the VM to the forest `testdomain.local` (NetBIOS `TESTDOMAIN`),
+3. asks for a DSRM password,
+4. **reboots the VM**.
 
-Nach dem Neustart ist `testdomain.local` aktiv. Melde dich als
-`TESTDOMAIN\Administrator` an.
+After the reboot `testdomain.local` is active. Log in as `TESTDOMAIN\Administrator`.
 
 ---
 
-## 4. Schritt 2 — AD-Testobjekte anlegen / Create AD test objects
+## 4. Step 2 — Create AD test objects
 
-Nach dem Neustart, erneut in administrativer PowerShell:
+After the reboot, again in an administrative PowerShell:
 
 ```powershell
 .\scripts\test-env\02-setup-ad-objects.ps1
 ```
 
-Das Skript legt unter `OU=DevMS-Test,DC=testdomain,DC=local` an:
+The script creates the following under `OU=DevMS-Test,DC=testdomain,DC=local`:
 
-**Legacy-Benutzer für Integrationstests / legacy users for integration tests**
+**Legacy users for integration tests**
 
-| sAMAccountName | Zweck im Test |
-|----------------|---------------|
-| `max.mustermann` | Gruppenauflösung, transitive Mitgliedschaft |
-| `anna.schmidt` | Identity-Caching-Test |
-| `Administrator` | bereits vorhanden — `resolve_administrator_identity` |
+| sAMAccountName | Purpose in tests |
+|----------------|------------------|
+| `max.mustermann` | Group resolution, transitive membership |
+| `anna.schmidt` | Identity caching test |
+| `Administrator` | Already present — `resolve_administrator_identity` |
 
-**Sieben Abteilungen als Sub-OUs / seven departments as sub-OUs**
+**Seven departments as sub-OUs**
 
-| Sub-OU | Mitglieder |
-|--------|-----------|
-| `OU=Geschaeftsleitung` | birger.labinsch |
-| `OU=Personal` | susanne.mueller |
-| `OU=Analyse` | thomas.hibel, markus.neuer |
-| `OU=Produktion` | reiner.wanscher, frank.hilbert |
-| `OU=Finanzen` | heidi.weger |
-| `OU=Lager` | oscar.wolle |
-| `OU=Wissenschaft` | julia.kurz, jasmin.koppen |
+| Sub-OU | Members |
+|--------|---------|
+| `OU=Management` | birger.labinsch |
+| `OU=HR` | susanne.mueller |
+| `OU=Analysis` | thomas.hibel, markus.neuer |
+| `OU=Production` | reiner.wanscher, frank.hilbert |
+| `OU=Finance` | heidi.weger |
+| `OU=Warehouse` | oscar.wolle |
+| `OU=Science` | julia.kurz, jasmin.koppen |
 
-Insgesamt **12 Benutzer** (10 aus PASSWORD.md + 2 Legacy). Alle Benutzer
-bekommen dasselbe Test-Passwort, das das Skript interaktiv abfragt.
+In total **12 users** (10 from PASSWORD.md + 2 legacy). All users get the same test password, which the script prompts for interactively.
 
-> Die Abteilungs-Zuordnung ist exemplarisch — PASSWORD.md spezifiziert
-> sie nicht. Anpassbar im `$testUsers`-Array von `02-setup-ad-objects.ps1`.
+> The department assignment is an example — PASSWORD.md does not specify it. Adjust in the `$testUsers` array of `02-setup-ad-objects.ps1`.
 
-**Gruppen / Groups und Verschachtelung / nesting**
+**Groups and nesting**
 
-Legacy (für `resolve_group_memberships_max_mustermann`):
+Legacy (for `resolve_group_memberships_max_mustermann`):
 
 ```text
-max.mustermann ─┬─ GRP_IT_Admins   (direkt) ── GRP_FullAccess_FS   (verschachtelt)
-                └─ GRP_Development (direkt) ── GRP_ShareAccess_SMB  (verschachtelt)
+max.mustermann ─┬─ GRP_IT_Admins   (direct)  ── GRP_FullAccess_FS   (nested)
+                └─ GRP_Development (direct)  ── GRP_ShareAccess_SMB  (nested)
 ```
 
-Pro Abteilung eine Members-Gruppe in der jeweiligen Sub-OU:
+One members group per department in its sub-OU:
 
 ```text
-GRP_Geschaeftsleitung_Members
-GRP_Personal_Members
-GRP_Analyse_Members
-GRP_Produktion_Members
-GRP_Finanzen_Members
-GRP_Lager_Members
-GRP_Wissenschaft_Members
+GRP_Management_Members
+GRP_HR_Members
+GRP_Analysis_Members
+GRP_Production_Members
+GRP_Finance_Members
+GRP_Warehouse_Members
+GRP_Science_Members
 ```
 
-Insgesamt **11 Gruppen** (4 Legacy + 7 Members).
+In total **11 groups** (4 legacy + 7 members).
 
-Die Legacy-Struktur ist genau das, was `crates/ad_resolver/src/resolver.rs`
-erwartet (`resolve_group_memberships_max_mustermann`). Sie darf nicht
-entfernt werden, ohne den Test gleichzeitig anzupassen.
+The legacy structure is exactly what `crates/ad_resolver/src/resolver.rs` expects (`resolve_group_memberships_max_mustermann`). It must not be removed without also updating the test.
 
-Das Skript ist idempotent — vorhandene Objekte werden übersprungen. Für
-nicht-interaktive Läufe akzeptiert es `-UserPassword` als SecureString.
+The script is idempotent — existing objects are skipped. For non-interactive runs it accepts `-UserPassword` as a SecureString.
 
 ---
 
-## 5. Schritt 3 — Test-Fileserver einrichten / Set up the test file server
+## 5. Step 3 — Set up the test file server
 
 ```powershell
 .\scripts\test-env\03-setup-fileserver.ps1
 ```
 
-Das Skript erstellt unter `C:\DevMS-TestData` zwei Strukturen:
+The script creates two structures under `C:\DevMS-TestData`:
 
-**Legacy-Struktur** (deckt die fachlichen Analysefälle ab):
+**Legacy structure** (covers the analyzer's audit cases):
 
-| Pfad | NTFS-Berechtigung | Freigabe | Testfall |
-|------|-------------------|----------|----------|
-| `Public` | `Everyone` Read | `Public$` (Full) | Everyone-/Broad-Group-Regel |
-| `IT` | `GRP_IT_Admins` Modify (vererbt) | `IT` (Change) | Gruppen-/verschachtelte Rechte |
-| `IT\maxdata` | zusätzlich `max.mustermann` explizit | — | `DIRECT_USER_ACE` |
-| `Development` | `GRP_Development` Modify | — | Gruppenrechte |
-| `Development\Restricted` | Vererbung deaktiviert, explizites Deny | — | Vererbungsunterbrechung, Deny |
-| `Shared` | `GRP_FullAccess_FS` Full Control | `Shared` (Read) | NTFS-∩-Share-Kombination |
-| `Secrets\passwords` | `GRP_IT_Admins` Read | — | `SENSITIVE_PATH`-Regel |
+| Path | NTFS permission | Share | Test case |
+|------|-----------------|-------|-----------|
+| `Public` | `Everyone` Read | `Public$` (Full) | Everyone / broad-group rule |
+| `IT` | `GRP_IT_Admins` Modify (inherited) | `IT` (Change) | Group / nested rights |
+| `IT\maxdata` | additional `max.mustermann` explicit | — | `DIRECT_USER_ACE` |
+| `Development` | `GRP_Development` Modify | — | Group rights |
+| `Development\Restricted` | inheritance disabled, explicit Deny | — | Inheritance break, Deny |
+| `Shared` | `GRP_FullAccess_FS` Full Control | `Shared` (Read) | NTFS ∩ share combination |
+| `Secrets\passwords` | `GRP_IT_Admins` Read | — | `SENSITIVE_PATH` rule |
 
-**Abteilungs-Struktur** unter `C:\DevMS-TestData\Abteilungen` — ein Ordner
-und eine sichtbare SMB-Freigabe pro Sub-OU aus Schritt 2:
+**Department structure** under `C:\DevMS-TestData\Departments` — one folder and one visible SMB share per sub-OU from step 2:
 
-| Pfad | NTFS-Berechtigung | Freigabe |
-|------|-------------------|----------|
-| `Abteilungen\Geschaeftsleitung` | `GRP_Geschaeftsleitung_Members` Modify | `Geschaeftsleitung` (Change) |
-| `Abteilungen\Personal` | `GRP_Personal_Members` Modify | `Personal` (Change) |
-| `Abteilungen\Analyse` | `GRP_Analyse_Members` Modify | `Analyse` (Change) |
-| `Abteilungen\Produktion` | `GRP_Produktion_Members` Modify | `Produktion` (Change) |
-| `Abteilungen\Finanzen` | `GRP_Finanzen_Members` Modify | `Finanzen` (Change) |
-| `Abteilungen\Lager` | `GRP_Lager_Members` Modify | `Lager` (Change) |
-| `Abteilungen\Wissenschaft` | `GRP_Wissenschaft_Members` Modify | `Wissenschaft` (Change) |
+| Path | NTFS permission | Share |
+|------|-----------------|-------|
+| `Departments\Management` | `GRP_Management_Members` Modify | `Management` (Change) |
+| `Departments\HR` | `GRP_HR_Members` Modify | `HR` (Change) |
+| `Departments\Analysis` | `GRP_Analysis_Members` Modify | `Analysis` (Change) |
+| `Departments\Production` | `GRP_Production_Members` Modify | `Production` (Change) |
+| `Departments\Finance` | `GRP_Finance_Members` Modify | `Finance` (Change) |
+| `Departments\Warehouse` | `GRP_Warehouse_Members` Modify | `Warehouse` (Change) |
+| `Departments\Science` | `GRP_Science_Members` Modify | `Science` (Change) |
 
-Damit hat jeder Abteilungs-Benutzer einen eigenen Berechtigungs-Scope
-inklusive SMB-Pfad (`\\<dc>\<Dept>`), den der Analyzer auswerten kann.
+That gives every department user a dedicated permission scope including an SMB path (`\\<dc>\<Dept>`) the analyzer can evaluate.
 
-> Auch diese Schreibvorgänge betreffen ausschließlich die Test-VM. Der Analyzer
-> selbst liest diese Strukturen später nur.
+> These write operations also affect the test VM only. The analyzer itself later only reads these structures.
 
 ---
 
-## 6. Schritt 4 — Integrationstests ausführen / Run the integration tests
+## 6. Step 4 — Run the integration tests
 
-Die AD-Integrationstests sind mit `#[ignore]` markiert und lesen ihre Verbindung
-aus Umgebungsvariablen. Ohne gesetzte Variablen kehren sie sofort zurück
-(`test_config()` liefert `None`).
+The AD integration tests are marked `#[ignore]` and read their connection from environment variables. Without the variables set they return early (`test_config()` returns `None`).
 
-Benötigte Umgebungsvariablen / required environment variables:
+Required environment variables:
 
-| Variable | Beispiel |
-|----------|----------|
+| Variable | Example |
+|----------|---------|
 | `DEVMS_TEST_LDAP_SERVER` | `dc01.testdomain.local` |
 | `DEVMS_TEST_LDAP_BASE_DN` | `DC=testdomain,DC=local` |
 | `DEVMS_TEST_LDAP_BIND_DN` | `CN=Administrator,CN=Users,DC=testdomain,DC=local` |
-| `DEVMS_TEST_LDAP_PASSWORD` | (Bind-Passwort) |
-| `DEVMS_TEST_LDAP_INSECURE` | `1` nur falls kein LDAPS verfügbar — sonst weglassen |
+| `DEVMS_TEST_LDAP_PASSWORD` | (bind password) |
+| `DEVMS_TEST_LDAP_INSECURE` | `1` only if LDAPS is unavailable — otherwise omit |
 
-Komfort-Skript auf dem **Entwicklungsrechner** (fragt das Passwort sicher ab):
+Convenience script on the **developer machine** (prompts for the password securely):
 
 ```powershell
 .\scripts\test-env\04-run-integration-tests.ps1 -Server dc01.testdomain.local
 ```
 
-Oder manuell:
+Or manually:
 
 ```powershell
 $env:DEVMS_TEST_LDAP_SERVER  = "dc01.testdomain.local"
@@ -212,34 +184,30 @@ $env:DEVMS_TEST_LDAP_PASSWORD = (Read-Host -AsSecureString | ConvertFrom-SecureS
 cargo test --workspace -- --ignored
 ```
 
-Erwartete Integrationstests / expected integration tests
-(`crates/ad_resolver/src/resolver.rs`):
+Expected integration tests (`crates/ad_resolver/src/resolver.rs`):
 
 - `resolve_administrator_identity`
 - `resolve_group_memberships_max_mustermann`
 - `orphaned_sid_returns_unknown`
 - `identity_is_cached_after_first_lookup`
 
-> **Sicherheit:** Das Bind-Passwort niemals als Klartext-Argument oder in der
-> Shell-History ablegen. `DEVMS_TEST_LDAP_PASSWORD` nur prozesslokal setzen.
-> `DEVMS_TEST_LDAP_INSECURE=1` aktiviert unverschlüsseltes LDAP — ausschließlich
-> in isolierten Testnetzen verwenden.
+> **Security:** Never pass the bind password as a cleartext argument or leave it in the shell history. Set `DEVMS_TEST_LDAP_PASSWORD` only for the process. `DEVMS_TEST_LDAP_INSECURE=1` enables unencrypted LDAP — use only in isolated test networks.
 
 ---
 
-## 7. Funktionaler End-to-End-Test mit der CLI / Functional end-to-end CLI test
+## 7. Functional end-to-end CLI test
 
-Gegen den Test-Fileserver lässt sich der Analyzer direkt prüfen:
+The analyzer can be verified directly against the test file server:
 
 ```powershell
-# Effektive Rechte eines Benutzers auf einem Ordner
+# Effective rights of a user on a folder
 adpa analyze --path C:\DevMS-TestData\Shared `
   --user max.mustermann `
   --server dc01.testdomain.local `
   --base-dn "DC=testdomain,DC=local" `
   --bind-dn "CN=Administrator,CN=Users,DC=testdomain,DC=local"
 
-# Rekursiver Scan mit HTML-Report inkl. Risikobefunden
+# Recursive scan with HTML report including risk findings
 adpa scan --path C:\DevMS-TestData `
   --user max.mustermann `
   --server dc01.testdomain.local `
@@ -248,34 +216,32 @@ adpa scan --path C:\DevMS-TestData `
   --output report.html
 ```
 
-Das Bind-Passwort wird über `ADPA_BIND_PASSWORD` erwartet (siehe `adpa --help`).
+The bind password is read from `ADPA_BIND_PASSWORD` (see `adpa --help`).
 
 ---
 
-## 8. Aufräumen / Teardown
+## 8. Teardown
 
-Bevorzugt: **VM-Snapshot zurückspielen**.
+Preferred: **revert the VM snapshot**.
 
-Falls die VM erhalten bleiben soll:
+If the VM should be kept:
 
 ```powershell
 .\scripts\test-env\99-teardown.ps1
 ```
 
-Das Skript entfernt die AD-Test-OU, die Freigaben und `C:\DevMS-TestData`.
-Die Herabstufung des Domänencontrollers (`Uninstall-ADDSDomainController`) muss
-bewusst manuell erfolgen und ist nicht Teil des Skripts.
+The script removes the AD test OU, the shares, and `C:\DevMS-TestData`. Demoting the domain controller (`Uninstall-ADDSDomainController`) must be done deliberately by hand and is not part of the script.
 
 ---
 
-## 9. Kurzreferenz / Quick reference
+## 9. Quick reference
 
 ```text
-Test-VM (Windows Server):
-  1. scripts\test-env\01-setup-dc.ps1          -> DC, Neustart
-  2. scripts\test-env\02-setup-ad-objects.ps1  -> Benutzer + Gruppen
-  3. scripts\test-env\03-setup-fileserver.ps1  -> Ordner + ACLs + Shares
+Test VM (Windows Server):
+  1. scripts\test-env\01-setup-dc.ps1          -> DC, reboot
+  2. scripts\test-env\02-setup-ad-objects.ps1  -> users + groups
+  3. scripts\test-env\03-setup-fileserver.ps1  -> folders + ACLs + shares
 
-Entwicklungsrechner:
+Developer machine:
   4. scripts\test-env\04-run-integration-tests.ps1 -Server <dc-fqdn>
 ```

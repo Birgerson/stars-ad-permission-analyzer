@@ -70,9 +70,7 @@ impl LdapResolver {
                     None => Ok(None),
                     Some(entry) => {
                         let sid = extract_sid_from_entry(&entry).ok_or_else(|| {
-                            CoreError::SidResolution(format!(
-                                "Kein objectSid für UPN / No objectSid for UPN: {upn}"
-                            ))
+                            CoreError::SidResolution(format!("No objectSid for UPN: {upn}"))
                         })?;
                         let identity = parse_identity_from_entry(&entry, &sid);
                         self.identity_cache
@@ -652,11 +650,11 @@ async fn resolve_primary_group(
     match ldap_client::search_by_sid(ldap, base_dn, &primary_group_sid_str).await {
         Ok(Some(_)) => Some(Sid(primary_group_sid_str)),
         Ok(None) => {
-            warn!("Primärgruppe nicht gefunden / Primary group not found: {primary_group_sid_str}");
+            warn!("Primary group not found: {primary_group_sid_str}");
             None
         }
         Err(e) => {
-            warn!("Primärgruppen-Suche fehlgeschlagen / Primary group search failed: {e}");
+            warn!("Primary group search failed: {e}");
             None
         }
     }
@@ -751,11 +749,11 @@ mod tests {
         // Basic check: at least Domain Users (primary group) must be resolved.
         assert!(
             !group_names.is_empty(),
-            "Mindestens eine Gruppe muss aufgelöst werden / At least one group must be resolved"
+            "At least one group must be resolved"
         );
         assert!(
             group_names.contains(&"Domain Users".to_string()),
-            "Domain Users (Primärgruppe) muss immer enthalten sein / Domain Users (primary group) must always be present"
+            "Domain Users (primary group) must always be present"
         );
 
         // (scripts/test-env/02-setup-ad-objects.ps1) angelegte AD-Struktur:

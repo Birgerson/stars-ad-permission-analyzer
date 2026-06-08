@@ -718,7 +718,7 @@ mod tests {
     /// built-in Administrator usually disabled) do not run this
     /// reliably.
     #[test]
-    #[ignore = "DC- oder Workstation-spezifisch; lokal mit `cargo test -- --ignored` ausführen"]
+    #[ignore = "DC- or workstation-specific; run locally with `cargo test -- --ignored`"]
     fn resolve_local_administrator_yields_memberships() {
         let admin_sid = lookup_sid_for_account(None, "Administrator")
             .expect("local Administrator must resolve to a SID");

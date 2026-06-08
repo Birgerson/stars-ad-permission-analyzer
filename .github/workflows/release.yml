@@ -99,7 +99,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: "Stars ${{ github.ref_name }}"
-          # Tags mit '-' (z. B. v0.2.0-rc1, v1.0.0-beta) als Pre-Release markieren.
           # Tags containing '-' (e.g. v0.2.0-rc1, v1.0.0-beta) are marked as pre-release.
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
@@ -107,22 +106,22 @@ jobs:
 
             ### Installation
             1. Download **Stars-${{ github.ref_name }}-Setup.exe** below.
-            2. **Empfohlen:** zusätzlich `.sha256`-Datei laden und Integrität verifizieren (siehe unten).
-            3. Doppelklick auf den Installer — keine Administratorrechte erforderlich.
-            4. Ein **Stars**-Symbol erscheint auf dem Desktop.
+            2. **Recommended:** also download the `.sha256` file and verify integrity (see below).
+            3. Double-click the installer — no administrator rights required.
+            4. A **Stars** icon appears on the desktop.
 
-            ### Integrität verifizieren (SHA256)
+            ### Verify integrity (SHA256)
 
-            Stars hat aktuell **kein Code-Signing-Zertifikat** — Windows SmartScreen warnt
-            entsprechend („unbekannter Herausgeber"). Damit du trotzdem prüfen kannst, dass
-            die heruntergeladene Datei mit dem auf GitHub freigegebenen Build identisch ist:
+            Stars currently has **no code-signing certificate** — Windows SmartScreen warns
+            accordingly ("unknown publisher"). To check that the downloaded file is identical
+            to the build published on GitHub:
 
             **PowerShell:**
             ```powershell
             $exe = "Stars-${{ github.ref_name }}-Setup.exe"
             $expected = (Get-Content "$exe.sha256").Split("  ")[0]
             $actual = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
-            if ($actual -eq $expected) { "OK — Datei stimmt" } else { "MISMATCH — NICHT verwenden" }
+            if ($actual -eq $expected) { "OK — file matches" } else { "MISMATCH — DO NOT use" }
             ```
 
             **bash / WSL / macOS:**
@@ -130,25 +129,24 @@ jobs:
             sha256sum -c Stars-${{ github.ref_name }}-Setup.exe.sha256
             ```
 
-            Gibt das Skript `OK` bzw. `Stars-…-Setup.exe: OK` aus, ist die Datei bit-genau
-            der Build, den dieser GitHub-Actions-Lauf erzeugt hat — kein Man-in-the-Middle,
-            keine veränderte Kopie. Das ersetzt **kein** Code-Signing (die Echtheit der Quelle
-            verifizierst du über das GitHub-Repo selbst), schützt aber gegen verfälschte
-            Downloads.
+            If the script prints `OK` or `Stars-…-Setup.exe: OK`, the file is bit-for-bit the
+            build this GitHub Actions run produced — no man-in-the-middle, no tampered copy.
+            This does **not** replace code signing (you verify the authenticity of the source
+            via the GitHub repo itself), but it protects against tampered downloads.
 
-            ### Systemvoraussetzungen
-            - Windows 10 / Windows 11 / Windows Server 2016 oder neuer
-            - Keine zusätzliche Software erforderlich (eigenständige EXE)
+            ### System requirements
+            - Windows 10 / Windows 11 / Windows Server 2016 or newer
+            - No additional software required (self-contained EXE)
 
             ### Features
-            - NTFS-ACL-Analyse mit vollständigem Berechtigungspfad
-            - Rekursiver Baum-Scan mit Live-Ergebnistabelle
-            - Risikoanalyse (6 Regeln: Full Control, Write Access, Admin Rights, Broad Group, Direct User ACE, Sensitive Path)
-            - HTML-/JSON-/CSV-Berichtsexport
-            - Delta-Vergleich zwischen zwei Scan-Läufen
-            - Optionale LDAP / Active Directory Identitätsauflösung
-            - Optionale SMB-Share-Berechtigungsüberlagerung
-            - SQLite-Scan-Historie pro Benutzerprofil
+            - NTFS ACL analysis with the full permission path
+            - Recursive tree scan with a live result table
+            - Risk analysis (6 rules: Full Control, Write Access, Admin Rights, Broad Group, Direct User ACE, Sensitive Path)
+            - HTML / JSON / CSV report export
+            - Delta comparison between two scan runs
+            - Optional LDAP / Active Directory identity resolution
+            - Optional SMB share permission overlay
+            - SQLite scan history per user profile
           files: |
             Stars-${{ github.ref_name }}-Setup.exe
             Stars-${{ github.ref_name }}-Setup.exe.sha256

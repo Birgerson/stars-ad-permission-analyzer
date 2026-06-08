@@ -975,7 +975,7 @@ mod tests {
             USER_SID,
             MASK_READ,
             r"C:\data",
-            vec!["Zulassen-ACE [explizit] für jemand anderen".to_string()],
+            vec!["Allow ACE [explicit] for someone else".to_string()],
             vec![],
             vec![ace_entry(USER_SID, AceKind::Allow, false)],
         )]));
@@ -1083,7 +1083,7 @@ mod tests {
         let r = SensitivePathRule.evaluate(&ctx(vec![p]));
         assert!(
             r.is_empty(),
-            "Maßgeblich ist die effektive Maske, nicht die rohe NTFS-Maske"
+            "What counts is the effective mask, not the raw NTFS mask"
         );
     }
 

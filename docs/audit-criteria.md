@@ -590,16 +590,14 @@ If `%APPDATA%` is not set, Stars falls back to the directory next to the EXE —
 
 ---
 
-*Diese Lektüre ist Bestandteil der Stars-Dokumentation und wird mit dem Repository versioniert. Änderungen an Regeln, Severities oder Schwellwerten müssen hier nachgepflegt werden, sonst läuft die Doku auseinander.*
-
-*This document is part of the Stars documentation and is versioned with the repository. Changes to rules, severities or thresholds must be reflected here, otherwise the documentation drifts out of sync.*
+*This document is part of the Stars documentation and is versioned with the repository. Changes to rules, severities, or thresholds must be reflected here, otherwise the documentation drifts out of sync.*
 
 ---
 
-### Urheberschaft / Authorship
+### Authorship
 
-**Konzeption, Spezifikation, Steuerung und Review / Concept, specification, direction, and review:** Birger Labinsch — Fachinformatiker Anwendungs­entwicklung / IT Specialist for Application Development / Prompt Engineer.
+**Concept, specification, direction, and review:** Birger Labinsch — IT Specialist for Application Development / Prompt Engineer.
 
-**Verfasst durch / Authored by:** Claude Opus 4.7 (Anthropic) als KI-Modell, unter direkter Anleitung und Review von Birger Labinsch / as an AI model under direct guidance and review by Birger Labinsch. Inhaltlich abgeleitet aus dem tatsächlich im Repository implementierten Code (`crates/risk_engine/src/rules.rs`, `crates/permission_engine/`, `crates/ad_resolver/`) — keine erdachten Regeln, keine Wunsch­vorstellungen / Content derived from the code actually implemented in the repository — no invented rules, no wishful thinking.
+**Authored by:** Claude Opus 4.7 (Anthropic) as an AI model, under direct guidance and review by Birger Labinsch. Content derived from the code actually implemented in the repository (`crates/risk_engine/src/rules.rs`, `crates/permission_engine/`, `crates/ad_resolver/`) — no invented rules, no wishful thinking.
 
-Birger Labinsch hat den hier dokumentierten Code **nicht selbst geschrieben**, sondern als Prompt Engineer beauftragt, gesteuert und freigegeben / did **not** write the code documented here himself but, as a prompt engineer, commissioned, directed and approved it.
+Birger Labinsch did **not** write the code documented here himself; as a prompt engineer he commissioned, directed, and approved it.

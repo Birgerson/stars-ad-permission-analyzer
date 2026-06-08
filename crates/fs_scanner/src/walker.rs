@@ -364,7 +364,7 @@ mod tests {
         let root_str = root.to_string_lossy().into_owned();
         assert!(
             !root_str.starts_with(r"\\?\"),
-            "Test-Setup: Root muss präfix-frei sein, sonst testet er Finding 5 nicht"
+            "test setup: root must be prefix-free, otherwise it does not exercise finding 5"
         );
 
         let result = walk(&root_str, &unlimited());
@@ -401,7 +401,7 @@ mod tests {
         for obj in &result.objects {
             assert!(
                 !obj.path.0.starts_with(r"\\?\"),
-                "FSO-Pfad darf kein \\\\?\\-Präfix tragen: {}",
+                "FSO path must not carry a \\\\?\\ prefix: {}",
                 obj.path.0
             );
         }
@@ -523,7 +523,7 @@ mod tests {
         });
         assert!(
             loop_msg,
-            "Mindestens ein Fehler muss die Schleifen-Erkennung erklären, hatte: {:?}",
+            "at least one error must explain the loop detection, got: {:?}",
             result
                 .errors
                 .iter()

@@ -31,29 +31,23 @@ pub fn sid_str_to_bytes(sid: &str) -> Result<Vec<u8>, CoreError> {
     // Minimum format: S-R-I (at least 3 parts)
     if parts.len() < 3 || parts[0] != "S" {
         return Err(CoreError::SidResolution(format!(
-            "Ungültiges SID-Format / Invalid SID format: {sid}"
+            "Invalid SID format: {sid}"
         )));
     }
 
-    let revision: u8 = parts[1].parse().map_err(|_| {
-        CoreError::SidResolution(format!(
-            "Ungültige Revision in SID / Invalid revision: {sid}"
-        ))
-    })?;
+    let revision: u8 = parts[1]
+        .parse()
+        .map_err(|_| CoreError::SidResolution(format!("Invalid revision in SID: {sid}")))?;
 
-    let authority: u64 = parts[2].parse().map_err(|_| {
-        CoreError::SidResolution(format!(
-            "Ungültige Identifier Authority / Invalid identifier authority: {sid}"
-        ))
-    })?;
+    let authority: u64 = parts[2]
+        .parse()
+        .map_err(|_| CoreError::SidResolution(format!("Invalid identifier authority: {sid}")))?;
 
     let sub_authorities: Vec<u32> = parts[3..]
         .iter()
         .map(|s| {
             s.parse::<u32>().map_err(|_| {
-                CoreError::SidResolution(format!(
-                    "Ungültige Sub-Authority / Invalid sub-authority in SID: {sid}"
-                ))
+                CoreError::SidResolution(format!("Invalid sub-authority in SID: {sid}"))
             })
         })
         .collect::<Result<_, _>>()?;
@@ -94,7 +88,7 @@ pub fn bytes_to_sid_str(bytes: &[u8]) -> Result<String, CoreError> {
     let expected_len = 8 + sub_authority_count * 4;
     if bytes.len() < expected_len {
         return Err(CoreError::SidResolution(format!(
-            "SID-Daten unvollständig / SID data incomplete: expected {expected_len} bytes, got {}",
+            "SID data incomplete: expected {expected_len} bytes, got {}",
             bytes.len()
         )));
     }

@@ -486,7 +486,7 @@ pub fn spawn_worker(
                         Some(d) => list_scan_run_summaries(d),
                         None => Err(db_open_error
                             .clone()
-                            .unwrap_or_else(|| "Datenbank nicht geöffnet".to_string())),
+                            .unwrap_or_else(|| "Database not open".to_string())),
                     };
                     let _ = evt_tx.send(WorkerEvent::ScanRunsLoaded(result));
                     notify();
@@ -504,7 +504,7 @@ pub fn spawn_worker(
                         Some(d) => compute_delta(d, &old_run_id, &new_run_id),
                         None => Err(db_open_error
                             .clone()
-                            .unwrap_or_else(|| "Datenbank nicht geöffnet".to_string())),
+                            .unwrap_or_else(|| "Database not open".to_string())),
                     };
                     let _ = evt_tx.send(WorkerEvent::DeltaComputed(result));
                     notify();
@@ -514,7 +514,7 @@ pub fn spawn_worker(
                         Some(d) => delete_scan_run(d, &run_id),
                         None => Err(db_open_error
                             .clone()
-                            .unwrap_or_else(|| "Datenbank nicht geöffnet".to_string())),
+                            .unwrap_or_else(|| "Database not open".to_string())),
                     };
                     let _ = evt_tx.send(WorkerEvent::ScanRunDeleted { run_id, result });
                     notify();
@@ -1222,7 +1222,7 @@ fn export_html(
     // and let the user pick a fresh path.
     if let ExportPathStatus::Exists(p) = &status {
         return Err(format!(
-            "Zieldatei existiert bereits: {}. Bitte anderen Namen wählen oder die Datei vorab loeschen.",
+            "Target file already exists: {}. Pick a different name or delete the file first.",
             p.0.display()
         ));
     }
@@ -1282,7 +1282,7 @@ fn collect_identity_suggestions() -> Result<Vec<IdentitySuggestion>, String> {
 
 #[cfg(not(windows))]
 fn collect_identity_suggestions() -> Result<Vec<IdentitySuggestion>, String> {
-    Err("Identitäts-Enumeration verfügt nur unter Windows (NetAPI)".to_string())
+    Err("Identity enumeration is only available on Windows (NetAPI)".to_string())
 }
 
 fn kind_to_icon(kind: &IdentityKind, domain: &str) -> &'static str {
@@ -1304,8 +1304,7 @@ fn kind_to_icon(kind: &IdentityKind, domain: &str) -> &'static str {
 /// Returns `Ok(())` even if the ID did not exist — the GUI has to sync local
 /// state regardless.
 fn delete_scan_run(db: &Database, run_id: &str) -> Result<(), String> {
-    let id =
-        Uuid::parse_str(run_id).map_err(|e| format!("Invalid scan-run ID '{run_id}': {e}"))?;
+    let id = Uuid::parse_str(run_id).map_err(|e| format!("Invalid scan-run ID '{run_id}': {e}"))?;
     db.delete_scan_run(&id)
         .map_err(|e| format!("delete failed: {e}"))?;
     Ok(())
@@ -1841,7 +1840,7 @@ mod tests {
         assert_eq!(
             persisted.len(),
             2,
-            "Walk-Fehler müssen in scan_errors landen, gefunden: {persisted:?}"
+            "walk errors must end up in scan_errors, found: {persisted:?}"
         );
         assert_eq!(
             persisted[0].path.as_ref().map(|p| p.0.as_str()),
@@ -1881,7 +1880,7 @@ mod tests {
         let persisted = db.scan_store().list_errors_for(&run_id).unwrap();
         assert!(
             persisted.is_empty(),
-            "Ohne Walk-Fehler und ohne Abbruch dürfen keine Einträge in scan_errors stehen"
+            "without walk errors and without cancellation there must be no entries in scan_errors"
         );
     }
 
@@ -2104,7 +2103,7 @@ mod tests {
 
         let err = result.expect_err("export must refuse pre-existing target");
         assert!(
-            err.contains("existiert bereits"),
+            err.contains("already exists"),
             "error must name the overwrite condition; got: {err}"
         );
         // Sentinel must still be intact at the time of refusal.

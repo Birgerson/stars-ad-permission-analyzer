@@ -1153,8 +1153,8 @@ mod tests {
             .unwrap();
         assert_eq!(
             mask, 0x0012_0089,
-            "Allow zuerst muss gewinnen (Stored-Order-AccessCheck) — \
-             altes Bucket-Modell hätte hier irrtümlich 0 geliefert"
+            "Allow first must win (stored-order AccessCheck); \
+             the old bucket model would have wrongly returned 0 here"
         );
     }
 

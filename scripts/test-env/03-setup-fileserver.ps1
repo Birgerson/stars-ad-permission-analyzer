@@ -1,19 +1,15 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Erstellt die Test-Ordnerstruktur mit NTFS-ACLs und SMB-Freigaben.
     Creates the test folder structure with NTFS ACLs and SMB shares.
 
 .DESCRIPTION
-    Auf der Test-VM nach 02-setup-ad-objects.ps1 ausfuehren. Idempotent.
     Run on the test VM after 02-setup-ad-objects.ps1. Idempotent.
 
-    Diese Struktur deckt die fachlichen Analysefaelle des DevMS-Analyzers ab:
-    Gruppenrechte, verschachtelte Gruppen, Vererbungsunterbrechung, Deny-ACE,
-    NTFS-/Share-Kombination, direkter Benutzer-ACE und sensible Pfadnamen.
+    The structure covers the analyzer's main analysis cases: group rights,
+    nested groups, inheritance break, Deny ACE, NTFS / share combination,
+    direct user ACE, and sensitive path names.
 
-    Hinweis: Dies ist Testumgebungs-Provisionierung. Der DevMS-Analyzer selbst
-    veraendert niemals Berechtigungen - er liest sie nur.
     Note: this is test environment provisioning. The analyzer itself never
     modifies permissions - it only reads them.
 #>
@@ -29,30 +25,29 @@ function New-TestDir {
     param([string]$Path)
     if (-not (Test-Path $Path)) {
         New-Item -ItemType Directory -Path $Path | Out-Null
-        Write-Host "Ordner angelegt / created folder: $Path" -ForegroundColor Green
+        Write-Host "created folder: $Path" -ForegroundColor Green
     } else {
-        Write-Host "Ordner vorhanden / folder exists: $Path" -ForegroundColor DarkGray
+        Write-Host "folder exists: $Path" -ForegroundColor DarkGray
     }
 }
 
 function Grant-Ntfs {
-    # icacls-Maske: (OI)(CI) = Vererbung auf Dateien und Unterordner
-    # icacls mask: (OI)(CI) = inherit to files and subfolders
+    # icacls mask: (OI)(CI) = inherit to files and subfolders.
     param([string]$Path, [string]$Principal, [string]$Rights)
     & icacls $Path /grant "${Principal}:(OI)(CI)$Rights" | Out-Null
-    Write-Host "  NTFS grant: $Principal -> $Rights auf $Path" -ForegroundColor Gray
+    Write-Host "  NTFS grant: $Principal -> $Rights on $Path" -ForegroundColor Gray
 }
 
 function Deny-Ntfs {
     param([string]$Path, [string]$Principal, [string]$Rights)
     & icacls $Path /deny "${Principal}:(OI)(CI)$Rights" | Out-Null
-    Write-Host "  NTFS deny : $Principal -> $Rights auf $Path" -ForegroundColor Gray
+    Write-Host "  NTFS deny : $Principal -> $Rights on $Path" -ForegroundColor Gray
 }
 
 function New-TestShare {
     param([string]$Name, [string]$Path, [hashtable]$Access)
     if (Get-SmbShare -Name $Name -ErrorAction SilentlyContinue) {
-        Write-Host "Freigabe vorhanden / share exists: $Name" -ForegroundColor DarkGray
+        Write-Host "share exists: $Name" -ForegroundColor DarkGray
         return
     }
     $params = @{ Name = $Name; Path = $Path }
@@ -60,13 +55,12 @@ function New-TestShare {
     if ($Access.ContainsKey("Change")) { $params["ChangeAccess"] = $Access["Change"] }
     if ($Access.ContainsKey("Read"))   { $params["ReadAccess"]   = $Access["Read"] }
     New-SmbShare @params | Out-Null
-    Write-Host "Freigabe angelegt / created share: $Name -> $Path" -ForegroundColor Green
+    Write-Host "created share: $Name -> $Path" -ForegroundColor Green
 }
 
-# --- 1) Legacy-Ordnerstruktur (deckt die fachlichen Test-Faelle ab) ---
 # --- 1) Legacy folder structure (covers the analysis test cases) ---
 Write-Host ""
-Write-Host "1) Legacy-Ordnerstruktur / legacy folder structure" -ForegroundColor Cyan
+Write-Host "1) Legacy folder structure" -ForegroundColor Cyan
 New-TestDir $Root
 New-TestDir "$Root\Public"
 New-TestDir "$Root\IT"
@@ -77,75 +71,68 @@ New-TestDir "$Root\Shared"
 New-TestDir "$Root\Secrets"
 New-TestDir "$Root\Secrets\passwords"
 
-# --- Legacy-NTFS-Berechtigungen / legacy NTFS permissions ---
-# Public: Everyone Read -> Broad-Group-/Everyone-Regel
+# Legacy NTFS permissions.
+# Public: Everyone Read -> broad-group / Everyone rule.
 Grant-Ntfs "$Root\Public" "Everyone" "R"
 
-# IT: GRP_IT_Admins Modify (wird auf maxdata vererbt)
+# IT: GRP_IT_Admins Modify (inherited to maxdata).
 Grant-Ntfs "$Root\IT" "$Domain\GRP_IT_Admins" "M"
 
-# IT\maxdata: zusaetzlich direkter expliziter Benutzer-ACE -> DIRECT_USER_ACE
+# IT\maxdata: additional explicit user ACE -> DIRECT_USER_ACE rule.
 Grant-Ntfs "$Root\IT\maxdata" "$Domain\max.mustermann" "M"
 
-# Development: GRP_Development Modify
+# Development: GRP_Development Modify.
 Grant-Ntfs "$Root\Development" "$Domain\GRP_Development" "M"
 
-# Development\Restricted: Vererbung trennen, dann explizites Deny
-# Break inheritance (keep copied entries), then add an explicit Deny.
+# Development\Restricted: break inheritance (keep copied entries),
+# then add an explicit Deny.
 & icacls "$Root\Development\Restricted" /inheritance:d | Out-Null
 Deny-Ntfs "$Root\Development\Restricted" "$Domain\GRP_Development" "M"
 
-# Shared: GRP_FullAccess_FS Full Control (Share-Recht ist nur Read -> NTFS-Share-Kombination)
+# Shared: GRP_FullAccess_FS Full Control (share permission is only Read -> NTFS / share combination).
 Grant-Ntfs "$Root\Shared" "$Domain\GRP_FullAccess_FS" "F"
 
-# Secrets\passwords: sensibler Pfadname -> SENSITIVE_PATH-Regel
+# Secrets\passwords: sensitive path name -> SENSITIVE_PATH rule.
 Grant-Ntfs "$Root\Secrets\passwords" "$Domain\GRP_IT_Admins" "R"
 
-# --- Legacy-SMB-Freigaben / legacy SMB shares ---
+# Legacy SMB shares.
 New-TestShare -Name "Public$" -Path "$Root\Public" -Access @{ Full = "Everyone" }
 New-TestShare -Name "IT"      -Path "$Root\IT"     -Access @{ Change = "$Domain\GRP_IT_Admins" }
-# Shared: Share-Recht Read trifft auf NTFS Full Control -> effektiv Read.
+# Shared: share permission Read meets NTFS Full Control -> effective Read.
 New-TestShare -Name "Shared"  -Path "$Root\Shared" -Access @{ Read = "Everyone" }
 
 # ===========================================================================
-# 2) Abteilungs-Ordner und -Freigaben (analog zu den Sub-OUs in 02)
-#    Department folders and shares (mirroring the sub-OUs in 02)
+# 2) Department folders and shares (mirroring the sub-OUs in 02).
 #
-#    Pattern pro Abteilung:
-#      Ordner:   $Root\Abteilungen\<Dept>
+#    Pattern per department:
+#      Folder:   $Root\Departments\<Dept>
 #      NTFS:     GRP_<Dept>_Members  -> Modify (OI)(CI)
 #      Share:    <Dept>              -> Change (GRP_<Dept>_Members)
-#    Damit haben CLI- und GUI-Tests pro Abteilungs-User einen eigenen
-#    Berechtigungs-Scope inkl. SMB-Pfad.
+#    This gives CLI and GUI tests a dedicated permission scope per
+#    department user, including an SMB path.
 # ===========================================================================
 Write-Host ""
-Write-Host "2) Abteilungs-Ordner und -Freigaben / department folders + shares" -ForegroundColor Cyan
+Write-Host "2) Department folders + shares" -ForegroundColor Cyan
 
-New-TestDir "$Root\Abteilungen"
+New-TestDir "$Root\Departments"
 
 $departments = @(
-    "Geschaeftsleitung",
-    "Personal",
-    "Analyse",
-    "Produktion",
-    "Finanzen",
-    "Lager",
-    "Wissenschaft"
+    "Management",
+    "HR",
+    "Analysis",
+    "Production",
+    "Finance",
+    "Warehouse",
+    "Science"
 )
 
 foreach ($dept in $departments) {
-    $deptPath = "$Root\Abteilungen\$dept"
+    $deptPath = "$Root\Departments\$dept"
     $deptGrp  = "$Domain\GRP_${dept}_Members"
 
     New-TestDir $deptPath
     Grant-Ntfs $deptPath $deptGrp "M"
 
-    # Share-Name = Abteilungsname (kein $ -> sichtbar in der Netzwerk-Liste,
-    # damit Auditoren sie ohne Vorwissen finden).
-    # Administrators bekommen zusaetzlich Full-Access auf die Share, sonst
-    # koennen Auditoren-/Read-only-Accounts die DACL gar nicht auslesen
-    # (Share-Permissions schiessen NTFS-Rechte ab). Dies ist Audit-Tooling-
-    # Pflicht und entspricht der Default-Praxis fuer administrative Shares.
     # Share name = department name (no $ -> visible in network browsing so
     # auditors can find it without prior knowledge).
     # Administrators additionally get Full Access at the share level —
@@ -159,7 +146,7 @@ foreach ($dept in $departments) {
 }
 
 Write-Host ""
-Write-Host "Test-Fileserver vollstaendig eingerichtet / test file server complete." -ForegroundColor Green
-Write-Host "  - $($departments.Count) Abteilungs-Ordner + Shares" -ForegroundColor White
-Write-Host "  - 5 Legacy-Ordner (Public, IT, Development, Shared, Secrets)" -ForegroundColor White
-Write-Host "Naechster Schritt / next step: 04-run-integration-tests.ps1 (auf dem Entwicklungsrechner)" -ForegroundColor Cyan
+Write-Host "Test file server complete." -ForegroundColor Green
+Write-Host "  - $($departments.Count) department folders + shares" -ForegroundColor White
+Write-Host "  - 5 legacy folders (Public, IT, Development, Shared, Secrets)" -ForegroundColor White
+Write-Host "Next step: 04-run-integration-tests.ps1 (on the developer machine)" -ForegroundColor Cyan

@@ -952,7 +952,7 @@ mod tests {
     async fn unknown_sid_with_no_lsa_match_is_orphaned() {
         let sid = Sid("S-1-5-21-1-1-1-99999".to_owned());
         let ldap = FakeLdapBackend::new();
-        let lsa = FakeLsaBackend::new(); // weiß die SID nicht
+        let lsa = FakeLsaBackend::new(); // does not know the SID
 
         let resolver = PrincipalResolver::new(ldap, Some(lsa));
         let res = resolver

@@ -758,8 +758,8 @@ slint::slint! {
                                         ComboBox {
                                             model: [
                                                 "Off — use SAM/LSA (recommended on a DC)",
-                                                "LDAPS — verschlüsselt, Port 636",
-                                                "LDAP unverschlüsselt — Port 389 (nur Test)",
+                                                "LDAPS — encrypted, port 636",
+                                                "Plain LDAP — port 389 (test only)",
                                             ];
                                             current-index <=> root.a-ldap-mode;
                                             horizontal-stretch: 1;
@@ -847,7 +847,7 @@ slint::slint! {
                                 alignment: start;
                                 spacing: Theme.spacing-sm;
                                 PrimaryButton {
-                                    text: root.a-is-running ? "Läuft..." : "▶  Analysieren";
+                                    text: root.a-is-running ? "Running..." : "▶  Analyze";
                                     enabled: !root.a-is-running;
                                     clicked => { root.analyze-clicked(); }
                                 }
@@ -857,7 +857,7 @@ slint::slint! {
                                 // trustee view. Needs no identity because
                                 // it lists every ACE on the path.
                                 Button {
-                                    text: root.a-trustees-running ? "Läuft..." : "Wer hat Zugriff?";
+                                    text: root.a-trustees-running ? "Running..." : "Who has access?";
                                     enabled: !root.a-trustees-running;
                                     clicked => { root.analyze-trustees-clicked(); }
                                 }
@@ -908,7 +908,7 @@ slint::slint! {
                             // independent of any identity token. Complement
                             // to the identity-based effective analysis above.
                             if root.a-has-trustees: GroupBox {
-                                title: "Wer hat Zugriff (" + root.a-trustees.length + " ACE-Einträge)";
+                                title: "Who has access (" + root.a-trustees.length + " ACE entries)";
                                 VerticalBox {
                                     spacing: 4px;
                                     HorizontalBox {
@@ -1133,8 +1133,8 @@ slint::slint! {
                                         ComboBox {
                                             model: [
                                                 "Off — use SAM/LSA (recommended on a DC)",
-                                                "LDAPS — verschlüsselt, Port 636",
-                                                "LDAP unverschlüsselt — Port 389 (nur Test)",
+                                                "LDAPS — encrypted, port 636",
+                                                "Plain LDAP — port 389 (test only)",
                                             ];
                                             current-index <=> root.s-ldap-mode;
                                             horizontal-stretch: 1;
@@ -1222,7 +1222,7 @@ slint::slint! {
                                 alignment: start;
                                 spacing: Theme.spacing-sm;
                                 PrimaryButton {
-                                    text: root.s-is-running ? "Läuft..." : "▶  Scan starten";
+                                    text: root.s-is-running ? "Running..." : "▶  Start scan";
                                     enabled: !root.s-is-running;
                                     clicked => { root.scan-clicked(); }
                                 }
@@ -1303,7 +1303,7 @@ slint::slint! {
                                             if row.trustees.length > 0: VerticalBox {
                                                 spacing: 1px;
                                                 Text {
-                                                    text: "Wer hat Zugriff (" + row.trustees.length + " ACE-Einträge):";
+                                                    text: "Who has access (" + row.trustees.length + " ACE entries):";
                                                     color: Theme.text-primary;
                                                     font-weight: 700;
                                                 }
@@ -1380,7 +1380,7 @@ slint::slint! {
                                         }
                                         Text {
                                             text: risk.incomplete
-                                                ? "⚠ unvollständig — " + risk.description
+                                                ? "⚠ incomplete — " + risk.description
                                                 : risk.description;
                                             color: #444;
                                             wrap: word-wrap;
@@ -1439,7 +1439,7 @@ slint::slint! {
                                 alignment: start;
                                 spacing: Theme.spacing-sm;
                                 PrimaryButton {
-                                    text: root.d-is-loading ? "Lädt..." : "📂  Scan-Historie laden";
+                                    text: root.d-is-loading ? "Loading..." : "📂  Load scan history";
                                     enabled: !root.d-is-loading;
                                     clicked => { root.delta-load-runs-clicked(); }
                                 }
@@ -1568,9 +1568,9 @@ slint::slint! {
                             }
 
                             if root.d-has-result: GroupBox {
-                                title: "Delta (" + root.d-added-count + " hinzugefügt, "
+                                title: "Delta (" + root.d-added-count + " added, "
                                     + root.d-removed-count + " entfernt, "
-                                    + root.d-changed-count + " geändert)";
+                                    + root.d-changed-count + " changed)";
                                 VerticalBox {
                                     spacing: 2px;
                                     HorizontalBox {
@@ -2154,7 +2154,7 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         };
 
         ui.set_a_is_running(true);
-        ui.set_a_status("Analyse läuft...".into());
+        ui.set_a_status("Analysis running...".into());
         ui.set_a_status_is_error(false);
         ui.set_a_rights_label("".into());
         ui.set_a_mask_hex("".into());
@@ -2308,11 +2308,13 @@ fn format_share_line(perm: &EffectivePermission) -> String {
                 .map(|m| NormalizedRights::new(m.0).label())
                 .unwrap_or("—");
             format!(
-                "Share-Beschränkung angewendet: NTFS = {ntfs_label}, Share = {share_label}, effektiv = NTFS ∩ Share."
+                "Share restriction applied: NTFS = {ntfs_label}, Share = {share_label}, effective = NTFS ∩ Share."
             )
         }
         ShareEvalStatus::Unrestricted => {
-            format!("Share hat NULL-DACL (keine Beschränkung über SMB) — effektiv folgt NTFS = {ntfs_label}.")
+            format!(
+                "Share has NULL DACL (no SMB restriction) — effective follows NTFS = {ntfs_label}."
+            )
         }
         ShareEvalStatus::ReadFailed(reason) => {
             format!("Share DACL read failed: {reason} — result may be incomplete.")
@@ -2429,7 +2431,7 @@ fn wire_scan_tab(
 
             ui.set_s_is_running(true);
             ui.set_s_done(false);
-            ui.set_s_status("Scan läuft...".into());
+            ui.set_s_status("Scan running...".into());
             ui.set_s_status_is_error(false);
             ui.set_s_total(0);
             ui.set_s_error_count(0);
@@ -2503,7 +2505,7 @@ fn wire_scan_tab(
                 ui.set_s_export_is_error(true);
                 return;
             }
-            ui.set_s_export_message("Export läuft...".into());
+            ui.set_s_export_message("Export running...".into());
             ui.set_s_export_is_error(false);
             if let Err(e) = req_tx.send(WorkerRequest::ExportHtml { output_path }) {
                 ui.set_s_export_message(format!("Worker not reachable: {e}").into());
@@ -2760,7 +2762,7 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
                 return;
             }
             ui.set_d_is_loading(true);
-            ui.set_d_status("Vergleiche Läufe...".into());
+            ui.set_d_status("Comparing runs...".into());
             ui.set_d_status_is_error(false);
             ui.set_d_has_result(false);
             if let Err(e) = req_tx.send(WorkerRequest::ComputeDelta {
@@ -2824,7 +2826,7 @@ fn handle_scan_runs_loaded(ui: &MainWindow, result: Result<Vec<ScanRunSummary>, 
                 s.selected_new = None;
             });
             refresh_delta_runs(ui);
-            ui.set_d_status("Keine Scan-Läufe gespeichert — erst einen Scan ausführen.".into());
+            ui.set_d_status("No scan runs stored — run a scan first.".into());
             ui.set_d_status_is_error(false);
         }
         Ok(runs) => {
@@ -2852,8 +2854,7 @@ fn handle_scan_runs_loaded(ui: &MainWindow, result: Result<Vec<ScanRunSummary>, 
             });
             refresh_delta_runs(ui);
             ui.set_d_status(
-                "Scan runs loaded. Check one for 'Old' and one for 'New', then compare."
-                    .into(),
+                "Scan runs loaded. Check one for 'Old' and one for 'New', then compare.".into(),
             );
             ui.set_d_status_is_error(false);
         }
@@ -2898,7 +2899,7 @@ fn handle_scan_run_deleted(ui: &MainWindow, run_id: &str, result: Result<(), Str
             });
         }
         Err(e) => {
-            ui.set_d_status(format!("Löschen fehlgeschlagen: {e}").into());
+            ui.set_d_status(format!("Delete failed: {e}").into());
             ui.set_d_status_is_error(true);
         }
     }
@@ -2915,7 +2916,7 @@ fn handle_delta_computed(ui: &MainWindow, result: Result<Vec<DeltaRow>, String>)
                 .into_iter()
                 .map(|r| {
                     let color = match r.kind_label.as_str() {
-                        "Hinzugefügt" => {
+                        "Added" => {
                             added += 1;
                             slint::Color::from_rgb_u8(0x27, 0x8d, 0x4f)
                         }
@@ -3109,7 +3110,7 @@ fn resolve_name_to_sid(
     mut _on_sid: impl FnMut(String),
     mut on_error: impl FnMut(String),
 ) {
-    on_error("Name → SID-Auflösung benötigt Windows (LSA-API).".to_string());
+    on_error("Name → SID resolution needs Windows (LSA API).".to_string());
 }
 
 /// Modaler Fehler-Dialog (Windows) bzw. stderr-Ausgabe (andere Plattformen).
