@@ -45,6 +45,8 @@ ALLOWLIST = [
     # names that Stars correctly resolves on a Server 2025 trust.
     ("docs/lab/verification.md", "VORDEFINIERT"),
     ("docs/lab/verification.md", "Domänen-Benutzer"),
+    # This script itself describes the umlauts it checks for.
+    ("scripts/check-language.py", None),
 ]
 
 
