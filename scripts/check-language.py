@@ -162,6 +162,15 @@ ALLOWLIST = [
     ("docs/lab/verification.md", "Domänen-Benutzer"),
     # This script itself describes the German words it checks for.
     ("scripts/check-language.py", None),
+    # README.md "Wie Stars entstanden ist" — a deliberate German
+    # marketing section addressing German-speaking IT professionals.
+    # The four substrings cover the section heading and one phrase
+    # per paragraph so only those four lines stay allowlisted; the
+    # rest of the README must remain English.
+    ("README.md", "Wie Stars entstanden ist"),
+    ("README.md", "Fachinformatiker Anwendungsentwicklung gebaut"),
+    ("README.md", "Audit-Tool, im 3-Forest-Lab gegen 1000"),
+    ("README.md", "Verstärker des eigenen Handwerks"),
     # Real test fixture data: the lab uses a German user name as a
     # legacy identity (max.mustermann); these scripts have to mention
     # it for testdata generation.

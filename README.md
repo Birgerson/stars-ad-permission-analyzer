@@ -98,6 +98,14 @@ On WSL / Linux / macOS, `sha256sum -c Stars-v1.5.16-Setup.exe.sha256` works dire
 >
 > **Use at your own risk. Make a full backup before any production use.** → [Full disclaimer](#disclaimer)
 
+### Wie Stars entstanden ist
+
+Stars wurde von einem Fachinformatiker Anwendungsentwicklung gebaut, der die Implementierung an Claude (Anthropic) als Werkzeug delegiert hat — bei voller Steuerung jedes Architektur-Entscheids, jeder Review und jeder Korrektur.
+
+Das Ergebnis: ein produktives Audit-Tool, im 3-Forest-Lab gegen 1000 Test-User und 5000 Pfade verifiziert.
+
+Wer KI als Verstärker des eigenen Handwerks einsetzt statt als Ersatz, kommt schneller zu Software die hält was sie verspricht.
+
 ### What is Stars?
 
 Stars is a **native Windows application** (`.exe`) for IT administrators and security auditors.
