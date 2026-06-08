@@ -37,7 +37,7 @@ pub struct Identity {
     pub domain: Option<String>,
     pub kind: IdentityKind,
     pub disabled: bool,
-    /// userPrincipalName aus AD (z. B. `max.mustermann@testdomain.local`).
+    /// userPrincipalName from AD (e.g. `max.mustermann@testdomain.local`).
     /// userPrincipalName from AD (e.g. `max.mustermann@testdomain.local`).
     /// Preferred for Windows NetAPI calls like `NetUserGetLocalGroups`,
     /// since the `DOMAIN\sAMAccountName` form strictly requires the NetBIOS
@@ -229,7 +229,6 @@ pub struct FileSystemObject {
     /// ACEs whose type is not supported by the parser (object, callback ACEs, etc.).
     #[serde(default)]
     pub unsupported_aces: Vec<UnsupportedAce>,
-    /// Zugriff" bedeutet.
     /// `true` if the object's DACL is NULL. A NULL DACL means "no access
     /// control" (full access for everyone) — distinct from an empty DACL
     /// (`dacl` empty but `null_dacl == false`), which means "no access".
@@ -401,7 +400,7 @@ pub enum PermissionDiagnostic {
     UnsupportedShareAces { count: usize },
 
     ///
-    /// Schliesst ChatGPT-Code-Review 2026-06-04 Finding 6.
+    /// Closes ChatGPT code review 2026-06-04 finding 6.
     ///
     /// Group resolution runs through the SAM/LSA fallback (no LDAP) and
     /// therefore through `NetUserGetGroups`. That API only returns
@@ -414,8 +413,7 @@ pub enum PermissionDiagnostic {
     /// Closes ChatGPT code review 2026-06-04 finding 6.
     DomainGroupRecursionIncomplete,
 
-    ///
-    /// Schliesst ChatGPT-Code-Review 2026-06-04 Finding 7.
+    /// Closes ChatGPT code review 2026-06-04 finding 7.
     ///
     /// The analyzed identity is flagged as disabled in AD
     /// (`userAccountControl` bit `ACCOUNTDISABLE`, 0x0002). The computed

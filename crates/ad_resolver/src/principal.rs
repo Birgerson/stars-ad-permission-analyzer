@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Eingabeformen (`DOMAIN\user`, UPN, plain `sAMAccountName`, direkte
+//! Input forms (`DOMAIN\user`, UPN, plain `sAMAccountName`, direct
 //! SID, GUI Name → SID-Workflow).
 //!
 //! `lookup_via_*`-Helfern in [`crate::resolver::LdapResolver`] plus

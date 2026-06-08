@@ -124,12 +124,11 @@ impl LdapResolver {
         {
             let cache = self.identity_cache.lock().await;
             if let Some(identity) = cache.get(&sid.0) {
-                debug!("Cache-Treffer / cache hit: {}", sid.0);
+                debug!("Cache hit: {}", sid.0);
                 return Ok(identity.clone());
             }
         }
 
-        // (review finding 5).
         // Bound the whole operation against the configured timeout
         // (review finding 5).
         let identity = ldap_client::with_timeout(
@@ -145,7 +144,7 @@ impl LdapResolver {
                     Some(entry) => parse_identity_from_entry(&entry, sid),
                     None => {
                         // Orphaned SID — no AD object found
-                        warn!("Verwaiste SID / Orphaned SID: {}", sid.0);
+                        warn!("Orphaned SID: {}", sid.0);
                         Identity {
                             sid: sid.clone(),
                             name: None,
@@ -160,8 +159,6 @@ impl LdapResolver {
         )
         .await?;
 
-        // Review 2026-06-04 round 3 finding 1 (cache poisoning):
-        //
         // Review 2026-06-04 round 3 finding 1 (cache poisoning):
         // `Orphaned` identities were cached unconditionally. A
         // subsequent `lookup_via_lsa` that built an LSA-only identity
@@ -742,7 +739,7 @@ mod tests {
         // These asserts depend on Finding 8 — transitive resolution now runs
         assert!(
             group_names.contains(&"GRP_IT_Admins".to_string()),
-            "GRP_IT_Admins (direkt) fehlt — vorhandene Gruppen: {group_names:?}"
+            "GRP_IT_Admins (direct) missing — present groups: {group_names:?}"
         );
         assert!(
             group_names.contains(&"GRP_Development".to_string()),

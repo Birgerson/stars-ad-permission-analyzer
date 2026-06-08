@@ -27,7 +27,7 @@ use crate::cancel::CancellationToken;
 /// Configuration for the walker.
 pub struct WalkConfig {
     /// Maximale Rekursionstiefe. `None` = unbegrenzt. / Maximum recursion depth. `None` = unlimited.
-    /// Tiefe 0 = nur Root, 1 = Root + direkte Kinder, usw.
+    /// Depth 0 = root only, 1 = root + direct children, etc.
     /// Depth 0 = root only, 1 = root + direct children, etc.
     pub max_depth: Option<u32>,
 }
@@ -379,7 +379,7 @@ mod tests {
         assert_eq!(
             result.objects.len(),
             13,
-            "Erwarte 13 Objekte (Root + 12 Tiefe), bekam: {}",
+            "expected 13 objects (root + 12 depth), got: {}",
             result.objects.len()
         );
 

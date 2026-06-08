@@ -41,6 +41,12 @@ DE_WORDS = [
     # Theme-toggle and obvious GUI labels
     "Hell", "Dunkel", "Abbrechen", "Schliessen",
     "Ziel", "Modus",
+    # Review 2026-06-08 part 3
+    "Cache-Treffer", "Verwaiste",
+    "Spezifische", "Erweiterte", "Synchronisationspunkt",
+    "Eingabeformen", "Walk-Fehler",
+    "Schliesst",
+    "Tiefe",
     # German compound nouns from Stars' GUI that have no English meaning
     "Berechtigungspfad", "Berechtigungen", "Berechtigung",
     "Zieldatei", "Zielordner", "Berichte",

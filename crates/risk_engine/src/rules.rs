@@ -285,23 +285,34 @@ impl RiskRule for BroadGroupWriteRule {
             SID_ANONYMOUS_LOGON,
             SID_NETWORK,
         ];
+        // Review 2026-06-08 finding 1: gate on write-specific effective
+        // bits, not the composite MASK_WRITE. MASK_WRITE includes
+        // READ_CONTROL and SYNCHRONIZE which a Read-only final mask also
+        // satisfies. Plus require the contributing SID's mask AND the final
+        // effective mask to overlap on write-specific bits — otherwise an
+        // NTFS Allow whose write bits got capped away by Share Read would
+        // still trigger.
+        let effective_write_bits =
+            |p: &EffectivePermission| p.effective_mask.0 & WRITE_SPECIFIC_BITS;
         context
             .findings
             .iter()
             .filter(|p| {
-                p.effective_mask.0 & MASK_WRITE != 0
+                let eff_w = effective_write_bits(p);
+                eff_w != 0
                     && p.contributing_sids.iter().any(|cs| {
                         broad_sids.contains(&cs.sid.0.as_str())
-                            && cs.mask.0 & WRITE_SPECIFIC_BITS != 0
+                            && (cs.mask.0 & eff_w) != 0
                     })
             })
             .map(|p| {
+                let eff_w = effective_write_bits(p);
                 let broad_sid = p
                     .contributing_sids
                     .iter()
                     .find(|cs| {
                         broad_sids.contains(&cs.sid.0.as_str())
-                            && cs.mask.0 & WRITE_SPECIFIC_BITS != 0
+                            && (cs.mask.0 & eff_w) != 0
                     })
                     .map(|cs| cs.sid.0.as_str())
                     .unwrap_or("");
@@ -757,6 +768,35 @@ mod tests {
                 )]))
                 .is_empty(),
             "BROAD_GROUP_WRITE must not fire when Everyone only contributed Read bits"
+        );
+    }
+
+    /// Review 2026-06-08 finding 1: NTFS grants Everyone Modify, but the
+    /// SMB share caps the final effective permission to Read. Pre-fix,
+    /// the rule fired because `effective_mask & MASK_WRITE` was non-zero
+    /// (READ_CONTROL/SYNCHRONIZE bits overlap with Read), so a Read-only
+    /// effective permission was reported as critical broad write — a
+    /// false-positive in exactly the NTFS+SMB combination Stars audits.
+    /// Post-fix, the rule must use write-specific effective bits.
+    #[test]
+    fn ntfs_modify_via_everyone_but_share_read_no_broad_group_write() {
+        // The permission as the engine would emit it after NTFS Modify
+        // ∩ Share Read = Read & Execute. NTFS mask carries Everyone's
+        // Modify, share mask carries Read, effective is Read.
+        let mut p = perm_cs(
+            USER_SID,
+            MASK_MODIFY,
+            r"C:\share-data",
+            vec![],
+            vec![ace(SID_EVERYONE, MASK_MODIFY)],
+        );
+        p.ntfs_mask = AccessMask(MASK_MODIFY);
+        p.share_mask = Some(AccessMask(MASK_READ));
+        p.effective_mask = AccessMask(MASK_READ);
+        assert!(
+            BroadGroupWriteRule.evaluate(&ctx(vec![p])).is_empty(),
+            "BROAD_GROUP_WRITE must not fire when the final effective permission \
+             is Read, even when NTFS alone gave Everyone Modify"
         );
     }
 

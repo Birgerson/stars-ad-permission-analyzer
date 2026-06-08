@@ -23,7 +23,7 @@ authors = ["Birger Labinsch — Fachinformatiker AE / Prompt Engineer <birger@la
 license = "AGPL-3.0-or-later"
 
 [workspace.dependencies]
-# Fehlerbehandlung / Error handling
+# Error handling
 thiserror = "2"
 anyhow = "1"
 

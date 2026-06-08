@@ -1041,14 +1041,12 @@ slint::slint! {
                                                 text <=> root.s-sid;
                                             }
                                         }
-                                        // Tiefe-Begrenzen-Reihe als regulaere
-                                        // bekommt `horizontal-stretch: 1`,
                                         // Depth limit row stretches its
                                         // second-column container so the
                                         // label column stays aligned with
                                         // the rows above.
                                         Row {
-                                            Text { text: "Tiefe:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: "Depth:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             HorizontalLayout {
                                                 spacing: Theme.spacing-md;
                                                 alignment: start;
@@ -1057,7 +1055,7 @@ slint::slint! {
                                                     alignment: center;
                                                     horizontal-stretch: 0;
                                                     CheckBox {
-                                                        text: "Tiefe begrenzen";
+                                                        text: "Limit depth";
                                                         checked <=> root.s-limit-depth;
                                                     }
                                                 }
@@ -1209,7 +1207,7 @@ slint::slint! {
                             }
 
                             if root.s-done || root.s-is-running: GroupBox {
-                                title: "Ergebnisse (" + root.s-total + " Pfade, "
+                                title: "Results (" + root.s-total + " paths, "
                                     + root.s-error-count + " errors)";
                                 VerticalBox {
                                     spacing: Theme.spacing-sm;
@@ -1627,16 +1625,6 @@ slint::slint! {
                                 color: Theme.text-secondary;
                             }
 
-                            // ============================================================
-                            // English section
-                            // ============================================================
-                            Text {
-                                text: "— English —";
-                                font-size: Theme.font-md;
-                                font-weight: 700;
-                                color: Theme.accent;
-                            }
-
                             GroupBox {
                                 title: "Author and license";
                                 VerticalLayout {
@@ -1743,121 +1731,6 @@ slint::slint! {
                                 }
                             }
 
-                            // ============================================================
-                            // Deutsche Sektion
-                            // ============================================================
-                            Text {
-                                text: "— Deutsch —";
-                                font-size: Theme.font-md;
-                                font-weight: 700;
-                                color: Theme.accent;
-                            }
-
-                            GroupBox {
-                                title: "Author and license";
-                                VerticalLayout {
-                                    spacing: Theme.spacing-sm;
-                                    padding: Theme.spacing-sm;
-                                    Text {
-                                        text: "Copyright (c) 2026 Birger Labinsch";
-                                        color: Theme.text-primary;
-                                    }
-                                    Text {
-                                        text: "Lizenz: GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)";
-                                        color: Theme.text-primary;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: "Lizenztext: https://www.gnu.org/licenses/agpl-3.0.html";
-                                        color: Theme.text-secondary;
-                                        font-size: Theme.font-sm;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: "Source code (required by AGPL): https://github.com/Birgerson/stars-ad-permission-analyzer";
-                                        color: Theme.text-secondary;
-                                        font-size: Theme.font-sm;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: "This software is predominantly AI-assisted: code by Anthropic Claude Opus. Birger Labinsch is the prompt engineer, not the code author.";
-                                        color: Theme.text-secondary;
-                                        font-size: Theme.font-sm;
-                                        wrap: word-wrap;
-                                    }
-                                }
-                            }
-
-                            GroupBox {
-                                title: "Read-only-Prinzip — drei harte Grenzen";
-                                VerticalLayout {
-                                    spacing: Theme.spacing-sm;
-                                    padding: Theme.spacing-sm;
-                                    Text {
-                                        text: "1. Read-only. Stars never writes to NTFS, SMB shares, or Active Directory. No future release will gain write functions.";
-                                        color: Theme.text-primary;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: "2. No agent on target systems. Stars runs on an audit workstation or an audit DC. It installs nothing on file servers or other DCs.";
-                                        color: Theme.text-primary;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: "3. No backdoor authentication. Stars binds via LDAP (ideally LDAPS), nothing else. No hidden telemetry, no update beacons without signature verification.";
-                                        color: Theme.text-primary;
-                                        wrap: word-wrap;
-                                    }
-                                }
-                            }
-
-                            GroupBox {
-                                title: "Backup duty and disclaimer";
-                                VerticalLayout {
-                                    spacing: Theme.spacing-sm;
-                                    padding: Theme.spacing-sm;
-                                    Text {
-                                        text: "Before any use in a production environment, a complete tested backup of the affected systems is mandatory — even though Stars architecturally only reads. Driver bugs, antivirus interference, or load spikes can cause disruption even with a pure read-only tool.";
-                                        color: Theme.text-primary;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: "Use is at your own risk. Birger Labinsch assumes no liability for damages, data loss, incorrect audit results, or consequences arising from the use of this software. Full disclaimer in README.md (section 'Disclaimer').";
-                                        color: Theme.text-primary;
-                                        wrap: word-wrap;
-                                    }
-                                }
-                            }
-
-                            GroupBox {
-                                title: "Contact and further documentation";
-                                VerticalLayout {
-                                    spacing: Theme.spacing-sm;
-                                    padding: Theme.spacing-sm;
-                                    Text {
-                                        text: "E-Mail: birger@labinsch.de";
-                                        color: Theme.text-primary;
-                                    }
-                                    Text {
-                                        text: "Issues / Bugs: https://github.com/Birgerson/stars-ad-permission-analyzer/issues";
-                                        color: Theme.text-secondary;
-                                        font-size: Theme.font-sm;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: "Decision guide before use: docs/can-stars-help-you.md in the repo.";
-                                        color: Theme.text-secondary;
-                                        font-size: Theme.font-sm;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: "Build verified against Windows Server 2022 Standard and Windows Server 2025 Standard (3-forest lab smoke test, 2026-06-07).";
-                                        color: Theme.text-secondary;
-                                        font-size: Theme.font-sm;
-                                        wrap: word-wrap;
-                                    }
-                                }
-                            }
                         }
                     }
                 }

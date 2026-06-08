@@ -47,7 +47,7 @@ fn looks_like_dns_domain(domain: &str) -> bool {
 ///
 /// Order:
 ///    konstruiert.
-/// 4. `name` (rein) — lokale Konten ohne Domain.
+/// 4. `name` (bare) — local accounts without a domain.
 ///
 /// Returns a **candidate list** of account names for
 /// `NetUserGetLocalGroups`, in preference order. The caller iterates

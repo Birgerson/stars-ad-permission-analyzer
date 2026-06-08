@@ -101,7 +101,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         );
 
         let contributing_sids =
-            collect_contributing_sids(&input.file_system_object.dacl, &user_sids, ntfs_raw);
+            collect_contributing_sids(&input.file_system_object.dacl, &user_sids);
 
         let matched_aces = collect_matched_aces(&input.file_system_object.dacl, &user_sids);
 
@@ -298,29 +298,52 @@ fn ace_applies_to_current_object(ace: &AceEntry) -> bool {
     ace.propagation_flags & INHERIT_ONLY_ACE == 0
 }
 
-/// Collects allow ACEs that contributed at least one bit to the NTFS result, with the actually
-/// contributed bits per SID (accumulated across multiple ACEs of the same SID).
+/// Collects Allow ACEs that **actually decided** at least one bit during
+/// the stored-order DACL walk, with the bits they contributed accumulated
+/// per SID.
 ///
-/// Used by the risk engine to detect whether write access originated from broad principals
-/// (Everyone, Authenticated Users) — and exactly which bits they contributed.
+/// Used by the risk engine to detect whether write access originated from
+/// broad principals (Everyone, Authenticated Users) — and exactly which
+/// bits they contributed.
+///
+/// Review 2026-06-08 finding 2: the previous implementation attributed
+/// bits via mask overlap with the final `ntfs_raw`, without honouring
+/// stored-order precedence. A later Allow Everyone Modify was attributed
+/// the same bits as an earlier Allow specific-group Modify, and Deny ACEs
+/// that took bits before any Allow could grant them were ignored. This
+/// produced false BROAD_GROUP_WRITE / DIRECT_USER_ACE findings.
+///
+/// The fix walks the DACL in the same stored order as
+/// [`evaluate_dacl_ordered`] and records only the `bits` value that a
+/// specific Allow ACE actually flipped from undecided to granted.
 fn collect_contributing_sids(
     dacl: &[AceEntry],
     user_sids: &HashSet<String>,
-    ntfs_raw: u32,
 ) -> Vec<ContributingAce> {
     let mut by_sid: HashMap<String, u32> = HashMap::new();
+    let mut granted: u32 = 0;
+    let mut denied: u32 = 0;
     for ace in dacl {
-        if ace.kind != AceKind::Allow
-            || !user_sids.contains(&ace.sid.0)
-            || !ace_applies_to_current_object(ace)
-        {
+        if !ace_applies_to_current_object(ace) {
             continue;
         }
-        // Generic bits must be expanded before the AND with ntfs_raw, otherwise
-        // a GENERIC_ALL ACE would falsely report "contributed nothing".
-        let contributed = expand_generic_rights(ace.mask.0) & ntfs_raw;
-        if contributed != 0 {
-            *by_sid.entry(ace.sid.0.clone()).or_insert(0) |= contributed;
+        if !user_sids.contains(&ace.sid.0) {
+            continue;
+        }
+        let mask = expand_generic_rights(ace.mask.0);
+        let undecided = !(granted | denied);
+        let bits = mask & undecided;
+        if bits == 0 {
+            continue;
+        }
+        match ace.kind {
+            AceKind::Allow => {
+                granted |= bits;
+                *by_sid.entry(ace.sid.0.clone()).or_insert(0) |= bits;
+            }
+            AceKind::Deny => {
+                denied |= bits;
+            }
         }
     }
     by_sid
@@ -1469,6 +1492,135 @@ mod tests {
             p.contributing_sids.iter().all(|c| c.mask.0 == MASK_READ),
             "INHERIT_ONLY ACE must not show up in contributing_sids"
         );
+    }
+
+    // --- Review 2026-06-08 finding 2: stored-order provenance ---
+
+    /// Allow specific group Modify, then Allow Everyone Modify in the SAME
+    /// DACL. Stored order: the first Allow decides every Modify bit, so the
+    /// later Everyone ACE contributes **no newly decided bit**. Before the
+    /// fix Everyone showed up as contributing Modify (via mask overlap),
+    /// which caused false BROAD_GROUP_WRITE findings. After the fix,
+    /// Everyone must not appear in contributing_sids at all.
+    #[test]
+    fn stored_order_later_everyone_allow_does_not_contribute_if_already_granted() {
+        const GROUP_A: &str = "S-1-5-21-1000-1000-1000-5000";
+        const EVERYONE: &str = "S-1-1-0";
+        let memberships = vec![
+            membership(USER, GROUP_A),
+            membership(USER, EVERYONE), // user is in Everyone via the token
+        ];
+        let p = eval(
+            user(USER),
+            memberships,
+            fso(
+                None,
+                vec![
+                    allow_ace(GROUP_A, MASK_MODIFY, false),
+                    allow_ace(EVERYONE, MASK_MODIFY, false),
+                ],
+            ),
+            None,
+        );
+        assert_eq!(
+            p.effective_mask.0, MASK_MODIFY,
+            "engine result still Modify"
+        );
+        let cs_everyone: Vec<_> = p
+            .contributing_sids
+            .iter()
+            .filter(|cs| cs.sid.0 == EVERYONE)
+            .collect();
+        assert!(
+            cs_everyone.is_empty(),
+            "Everyone must not be in contributing_sids when an earlier ACE \
+             already decided all Modify bits — was: {:?}",
+            p.contributing_sids
+        );
+        let cs_group: Vec<_> = p
+            .contributing_sids
+            .iter()
+            .filter(|cs| cs.sid.0 == GROUP_A)
+            .collect();
+        assert_eq!(cs_group.len(), 1);
+        assert_eq!(cs_group[0].mask.0, MASK_MODIFY);
+    }
+
+    /// Allow Everyone Read first, then Allow specific group Modify. Stored
+    /// order: Everyone contributes the Read bits (decided first), the group
+    /// contributes the remaining Modify bits (the ones still undecided
+    /// after the Read decision). Both must appear with non-overlapping
+    /// bit sets.
+    #[test]
+    fn stored_order_first_everyone_read_contributes_only_read_bits() {
+        const GROUP_A: &str = "S-1-5-21-1000-1000-1000-5000";
+        const EVERYONE: &str = "S-1-1-0";
+        let memberships = vec![membership(USER, GROUP_A), membership(USER, EVERYONE)];
+        let p = eval(
+            user(USER),
+            memberships,
+            fso(
+                None,
+                vec![
+                    allow_ace(EVERYONE, MASK_READ, false),
+                    allow_ace(GROUP_A, MASK_MODIFY, false),
+                ],
+            ),
+            None,
+        );
+        assert_eq!(p.effective_mask.0, MASK_MODIFY);
+        let everyone = p
+            .contributing_sids
+            .iter()
+            .find(|cs| cs.sid.0 == EVERYONE)
+            .expect("Everyone should contribute its Read bits");
+        assert_eq!(
+            everyone.mask.0, MASK_READ,
+            "Everyone must contribute exactly the Read bits it decided first"
+        );
+        let group = p
+            .contributing_sids
+            .iter()
+            .find(|cs| cs.sid.0 == GROUP_A)
+            .expect("the specific group should still contribute its remaining Modify bits");
+        assert_eq!(
+            group.mask.0 & MASK_READ,
+            0,
+            "the specific group's contribution must not double-count Read bits \
+             Everyone already decided — got: {:#x}",
+            group.mask.0
+        );
+    }
+
+    /// Deny Everyone Write first, then Allow Everyone Modify. The Deny
+    /// takes the Write bits before any Allow can grant them. The Allow
+    /// still decides the read-style bits in Modify that the Deny did not
+    /// take. Everyone's contributing entry must NOT include the denied
+    /// write bits — those were never actually granted to anyone.
+    #[test]
+    fn stored_order_deny_first_excludes_denied_bits_from_contribution() {
+        const EVERYONE: &str = "S-1-1-0";
+        let memberships = vec![membership(USER, EVERYONE)];
+        let p = eval(
+            user(USER),
+            memberships,
+            fso(
+                None,
+                vec![
+                    deny_ace(EVERYONE, MASK_WRITE, false),
+                    allow_ace(EVERYONE, MASK_MODIFY, false),
+                ],
+            ),
+            None,
+        );
+        let everyone = p.contributing_sids.iter().find(|cs| cs.sid.0 == EVERYONE);
+        if let Some(cs) = everyone {
+            assert_eq!(
+                cs.mask.0 & MASK_WRITE & !MASK_READ,
+                0,
+                "denied write-specific bits must not appear as Everyone's contribution"
+            );
+        }
     }
 
     // --- Finding 3: expand generic bits (GENERIC_*) in the NTFS path ---

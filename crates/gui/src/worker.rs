@@ -1772,7 +1772,7 @@ mod tests {
         let run_id = Uuid::parse_str(&run_id_str).unwrap();
 
         let persisted = db.scan_store().list_errors_for(&run_id).unwrap();
-        assert_eq!(persisted.len(), 2, "Walk-Fehler + Cancel-Marker erwartet");
+        assert_eq!(persisted.len(), 2, "walk error + cancel marker expected");
         // Cancel marker has path = None and is appended last.
         assert!(persisted[1].path.is_none());
         assert!(persisted[1].message.contains("cancelled"));

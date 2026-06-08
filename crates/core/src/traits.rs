@@ -85,7 +85,7 @@ pub struct PermissionEvaluationInput {
     /// Default `false`. Closes review 2026-06-04 round 2 finding 5.
     pub identity_disabled_status_unknown: bool,
     /// Risk-Engine markiert abgeleitete Findings als
-    /// `incomplete = true`. Default `None`. Schliesst
+    /// `incomplete = true`. Default `None`. Closes
     /// Review finding 1, 2026-06-04 round 4.
     /// `Some(reason)` when the LDAP identity lookup failed with a
     /// technical error. The engine pushes an `IdentityLookupFailed`

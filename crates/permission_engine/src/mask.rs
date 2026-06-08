@@ -1,48 +1,44 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! NTFS-Zugriffsmasken-Normalisierung.
-//! NTFS access mask normalization.
+//! NTFS access-mask normalization.
 //!
 //! Translates raw Windows AccessMask values (u32) into named NTFS rights.
 //!
-//! Bit-Quellen / Bit sources: WinNT.h, MSDN "File Security and Access Rights"
+//! Bit sources: WinNT.h, MSDN "File Security and Access Rights".
 
 use adpa_core::model::AccessMask;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// Spezifische Dateirechte (Bits 0–8) — aus WinNT.h
-// Specific file rights (bits 0–8) — from WinNT.h
+// Specific file rights (bits 0-8) — from WinNT.h
 // ---------------------------------------------------------------------------
 
 pub const FILE_READ_DATA: u32 = 0x0000_0001;
 pub const FILE_WRITE_DATA: u32 = 0x0000_0002;
 pub const FILE_APPEND_DATA: u32 = 0x0000_0004;
 pub const FILE_READ_EA: u32 = 0x0000_0008;
-/// Erweiterte Attribute schreiben
+/// Write extended attributes.
 pub const FILE_WRITE_EA: u32 = 0x0000_0010;
 pub const FILE_EXECUTE: u32 = 0x0000_0020;
 pub const FILE_DELETE_CHILD: u32 = 0x0000_0040;
 pub const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
-/// Basis-Attribute schreiben
+/// Write basic attributes.
 pub const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
 
 // ---------------------------------------------------------------------------
-// Standardrechte (Bits 16–20) — aus WinNT.h
-// Standard rights (bits 16–20) — from WinNT.h
+// Standard rights (bits 16-20) — from WinNT.h
 // ---------------------------------------------------------------------------
 
 pub const FILE_DELETE: u32 = 0x0001_0000;
 pub const FILE_READ_CONTROL: u32 = 0x0002_0000;
 pub const FILE_WRITE_DAC: u32 = 0x0004_0000;
 pub const FILE_WRITE_OWNER: u32 = 0x0008_0000;
-/// Synchronisationspunkt (SYNCHRONIZE)
+/// Synchronization point (SYNCHRONIZE).
 pub const FILE_SYNCHRONIZE: u32 = 0x0010_0000;
 
 // ---------------------------------------------------------------------------
-// Generic rights (bits 28–31) — Windows maps them to specific rights
-// Generic rights (bits 28–31) — Windows maps them to specific rights
+// Generic rights (bits 28-31) — Windows maps them to specific rights.
 // ---------------------------------------------------------------------------
 
 pub const GENERIC_ALL: u32 = 0x1000_0000;
@@ -61,7 +57,6 @@ pub const FILE_GENERIC_WRITE: u32 = 0x0012_0116;
 pub const FILE_GENERIC_EXECUTE: u32 = 0x0012_00A0;
 
 // ---------------------------------------------------------------------------
-// (OI|CI) bzw. propagation_flags (NP|IO) abgelegt.
 // ACE flag bits (WinNT.h) — the scanner places them into inheritance_flags
 // (OI|CI) and propagation_flags (NP|IO).
 // ---------------------------------------------------------------------------
@@ -134,7 +129,7 @@ impl NormalizedRights {
         self.raw
     }
 
-    // --- Spezifische Bits / specific bits ---
+    // --- specific bits ---
 
     pub fn read_data(&self) -> bool {
         self.has(FILE_READ_DATA)
