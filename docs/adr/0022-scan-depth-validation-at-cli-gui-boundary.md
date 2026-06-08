@@ -1,9 +1,9 @@
 # ADR 0022 — `max_depth` zentral validieren am CLI-/GUI-Boundary
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-25
+**Status:** Accepted  
+**Date:** 2026-05-25
 
-## Kontext / Context
+## Context
 
 `validation::numbers::validate_scan_depth` (Min 0, Max 512) existiert
 seit dem ersten validation-Setup, wurde aber von CLI und GUI-Worker
@@ -19,7 +19,7 @@ verarbeitet werden. Numerische Scan-Steuerwerte sind unter
 
 Folge-Review (2026-05-25), Finding 3 (Low).
 
-## Entscheidung / Decision
+## Decision
 
 1. **Neuer Helfer `validate_optional_scan_depth(Option<u32>)`** in
    `validation::numbers`, der `None` durchreicht (= unbegrenzte Tiefe,
@@ -44,7 +44,7 @@ Folge-Review (2026-05-25), Finding 3 (Low).
    Korrektheitsgewinn. „Validate at the boundary, then unwrap" ist
    ein gängiges Rust-Pattern und passt hier.
 
-## Begründung / Rationale
+## Rationale
 
 - **Single-Source-of-Truth für Grenzen** — `MAX_SCAN_DEPTH = 512`
   lebt in einer Konstante, die der Validator durchsetzt. Spätere
@@ -56,7 +56,7 @@ Folge-Review (2026-05-25), Finding 3 (Low).
   CLI und GUI laufen durch denselben Validierungs-Pattern; Scan-
   Tiefe schließt jetzt diese Lücke.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - 4 neue Unit-Tests in `validation::numbers::tests`:
   - `optional_scan_depth_none_passes_through`

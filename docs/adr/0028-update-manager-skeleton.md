@@ -1,9 +1,9 @@
 # ADR 0028 — update_manager: Manifest-Schema + pluggable Signaturprüfung
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-05-25
+**Status:** Accepted
+**Date:** 2026-05-25
 
-## Kontext / Context
+## Context
 
 AGENTS.md §13 schreibt `update_manager` als festen Architekturbaustein
 vor:
@@ -22,7 +22,7 @@ Signaturprüfung. Damit war jeder spätere Implementierungsschritt
 gleichzeitig Schema-Design — riskant, weil die Schema-Wahl die
 Kompatibilität aller späteren Update-Pakete bestimmt.
 
-## Entscheidung / Decision
+## Decision
 
 1. **Manifest-Schema festlegen** (`update_manager::manifest`):
    - `UpdateManifest { manifest_version, app_version, channel,
@@ -53,7 +53,7 @@ Kompatibilität aller späteren Update-Pakete bestimmt.
    Schema → Signatur → Datei-Hashes. Jede Stufe liefert einen
    sprechenden `CoreError`.
 
-## Begründung / Rationale
+## Rationale
 
 - **Schema-First**: Wer als Erstes das Manifest entwirft, friert die
   Wire-Form-Kompatibilität ein. Hier ist sie bewusst minimal und
@@ -76,7 +76,7 @@ Kompatibilität aller späteren Update-Pakete bestimmt.
   Ablehnen abgeschnittener Downloads, ohne erst SHA-256 über
   möglicherweise viele MB zu rechnen.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - 16 neue Tests in `update_manager`:
   - 6 Manifest-Tests (parse-success, unsigned-reject, kurze

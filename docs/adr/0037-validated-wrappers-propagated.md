@@ -1,9 +1,9 @@
 # ADR 0037 — Validierte Wrapper konsequent propagieren
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-04
+**Status:** Accepted
+**Date:** 2026-06-04
 
-## Kontext / Context
+## Context
 
 Review 2026-06-04 Runde 3 Finding 2 (Medium) zeigte, dass die
 Validierungsschicht zwar formal korrekt arbeitete (`validate_sid`,
@@ -28,7 +28,7 @@ unterschiedlichen Ergebnissen führen — ein Audit-Reproduzierbarkeits-
 defekt, der die Architekturregel **„Validierung vor Verarbeitung"**
 materiell verletzte.
 
-## Entscheidung / Decision
+## Decision
 
 `validate_connection_inputs` liefert in CLI und GUI jetzt eine
 **normalisierte Struktur** zurück, deren Felder die getrimmten Werte
@@ -71,7 +71,7 @@ let user = if user.starts_with("S-1-") {
 `PrincipalInput::Auto(...)` trimmt zusätzlich in der Klassifikation
 (`classify()`) — Schutz in der Tiefe.
 
-## Konsequenzen / Consequences
+## Consequences
 
 **Positiv / Positive:**
 

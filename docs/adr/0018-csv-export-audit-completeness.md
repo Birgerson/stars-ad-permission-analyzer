@@ -1,9 +1,9 @@
 # ADR 0018 — CSV-Export: Vollständigkeits-Diagnose und strukturierte Audit-Daten
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-24
+**Status:** Accepted  
+**Date:** 2026-05-24
 
-## Kontext / Context
+## Context
 
 Der CSV-Export trug bisher 15 Spalten — alle Top-Level-Felder einer
 `EffectivePermission` plus `share_status` und `unsupported_aces` als
@@ -27,7 +27,7 @@ Format.
 
 Siehe Review-Befund 9.
 
-## Entscheidung / Decision
+## Decision
 
 1. **Vier neue Spalten am Ende der CSV** — Reihenfolge bewusst so,
    dass bestehende Importer mit fester Spaltenposition für die ersten
@@ -60,7 +60,7 @@ Siehe Review-Befund 9.
    SIDs in ihrer vollen Tiefe. CSV ist die Top-Level-Tabelle, JSON
    ist die kanonische maschinenlesbare Form für den ganzen Baum.
 
-## Begründung / Rationale
+## Rationale
 
 - **Diagnostische Lücke schließen, ohne Strukturentscheidungen
   umzuwerfen:** Audit-Nutzer, die CSV als ihr primäres Format haben
@@ -77,7 +77,7 @@ Siehe Review-Befund 9.
 - **Risk-Findings explizit JSON-only** trennt zwei Ebenen sauber:
   CSV = pro-(Pfad,Identität)-Zeile; JSON = vollständiger Bericht.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - 5 neue Tests in `exporter::csv::tests`:
   - `local_group_status_applied_serialized_correctly`

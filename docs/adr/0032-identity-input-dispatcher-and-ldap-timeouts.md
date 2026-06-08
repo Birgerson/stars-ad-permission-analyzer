@@ -1,9 +1,9 @@
 # ADR 0032 — Identitäts-Eingabe-Dispatcher und durchgesetzte LDAP-Timeouts
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-04
+**Status:** Accepted
+**Date:** 2026-06-04
 
-## Kontext / Context
+## Context
 
 Zwei Findings aus dem ChatGPT-Code-Review 2026-06-04 zeigten Schwächen
 in der LDAP-Auflösung, die direkt fachliche Korrektheit betrafen:
@@ -20,7 +20,7 @@ in der LDAP-Auflösung, die direkt fachliche Korrektheit betrafen:
   unerreichbarer DC, ein Firewall-Drop, DNS-Probleme oder ein langsamer
   Global Catalog konnten die Analyse beliebig lange blockieren.
 
-## Entscheidung / Decision
+## Decision
 
 ### Finding 3 — drei explizite Eingabeformen, drei dedizierte Pfade
 
@@ -55,7 +55,7 @@ selbst klammert TCP/TLS-Aufbau und Bind zusätzlich separat ein — eine
 hängende Verbindung wird so direkt im Aufbau abgefangen, nicht erst beim
 ersten Search.
 
-## Begründung / Rationale
+## Rationale
 
 - **Pro Form ein eigener Pfad** ist robuster als Heuristik. Wer
   `DOMAIN\user` schreibt, soll genau diese Domain treffen — nicht eine
@@ -69,7 +69,7 @@ ersten Search.
   Ein logischer Vorgang ist eine Einheit; der Aufrufer setzt
   `timeout_secs` für die ganze Operation, nicht pro Sub-Call.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - Aufrufer, die `lookup_by_samaccount("admin")` schreiben, bekommen jetzt
   in Multi-Match-Szenarien einen klaren Fehler statt einer falschen SID.
@@ -81,7 +81,7 @@ ersten Search.
   liefert die Funktion einen `Validation`-Fehler — Stars zielt ohnehin
   auf Windows.
 
-## Tests / Tests
+## Tests
 
 Unit-Tests für den Dispatcher selbst lassen sich nur eingeschränkt
 ohne echte LDAP/LSA-Umgebung schreiben. Build-Verifikation deckt die

@@ -1,9 +1,9 @@
 # ADR 0040 — Kandidatenliste für lokale Gruppen-Auflösung
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-04
+**Status:** Accepted
+**Date:** 2026-06-04
 
-## Kontext / Context
+## Context
 
 Review 2026-06-04 Runde 5 Finding 1 (High) hat eine **stille
 Rechteunterbewertung** im lokalen Gruppen-Pfad offengelegt:
@@ -37,7 +37,7 @@ Unterbewertung der gefährlichste Bug-Klassentyp: Stars *zeigt*
 Rechte, die der Auditor für korrekt hält, obwohl die
 Berechnungsgrundlage unvollständig war.
 
-## Entscheidung / Decision
+## Decision
 
 **Drei Änderungen** in `crates/ad_resolver/src/local_groups.rs`:
 
@@ -103,7 +103,7 @@ rufen jetzt `resolve_local_group_sids_for_identity` direkt mit
 der `&Identity` auf, nicht mehr `format_account_for_local_groups` +
 `resolve_local_group_sids`.
 
-## Konsequenzen / Consequences
+## Consequences
 
 **Positiv / Positive:**
 

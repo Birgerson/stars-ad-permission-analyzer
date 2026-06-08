@@ -1,9 +1,9 @@
 # ADR 0025 — NULL-DACL-Klassifikation: `bDaclPresent=TRUE, pDacl=NULL` ist NULL DACL
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-25
+**Status:** Accepted  
+**Date:** 2026-05-25
 
-## Kontext / Context
+## Context
 
 Per Win32-Doku (`GetSecurityDescriptorDacl`):
 
@@ -20,7 +20,7 @@ Konsequenz: Eine unrestricted Share-NULL-DACL erschien in Reports als „no SMB 
 
 Review 2026-05-25, Finding 1 (High).
 
-## Entscheidung / Decision
+## Decision
 
 1. **Neue reine Klassifikationsfunktion `classify_dacl(present, ptr_is_null, ace_count) → DaclClassification`** in `share_scanner::scanner`. Drei Ergebnisse:
 
@@ -37,13 +37,13 @@ Review 2026-05-25, Finding 1 (High).
    - `Empty` → `Ok(Some((vec![], 0)))` (führt zu `ShareDacl::Acl(vec![])`)
    - `Normal` → ACE-Loop wie bisher
 
-## Begründung / Rationale
+## Rationale
 
 - **Korrektheit ist nicht verhandelbar** (AGENTS.md Grundregel 1). Eine unrestricted Share, die als „kein Zugriff" gemeldet wird, untergräbt die fundamentale Audit-Funktion.
 - **Reine Klassifikation = direkt testbar**: ohne den Helfer hätte jeder Test einen echten Win32-Security-Descriptor brauchen — praktisch unmöglich ohne Integration gegen einen echten Share. Der Helfer kapselt die fehleranfällige Logik in eine vollständig isolierte Funktion.
 - **Tabellen-getriebene Tests**: die vier Zeilen der MSDN-Tabelle werden je durch einen eigenen Test geprüft. Der Bug von vorher steht als explizite Assertion mit „**MUST** classify as Null" und Kommentar dokumentiert.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - 4 neue Tests in `share_scanner::scanner::tests`:
   - `classify_dacl_not_present_is_null`

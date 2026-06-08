@@ -1,9 +1,9 @@
 # ADR 0033 — Sichtbare Diagnostik für SAM-Fallback und deaktivierte Identitäten
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-04
+**Status:** Accepted
+**Date:** 2026-06-04
 
-## Kontext / Context
+## Context
 
 Zwei Findings aus dem ChatGPT-Code-Review 2026-06-04 trafen denselben
 Mechanismus — strukturierte Diagnose-Marker an der
@@ -26,7 +26,7 @@ Mechanismus — strukturierte Diagnose-Marker an der
   authentifizierbarer Zugriff. CLI/HTML/JSON trennten beide Sichten
   bisher nicht klar.
 
-## Entscheidung / Decision
+## Decision
 
 Beide Lücken werden über die schon vorhandene
 `PermissionDiagnostic`-Vector-Infrastruktur geschlossen (ADR 0021), die
@@ -72,7 +72,7 @@ zukunftssicher um weitere Marker erweitert werden kann.
      Diagnose-Blöcke aus: `[!] Group resolution ran through the SAM/LSA
      fallback…` und `[i] Identity is flagged as disabled in AD…`.
 
-## Begründung / Rationale
+## Rationale
 
 - **Wieder­verwendung der vorhandenen Diagnose-Schicht.** ADR 0021 hat
   den `PermissionDiagnostic`-Vector genau für diesen Anwendungsfall
@@ -88,7 +88,7 @@ zukunftssicher um weitere Marker erweitert werden kann.
   `incomplete = true` gerendert, ohne dass die Rules angepasst werden
   müssen.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - Bestehende Konstruktions­sites von `PermissionEvaluationInput` müssen
   das neue Feld `group_resolution_via_sam_fallback` setzen — Default
@@ -100,7 +100,7 @@ zukunftssicher um weitere Marker erweitert werden kann.
   „Account gesperrt", „Passwort abgelaufen") können dem gleichen Muster
   folgen.
 
-## Tests / Tests
+## Tests
 
 Workspace-Tests bleiben grün. Die zwei neuen Marker werden über die
 schon vorhandene Diagnose-Anzeige-Pipeline gerendert, die durch die

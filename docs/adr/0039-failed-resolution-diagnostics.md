@@ -1,9 +1,9 @@
 # ADR 0039 — Diagnostik für gescheiterte Identity- und Group-Auflösung
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-04
+**Status:** Accepted
+**Date:** 2026-06-04
 
-## Kontext / Context
+## Context
 
 Review 2026-06-04 Runde 4 Finding 1 (High) hat einen Folgemangel der
 in ADR 0036 eingeführten zentralen Principal-Pipeline aufgedeckt: die
@@ -35,7 +35,7 @@ in v1.5.0 aber als „LookupFailed ist Edge-Case" offen gelassen. Das
 war ein Fehler — Edge-Cases sind genau das, wo Marker sichtbar sein
 müssen.)
 
-## Entscheidung / Decision
+## Decision
 
 Zwei neue strukturierte Diagnose-Marker in
 `adpa_core::model::PermissionDiagnostic`:
@@ -95,7 +95,7 @@ RiskFinding.incomplete = true
 - HTML-Exporter (`exporter::html`) rendert beide als `badge-high`
   mit Reason im `title`-Attribut (HTML-escaped).
 
-## Konsequenzen / Consequences
+## Consequences
 
 **Positiv / Positive:**
 

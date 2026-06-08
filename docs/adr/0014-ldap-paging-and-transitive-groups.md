@@ -1,104 +1,54 @@
-# ADR 0014 — LDAP-Paging und serverseitige Transitivität
+# ADR 0014 — LDAP paging and server-side transitivity
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-24
+**Status:** Accepted
+**Date:** 2026-05-24
 
-## Kontext / Context
+## Context
 
-Die ursprüngliche `LdapResolver`-Implementierung hatte zwei klassische
-AD-Probleme:
+The original `LdapResolver` implementation had two classic AD problems:
 
-1. **Keine Paginierung.** `search_by_query` rief `Ldap::search()` direkt
-   auf — das nutzt kein Paged-Results-Control. Trifft das Ergebnis die
-   AD-Default-Begrenzung `MaxPageSize` (1000), wird es serverseitig
-   abgeschnitten, ohne dass der Client das bemerkt. In großen Domänen
-   sind dadurch Suchen unvollständig.
+1. **No paging.** `search_by_query` called `Ldap::search()` directly — without the paged-results control. If the result hits the AD default limit `MaxPageSize` (1000), it is truncated server-side without the client noticing. In large domains searches are silently incomplete.
 
-2. **`memberOf`-Walking mit Range-Retrieval-Risiko.** Die Auflösung
-   transitiver Gruppen lief client-seitig: zuerst `memberOf` am User
-   lesen, dann für jede Gruppe wieder `memberOf` lesen, usw. AD schneidet
-   `memberOf` ab ~1500 Werten ab — Benutzer in vielen Gruppen verlieren
-   damit Teile ihrer Mitgliedschaft. Zusätzlich entstanden N+1 LDAP-
-   Roundtrips pro Hierarchieebene.
+2. **`memberOf` walking with range-retrieval risk.** Transitive group resolution ran client-side: first read `memberOf` on the user, then for each group read `memberOf` again, and so on. AD truncates `memberOf` at around 1500 values — users in many groups lose part of their membership. Additionally this caused N+1 LDAP round-trips per hierarchy level.
 
-Sichtbarer Live-Effekt im Test-Server-Scan (vor Finding 8): selbst für
-`max.mustermann` (direkt in zwei Gruppen, transitiv in zwei weiteren)
-gab der Resolver nur `Domain Users` (die Primärgruppe) zurück.
+Visible live effect in the test server scan (before finding 8): even for `max.mustermann` (direct in two groups, transitive in two more), the resolver only returned `Domain Users` (the primary group).
 
-Siehe Review-Befund 8.
+See review finding 8.
 
-## Entscheidung / Decision
+## Decision
 
-1. **Paged Search als Standard.** Neue private Helper-Funktion
-   `search_paged_with_limit` in `ldap_client` baut eine
-   `streaming_search_with`-Pipeline mit den ldap3-Adaptern
-   `EntriesOnly` + `PagedResults`. Standard-Seitengröße: 1000 (AD-
-   `MaxPageSize`-Default). Optionales `client_limit` für Anwendungsfälle
-   wie „Namensvorschläge" (max. 50 Treffer für die Picker-Liste).
-   `search_by_query` nutzt diese Funktion.
+1. **Paged search as the default.** A new private helper `search_paged_with_limit` in `ldap_client` builds a `streaming_search_with` pipeline using the ldap3 adapters `EntriesOnly` + `PagedResults`. Default page size: 1000 (AD `MaxPageSize` default). Optional `client_limit` for use cases like "name suggestions" (max 50 hits for the picker list). `search_by_query` uses this function.
 
-2. **Transitive Gruppenauflösung serverseitig.** Neue Funktion
-   `search_transitive_groups_for_member(member_dn)` schickt einen
-   einzigen Filter
+2. **Server-side transitive group resolution.** New function `search_transitive_groups_for_member(member_dn)` sends a single filter
 
    ```text
    (&(objectClass=group)(member:1.2.840.113556.1.4.1941:=<dn>))
    ```
 
-   an den Domain Controller. Die OID `1.2.840.113556.1.4.1941`
-   (`LDAP_MATCHING_RULE_IN_CHAIN`) lässt AD die Transitivität in einem
-   Roundtrip auflösen. Die Suche läuft selbst paged.
+   to the domain controller. The OID `1.2.840.113556.1.4.1941` (`LDAP_MATCHING_RULE_IN_CHAIN`) lets AD resolve transitivity in one round-trip. The search itself is paged.
 
-3. **Resolver vereinfacht.** `resolve_memberships_internal` nutzt nun:
+3. **Resolver simplified.** `resolve_memberships_internal` now does:
 
-   1. Eintrag laden (für DN + `primaryGroupID` + `memberOf` als
-      „direkt"-Marker).
-   2. `primaryGroupID` separat auflösen (sie ist nicht über `member`
-      modelliert).
-   3. Eine einzige Transitivsuche für den User-DN — liefert alle
-      Gruppen, in denen der User über `member`-Ketten enthalten ist.
-   4. Primärgruppe nochmal transitiv auflösen (für deren Parent-
-      Gruppen).
-   5. Ergebnisse als `direct=true/false` markieren, anhand der
-      `memberOf`-Liste des Users.
+   1. Load the entry (for DN + `primaryGroupID` + `memberOf` as a "direct" marker).
+   2. Resolve `primaryGroupID` separately (it is not modelled via `member`).
+   3. One transitive search for the user DN — returns every group the user is in via `member` chains.
+   4. Transitively resolve the primary group as well (for its parent groups).
+   5. Mark results as `direct=true/false` using the user's `memberOf` list.
 
-   Die alte `resolve_groups_recursive` mit `MAX_GROUP_DEPTH=64` ist
-   ersatzlos entfernt — Zyklen können in dieser Form gar nicht mehr
-   auftreten (der Server liefert nur Gruppen-Mengen, keine Pfade).
+   The old `resolve_groups_recursive` with `MAX_GROUP_DEPTH=64` is gone without replacement — cycles can no longer occur in this shape (the server returns sets of groups, not traversal paths).
 
-4. **`memberOf` wird nur noch als Hint genutzt.** Die maßgebliche
-   Mitgliedschaftsliste kommt aus der Transitivsuche; `memberOf` dient
-   nur zur Klassifikation „direkt vs. transitiv". Falls AD `memberOf`
-   abschneidet, betrifft das jetzt höchstens die `direct`-Markierung
-   einzelner Gruppen (eine geerbte könnte fälschlich als transitiv
-   markiert werden) — die Mitgliedschaft selbst ist vollständig.
+4. **`memberOf` is now only a hint.** The authoritative membership list comes from the transitive search; `memberOf` is only used to classify "direct vs. transitive". If AD truncates `memberOf`, the impact is at most on the `direct` marker of individual groups (an inherited one could be wrongly tagged as transitive) — the membership itself is complete.
 
-## Begründung / Rationale
+## Rationale
 
-- **Korrektheit:** „Große AD-Umgebungen sind Standardfall" (AGENTS.md
-  Regel 9). Der bisherige Pfad versagte still in genau diesen Umgebungen.
-- **Weniger Roundtrips:** Eine LDAP-Operation pro User statt N pro
-  Hierarchieebene. Skaliert deutlich besser bei tiefen Gruppen-
-  Schachtelungen.
-- **Keine eigene Cycle-Detection mehr nötig** — der Server liefert
-  eine Menge, keine Traversierungs-Pfade.
-- **Backwards-kompatible Public-API:** `search_by_query` behält
-  Signatur und Begrenzung auf 50; nur die Implementierung darunter
-  ist robuster geworden.
-- **Bewusst nicht implementiert: explizites Range-Retrieval auf
-  `memberOf`.** Mit dem Transitivsuch-Pfad ist es überflüssig. Sollte
-  ein zukünftiger Use-Case `memberOf` als Wahrheit benötigen, kann
-  Range-Retrieval als zusätzliche `ldap_client`-Funktion folgen.
+- **Correctness:** "Large AD environments are the default case" (AGENTS.md rule 9). The previous path failed silently in exactly those environments.
+- **Fewer round-trips:** one LDAP operation per user instead of N per hierarchy level. Scales noticeably better with deep group nesting.
+- **No more own cycle detection** — the server returns a set, not a traversal path.
+- **Backwards-compatible public API:** `search_by_query` keeps its signature and the 50-hit cap; only the implementation underneath got more robust.
+- **Deliberately not implemented: explicit range retrieval on `memberOf`.** With the transitive-search path it is redundant. If a future use case needs `memberOf` as truth, range retrieval can be added as an extra `ldap_client` function.
 
-## Konsequenzen / Consequences
+## Consequences
 
-- `LDAP_MATCHING_RULE_IN_CHAIN` ist AD-spezifisch (Windows Server 2003 R2
-  und neuer). OpenLDAP & Co. unterstützen die OID nicht — das Projekt
-  zielt aber explizit auf Active Directory.
-- Der bestehende Integrationstest
-  `resolve_group_memberships_max_mustermann` wurde verschärft: die
-  zuvor optionalen Transitivitäts-Asserts sind jetzt unbedingt. Neu
-  geprüft wird zusätzlich die `direct`-Markierung der zurückgegebenen
-  Memberships.
-- Konstante `MAX_GROUP_DEPTH` ist entfernt; `MAX_GROUP_DEPTH`-Warnungen
-  im Log entfallen.
+- `LDAP_MATCHING_RULE_IN_CHAIN` is AD-specific (Windows Server 2003 R2 and newer). OpenLDAP and others do not support the OID — but the project explicitly targets Active Directory.
+- The existing integration test `resolve_group_memberships_max_mustermann` has been tightened: previously optional transitivity asserts are now unconditional. Additionally checked: the `direct` marker on the returned memberships.
+- The constant `MAX_GROUP_DEPTH` is removed; `MAX_GROUP_DEPTH` warnings in the log are gone.

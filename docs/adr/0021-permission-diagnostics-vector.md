@@ -1,9 +1,9 @@
 # ADR 0021 — Strukturierte Diagnose-Marker pro Berechtigung
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-24
+**Status:** Accepted  
+**Date:** 2026-05-24
 
-## Kontext / Context
+## Context
 
 ADR 0012 (Stored-Order DACL-Auswertung) entscheidet bewusst, nicht-
 kanonisch sortierte DACLs nach Windows-AccessCheck-Semantik in
@@ -22,7 +22,7 @@ abweicht.
 
 Folge-Befund 3.
 
-## Entscheidung / Decision
+## Decision
 
 1. **Neuer Variant-tagged Enum `PermissionDiagnostic`** in
    `adpa_core::model`. Erster Marker:
@@ -56,7 +56,7 @@ Folge-Befund 3.
    Detektion ist zentral in `collect_diagnostics` — Single Source of
    Truth zwischen Log und strukturiertem Marker.
 
-## Begründung / Rationale
+## Rationale
 
 - **Audit-Wirksamkeit:** Ein Marker, der nicht ins persistente
   Artefakt eingeht, ist für einen Auditor wertlos.
@@ -70,7 +70,7 @@ Folge-Befund 3.
   HTML kann später dieselben Daten visualisieren — bewusst nicht in
   diese Iteration gepackt, um die Änderung fokussiert zu halten.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - 4 neue Tests in `permission_engine::engine::tests`:
   - `non_canonical_dacl_yields_diagnostic_marker`

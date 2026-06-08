@@ -1,9 +1,9 @@
 # ADR 0026 — `ShareScanResult.share_dacls` trägt `ShareDaclScan`
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-25
+**Status:** Accepted  
+**Date:** 2026-05-25
 
-## Kontext / Context
+## Context
 
 ADR 0024 hatte `ShareDaclScan { dacl, unsupported_count }` als
 Return-Typ von `get_share_dacl` eingeführt, sodass der CLI/GUI-pro-Pfad-
@@ -22,7 +22,7 @@ Typen als `incomplete` gilt.
 
 Review 2026-05-25, Finding 2 (Medium).
 
-## Entscheidung / Decision
+## Decision
 
 **`ShareScanResult.share_dacls` ist jetzt `Vec<(String, ShareDaclScan)>`.**
 Pro Share wandert der komplette `ShareDaclScan` (DACL + unsupported
@@ -33,7 +33,7 @@ Die Aufrufstelle in `scan_shares` pusht nicht mehr `(share.name,
 scan.dacl)`, sondern `(share.name, scan)`. Das aggregierende
 `unsupported_share_aces_total`-Log bleibt als operativer Schnellüberblick.
 
-## Begründung / Rationale
+## Rationale
 
 - **Single source of truth**: pro Share gibt es jetzt genau einen Ort,
   an dem alle relevanten Audit-Daten liegen — die Aufrufer-Sicht ist
@@ -45,7 +45,7 @@ scan.dacl)`, sondern `(share.name, scan)`. Das aggregierende
   Tests des `share_scanner`-Crates konsumiert. Externe Konsumenten
   gibt es nicht.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - 1 neuer Test in `share_scanner::scanner::tests`:
   `share_dacls_field_preserves_per_share_unsupported_count` —

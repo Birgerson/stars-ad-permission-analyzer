@@ -1,87 +1,48 @@
-# ADR 0015 — Long-Path-Normalisierung für Win32-Aufrufe
+# ADR 0015 — Long-path normalization for Win32 calls
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-24
+**Status:** Accepted
+**Date:** 2026-05-24
 
-## Kontext / Context
+## Context
 
-Die Pfadvalidierung in `validation::path` lässt Pfade bis zu 32.767
-Zeichen zu (Windows-Extended-Length-Limit). Der NTFS-Scanner reichte
-solche Pfade jedoch unverändert an `GetFileAttributesW` und
-`GetNamedSecurityInfoW` weiter — diese Win32-Wide-APIs sind ohne
-`\\?\`-Präfix auf `MAX_PATH` (260 Zeichen) limitiert. Ein vom Tool
-formal akzeptierter Pfad konnte also zur Laufzeit am Win32-Aufruf
-scheitern, ohne dass das aus der Validierung absehbar war — ein
-gebrochenes Versprechen.
+Path validation in `validation::path` accepts paths up to 32 767 characters (Windows extended-length limit). The NTFS scanner however passed such paths through unchanged to `GetFileAttributesW` and `GetNamedSecurityInfoW` — these Win32 wide APIs are capped at `MAX_PATH` (260 characters) without the `\\?\` prefix. A path the tool formally accepted could therefore fail at runtime on the Win32 call, with no way to predict that from the validation — a broken promise.
 
-Auch `std::fs::read_dir` im Walker traf dasselbe Problem für die
-Verzeichnis-Enumeration.
+`std::fs::read_dir` in the walker hit the same problem for directory enumeration.
 
-Siehe Review-Befund 5.
+See review finding 5.
 
-## Entscheidung / Decision
+## Decision
 
-1. **Neuer Pfadtyp `WindowsApiPath`** in `validation::path` plus zwei
-   freistehende Helper:
+1. **New path type `WindowsApiPath`** in `validation::path` plus two free helpers:
 
    ```rust
    pub fn to_windows_api_path(path: &str) -> String;
    pub fn strip_long_path_prefix(path: &str) -> String;
    ```
 
-   - `to_windows_api_path` wandelt um:
+   - `to_windows_api_path` converts:
      - `C:\…` → `\\?\C:\…`
      - `\\server\share\…` → `\\?\UNC\server\share\…`
-     - bereits präfixierte Pfade bleiben unverändert (idempotent)
-     - alles andere (relativ etc.) bleibt unverändert
-   - `strip_long_path_prefix` ist die Umkehrung — wird im FSO-Bau
-     genutzt, um den im Report sichtbaren Pfad menschenlesbar zu
-     halten.
+     - already-prefixed paths stay unchanged (idempotent)
+     - anything else (relative etc.) stays unchanged
+   - `strip_long_path_prefix` is the inverse — used during FSO construction so the path that appears in the report stays human-readable.
 
-2. **Anwendung im NTFS-Scanner:** `read_file_system_object` normalisiert
-   den Eingabepfad **einmal** vor den Win32-Aufrufen. Der im
-   resultierenden `FileSystemObject` gespeicherte Pfad wird vorher per
-   `strip_long_path_prefix` wieder bereinigt, damit Reports und
-   Persistenz die ursprüngliche, lesbare Form sehen.
+2. **Applied in the NTFS scanner:** `read_file_system_object` normalizes the input path **once** before the Win32 calls. The path stored in the resulting `FileSystemObject` is cleaned via `strip_long_path_prefix` first, so reports and persistence see the original, readable form.
 
-3. **Anwendung im Walker:** `walk_dir` ruft `std::fs::read_dir` mit dem
-   normalisierten Pfad auf. Die `DirEntry::path()`-Rückgaben vererben
-   den `\\?\`-Präfix an die Kinder — `to_windows_api_path` ist
-   idempotent, also gibt es keine doppelte Präfixierung. Der
-   FSO-Bau in `read_file_system_object` entfernt den Präfix wieder
-   für die Anzeige.
+3. **Applied in the walker:** `walk_dir` calls `std::fs::read_dir` with the normalized path. The `DirEntry::path()` returns inherit the `\\?\` prefix on children — `to_windows_api_path` is idempotent, so there is no double prefixing. The FSO build in `read_file_system_object` strips the prefix again for display.
 
-4. **Keine Lockerung der Validierung.** Pfade in der `\\?\…`-Form
-   bleiben in `validate_local_path` / `validate_unc_path` weiterhin
-   verboten (`?` und `:` sind in Segmenten verbotene Zeichen). Der
-   Präfix ist eine interne Optimierung des Scanners, nicht ein
-   benutzerseitiges Eingabeformat.
+4. **No loosening of validation.** Paths in the `\\?\…` form remain forbidden in `validate_local_path` / `validate_unc_path` (`?` and `:` are illegal characters in segments). The prefix is an internal scanner optimization, not a user-facing input format.
 
-## Begründung / Rationale
+## Rationale
 
-- **Konsistenz mit der Validierung:** Was die Validierung zulässt
-  (bis 32.767 Zeichen), soll der Scanner auch lesen können.
-- **Minimal-invasiv:** Die externe API (CLI/GUI/Trait-Signaturen)
-  bleibt unverändert; der Präfix lebt nur zwischen Validierung und
-  Win32-Aufruf.
-- **Reports bleiben lesbar:** Anwender sehen weiterhin
-  `C:\Users\…` statt `\\?\C:\Users\…`.
-- **Idempotenz** des Konverters erlaubt es, ihn beliebig oft
-  anzuwenden ohne Spezialfall-Behandlung — der Walker und der
-  ACL-Reader können beide ihre eigenen Konvertierungen durchführen.
+- **Consistency with validation:** what validation permits (up to 32 767 characters) the scanner should be able to read.
+- **Minimally invasive:** the external API (CLI/GUI/trait signatures) stays unchanged; the prefix only lives between validation and the Win32 call.
+- **Reports stay readable:** users continue to see `C:\Users\…` rather than `\\?\C:\Users\…`.
+- **Idempotency** of the converter allows it to be applied any number of times without special-case handling — walker and ACL reader can both run their own conversions.
 
-## Konsequenzen / Consequences
+## Consequences
 
-- 11 neue Tests in `validation::path::tests`: vier Roundtrip-/
-  Strip-/Idempotenz-Tests, sieben Fall-Tests
-  (`to_windows_api_path` für UNC/Local/Long/präfixiert sowie
-  `WindowsApiPath::from(&Validated…)`).
-- 1 neuer Integrationstest in `fs_scanner::walker::tests` baut unter
-  `TEMP` eine 12-stufige Verzeichniskette von ~412 Zeichen, scannt
-  sie ohne `\\?\`-Präfix und prüft: keine Fehler, 13 Objekte
-  (Root + Tiefe), tiefster Pfad > 260, FSO-Pfade tragen kein Präfix.
-- `fs_scanner` hängt jetzt von `validation` ab — die Long-Path-
-  Mechanik ist Validierungs-/Pfad-Semantik, kein Scanner-Detail.
-- Eine spätere bewusste Erweiterung der Validierung um
-  `\\?\…`-Format ist möglich, falls externe Aufrufer ihn doch direkt
-  übergeben wollen — Pflicht ist sie nicht.
+- 11 new tests in `validation::path::tests`: four round-trip / strip / idempotency tests, seven case tests (`to_windows_api_path` for UNC / local / long / prefixed, plus `WindowsApiPath::from(&Validated…)`).
+- 1 new integration test in `fs_scanner::walker::tests` builds a 12-level directory chain (~412 characters) under `TEMP`, scans it without the `\\?\` prefix, and verifies: no errors, 13 objects (root + depth), the deepest path is > 260, FSO paths carry no prefix.
+- `fs_scanner` now depends on `validation` — the long-path mechanism is validation/path semantics, not a scanner detail.
+- A later deliberate extension of validation to also accept the `\\?\…` form is possible if external callers want to pass it in directly — but it is not mandatory.

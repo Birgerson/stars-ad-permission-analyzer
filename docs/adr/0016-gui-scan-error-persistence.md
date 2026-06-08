@@ -1,9 +1,9 @@
 # ADR 0016 — GUI-Scans persistieren Walk-/Eval-Fehler in `scan_errors`
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-24
+**Status:** Accepted  
+**Date:** 2026-05-24
 
-## Kontext / Context
+## Context
 
 Der GUI-Worker sendete Walk-, Permission-Eval- und Setup-Fehler an die
 UI (`WorkerEvent::ScanError`), aber `persist_scan` schrieb nur die
@@ -22,7 +22,7 @@ Folgen:
 
 Siehe Review-Befund 6.
 
-## Entscheidung / Decision
+## Decision
 
 1. **`ScanSummary` trägt jetzt eine strukturierte Fehlerliste.**
    `errors: usize` → `errors: Vec<ScanError>`. Die UI-Anzeige nutzt
@@ -51,7 +51,7 @@ Siehe Review-Befund 6.
    genutzt und ist sinnvolle Diagnose-API für zukünftige Historien-
    Ansichten.
 
-## Begründung / Rationale
+## Rationale
 
 - **Parität CLI ↔ GUI:** Die Audit-Erwartung an „der Scan-Lauf in der
   Historie ist vollständig" muss in beiden Pfaden gleich sein.
@@ -63,7 +63,7 @@ Siehe Review-Befund 6.
 - **`Vec<ScanError>` statt `usize`** als Single-Source-of-Truth: aus
   einer Liste kann man den Count ableiten, umgekehrt nicht.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - 3 neue Tests in `gui::worker::tests` (persistiert Walk-Fehler,
   ergänzt Abbruch-Marker, leerer Lauf bleibt leer).

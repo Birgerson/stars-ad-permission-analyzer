@@ -1,9 +1,9 @@
 # ADR 0041 — Lokale-Gruppen-Mitgliedschaften im Erklärungspfad
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-05
+**Status:** Accepted
+**Date:** 2026-06-05
 
-## Kontext / Context
+## Context
 
 ADR 0040 hat die *Auswertung* lokaler Server-Gruppen für Trust-Identities
 geschlossen: Eine Kandidatenliste (`format_account_candidates_for_local_groups`)
@@ -37,7 +37,7 @@ Stars meldet korrektes Effective-Right, gibt aber im Erklärungspfad keine
 nachvollziehbare Begründung — was direkt gegen das Read-only-Auditing-Versprechen
 verstößt, jeden Rechte-Befund nachvollziehbar zu machen.
 
-## Entscheidung / Decision
+## Decision
 
 Der `ad_resolver` produziert pro Identität nicht mehr nur ein
 SID-Vec für lokale Gruppen, sondern ein **`Vec<GroupMembership>` mit
@@ -108,7 +108,7 @@ Member of BUILTIN\Administrators (S-1-5-32-544)
     [exact chain unknown, source: LocalGroup]
 ```
 
-## Konsequenzen / Consequences
+## Consequences
 
 ### Positiv
 

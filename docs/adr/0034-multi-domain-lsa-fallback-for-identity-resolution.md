@@ -1,9 +1,9 @@
 # ADR 0034 — Multi-Domain-LSA-Fallback für Identitätsauflösung
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-04
+**Status:** Accepted
+**Date:** 2026-06-04
 
-## Kontext / Context
+## Context
 
 Beim zweiten ChatGPT-Code-Review-Durchgang am 2026-06-04 stand der
 `DOMAIN\user`-Pfad in `ad_resolver::resolver::LdapResolver` im Fokus.
@@ -29,7 +29,7 @@ Folgen der bisherigen Klassifikation:
   rekursive Domain-Gruppen-Auflösung war in dieser Konstellation nicht
   möglich.
 
-## Entscheidung / Decision
+## Decision
 
 Wenn LSA eine gültige SID liefert, LDAP die SID aber nicht indexiert,
 fällt der Resolver auf eine **LSA-only-Identity** zurück und markiert
@@ -73,7 +73,7 @@ das Ergebnis über zwei strukturierte Diagnose-Marker an der
    - HTML-Exporter (`exporter::html`) rendert ein `badge-medium` bzw.
      `badge-info`.
 
-## Konsequenzen / Consequences
+## Consequences
 
 **Positiv / Positive:**
 

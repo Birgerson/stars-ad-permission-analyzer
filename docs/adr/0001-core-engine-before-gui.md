@@ -1,26 +1,23 @@
-# ADR 0001 — Core Engine vor GUI
+# ADR 0001 — Core engine before GUI
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-20
+**Status:** Accepted
+**Date:** 2026-05-20
 
-## Kontext / Context
+## Context
 
-Das Projekt analysiert Active-Directory-Berechtigungen, NTFS-ACLs und SMB-Freigaben.
-Die korrekte Berechnung effektiver Rechte ist komplex und muss vollständig testbar sein.
+The project analyses Active Directory permissions, NTFS ACLs, and SMB shares. Correct effective-rights computation is complex and must be fully testable.
 
-## Entscheidung / Decision
+## Decision
 
-Die Core Engine (`permission_engine`, `ad_resolver`, `fs_scanner`, `share_scanner`)
-wird vollständig entwickelt und getestet, bevor eine GUI gebaut wird.
-Die GUI-Technologie (egui, iced, Tauri, Slint) wird erst nach stabiler Core Engine gewählt.
+The core engine (`permission_engine`, `ad_resolver`, `fs_scanner`, `share_scanner`) is built and tested fully before a GUI is added. The GUI technology (egui, iced, Tauri, Slint) is only picked once the core engine is stable.
 
-## Begründung / Rationale
+## Rationale
 
-- Berechtigungslogik in der GUI duplizieren würde zu Inkonsistenzen führen.
-- Ohne stabile Core Engine lässt sich die GUI nicht sinnvoll validieren.
-- Die CLI erlaubt frühe Integration- und Regressionstests ohne GUI.
+- Duplicating permission logic in the GUI would cause inconsistencies.
+- Without a stable core engine, the GUI cannot be meaningfully validated.
+- The CLI enables early integration and regression testing without a GUI.
 
-## Konsequenzen / Consequences
+## Consequences
 
-- GUI-Crate ist angelegt, aber vorerst leer.
-- Alle fachlichen Änderungen gehen durch Core-Crates, nicht durch GUI-Code.
+- The GUI crate exists but is empty for now.
+- All domain changes flow through the core crates, not through GUI code.

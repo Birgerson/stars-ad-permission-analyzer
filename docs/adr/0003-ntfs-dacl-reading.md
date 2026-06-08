@@ -1,48 +1,38 @@
-# ADR 0003 — NTFS-DACL-Lesen mit GetNamedSecurityInfoW
+# ADR 0003 — NTFS DACL reading with `GetNamedSecurityInfoW`
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-20
+**Status:** Accepted
+**Date:** 2026-05-20
 
-## Kontext / Context
+## Context
 
-Um NTFS-Berechtigungen zu lesen, muss der Security Descriptor eines Pfades
-gelesen werden. Windows bietet mehrere APIs:
+To read NTFS permissions the security descriptor of a path must be read. Windows offers several APIs:
 
-- `GetFileSecurity` — erfordert separates Speichermanagement für den Descriptor
-- `GetNamedSecurityInfoW` — allokiert den Security Descriptor intern, gibt
-  `PSECURITY_DESCRIPTOR` zurück, das mit `LocalFree` freigegeben werden muss
-- `NtQuerySecurityObject` — low-level, erfordert HANDLE-Öffnung
+- `GetFileSecurity` — requires separate memory management for the descriptor.
+- `GetNamedSecurityInfoW` — allocates the security descriptor internally, returns `PSECURITY_DESCRIPTOR` which must be freed with `LocalFree`.
+- `NtQuerySecurityObject` — low-level, requires a HANDLE.
 
-## Entscheidung / Decision
+## Decision
 
-Verwendung von `GetNamedSecurityInfoW` aus `windows-sys 0.59`.
+Use `GetNamedSecurityInfoW` from `windows-sys 0.59`.
 
-## Begründung / Rationale
+## Rationale
 
-- Höchster Abstraktionsgrad: gibt Owner-SID und DACL-Zeiger direkt zurück
-- Unterstützt UNC-Pfade nativ
-- Kein separates Speichermanagement für den Security Descriptor nötig
-- `SE_FILE_OBJECT` als Objekttyp deckt Dateien und Ordner ab
+- Highest abstraction: returns the owner SID and the DACL pointer directly.
+- Supports UNC paths natively.
+- No separate memory management for the security descriptor.
+- `SE_FILE_OBJECT` as the object type covers both files and directories.
 
-## Technische Besonderheiten / Technical Details
+## Technical details
 
-- `ACCESS_ALLOWED_ACE_TYPE` (0) und `ACCESS_DENIED_ACE_TYPE` (1) sind in
-  windows-sys 0.59 nicht als Konstante exportiert; Rohwerte aus WinNT.h werden
-  als lokale `const` definiert.
-- `INHERITED_ACE` ist in windows-sys als `u32` exportiert; wird per `as u8`
-  auf das `AceFlags`-Byte (u8) im ACE-Header angewendet.
-- `HLOCAL` = `*mut c_void` in windows-sys 0.59; `LocalFree` nimmt entsprechend
-  `*mut c_void`, kein `isize`.
-- `SidStart` in `ACCESS_ALLOWED_ACE` ist ein Platzhalter (u32); `addr_of!`
-  gibt den Startzeiger des SID-Byte-Blocks zurück.
-- `SE_DACL_PROTECTED` (0x1000) im Security-Descriptor-Control-Feld zeigt an,
-  ob die Vererbung auf diesem Pfad unterbrochen ist.
+- `ACCESS_ALLOWED_ACE_TYPE` (0) and `ACCESS_DENIED_ACE_TYPE` (1) are not exported as constants in windows-sys 0.59; raw values from WinNT.h are defined as local `const`.
+- `INHERITED_ACE` is exported as `u32` in windows-sys; applied via `as u8` to the `AceFlags` byte (u8) of the ACE header.
+- `HLOCAL` = `*mut c_void` in windows-sys 0.59; `LocalFree` accordingly takes `*mut c_void`, not `isize`.
+- `SidStart` in `ACCESS_ALLOWED_ACE` is a placeholder (u32); `addr_of!` returns the start pointer of the SID byte block.
+- `SE_DACL_PROTECTED` (0x1000) in the security-descriptor control field indicates whether inheritance is broken on this path.
 
-## Konsequenzen / Consequences
+## Consequences
 
-- Alle Windows-API-Aufrufe sind in `crates/fs_scanner/src/acl.rs` gekapselt.
-- `scanner.rs` und Aufrufer erhalten typisierte `FileSystemObject`-Modelle.
-- 7 Unit-Tests mit `C:\Windows` und `C:\Windows\System32` als bekannten
-  Testpfaden; kein Mocking notwendig.
-- Nicht unterstützte ACE-Typen (Object-ACEs etc.) werden übersprungen und
-  können in einem späteren Schritt ergänzt werden.
+- All Windows API calls are encapsulated in `crates/fs_scanner/src/acl.rs`.
+- `scanner.rs` and callers receive typed `FileSystemObject` models.
+- 7 unit tests with `C:\Windows` and `C:\Windows\System32` as known test paths; no mocking required.
+- Unsupported ACE types (object ACEs etc.) are skipped and may be added in a later step.

@@ -1,16 +1,15 @@
-# ADR 0007 — SQLite-Cache und Scan-Historie
+# ADR 0007 — SQLite cache and scan history
 
 ## Status
 Accepted
 
-## Kontext / Context
+## Context
 
 Step 11 adds a local SQLite database with two purposes:
 1. **Identity cache** — avoids repeated AD queries for the same SID across scans.
-2. **Scan history** — stores every analysis run with its results so they can be reviewed later
-   without re-running the analysis.
+2. **Scan history** — stores every analysis run with its results so they can be reviewed later without re-running the analysis.
 
-## Entscheidung / Decision
+## Decision
 
 ### Schema (migration v1)
 
@@ -26,12 +25,9 @@ Five tables, versioned via `PRAGMA user_version`:
 
 ### Migration system
 
-`migrations::run_migrations(conn)` reads `PRAGMA user_version`, then applies any migration whose
-version number is higher. Each migration is wrapped in a `BEGIN … COMMIT` and updates
-`user_version` atomically within the same transaction.
+`migrations::run_migrations(conn)` reads `PRAGMA user_version`, then applies any migration whose version number is higher. Each migration is wrapped in a `BEGIN … COMMIT` and updates `user_version` atomically within the same transaction.
 
-Currently one migration exists (`v1`). Future columns or tables are added as `v2`, `v3`, etc.
-without touching previous migration SQL.
+Currently one migration exists (`v1`). Future columns or tables are added as `v2`, `v3`, etc. without touching previous migration SQL.
 
 ### Public API (`Database` struct)
 
@@ -43,8 +39,7 @@ db.scan_store()       -> ScanStore<'_>
 db.identity_cache()   -> IdentityCache<'_>
 ```
 
-`ScanStore` and `IdentityCache` hold a `&Connection` (lifetime-bound to the `Database`).
-`rusqlite::Connection` uses interior mutability so all methods take `&self`.
+`ScanStore` and `IdentityCache` hold a `&Connection` (lifetime-bound to the `Database`). `rusqlite::Connection` uses interior mutability so all methods take `&self`.
 
 ### IdentityCache
 
@@ -64,22 +59,17 @@ db.identity_cache()   -> IdentityCache<'_>
 
 ### Explanation path storage
 
-`path_explanation.steps: Vec<String>` is serialized to a JSON array (`serde_json`) and stored in a
-single TEXT column. This keeps the schema simple and avoids a many-to-one join for a field that is
-always read as a unit.
+`path_explanation.steps: Vec<String>` is serialized to a JSON array (`serde_json`) and stored in a single TEXT column. This keeps the schema simple and avoids a many-to-one join for a field that is always read as a unit.
 
-## Alternativen erwogen / Alternatives considered
+## Alternatives considered
 
-- **Separate explanation table**: normalized but requires a join for every permission read.
-  The JSON column approach is simpler and the explanation is always read with the permission.
-- **`Arc<Mutex<Connection>>`**: deferred. The current synchronous single-connection design is
-  correct for CLI use. Multi-threaded scanning will wrap in `Mutex` when needed.
-- **Diesel / SeaORM**: ORM overhead not justified for a small fixed schema. Raw `rusqlite` keeps
-  the crate dependency minimal and the SQL explicit.
+- **Separate explanation table**: normalized but requires a join for every permission read. The JSON column approach is simpler and the explanation is always read with the permission.
+- **`Arc<Mutex<Connection>>`**: deferred. The current synchronous single-connection design is correct for CLI use. Multi-threaded scanning will wrap in `Mutex` when needed.
+- **Diesel / SeaORM**: ORM overhead not justified for a small fixed schema. Raw `rusqlite` keeps the crate dependency minimal and the SQL explicit.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - AD queries for previously seen SIDs can be skipped if the cache is warm.
 - Past analysis results are queryable without re-scanning.
 - Schema evolution is handled by appending migrations — no destructive changes to existing tables.
-- All tests use `Database::open_in_memory()` — no file system side-effects.
+- All tests use `Database::open_in_memory()` — no file-system side effects.

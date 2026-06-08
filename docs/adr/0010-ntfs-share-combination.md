@@ -1,18 +1,18 @@
-# ADR 0010 — NTFS-∩-Share-Kombination im Scan-Befehl
+# ADR 0010 — NTFS ∩ share combination in the scan command
 
 ## Status
 Accepted
 
-## Kontext / Context
+## Context
 
 Step 14 wires the share permission layer into the `adpa scan` subcommand.
 The permission engine already supports `share_mask: Option<AccessMask>` in
 `PermissionEvaluationInput` and computes `effective = ntfs & share` correctly.
 What was missing was the CLI plumbing to obtain the share mask and pass it through.
 
-## Entscheidung / Decision
+## Decision
 
-### Neue share_scanner-API / New share_scanner API
+### New share_scanner API
 
 **`ShareDacl` enum**
 
@@ -37,7 +37,7 @@ Computes the user's effective share permission:
 - `None` if `dacl` is `NullDacl` (no restriction from share side)
 - `Some(allow & !deny)` for `Acl` variant
 
-### CLI-Erweiterung / CLI extension
+### CLI extension
 
 Two new optional arguments added to `adpa scan`:
 
@@ -84,7 +84,7 @@ Server), but may produce unexpected results for shares that use generic rights
 exclusively. This will be addressed when generic-rights expansion is added to
 the core engine.
 
-## Alternativen erwogen / Alternatives considered
+## Alternatives considered
 
 - **Per-path share lookup**: determine the share for each individual path during
   the walk. Rejected — all paths in the scan root are under the same share; a
@@ -93,7 +93,7 @@ the core engine.
   full share-listing report is needed. The per-scan share integration (Step 14)
   is independent of a standalone listing command.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - `adpa scan --path \\server\share\data --user S-1-5-...` now automatically
   applies the share permission for that user, producing the true effective

@@ -1,9 +1,9 @@
 # ADR 0020 — `matched_aces` filtert INHERIT_ONLY-Einträge
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-24
+**Status:** Accepted  
+**Date:** 2026-05-24
 
-## Kontext / Context
+## Context
 
 Seit ADR 0012 filtert die Engine `INHERIT_ONLY_ACE` (Flag 0x08) bei der
 Effective-Rights-Berechnung korrekt aus — solche ACEs wirken nur auf
@@ -20,7 +20,7 @@ nicht berührt — Falschmeldung.
 
 Folge-Review (2026-05-24), Befund 2.
 
-## Entscheidung / Decision
+## Decision
 
 `collect_matched_aces` filtert jetzt zusätzlich über
 `ace_applies_to_current_object(ace)` — derselbe Helfer, den die
@@ -34,7 +34,7 @@ mit `[inherit-only — not applied to this object]` (eingeführt in
 ADR 0012). Risikoregeln arbeiten mit `matched_aces`, Reports mit der
 Erklärung — die Trennung passt.
 
-## Begründung / Rationale
+## Rationale
 
 - **Minimale Invasivität:** Eine Zeile Filter-Logik, kein
   Modellwechsel, keine Persistenz-Migration. Die Alternative — ein
@@ -48,7 +48,7 @@ Erklärung — die Trennung passt.
   `ace_applies_to_current_object`. `collect_matched_aces` folgt
   diesem Muster.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - 1 neuer Engine-Test (`inherit_only_ace_not_in_matched_aces`).
 - 1 neuer Risk-Engine-Test

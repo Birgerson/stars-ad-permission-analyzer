@@ -1,42 +1,24 @@
-# ADR 0012 — DACL-Auswertung mit Windows-AccessCheck-Semantik
+# ADR 0012 — DACL evaluation with Windows AccessCheck semantics
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-24
+**Status:** Accepted
+**Date:** 2026-05-24
 
-## Kontext / Context
+## Context
 
-Die ursprüngliche Implementierung in `DefaultPermissionEngine` hat alle
-DACL-Einträge in vier Eimer (explicit/inherited × allow/deny) gesammelt
-und daraus pauschale Masken kombiniert. Dieses Vorgehen war einfach,
-aber wich in mehreren Punkten von der Windows-`AccessCheck`-Semantik ab:
+The original implementation in `DefaultPermissionEngine` collected every DACL entry into four buckets (explicit/inherited × allow/deny) and combined them into aggregate masks. The approach was simple but diverged from the Windows `AccessCheck` semantics in three ways:
 
-1. **ACE-Reihenfolge wurde ignoriert.** Bei nicht-kanonischen DACLs kann
-   eine spätere Deny-ACE eine frühere Allow-ACE nicht mehr umstoßen —
-   Windows wertet ACEs in gespeicherter Reihenfolge aus. Der Bucket-
-   Algorithmus konnte deshalb in seltenen, aber realen Fällen
-   abweichende effektive Rechte berechnen (siehe Review-Befund 2).
-2. **`INHERIT_ONLY_ACE` (0x08) wurde nicht ausgewertet.** ACEs mit
-   diesem Flag gelten ausschließlich für Kinder und dürfen für das
-   aktuelle Objekt keine Bits beitragen. Sie sind in der DACL vorhanden,
-   sind aber für das aktuelle Objekt fachlich inert (Befund 1).
-3. **Generische Rechte (GENERIC_READ/WRITE/EXECUTE/ALL, Bits 28–31)
-   wurden im NTFS-Pfad nicht expandiert.** Ein `GENERIC_ALL`-Allow
-   konnte deshalb als „Special" durchgereicht und im
-   `NTFS ∩ Share`-AND auf 0 fallen. Der Share-Pfad expandierte bereits,
-   der NTFS-Pfad nicht — die Inkonsistenz war ein Korrektheitsfehler
-   (Befund 3).
+1. **ACE order was ignored.** With non-canonical DACLs a later Deny ACE cannot override an earlier Allow ACE — Windows evaluates ACEs in stored order. The bucket algorithm could therefore produce diverging effective rights in rare but real cases (review finding 2).
+2. **`INHERIT_ONLY_ACE` (0x08) was not evaluated.** ACEs with this flag apply only to children and must not contribute any bits to the current object. They exist in the DACL but are inert for the current object (finding 1).
+3. **Generic rights (GENERIC_READ/WRITE/EXECUTE/ALL, bits 28–31) were not expanded on the NTFS path.** A `GENERIC_ALL` Allow could therefore pass through as "Special" and drop to 0 in the `NTFS ∩ Share` AND. The share path already expanded; the NTFS path did not — the inconsistency was a correctness bug (finding 3).
 
-## Entscheidung / Decision
+## Decision
 
-1. **Auswertung erfolgt in gespeicherter ACE-Reihenfolge.**
-   `evaluate_dacl_ordered` läuft die DACL einmal von vorne nach hinten
-   durch. Pro Recht-Bit gewinnt die erste passende Entscheidung; bereits
-   entschiedene Bits sind „immun" gegen spätere ACEs:
+1. **Evaluation walks ACEs in stored order.** `evaluate_dacl_ordered` runs through the DACL once from front to back. Per right bit, the first matching decision wins; already-decided bits are "immune" to later ACEs:
 
    ```text
    granted, denied = 0, 0
    for ace in dacl:
-       if ace nicht anwendbar (INHERIT_ONLY) oder SID nicht im Token: skip
+       if ace not applicable (INHERIT_ONLY) or SID not in token: skip
        mask = expand_generic_rights(ace.mask)
        undecided = ¬(granted ∨ denied)
        bits = mask ∧ undecided
@@ -46,56 +28,23 @@ aber wich in mehreren Punkten von der Windows-`AccessCheck`-Semantik ab:
    return granted
    ```
 
-   Bei kanonisch sortierter DACL ist das Ergebnis identisch zum vorigen
-   Vier-Phasen-Modell; bei nicht-kanonischen DACLs entspricht es exakt
-   dem, was `AccessCheck` zur Laufzeit liefert.
+   For canonically ordered DACLs the result is identical to the previous four-phase model; for non-canonical DACLs it matches exactly what `AccessCheck` produces at runtime.
 
-2. **`INHERIT_ONLY_ACE` wird vor der Auswertung gefiltert.** Der
-   `fs_scanner`-Parser zerlegt `ACE_HEADER::AceFlags` jetzt sauber in
-   `inheritance_flags` (OI | CI — *welche* Kinder erben) und
-   `propagation_flags` (NP | IO — *wie* es propagiert). Der
-   `INHERITED`-Bit (0x10) bleibt im separaten `inherited: bool`. Die
-   Engine filtert ACEs mit gesetztem IO-Bit für das aktuelle Objekt
-   konsequent aus.
+2. **`INHERIT_ONLY_ACE` is filtered out before evaluation.** The `fs_scanner` parser now splits `ACE_HEADER::AceFlags` cleanly into `inheritance_flags` (OI | CI — *which* children inherit) and `propagation_flags` (NP | IO — *how* propagation works). The `INHERITED` bit (0x10) stays in the separate `inherited: bool`. The engine consistently filters ACEs with the IO bit out for the current object.
 
-3. **Generische Rechte werden zentral expandiert.**
-   `permission_engine::mask::expand_generic_rights()` bildet
-   `GENERIC_READ/WRITE/EXECUTE/ALL` auf die zugehörigen
-   `FILE_GENERIC_*`-Bits bzw. `MASK_FULL_CONTROL` ab. NTFS-Engine,
-   Erklärungsausgabe und `share_scanner` rufen alle die gleiche
-   Funktion auf — der Share-Pfad hat seine lokale Kopie aufgegeben.
+3. **Generic rights are expanded centrally.** `permission_engine::mask::expand_generic_rights()` maps `GENERIC_READ/WRITE/EXECUTE/ALL` to the matching `FILE_GENERIC_*` bits or `MASK_FULL_CONTROL`. NTFS engine, explanation output, and `share_scanner` all call the same function — the share path gave up its local copy.
 
-4. **Nicht-kanonische DACLs werden erkannt und protokolliert.**
-   `first_non_canonical_position` markiert die erste ACE, die die
-   Windows-Kanonik (explizit-Deny → explizit-Allow → inherited-Deny
-   → inherited-Allow) bricht. Die Auswertung folgt trotzdem dem
-   Stored Order; eine Warnung über `tracing::warn!` macht den Befund
-   für Audits sichtbar, ohne das Datenmodell oder das DB-Schema
-   ändern zu müssen.
+4. **Non-canonical DACLs are detected and logged.** `first_non_canonical_position` marks the first ACE that violates Windows canonical order (explicit-Deny → explicit-Allow → inherited-Deny → inherited-Allow). Evaluation still follows stored order; a `tracing::warn!` warning makes the finding visible to audits without changing the data model or the DB schema.
 
-## Begründung / Rationale
+## Rationale
 
-- **Korrektheit hat Vorrang vor Geschwindigkeit** (AGENTS.md, Grundregel 1).
-  Der frühere Bucket-Ansatz war schneller, aber an einer entscheidenden
-  Stelle inkorrekt — Behebung ist nicht optional.
-- **Einheitliche Maskennormalisierung** macht den NTFS- und Share-Pfad
-  konsistent. Eine doppelte Implementierung wäre eine Quelle für
-  zukünftige Drift.
-- Der Diagnose-Pfad über `tracing::warn!` ist bewusst gering invasiv:
-  `EffectivePermission`, das DB-Schema, GUI/CLI/Export-Formate bleiben
-  unverändert. Eine spätere strukturierte Diagnose (etwa ein
-  `non_canonical_dacl: bool`-Feld) ist möglich, sobald ein konkreter
-  Audit-Use-Case sie verlangt.
+- **Correctness before speed** (AGENTS.md, base rule 1). The earlier bucket approach was faster but incorrect at a critical point — fixing it is not optional.
+- **Unified mask normalization** keeps the NTFS and share paths consistent. A duplicated implementation would be a source of future drift.
+- The diagnostic path via `tracing::warn!` is deliberately low-impact: `EffectivePermission`, the DB schema, and the GUI/CLI/export formats stay unchanged. A later structured diagnostic (e.g. a `non_canonical_dacl: bool` field) is possible once a concrete audit use case demands it.
 
-## Konsequenzen / Consequences
+## Consequences
 
-- Neue Regressionstests in `permission_engine::engine::tests` für
-  INHERIT_ONLY, GENERIC_*-Bits, Allow-vor-Deny-Reihenfolge und den
-  Non-Canonical-Detektor.
-- Neue Tests in `fs_scanner::acl::tests` für `split_ace_flags`.
-- `share_scanner` hängt jetzt von `permission_engine` ab — die gemeinsame
-  Funktion `expand_generic_rights` liegt im Permission-Modul, weil die
-  Mask-Expansion eine Permission-Semantik ist, keine FS-Semantik.
-- `contributing_sids` filtert INHERIT_ONLY-ACEs aus und expandiert
-  Generic-Bits vor dem AND mit dem Ergebnis; vorher konnten
-  `GENERIC_ALL`-ACEs fälschlich als „nichts beigetragen" erscheinen.
+- New regression tests in `permission_engine::engine::tests` for INHERIT_ONLY, GENERIC_* bits, Allow-before-Deny ordering, and the non-canonical detector.
+- New tests in `fs_scanner::acl::tests` for `split_ace_flags`.
+- `share_scanner` now depends on `permission_engine` — the shared `expand_generic_rights` function lives in the permission module because mask expansion is permission semantics, not file-system semantics.
+- `contributing_sids` filters INHERIT_ONLY ACEs out and expands generic bits before the AND with the result; previously `GENERIC_ALL` ACEs could wrongly appear as "contributed nothing".

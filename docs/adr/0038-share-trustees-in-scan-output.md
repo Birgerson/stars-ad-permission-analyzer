@@ -1,9 +1,9 @@
 # ADR 0038 — Share-DACL-Trustees im Scan-Output
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-04
+**Status:** Accepted
+**Date:** 2026-06-04
 
-## Kontext / Context
+## Context
 
 Review 2026-06-04 Runde 3 Finding 3 (Medium): Der Scan-Pfad rief
 `build_path_trustees(&fso, None, None)` auf — das **NTFS-only**-
@@ -25,7 +25,7 @@ Das verletzt die Memory-Regel „keine Silent Skips" (Stars-Berichte
 müssen erklären, was sie zeigen und was sie verschweigen) sowie das
 Audit-Versprechen „read-only Analyse erklärt vollständig".
 
-## Entscheidung / Decision
+## Decision
 
 **Share-DACL einmal pro Share lesen** und als Overlay an jeden Pfad
 unter diesem Share anhängen:
@@ -69,7 +69,7 @@ Die Share-DACL ist eine Eigenschaft des Shares, nicht des Unterpfads
 — ein einmaliger Read pro Scan ist sowohl semantisch korrekt als auch
 performance-freundlich.
 
-## Konsequenzen / Consequences
+## Consequences
 
 **Positiv / Positive:**
 

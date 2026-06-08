@@ -1,9 +1,9 @@
 # ADR 0036 — Einheitliche Principal-Resolution-Pipeline
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-04
+**Status:** Accepted
+**Date:** 2026-06-04
 
-## Kontext / Context
+## Context
 
 Die ChatGPT-Code-Review 2026-06-04 Runde 3 (Finding 1, High) hat
 offengelegt, dass der in v1.4.1 eingeführte Multi-Domain-/Trust-
@@ -33,7 +33,7 @@ mal korrekt mit Diagnose-Markern, mal still als verwaiste SID erscheinen.
 Für AD-/DC-Audits ist das nicht akzeptabel — der ganze Sinn der Marker
 aus ADR 0033 (Severity-Sichtbarkeit) wurde dadurch unterlaufen.
 
-## Entscheidung / Decision
+## Decision
 
 Neue Pipeline `ad_resolver::principal` mit **einer einzigen
 Public-Entry-Point-Methode**, die alle Eingabeformen einheitlich
@@ -91,7 +91,7 @@ Kombinationen abdeckt, an denen die alte Architektur leise versagte.
 `Orphaned`-Identities mehr — der nächste Aufruf bekommt frische Daten,
 LSA-Reklassifikation kann immer einsteigen.
 
-## Konsequenzen / Consequences
+## Consequences
 
 **Positiv / Positive:**
 

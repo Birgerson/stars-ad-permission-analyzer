@@ -1,9 +1,9 @@
 # ADR 0043 — Effective Access Context bei explizitem SMB-Kontext
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-05
+**Status:** Accepted
+**Date:** 2026-06-05
 
-## Kontext / Context
+## Context
 
 `AccessContext::for_path(&path)` leitet den Logon-Kontext aus der **Pfadform** ab:
 
@@ -25,7 +25,7 @@ Der Auditor sitzt **lokal auf dem Fileserver** und will die effektive **SMB**-Be
 
 Round-7 Review Finding 1 (High) hat den Bug klassifiziert: ein Audit-Tool, das Share-Regeln gegen Well-Known-Logon-SIDs falsch aggregiert, liefert in dem real häufigsten Fall (Fileserver, lokal eingewählt) ein zu permissives Effective-Rights-Ergebnis. Das ist still falsch und damit der gefährlichste Fehler-Klassentyp für ein Read-only-Auditing-Tool.
 
-## Entscheidung / Decision
+## Decision
 
 Neue Helfer-Methode `AccessContext::for_path_with_smb`:
 
@@ -60,7 +60,7 @@ Sechs Call-Sites in CLI und GUI nutzen den Helfer:
 
 `AccessContext::for_path` bleibt erhalten — sie ist der korrekte Fall für reine Pfad-Ableitung ohne SMB-Hint, und Tests/Code, die sie direkt nutzen, müssen nicht geändert werden.
 
-## Konsequenzen / Consequences
+## Consequences
 
 ### Positiv
 

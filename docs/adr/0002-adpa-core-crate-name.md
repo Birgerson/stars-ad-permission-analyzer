@@ -1,28 +1,24 @@
-# ADR 0002 — Crate-Name `adpa_core` statt `core`
+# ADR 0002 — Crate name `adpa_core` instead of `core`
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-20
+**Status:** Accepted
+**Date:** 2026-05-20
 
-## Kontext / Context
+## Context
 
-Der Core-Crate war zunächst als `core` benannt. Rusts eingebautes `core`-Crate
-(`std::core`, `core::pin`, `core::future`, …) wird von Proc-Makros wie `async_trait`
-direkt referenziert. Ein eigener Crate namens `core` überlappt diesen Namensraum
-und führt zu Kompilierungsfehlern wie `cannot find pin in core`.
+The core crate was initially named `core`. Rust's built-in `core` crate (`std::core`, `core::pin`, `core::future`, …) is referenced directly by proc macros such as `async_trait`. A local crate named `core` overlaps that namespace and triggers compile errors like `cannot find pin in core`.
 
-## Entscheidung / Decision
+## Decision
 
-Der Crate wird in `adpa_core` umbenannt
-(AD Permission Analyzer Core).
+The crate is renamed to `adpa_core` (AD Permission Analyzer Core).
 
-## Begründung / Rationale
+## Rationale
 
-- Vermeidet die Kollision mit Rusts eingebautem `core`-Crate.
-- Der Name `adpa_core` ist eindeutig und sprechend.
-- Alle anderen Crates importieren über `use adpa_core::…`.
+- Avoids the collision with Rust's built-in `core` crate.
+- The name `adpa_core` is unambiguous and self-describing.
+- All other crates import via `use adpa_core::…`.
 
-## Konsequenzen / Consequences
+## Consequences
 
-- Alle Cargo.toml-Abhängigkeiten und `use`-Pfade wurden aktualisiert.
-- Der `doctest = false`-Workaround in `core/Cargo.toml` wurde entfernt.
-- Doctests laufen jetzt wieder normal.
+- All Cargo.toml dependencies and `use` paths updated.
+- The `doctest = false` workaround in `core/Cargo.toml` removed.
+- Doctests now run normally again.

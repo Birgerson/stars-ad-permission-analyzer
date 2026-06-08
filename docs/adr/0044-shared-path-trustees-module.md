@@ -1,9 +1,9 @@
 # ADR 0044 — Pfadzentrische Trustees als gemeinsames Modul für GUI und CLI
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-06
+**Status:** Accepted
+**Date:** 2026-06-06
 
-## Kontext / Context
+## Context
 
 Stars beantwortet zwei Audit-Fragen pro Pfad:
 
@@ -22,7 +22,7 @@ Die zweite Audit-Frage war für CLI-Audits damit faktisch *nicht beantwortet* �
 
 Round-9 Review-Finding 1 hat das als Medium klassifiziert. Die GUI war korrekt, aber die Daten waren in der falschen Schicht. Empfehlung: in eine non-UI-Schicht extrahieren, CLI und GUI teilen das.
 
-## Entscheidung / Decision
+## Decision
 
 Die Trustee-Build-Logik wandert in ein neues Modul **`crates/exporter/src/trustees.rs`**. Die Wahl der Crate folgt drei Kriterien:
 
@@ -108,7 +108,7 @@ let scan_share_overlay = match (smb_server, share_name) {
 
 und übergibt den Overlay an jeden Pfad-Aufruf. Damit ist die Share-DACL-Read-Last konstant pro Scan statt linear pro Pfad — identisches Verhalten wie der GUI-Scan-Pfad seit ADR 0038.
 
-## Konsequenzen / Consequences
+## Consequences
 
 ### Positiv
 

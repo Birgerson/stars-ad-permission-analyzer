@@ -1,9 +1,9 @@
 # ADR 0030 — Update-Manager: Pfadvalidierung und Policy-Schicht
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-01
+**Status:** Accepted
+**Date:** 2026-06-01
 
-## Kontext / Context
+## Context
 
 ADR 0028 hat den `update_manager`-Crate als Skelett aufgesetzt: Manifest
 mit Signatur und SHA-256-Datei-Hashes, `RejectAllVerifier` als sicherer
@@ -28,7 +28,7 @@ Reviewer-Befunde 2026-05-31 #6 und #7 zeigen zwei konkrete Schwächen:
    für eine vollständige Freigabe halten und die Policy-Prüfung
    überspringen.
 
-## Entscheidung / Decision
+## Decision
 
 1. **`validate_manifest_relative_path` als zentrale Pfadprüfung.** In
    `update_manager::manifest` lehnt sie ab:
@@ -82,7 +82,7 @@ Reviewer-Befunde 2026-05-31 #6 und #7 zeigen zwei konkrete Schwächen:
    Pre-Release-Ordering ist eine v1.x+-Erweiterung, sollte sie nötig
    werden.
 
-## Begründung / Rationale
+## Rationale
 
 - **Pfadprüfung ist defense-in-depth.** Auch wenn heute keine
   Installationslogik existiert, ist „später ergänzbar ohne Re-Review"
@@ -100,7 +100,7 @@ Reviewer-Befunde 2026-05-31 #6 und #7 zeigen zwei konkrete Schwächen:
 - **Dotted-Numeric reicht heute.** Die Software ist auf v1.0.0,
   schreibt v1.1.0; keine Pre-Releases im produktiven Kanal.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - Externe Konsumenten von `verify_manifest` (gibt es heute keine) wären
   umbenennungspflichtig.
@@ -110,7 +110,7 @@ Reviewer-Befunde 2026-05-31 #6 und #7 zeigen zwei konkrete Schwächen:
 - `chrono` ist neu als Workspace-Dependency in `update_manager`;
   passend, weil das Hauptprojekt es ohnehin nutzt.
 
-## Tests / Tests
+## Tests
 
 25 neue Tests im `update_manager`-Crate:
 

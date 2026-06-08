@@ -1,9 +1,9 @@
 # ADR 0029 — Konkreter Mitgliedschafts-Pfad in der Erklärung
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-01
+**Status:** Accepted
+**Date:** 2026-06-01
 
-## Kontext / Context
+## Context
 
 ADR 0014 hat die transitive Gruppenauflösung serverseitig per
 `LDAP_MATCHING_RULE_IN_CHAIN` umgesetzt. Das liefert eine vollständige
@@ -17,7 +17,7 @@ Zwischengruppe wirkt die ACE auf den Benutzer?". Reviewer-Befund
 2026-05-31 #1 stuft das als High ein, weil die Effektiv-Berechnung
 zwar korrekt ist, der Beweisweg aber unvollständig bleibt.
 
-## Entscheidung / Decision
+## Decision
 
 1. **Neues Datenmodell `MembershipPath` in `adpa_core::model`.**
    Trägt:
@@ -72,7 +72,7 @@ zwar korrekt ist, der Beweisweg aber unvollständig bleibt.
    ist eine Live-Auswertung und kostet pro Lauf nichts, was eine
    Persistierung rechtfertigen würde.
 
-## Begründung / Rationale
+## Rationale
 
 - **Audit-Korrektheit.** AGENTS.md fordert pro Ergebnis eine
   nachvollziehbare Kette, nicht nur die Endaussage. Ohne diesen Pfad
@@ -88,7 +88,7 @@ zwar korrekt ist, der Beweisweg aber unvollständig bleibt.
   das im Bericht explizit ausgewiesen statt einer plausibel aussehenden,
   aber irreführenden Direkt-Aussage.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - Erklärungstexte sind länger geworden. Für GUI-Listenansichten kann
   das eine optische Anpassung erfordern (Wrap-/Truncation-Verhalten).
@@ -101,7 +101,7 @@ zwar korrekt ist, der Beweisweg aber unvollständig bleibt.
   Trennung wird durch ADR 0029 verstärkt: der Pfad ist
   Audit-Information, kein Berechnungs-Input.
 
-## Tests / Tests
+## Tests
 
 Vier neue Engine-Tests in `crates/permission_engine/src/engine.rs`:
 

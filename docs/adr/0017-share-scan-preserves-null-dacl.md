@@ -1,9 +1,9 @@
 # ADR 0017 — Share-Scan erhält die NULL-DACL-Semantik
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-24
+**Status:** Accepted  
+**Date:** 2026-05-24
 
-## Kontext / Context
+## Context
 
 `get_share_dacl` unterscheidet seit ADR 0010 korrekt zwischen
 `ShareDacl::NullDacl` (keine Zugriffseinschränkung — Vollzugriff für
@@ -22,7 +22,7 @@ Freigabe keine Einschränkung hat oder effektiv keinen Zugriff zulässt.
 
 Siehe Review-Befund 7.
 
-## Entscheidung / Decision
+## Decision
 
 1. **`ShareScanResult` trägt zusätzlich ein strukturiertes Feld**
 
@@ -60,7 +60,7 @@ Siehe Review-Befund 7.
    Docstring weist seit ADR 0010 schon auf `get_share_dacl` für den
    strikten Fall hin.
 
-## Begründung / Rationale
+## Rationale
 
 - **Minimal invasiv:** Bestehende Aufrufer von `ShareScanResult`
   (intern: Tests; extern: keine produktiven) sehen das neue Feld
@@ -72,7 +72,7 @@ Siehe Review-Befund 7.
   `FileSystemObject.null_dacl` bereits die Unterscheidung; die
   Share-Seite zieht jetzt nach.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - 3 neue Tests in `share_scanner::scanner::tests`:
   - `scan_shares_records_dacl_status_for_every_successful_share`

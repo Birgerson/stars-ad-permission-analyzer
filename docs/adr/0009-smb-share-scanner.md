@@ -3,13 +3,13 @@
 ## Status
 Accepted
 
-## Kontext / Context
+## Context
 
 Step 13 adds the ability to enumerate SMB shares on a server and read the share-level security
 descriptors. The `share_scanner` crate, which previously only had a stub, now implements the
 full Windows Net API integration.
 
-## Entscheidung / Decision
+## Decision
 
 ### Windows APIs
 
@@ -68,7 +68,7 @@ the same pattern used in `fs_scanner::acl`.
 - `debug!` per discovered share and per share with read permissions
 - `warn!` on any failure (Net API error, missing security descriptor, SID conversion error)
 
-## Alternativen erwogen / Alternatives considered
+## Alternatives considered
 
 - **`windows` crate (higher-level)**: more ergonomic but adds a large dependency. The existing
   project uses `windows-sys`; consistency favoured staying with it.
@@ -80,7 +80,7 @@ the same pattern used in `fs_scanner::acl`.
   security descriptor directly, while `GetNamedSecurityInfoW` on `\\server\share` may return
   the NTFS DACL of the underlying directory, not the share permission DACL.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - `adpa scan` can now be extended (Step 14) to pass the share permission mask to the
   permission engine, enabling the NTFS ∩ Share combination for any path reachable via a share.

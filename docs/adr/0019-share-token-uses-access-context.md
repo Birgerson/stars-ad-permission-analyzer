@@ -1,9 +1,9 @@
 # ADR 0019 — Share-Token nutzt denselben AccessContext wie der NTFS-Token
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-24
+**Status:** Accepted  
+**Date:** 2026-05-24
 
-## Kontext / Context
+## Context
 
 ADR 0013 hat den `AccessContext` eingeführt: für UNC-Pfade fügt die
 Engine `NETWORK` (S-1-5-2) implizit in den Access-Token auf, für lokale
@@ -27,7 +27,7 @@ schwächere Share-Token jede effektive SMB-Berechnung.
 Der Folge-Review (2026-05-24) hat das als High-Priority-Befund 1
 korrekt identifiziert.
 
-## Entscheidung / Decision
+## Decision
 
 1. **`resolve_scan_share_status` (CLI) und `resolve_share_status` (GUI)
    nehmen einen neuen Pflicht-Parameter `access_context: AccessContext`.**
@@ -50,7 +50,7 @@ korrekt identifiziert.
    Rückwärts-Kompatibilität bestehen, ist aber für CLI/GUI nicht mehr
    die richtige Wahl.
 
-## Begründung / Rationale
+## Rationale
 
 - **Korrektheit hat Vorrang vor Geschwindigkeit** (AGENTS.md,
   Grundregel 1). Eine in zwei Schritten falsch berechnete Maske ist
@@ -63,7 +63,7 @@ korrekt identifiziert.
   letzteres wäre korrekt, aber durchgereicht zu sehen macht die
   Symmetrie offensichtlich.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - 3 neue Tests in `share_scanner::scanner::tests`:
   - `deny_network_share_ace_does_nothing_without_network_in_token`

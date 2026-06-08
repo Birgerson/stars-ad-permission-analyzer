@@ -1,9 +1,9 @@
 # ADR 0031 — Zentrale UNC-Zerlegung und expliziter SMB-Zielserver
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-04
+**Status:** Accepted
+**Date:** 2026-06-04
 
-## Kontext / Context
+## Context
 
 ChatGPT-Code-Review 2026-06-04, Findings 1, 2 und 4 trafen alle dieselbe
 Stelle der CLI-/GUI-Orchestrierung:
@@ -29,7 +29,7 @@ Stelle der CLI-/GUI-Orchestrierung:
   Token-Mismatch besonders bei ACEs auf `SERVER\Administrators`,
   `BUILTIN\Users` oder fileserverlokalen Applikations­gruppen.
 
-## Entscheidung / Decision
+## Decision
 
 1. **Eine Quelle der Wahrheit** für UNC-Zerlegung im `validation`-Crate:
 
@@ -54,7 +54,7 @@ Stelle der CLI-/GUI-Orchestrierung:
    (GUI)** leiten Server und Share über die zentralen Helfer ab. Der
    Aufruf­vertrag bleibt: lokaler Pfad ohne Override → `NotApplicable`.
 
-## Begründung / Rationale
+## Rationale
 
 - **Eine Stelle, eine Wahrheit.** Die GUI hatte den Lokal-Pfad-Guard
   bereits — die CLI nicht. Das war eine echte Vertrauenslücke, die der
@@ -66,7 +66,7 @@ Stelle der CLI-/GUI-Orchestrierung:
   `\\?\UNC\…` schon verarbeiten, nur die Orchestrierungs-Helfer nicht.
   Der Fix richtet beide Welten aufeinander aus.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - Externe Konsumenten der `unc_components`-Funktion in CLI / GUI gibt es
   nicht — die Symbole waren `fn`-private bzw. modul-private.
@@ -74,7 +74,7 @@ Stelle der CLI-/GUI-Orchestrierung:
   GUI-Smoke-Test, der die Sentinel-Konstellation aus Finding 1
   (`C:\Windows\SYSVOL` ohne Override → `NotApplicable`) abblockt.
 
-## Tests / Tests
+## Tests
 
 Neun Regressionstests in `validation::path::tests`:
 

@@ -1,9 +1,9 @@
 # ADR 0024 — Unsupported Share-ACEs als strukturierte Diagnose
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-25
+**Status:** Accepted  
+**Date:** 2026-05-25
 
-## Kontext / Context
+## Context
 
 `FileSystemObject.unsupported_aces` und
 `EffectivePermission.unsupported_ace_count` zeichnen seit ADR 0004
@@ -22,7 +22,7 @@ Reports zeigten keine Warnung.
 
 Folge-Review (2026-05-25), Finding 2 (Medium).
 
-## Entscheidung / Decision
+## Decision
 
 1. **Neue Variant `PermissionDiagnostic::UnsupportedShareAces { count }`**
    in `adpa_core::model`. Nutzt das in ADR 0021 etablierte
@@ -72,7 +72,7 @@ Folge-Review (2026-05-25), Finding 2 (Medium).
    `non_canonical_dacl_diagnostic_alone_does_not_mark_incomplete`
    dokumentiert die Unterscheidung explizit.
 
-## Begründung / Rationale
+## Rationale
 
 - **Symmetrie zur NTFS-Seite:** beide DACL-Welten haben jetzt das
   gleiche „ich konnte einen ACE nicht auswerten"-Signal in Modell,
@@ -91,7 +91,7 @@ Folge-Review (2026-05-25), Finding 2 (Medium).
   nur in den Exporten. GUI-Worker propagiert es in `scan_errors`
   (persistiert).
 
-## Konsequenzen / Consequences
+## Consequences
 
 - 1 neuer Test in `share_scanner::scanner::tests`
   (`share_dacl_scan_carries_dacl_and_unsupported_count`).

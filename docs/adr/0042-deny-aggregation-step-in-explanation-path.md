@@ -1,9 +1,9 @@
 # ADR 0042 — Deny-Aggregation als eigener Erklärungspfad-Schritt
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-05
+**Status:** Accepted
+**Date:** 2026-06-05
 
-## Kontext / Context
+## Context
 
 Die Stars-Engine aggregiert NTFS-Allow- und Deny-ACEs in einer einzigen
 finalen `ntfs_raw`-Maske (Funktion `evaluate_dacl_ordered`). Diese Maske
@@ -44,7 +44,7 @@ weggefallen sind: in `evaluate_dacl_ordered` läuft eine zweite Maske
 `denied` mit, die alle "first decision = Deny"-Bits aufsammelt. Diese
 Information wurde bisher nicht aus der Funktion herausgereicht.
 
-## Entscheidung / Decision
+## Decision
 
 `evaluate_dacl_ordered` gibt jetzt `(granted, denied)` zurück. Die Engine
 reicht `denied_raw` an `build_explanation` durch, und `build_explanation`
@@ -65,7 +65,7 @@ Wenn keine Deny-ACE im DACL der relevanten SIDs ist, bleibt der Pfad
 unverändert — der neue Schritt erscheint nicht, damit ganz normale Berichte
 (die in der überwiegenden Mehrheit aller Audits) sauber lesbar bleiben.
 
-## Konsequenzen / Consequences
+## Consequences
 
 ### Positiv
 

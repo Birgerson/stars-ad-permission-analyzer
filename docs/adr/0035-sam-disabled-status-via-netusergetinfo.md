@@ -1,9 +1,9 @@
 # ADR 0035 — SAM-Pfad bestätigt `disabled` per `NetUserGetInfo`
 
-**Status:** Akzeptiert / Accepted
-**Datum / Date:** 2026-06-04
+**Status:** Accepted
+**Date:** 2026-06-04
 
-## Kontext / Context
+## Context
 
 Beim zweiten ChatGPT-Code-Review-Durchgang am 2026-06-04 trat ein
 stilles Korrektheitsproblem im SAM-Fallback-Pfad hervor
@@ -25,7 +25,7 @@ Ohne Fix konnte ein Audit-Konsument nicht erkennen, dass der
 `disabled`-Status für eine SAM-aufgelöste Identity überhaupt fraglich
 ist. Das verletzt die „keine Silent Skips"-Regel.
 
-## Entscheidung / Decision
+## Decision
 
 1. **Neue Helper-Funktion `user_account_disabled`** in
    `ad_resolver::sam`:
@@ -67,7 +67,7 @@ ist. Das verletzt die „keine Silent Skips"-Regel.
    - CLI und HTML rendern den Marker mit eigener Beschreibung
      (`[i]`-Hinweis bzw. `badge-info`).
 
-## Konsequenzen / Consequences
+## Consequences
 
 **Positiv / Positive:**
 

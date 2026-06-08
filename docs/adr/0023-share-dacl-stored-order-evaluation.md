@@ -1,9 +1,9 @@
 # ADR 0023 — Share-DACL in Stored-Order auswerten (Symmetrie zur NTFS-Engine)
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-25
+**Status:** Accepted  
+**Date:** 2026-05-25
 
-## Kontext / Context
+## Context
 
 ADR 0012 hat die NTFS-Engine auf Windows-`AccessCheck`-Semantik
 umgestellt: DACL in gespeicherter ACE-Reihenfolge auswerten, erste
@@ -36,7 +36,7 @@ Da das Endresultat `NTFS ∩ Share` ist, vergiftet eine asymmetrisch
 falsche Share-Maske jede Effective-Rights-Berechnung über UNC-Pfade,
 selbst wenn die NTFS-Seite korrekt rechnet.
 
-## Entscheidung / Decision
+## Decision
 
 1. **`effective_share_mask` walkt die Share-DACL in gespeicherter
    ACE-Reihenfolge.** Der Algorithmus ist exakt symmetrisch zu
@@ -76,7 +76,7 @@ selbst wenn die NTFS-Seite korrekt rechnet.
    1 (Allow). Das 4-Phasen-Modell bleibt strukturell als Symmetrie
    zur NTFS-Variante erhalten.
 
-## Begründung / Rationale
+## Rationale
 
 - **Korrektheit hat Vorrang** (AGENTS.md Grundregel 1) und gilt
   symmetrisch für NTFS und Share. Eine zur Hälfte gefixte
@@ -91,7 +91,7 @@ selbst wenn die NTFS-Seite korrekt rechnet.
   ein konkreter Use-Case sie verlangt — dasselbe Muster wie bei
   ADR 0012 → ADR 0021.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - 5 neue Tests in `share_scanner::scanner::tests`:
   - `non_canonical_allow_before_deny_first_wins`

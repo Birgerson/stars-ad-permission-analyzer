@@ -1,31 +1,25 @@
-# ADR 0013 — Zugriffskontext im Token (`AccessContext`)
+# ADR 0013 — Access context in the token (`AccessContext`)
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-24
+**Status:** Accepted
+**Date:** 2026-05-24
 
-## Kontext / Context
+## Context
 
-Die Permission Engine baute den Token-SID-Satz bisher unabhängig vom
-Logon-Typ. Implizit hinzugefügt wurden nur `Everyone` (S-1-1-0) und
-`Authenticated Users` (S-1-5-11). Windows ergänzt im realen
-`AccessCheck` jedoch je nach Logon noch weitere Well-Known-SIDs:
+The permission engine built the token SID set independently of the logon type. The only implicit additions were `Everyone` (S-1-1-0) and `Authenticated Users` (S-1-5-11). The real Windows `AccessCheck` adds further well-known SIDs depending on the logon:
 
-- Remote-SMB-Logon → `NETWORK` (S-1-5-2)
-- lokal interaktiver Logon → `INTERACTIVE` (S-1-5-4) und `LOCAL` (S-1-2-0)
+- Remote SMB logon → `NETWORK` (S-1-5-2)
+- local interactive logon → `INTERACTIVE` (S-1-5-4) and `LOCAL` (S-1-2-0)
 
-Konsequenz im alten Verhalten:
+Consequence of the previous behaviour:
 
-- ACEs auf `NETWORK` (typisch für SMB-Audit-Setups: „Deny NETWORK ‹X›")
-  wurden bei SMB-Analysen nie ausgewertet — die Engine konnte zu
-  großzügig wirken und gleichzeitig Broad-Group-Risiken über `NETWORK`
-  übersehen.
-- Symmetrisches Problem bei `INTERACTIVE` für lokale Analysen.
+- ACEs on `NETWORK` (typical for SMB audit setups: "Deny NETWORK <X>") were never evaluated during SMB analyses — the engine could look too generous and at the same time miss broad-group risks via `NETWORK`.
+- Symmetric problem with `INTERACTIVE` for local analyses.
 
-Siehe Review-Befund 4.
+See review finding 4.
 
-## Entscheidung / Decision
+## Decision
 
-1. **Neuer Enum `AccessContext`** in `adpa_core::model`:
+1. **New enum `AccessContext`** in `adpa_core::model`:
 
    ```rust
    pub enum AccessContext {
@@ -36,51 +30,28 @@ Siehe Review-Befund 4.
    }
    ```
 
-   `Unspecified` ist der Default und reproduziert exakt das alte
-   Verhalten — bestehende Aufrufer, die noch keinen Kontext setzen,
-   bekommen keine Verhaltensänderung untergeschoben.
+   `Unspecified` is the default and exactly reproduces the previous behaviour — existing callers that don't yet set a context get no surprise behaviour change.
 
-2. **`PermissionEvaluationInput.access_context`** als neues Pflichtfeld.
-   Die Engine ergänzt den Token gemäß dem Kontext und reicht das
-   Ergebnis sonst unverändert weiter.
+2. **`PermissionEvaluationInput.access_context`** as a new mandatory field. The engine extends the token according to the context and passes the result through otherwise unchanged.
 
-3. **Auto-Detection im Aufrufer:** `AccessContext::for_path(path)`
-   leitet den Kontext aus der Pfadform ab:
+3. **Auto-detection at the caller:** `AccessContext::for_path(path)` derives the context from the path shape:
 
-   - UNC (`\\server\…`, inkl. Long-Path-Form `\\?\UNC\…`) → `RemoteSmb`
-   - lokaler Pfad (`C:\…`, inkl. `\\?\C:\…`) → `LocalInteractive`
+   - UNC (`\\server\…`, incl. long-path form `\\?\UNC\…`) → `RemoteSmb`
+   - local path (`C:\…`, incl. `\\?\C:\…`) → `LocalInteractive`
 
-   CLI und GUI nutzen diesen Helfer einmalig pro Analyse-/Scan-Aufruf.
+   CLI and GUI call this helper once per analyse/scan invocation.
 
-4. **Backwards-kompatible Public-API:** `build_token_sids` und
-   `build_token_sids_with_local` bleiben erhalten und delegieren auf
-   `build_token_sids_with_context(_, _, _, AccessContext::Unspecified)`.
-   Neue Aufrufer verwenden die `_with_context`-Variante.
+4. **Backwards-compatible public API:** `build_token_sids` and `build_token_sids_with_local` stay and delegate to `build_token_sids_with_context(_, _, _, AccessContext::Unspecified)`. New callers use the `_with_context` variant.
 
-## Begründung / Rationale
+## Rationale
 
-- **Korrektheitsgewinn ohne Risiko für bestehende Aufrufer:** Der
-  Default `Unspecified` lässt jeden alten Code unverändert funktionieren.
-  Nur Aufrufer, die den Kontext aktiv setzen (CLI, GUI), bekommen das
-  korrektere Verhalten.
-- **Keine GUI-/CLI-spezifische Token-Logik:** Die Engine bleibt der
-  einzige Ort, an dem Token-SIDs zusammengebaut werden — die Aufrufer
-  liefern nur den Kontext. Das verhindert, dass Token-Erweiterungen
-  später dupliziert oder vergessen werden.
-- **Bewusst minimaler Satz Well-Knowns:** Nur `NETWORK`, `INTERACTIVE`,
-  `LOCAL`. Weitere Logon-Typen (`BATCH` S-1-5-3, `SERVICE` S-1-5-6,
-  `REMOTE_INTERACTIVE` S-1-5-14) lassen sich später hinzufügen, sobald
-  ein konkreter Audit-Use-Case sie braucht.
+- **Correctness gain without risk for existing callers:** the `Unspecified` default leaves every old code path unchanged. Only callers that actively set the context (CLI, GUI) get the more correct behaviour.
+- **No GUI/CLI-specific token logic:** the engine stays the only place where token SIDs are assembled — callers only supply the context. This prevents token extensions from being duplicated or forgotten later.
+- **Deliberately minimal set of well-knowns:** only `NETWORK`, `INTERACTIVE`, `LOCAL`. Further logon types (`BATCH` S-1-5-3, `SERVICE` S-1-5-6, `REMOTE_INTERACTIVE` S-1-5-14) can be added later once a concrete audit use case requires them.
 
-## Konsequenzen / Consequences
+## Consequences
 
-- 9 neue Tests in `permission_engine::engine::tests`: NETWORK greift im
-  SMB-Kontext, nicht in den anderen; INTERACTIVE/LOCAL spiegelbildlich;
-  `Unspecified` ist das alte Verhalten; Deny-NETWORK überstimmt ein
-  User-Allow im SMB-Audit-Pfad.
-- 5 neue Tests in `adpa_core::model::tests` für `for_path`
-  (Standardpfad, UNC, Long-Path-UNC, Long-Path-lokal).
-- Persistenz/Export sind nicht betroffen — `AccessContext` lebt nur auf
-  der Eingabeseite. `EffectivePermission` bleibt unverändert.
-- Bestehende ADRs werden nicht widerrufen; ADR 0012
-  (AccessCheck-Semantik) und 0013 (dieser) ergänzen sich.
+- 9 new tests in `permission_engine::engine::tests`: NETWORK applies in the SMB context, not in the others; INTERACTIVE/LOCAL symmetrically; `Unspecified` is the previous behaviour; Deny-NETWORK overrides a user Allow in the SMB audit path.
+- 5 new tests in `adpa_core::model::tests` for `for_path` (standard path, UNC, long-path UNC, long-path local).
+- Persistence and export are unaffected — `AccessContext` only lives on the input side. `EffectivePermission` stays unchanged.
+- Existing ADRs are not revoked; ADR 0012 (AccessCheck semantics) and 0013 (this one) complement each other.

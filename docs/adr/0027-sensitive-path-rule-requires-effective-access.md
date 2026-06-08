@@ -1,9 +1,9 @@
 # ADR 0027 — `SensitivePathRule` setzt tatsächlichen Zugriff voraus
 
-**Status:** Akzeptiert / Accepted  
-**Datum / Date:** 2026-05-25
+**Status:** Accepted  
+**Date:** 2026-05-25
 
-## Kontext / Context
+## Context
 
 `SensitivePathRule` flaggt Pfade, deren Name auf sensible Daten
 hindeutet (`password`, `secret`, `token`, …). Die Finding-Beschreibung
@@ -21,7 +21,7 @@ besteht. Bei Audit-Berichten als Beweis-Artefakt (vgl. AGENTS.md
 
 Review 2026-05-25, Finding 3 (Medium).
 
-## Entscheidung / Decision
+## Decision
 
 **`SensitivePathRule.evaluate` filtert `p.effective_mask.0 > 0` vor**
 der Keyword-Prüfung. Pfade, auf die der Benutzer **kein** Zugriffs-
@@ -33,7 +33,7 @@ Begründungstext im Code:
 > identity actually has access. Otherwise a deny-all result would be
 > misreported as a positive risk.
 
-## Begründung / Rationale
+## Rationale
 
 - **Findung muss zur Aussage passen.** „Has access" ohne effektiven
   Zugriff ist semantisch inkorrekt.
@@ -51,7 +51,7 @@ Begründungstext im Code:
   Konzept etabliert. Falls später ein dedizierter „pure-naming"-
   Befund gewünscht ist, wird das eine separate Regel mit eigener ID.
 
-## Konsequenzen / Consequences
+## Consequences
 
 - 2 neue Tests in `risk_engine::rules::tests`:
   - `sensitive_path_with_zero_effective_mask_not_flagged`
