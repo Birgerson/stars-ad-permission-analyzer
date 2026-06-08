@@ -40,6 +40,7 @@ UMLAUT_RE = re.compile(r"[äöüÄÖÜß]")
 DE_WORDS = [
     # Theme-toggle and obvious GUI labels
     "Hell", "Dunkel", "Abbrechen", "Schliessen",
+    "Ziel", "Modus",
     # German compound nouns from Stars' GUI that have no English meaning
     "Berechtigungspfad", "Berechtigungen", "Berechtigung",
     "Zieldatei", "Zielordner", "Berichte",

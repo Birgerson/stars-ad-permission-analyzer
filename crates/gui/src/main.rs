@@ -611,7 +611,7 @@ slint::slint! {
                             spacing: Theme.spacing-sm;
 
                             GroupBox {
-                                title: "Ziel / Target";
+                                title: "Target";
                                 VerticalBox {
                                     spacing: Theme.spacing-sm;
                                     GridBox {
@@ -724,7 +724,7 @@ slint::slint! {
                                         spacing: Theme.spacing-sm;
                                         padding: 0px;
                                         Text {
-                                            text: "Modus:";
+                                            text: "Mode:";
                                             vertical-alignment: center;
                                             width: 110px;
                                         }
@@ -945,7 +945,7 @@ slint::slint! {
                             spacing: Theme.spacing-sm;
 
                             GroupBox {
-                                title: "Ziel / Target";
+                                title: "Target";
                                 VerticalBox {
                                     spacing: Theme.spacing-sm;
                                     GridBox {
@@ -1095,7 +1095,7 @@ slint::slint! {
                                         spacing: Theme.spacing-sm;
                                         padding: 0px;
                                         Text {
-                                            text: "Modus:";
+                                            text: "Mode:";
                                             vertical-alignment: center;
                                             width: 110px;
                                         }
@@ -2090,7 +2090,6 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             return;
         }
 
-        // LDAP-Modus: 0 = Aus (SAM/LSA), 1 = LDAPS, 2 = LDAP unverschluesselt.
         // LDAP mode: 0 = off (SAM/LSA), 1 = LDAPS, 2 = plain LDAP.
         let ldap = match ui.get_a_ldap_mode() {
             1 | 2 => Some(LdapParams {

@@ -115,7 +115,7 @@ impl RawEntry {
 
 /// Establishes an authenticated LDAP connection.
 ///
-/// TLS-Modus / TLS mode:
+/// TLS mode:
 ///   `Ldaps` (default): ldaps://server:636 — TLS from the first byte, recommended.
 ///   `Insecure`: ldap://server:389 — password in plaintext, test environments only.
 pub async fn connect(config: &LdapConfig) -> Result<Ldap, CoreError> {

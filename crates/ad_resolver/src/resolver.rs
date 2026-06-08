@@ -367,7 +367,7 @@ impl LdapResolver {
                 chain_dns.push(prev.clone());
                 cur = prev.clone();
             }
-            chain_dns.reverse(); // jetzt Hop-1 → ... → Ziel / now hop-1 → ... → target
+            chain_dns.reverse(); // now hop-1 → ... → target
             let mut nodes = Vec::with_capacity(chain_dns.len() + 1);
             let mut names = Vec::with_capacity(chain_dns.len() + 1);
             nodes.push(sid.clone());
