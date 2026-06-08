@@ -57,7 +57,7 @@ impl<T> NetApiBuffer<T> {
     /// # Safety
     ///
     ///
-    ///   („double free" waere ein UB).
+    ///   (a double free would be UB).
     ///
     /// Takes ownership of a buffer pointer returned by a `NetApi*`
     /// function.

@@ -11,8 +11,6 @@ use adpa_core::{
     traits::{RiskContext, RiskRule},
 };
 
-///   NTFS-Untergrenze),
-///
 /// Marks a finding as incomplete when the underlying evaluation has gaps —
 /// any of:
 /// - the share DACL could not be read (effective_mask is only an NTFS lower
@@ -29,19 +27,16 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
         || matches!(p.local_group_status, LocalGroupEvalStatus::NotAvailable(_))
         // Follow-up finding 2: unsupported share ACEs surface as a
         // structured marker in diagnostics — risk findings for this
-        //
-        // Review 2026-06-04 Runde 2, Finding 4: SAM-Fallback ohne LDAP
-        //
         // Review 2026-06-04 round 2, finding 4: SAM fallback without LDAP
         // means no recursive domain group resolution. ADR 0033 requires
         // risk findings for those permissions to carry
         // `incomplete = true` — same logic as for the other incomplete-
-        // evaluation sources. The risk engine did not consider this
-        // marker before; that was a discrepancy between ADR and code.
-        // Review 2026-06-04 Runde 2 Finding 1: Identitaet aus fremder
+        // evaluation sources.
+        //
         // Review 2026-06-04 round 2 finding 1: identity from a foreign
         // domain — LDAP base does not index it, domain group recursion is
         // incomplete (semantically same as SAM fallback).
+        //
         // Review 2026-06-04 round 4 finding 1: technical LDAP / group
         // failures in the principal pipeline are incompleteness too.
         || p.diagnostics.iter().any(|d| {
@@ -65,7 +60,7 @@ use permission_engine::mask::{
 const WRITE_SPECIFIC_BITS: u32 = MASK_WRITE & !MASK_READ;
 
 // ---------------------------------------------------------------------------
-// Bekannte Well-Known SIDs / Known well-known SIDs
+// Known well-known SIDs
 // ---------------------------------------------------------------------------
 
 const SID_EVERYONE: &str = "S-1-1-0";
@@ -133,7 +128,7 @@ impl RuleRegistry {
 }
 
 // ---------------------------------------------------------------------------
-// Regel 1: Full Control — CRITICAL
+// Rule 1: Full Control — CRITICAL
 // ---------------------------------------------------------------------------
 
 /// Reports paths where the user has Full Control.
@@ -163,7 +158,7 @@ impl RiskRule for FullControlRule {
 }
 
 // ---------------------------------------------------------------------------
-// Regel 2: Write-Zugriff — HIGH
+// Rule 2: Write access — HIGH
 // ---------------------------------------------------------------------------
 
 /// Reports paths with write access (Modify or Write, but not Full Control).
@@ -377,7 +372,7 @@ impl RiskRule for DirectUserAceRule {
 }
 
 // ---------------------------------------------------------------------------
-// Regel 5: Sensible Pfadnamen — MEDIUM
+// Rule 5: Sensitive path names — MEDIUM
 // ---------------------------------------------------------------------------
 
 /// Reports paths whose name suggests sensitive data.
@@ -787,7 +782,7 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 Runde 2 Finding 1: `IdentityNotInConfiguredLdapBase`
+    /// Review 2026-06-04 round 2 finding 1: `IdentityNotInConfiguredLdapBase`
     /// Review 2026-06-04 round 2 finding 1: `IdentityNotInConfiguredLdapBase`
     /// means LSA resolved the SID but the LDAP `base_dn` does not index
     /// it. Cross-domain group recursion is incomplete — risk findings
@@ -806,7 +801,7 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 Runde 2 Finding 5:
+    /// Review 2026-06-04 round 2 finding 5:
     /// tragen.
     /// Review 2026-06-04 round 2 finding 5: `IdentityDisabledStatusUnknown`
     /// is informational only — it signals "`disabled` could not be
@@ -827,7 +822,7 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 Runde 4 Finding 1: `IdentityLookupFailed`
+    /// Review 2026-06-04 round 4 finding 1: `IdentityLookupFailed`
     /// Round 4 finding 1: IdentityLookupFailed → incomplete.
     #[test]
     fn full_control_marks_finding_incomplete_on_identity_lookup_failed() {
@@ -845,7 +840,7 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 Runde 4 Finding 1: `GroupResolutionFailed`
+    /// Review 2026-06-04 round 4 finding 1: `GroupResolutionFailed`
     /// als incomplete durchschlagen.
     /// Round 4 finding 1: GroupResolutionFailed → incomplete.
     #[test]

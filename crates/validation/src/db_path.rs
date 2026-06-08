@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Validierung von Datenbank-Zielpfaden.
 //! Validation of database target paths.
 //!
-//! existierendes Zielverzeichnis.
 //! The database path is a write target and therefore subject to the same
 //! policy as export paths: absolute path, known extension, existing parent
 //! directory.
@@ -12,7 +10,6 @@
 use adpa_core::error::CoreError;
 use std::path::{Path, PathBuf};
 
-/// Validierter Datenbank-Zielpfad.
 /// Validated database target path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedDbPath(pub PathBuf);

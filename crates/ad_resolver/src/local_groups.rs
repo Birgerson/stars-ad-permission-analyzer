@@ -92,7 +92,7 @@ pub fn format_account_for_local_groups(identity: &Identity) -> Option<String> {
         .next()
 }
 
-/// (Review Runde 5 Finding 1).
+/// (review round 5 finding 1).
 /// `NetUserGetLocalGroups` outcome — separates **"user not found"**
 /// from **"user found but has no group memberships"**.
 #[derive(Debug, Clone)]
@@ -783,7 +783,7 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 Runde 5 Finding 1: bei einem NetBIOS-Domainnamen
+    /// Review 2026-06-04 round 5 finding 1: when given a NetBIOS domain name
     /// produktiv zu stillen NERR_USER_NOT_FOUND.
     /// Round 5 finding 1: NetBIOS domain must NOT produce a `name@domain`
     /// candidate — that exact form was the production bug.

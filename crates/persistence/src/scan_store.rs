@@ -163,7 +163,6 @@ impl<'a> ScanStore<'a> {
             };
 
         // Code Review 2026-06-07 Finding 1: Identity-Snapshot pro
-        // unveraenderlich gegenueber spaeteren Identity-Updates.
         // Code review 2026-06-07 finding 1: identity snapshot per
         // permission row. Previously the identity (name/domain/kind/
         // disabled) lived only in the global `identities` table and was

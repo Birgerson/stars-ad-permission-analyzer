@@ -486,7 +486,6 @@ slint::slint! {
         in property <string> a-mask-hex;
         in property <string> a-share-line;
         in property <[string]> a-explanation;
-        // Trustee-Sicht: pfadzentrierte Auflistung aller ACEs ohne
         // Trustee view: path-centric listing of all ACEs without a fixed
         // identity.
         in property <[TrusteeRowVm]> a-trustees;
@@ -809,7 +808,7 @@ slint::slint! {
                                         Row {
                                             Text { text: "Share:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "Daten";
+                                                placeholder-text: "data";
                                                 text <=> root.a-smb-share;
                                             }
                                         }
@@ -854,7 +853,7 @@ slint::slint! {
                                 VerticalBox {
                                     spacing: 4px;
                                     Text {
-                                        text: "Effektive Rechte: " + root.a-rights-label;
+                                        text: "Effective rights: " + root.a-rights-label;
                                         font-size: 16px;
                                     }
                                     Text {
@@ -1180,7 +1179,7 @@ slint::slint! {
                                         Row {
                                             Text { text: "Share:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "Daten";
+                                                placeholder-text: "data";
                                                 text <=> root.s-smb-share;
                                             }
                                         }
@@ -1281,9 +1280,9 @@ slint::slint! {
                                                     Text { text: "Trustee"; font-weight: 700; horizontal-stretch: 2; color: Theme.text-secondary; }
                                                     Text { text: "Kind"; font-weight: 700; width: 60px; color: Theme.text-secondary; }
                                                     Text { text: "Rights"; font-weight: 700; width: 180px; color: Theme.text-secondary; }
-                                                    Text { text: "Quelle"; font-weight: 700; width: 70px; color: Theme.text-secondary; }
-                                                    Text { text: "Anwendung"; font-weight: 700; width: 200px; color: Theme.text-secondary; }
-                                                    Text { text: "Schicht"; font-weight: 700; width: 60px; color: Theme.text-secondary; }
+                                                    Text { text: "Source"; font-weight: 700; width: 70px; color: Theme.text-secondary; }
+                                                    Text { text: "Applies to"; font-weight: 700; width: 200px; color: Theme.text-secondary; }
+                                                    Text { text: "Layer"; font-weight: 700; width: 60px; color: Theme.text-secondary; }
                                                 }
                                                 for t[k] in row.trustees: HorizontalBox {
                                                     spacing: Theme.spacing-sm;
@@ -2582,10 +2581,11 @@ fn handle_scan_done(
     } else {
         parts.push("Scan complete.".to_string());
     }
+    let had_persistence_error = persistence_error.is_some();
     if let Some(err) = persistence_error {
         parts.push(format!("Persistence failed: {err}"));
     }
-    let is_error = cancelled || parts.iter().any(|p| p.starts_with("Persistenz"));
+    let is_error = cancelled || had_persistence_error;
     ui.set_s_status(parts.join(" ").into());
     ui.set_s_status_is_error(is_error);
 }
@@ -2612,7 +2612,7 @@ fn handle_risk_findings(ui: &MainWindow, findings: Vec<RiskFinding>) {
 fn handle_export_done(ui: &MainWindow, result: Result<(), String>) {
     match result {
         Ok(()) => {
-            ui.set_s_export_message("✓ Export erfolgreich.".into());
+            ui.set_s_export_message("✓ Export successful.".into());
             ui.set_s_export_is_error(false);
         }
         Err(e) => {
@@ -2645,7 +2645,7 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
         ui.on_delta_load_runs_clicked(move || {
             let Some(ui) = weak.upgrade() else { return };
             ui.set_d_is_loading(true);
-            ui.set_d_status("Lade Scan-Historie...".into());
+            ui.set_d_status("Loading scan history...".into());
             ui.set_d_status_is_error(false);
             if let Err(e) = req_tx.send(WorkerRequest::ListScanRuns) {
                 ui.set_d_is_loading(false);
@@ -2815,11 +2815,9 @@ fn handle_scan_runs_loaded(ui: &MainWindow, result: Result<Vec<ScanRunSummary>, 
     }
 }
 
-/// „Scan-Historie laden".
 /// Reacts to a worker-completed scan-run deletion. Updates the status line,
 /// clears local selection state and triggers a fresh history reload so the
-/// list is up-to-date without requiring another click on "Scan-Historie
-/// laden".
+/// list is up-to-date without requiring another click on "Load scan history
 fn handle_scan_run_deleted(ui: &MainWindow, run_id: &str, result: Result<(), String>) {
     match result {
         Ok(()) => {
@@ -2870,7 +2868,7 @@ fn handle_delta_computed(ui: &MainWindow, result: Result<Vec<DeltaRow>, String>)
                             added += 1;
                             slint::Color::from_rgb_u8(0x27, 0x8d, 0x4f)
                         }
-                        "Entfernt" => {
+                        "Removed" => {
                             removed += 1;
                             slint::Color::from_rgb_u8(0xc0, 0x39, 0x2b)
                         }

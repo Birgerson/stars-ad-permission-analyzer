@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! `EffectivePermission`-Berechnung.
-//!
 //! Builds the path-centric trustee lists (`PathTrustee` / `PathTrustees`)
 //! for audit reports. Answers the second audit question "who is on the
 //! DACL at all?" without an identity context and is the counterpart to
@@ -30,8 +28,6 @@ pub struct ShareTrusteeOverlay {
     pub trustees: Vec<PathTrusteeEntry>,
 }
 
-/// `PathTrusteeEntry::Diagnostic`-Variante angefuegt; bei einem
-///
 /// Reads the share DACL once and produces a [`ShareTrusteeOverlay`].
 /// A NULL DACL yields a dedicated `PathTrusteeEntry::Diagnostic`
 /// variant; a read failure does the same — renderers and JSON
@@ -152,9 +148,6 @@ pub fn collect_ace_sids_for_resolution(
     out
 }
 
-/// [`collect_ace_sids_for_resolution`]), ruft **einmal**
-///
-///
 /// Like [`build_path_trustees_with_share`] but with a **pre-built**
 /// SID→name map. This is the scan variant: the caller collects all
 /// SIDs once per scan (see [`collect_ace_sids_for_resolution`]), calls
@@ -174,8 +167,6 @@ pub fn build_path_trustees_with_share_and_names(
 
     // NTFS-DACL
     if fso.null_dacl {
-        // NULL-DACL als typisierte Diagnose statt synthetischem Allow-ACE
-        // (Review-Runde 10 Finding 4).
         // NULL DACL as a typed diagnostic instead of a synthetic Allow ACE
         // (review round 10 finding 4).
         out.push(PathTrusteeEntry::diagnostic(

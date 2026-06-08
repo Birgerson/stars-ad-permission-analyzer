@@ -69,7 +69,7 @@ enum Commands {
         base_dn: Option<String>,
         #[arg(long)]
         bind_dn: Option<String>,
-        /// kommenden Version entfernt.
+        /// in an upcoming release.
         /// **DEPRECATED — insecure.** Visible in process listings and shell
         /// history. Use the `ADPA_BIND_PASSWORD` environment variable
         /// instead. Kept for backwards compatibility; will be removed in
@@ -105,7 +105,7 @@ enum Commands {
         base_dn: Option<String>,
         #[arg(long)]
         bind_dn: Option<String>,
-        /// kommenden Version entfernt.
+        /// in an upcoming release.
         /// **DEPRECATED — insecure.** Visible in process listings and shell
         /// history. Use the `ADPA_BIND_PASSWORD` environment variable
         /// instead. Kept for backwards compatibility; will be removed in
@@ -361,7 +361,7 @@ async fn resolve_identity(
         let ldap_resolver = std::sync::Arc::new(LdapResolver::new(config));
         let backend = LdapIdentityBackend::new(ldap_resolver);
 
-        // Review 2026-06-04 Runde 3 Finding 1.
+        // Review 2026-06-04 round 3 finding 1.
         // Central pipeline replacing four separate lookup paths.
         #[cfg(windows)]
         let principal_resolver = PrincipalResolver::new(backend, Some(WindowsLsaBackend));
@@ -492,7 +492,7 @@ async fn run_analyze(
     let path = validate_path(&path)
         .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
         .0;
-    // Review 2026-06-04 Runde 3 Finding 2 + Runde 4 Finding 2:
+    // Review 2026-06-04 round 3 finding 2 + round 4 Finding 2:
     // Round 3 finding 2 + round 4 finding 2: classify on the trimmed value.
     let user_trimmed = user.trim();
     let user = if user_trimmed.starts_with("S-1-") {
@@ -580,9 +580,9 @@ async fn run_analyze(
     #[cfg(not(windows))]
     let sid_names = std::collections::BTreeMap::new();
 
-    // abgeleitet — Single Source of Truth (Review Runde 3 Finding 1).
+    // derived — single source of truth (Review round 3 finding 1).
     // Engine flags are derived centrally from the resolution status.
-    // Review 2026-06-05 Runde 6 Finding 1: AD-Memberships +
+    // Review 2026-06-05 round 6 finding 1: AD memberships +
     // Round 6 finding 1: feed AD memberships + local server group
     // memberships together so the explanation path renders every
     // mediator step.
@@ -1385,7 +1385,7 @@ mod tests {
         assert!(check_overwrite_policy(&status, false).is_ok());
     }
 
-    /// Review 2026-06-04 Runde 3 Finding 2: `validate_connection_inputs`
+    /// Review 2026-06-04 round 3 finding 2: `validate_connection_inputs`
     /// Whitespace-Trimming an allen fuenf Eingabefeldern ab.
     /// Review round 3 finding 2: connection-input validation must
     #[test]

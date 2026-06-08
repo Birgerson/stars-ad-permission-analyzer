@@ -53,9 +53,6 @@ pub fn ldap_timeout(config: &LdapConfig) -> Duration {
 }
 use crate::sid_util::sid_str_to_ldap_filter;
 
-///
-/// Klassifikation direkt vs. transitiv.
-///
 /// Attributes read during identity searches. `memberOf` is included so the
 /// resolver can use it as a "direct" marker for membership classification
 /// (see ADR 0014). On large tokens AD may range-truncate this attribute —

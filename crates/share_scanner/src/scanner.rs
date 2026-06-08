@@ -513,7 +513,7 @@ unsafe fn sid_to_string(sid: *const core::ffi::c_void) -> Result<String, CoreErr
 ///   `present` is `lpbDaclPresent`, `ptr_is_null` whether `pDacl == NULL`.
 ///   `ace_count` is only meaningful when `pDacl != NULL`.
 ///
-/// | `present` | `ptr_is_null` | `ace_count` | Klassifikation       |
+/// | `present` | `ptr_is_null` | `ace_count` | Classification       |
 /// |-----------|---------------|-------------|----------------------|
 /// | false     | egal          | egal        | `Null` (unrestricted)|
 /// | true      | true          | egal        | `Null` (unrestricted)|

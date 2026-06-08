@@ -425,7 +425,7 @@ mod tests {
 
     #[test]
     fn intersect_share_read_ntfs_modify_yields_read() {
-        // Share: R, NTFS: M → effektiv R (restriktiver / more restrictive)
+        // Share: R, NTFS: M → effective R (the more restrictive)
         let share = rights(MASK_READ);
         let ntfs = rights(MASK_MODIFY);
         let effective = ntfs.intersect(share);
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn intersect_share_full_ntfs_read_yields_read() {
-        // Share: F, NTFS: R → effektiv R
+        // Share: F, NTFS: R → effective R
         let share = rights(MASK_FULL_CONTROL);
         let ntfs = rights(MASK_READ);
         let effective = ntfs.intersect(share);
@@ -454,7 +454,7 @@ mod tests {
         assert!(s.contains("0x001F01FF"));
     }
 
-    // --- Generische Rechte / generic rights ---
+    // --- generic rights ---
 
     #[test]
     fn generic_all_detected() {

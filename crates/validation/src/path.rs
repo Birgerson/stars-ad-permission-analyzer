@@ -724,7 +724,7 @@ mod tests {
         // share scanner.
         assert_eq!(parse_unc_components(r"C:\Windows"), None);
         assert_eq!(parse_unc_components(r"C:\Windows\SYSVOL"), None);
-        assert_eq!(parse_unc_components(r"D:\Daten\Abteilung"), None);
+        assert_eq!(parse_unc_components(r"D:\data\Department"), None);
         assert_eq!(parse_unc_components(r"\singlebackslash\foo"), None);
         assert_eq!(parse_unc_components(""), None);
     }
@@ -774,7 +774,7 @@ mod tests {
         // Finding 2: local path with explicit SMB server → local groups
         // must come from the override server, not from the local machine.
         assert_eq!(
-            effective_smb_target(r"C:\Daten", Some("fileserver01")),
+            effective_smb_target(r"C:\data", Some("fileserver01")),
             Some("fileserver01".to_string())
         );
     }
@@ -784,7 +784,7 @@ mod tests {
         // Finding 2: UNC path PLUS explicit override → override wins, so
         // the user can deliberately test against a different server.
         assert_eq!(
-            effective_smb_target(r"\\fs01\Daten", Some("fs02")),
+            effective_smb_target(r"\\fs01\data", Some("fs02")),
             Some("fs02".to_string())
         );
     }
@@ -793,11 +793,11 @@ mod tests {
     fn effective_smb_target_falls_back_to_unc_server() {
         // Without an explicit override, derive from the UNC path.
         assert_eq!(
-            effective_smb_target(r"\\fs01\Daten\sub", None),
+            effective_smb_target(r"\\fs01\data\sub", None),
             Some("fs01".to_string())
         );
         assert_eq!(
-            effective_smb_target(r"\\?\UNC\fs01\Daten\sub", None),
+            effective_smb_target(r"\\?\UNC\fs01\data\sub", None),
             Some("fs01".to_string())
         );
     }
@@ -810,7 +810,7 @@ mod tests {
         assert_eq!(effective_smb_target(r"C:\Windows\SYSVOL", Some("")), None);
     }
 
-    // --- SmbAuditContext: Review-Runde 10 Finding 1 ---
+    // --- SmbAuditContext: review round 10 finding 1 ---
 
     /// `path_trustees` einfloss.
     /// Bare UNC without explicit flags → both fields from the path.
@@ -850,7 +850,6 @@ mod tests {
         );
     }
 
-    /// waere.
     /// Server only explicit, path local, no share → `None`. Previously
     /// individual helpers would have built a half-context here, leading
     /// to `get_share_dacl` calls with an empty share name.

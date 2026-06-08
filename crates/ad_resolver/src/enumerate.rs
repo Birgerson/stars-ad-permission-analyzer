@@ -10,7 +10,6 @@
 //! function exists purely for the autocomplete helper in the name field
 //! ("you type, I suggest").
 //!
-//! **Datenquellen:**
 //!   audit-relevant.
 //!
 //! **Data sources:**
@@ -383,7 +382,6 @@ fn well_known_table() -> Vec<IdentitySnapshot> {
 }
 
 // ---------------------------------------------------------------------------
-// Hilfsmittel
 // ---------------------------------------------------------------------------
 
 /// Reads the NetBIOS domain name via `NetWkstaGetInfo` (level 100). On a

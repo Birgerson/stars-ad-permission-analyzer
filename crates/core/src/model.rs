@@ -429,7 +429,7 @@ pub enum PermissionDiagnostic {
     IdentityDisabled,
 
     ///
-    /// ChatGPT-Code-Review 2026-06-04 Runde 2 Finding 1.
+    /// ChatGPT code review 2026-06-04 round 2 finding 1.
     ///
     /// The analyzed identity was unambiguously resolved to a SID via LSA
     /// (`LookupAccountNameW` for `DOMAIN\user`), **but the configured

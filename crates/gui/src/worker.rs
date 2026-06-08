@@ -513,7 +513,7 @@ pub fn spawn_worker(
 
 struct ScanSummary {
     permissions: Vec<EffectivePermission>,
-    /// Pfadzentrische Trustee-Auflistung (raw model — ohne Display-
+    /// Path-centric trustee listing (raw model — without display-
     /// Path-centric trustee listing (raw model — no display formatting).
     /// Used by the HTML exporter; the GUI separately receives display-
     /// formatted `TrusteeRow` data inside each `ScanRow`.
@@ -1018,7 +1018,7 @@ async fn handle_search(
 ) -> Result<Vec<IdentitySearchResult>, String> {
     use adpa_core::model::IdentityKind;
 
-    // Review 2026-06-04 Runde 3 Finding 2: getrimmte Wrapperwerte
+    // Review 2026-06-04 round 3 finding 2: trimmed wrapper values
     // the raw `ldap` fields.
     let query = validate_identity_query(query)
         .map_err(|e| format!("Invalid search query: {e}"))?
@@ -1333,7 +1333,7 @@ fn analyze_trustees(
 }
 
 // build_path_trustees, build_path_trustees_with_share) liegt seit
-// Review Runde 9 Finding 1 in `crates/exporter/src/trustees.rs` —
+// Review round 9 finding 1 in `crates/exporter/src/trustees.rs` —
 // existierende Aufrufstellen ohne Anpassung weiterlaufen.
 // The raw trustee-build logic (read_share_overlay, build_path_trustees,
 // build_path_trustees_with_share) was moved to
@@ -1552,7 +1552,7 @@ async fn resolve_identity_sids(
     // `used_sam_fallback = true`.
     // Both paths (SAM success and bare SID fallback) are LDAP-free → nested
     // domain groups are not fully resolved, so `used_sam_fallback = true`.
-    // Schliesst Review 2026-06-04 Runde 2 Finding 5: `sam_resolve_fallback`
+    // Closes review 2026-06-04 round 2 finding 5: `sam_resolve_fallback`
     // passenden Diagnose-Marker. Closes review round 2 finding 5.
     let (identity, memberships, disabled_known) = sam_resolve_fallback(sid)?;
     let disabled_status = if disabled_known {
@@ -1790,7 +1790,7 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 Runde 3 Finding 3: `build_path_trustees_with_share`
+    /// Review 2026-06-04 round 3 finding 3: `build_path_trustees_with_share`
     /// weglaesst.
     /// Review round 3 finding 3: the precomputed share overlay must be
     /// attached to the NTFS list and both categories must show up.
@@ -1884,9 +1884,9 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 Runde 4 Finding 2: Whitespace-umrahmte SID
-    /// `handle_analyze`/`handle_scan` (klassifizieren → validieren),
-    /// Review 2026-06-04 Runde 4 Finding 3: `normalize_smb_pair` (von
+    /// Review 2026-06-04 round 4 finding 2: whitespace-padded SID
+    /// `handle_analyze`/`handle_scan` (classify → validate),
+    /// Review 2026-06-04 round 4 finding 3: `normalize_smb_pair` (which
     /// NTFS-only-Fallback.
     /// verwendet.
     /// Code review 2026-06-07 finding 2: `analyze_trustees` must
@@ -1941,7 +1941,7 @@ mod tests {
             super::normalize_smb_pair(None, Some("data")).is_err(),
             "share_name alone must error — closing round 4 finding 3"
         );
-        // Beide gesetzt: erfolgreich, getrimmt.
+        // Both set: success, trimmed.
         // Both set: succeeds with trimmed values.
         let (s, n) = super::normalize_smb_pair(Some("  fileserver  "), Some("  data  "))
             .expect("matched pair must succeed");

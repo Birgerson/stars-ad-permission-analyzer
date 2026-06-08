@@ -5,7 +5,7 @@
 //! SID, GUI Name → SID-Workflow).
 //!
 //! `lookup_via_*`-Helfern in [`crate::resolver::LdapResolver`] plus
-//! [`IdentityKind::Orphaned`] klassifiziert. Review 2026-06-04 Runde 3
+//! [`IdentityKind::Orphaned`]. Review 2026-06-04 round 3
 //! gemeinsam nutzen.
 //!
 //! Unified principal resolution — the single pipeline for all input
@@ -91,7 +91,7 @@ impl PrincipalInput {
 /// a trust domain outside the configured `base_dn`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityScopeStatus {
-    /// `IdentityKind`-Klassifikation).
+    /// `IdentityKind` classification).
     /// LDAP hit inside the configured `base_dn`.
     InsideConfiguredLdapBase,
     /// Domain indexiert. Identity stammt aus LSA-Reverse-Lookup;
@@ -155,7 +155,7 @@ impl PrincipalResolution {
     /// single official source for the corresponding
     /// `PermissionEvaluationInput` fields.
     pub fn engine_flags(&self) -> EngineFlags {
-        // Review 2026-06-04 Runde 4 Finding 1: LookupFailed,
+        // Review 2026-06-04 round 4 finding 1: LookupFailed,
         // daraus IdentityLookupFailed / GroupResolutionFailed-Marker.
         // Review round 4 finding 1.
         let identity_lookup_failure_reason = match &self.scope_status {
@@ -380,7 +380,7 @@ where
     pub async fn resolve(&self, input: PrincipalInput) -> Result<PrincipalResolution, CoreError> {
         let classified = input.classify()?;
         match classified {
-            PrincipalInput::Auto(_) => unreachable!("classify() entfernt Auto"),
+            PrincipalInput::Auto(_) => unreachable!("classify() removes Auto"),
             PrincipalInput::DomainQualified(name) => self.resolve_by_lsa_name(&name).await,
             PrincipalInput::DisplayName(name) => self.resolve_by_lsa_name(&name).await,
             PrincipalInput::Upn(upn) => self.resolve_by_upn(&upn).await,
@@ -431,7 +431,7 @@ where
                 })
             }
             None => {
-                // Fallback. ChatGPT-Review 2026-06-04 Runde 3 Finding
+                // Fallback. ChatGPT review 2026-06-04 round 3 Finding
                 // auseinanderlaufen.
                 // UPN missing in configured base_dn — return a clean
                 // error rather than fabricating a fallback identity.
@@ -759,7 +759,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Test-Matrix aus Review 2026-06-04 Runde 3 — sechs Faelle.
+    // Test matrix from review 2026-06-04 round 3 — six cases.
     // -----------------------------------------------------------------
 
     /// 1) `DOMAIN\user` LDAP hit: Inside, no markers, Known.

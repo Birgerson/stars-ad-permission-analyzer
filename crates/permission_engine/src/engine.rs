@@ -68,7 +68,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             }
         }
 
-        // Share-Status auswerten: NotApplicable → effektiv = NTFS;
+        // Evaluate share status: NotApplicable → effective = NTFS;
         // Evaluate the share status: NotApplicable → effective = NTFS;
         // Applied → effective = NTFS ∩ Share; ReadFailed → effective = NTFS but
         // the result carries the ReadFailed marker (incomplete).
@@ -135,7 +135,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if input.identity.disabled {
             diagnostics.push(PermissionDiagnostic::IdentityDisabled);
         }
-        // Review 2026-06-04 Runde 2 Finding 1: Identitaet per LSA aufgeloest,
+        // Review 2026-06-04 round 2 finding 1: identity resolved via LSA,
         // Review 2026-06-04 round 2 finding 1: identity resolved via LSA but
         // LDAP base does not index it (multi-domain).
         if input.identity_not_in_configured_ldap_base {
@@ -606,7 +606,7 @@ fn build_explanation(
         ));
     }
 
-    // 4. NTFS-effektiv / NTFS effective
+    // 4. NTFS effective
     let ntfs_rights = NormalizedRights::new(ntfs_raw);
     steps.push(format!(
         "NTFS effective: {} (0x{:08X})",
@@ -868,7 +868,7 @@ mod tests {
 
     #[test]
     fn multiple_groups_rights_combined() {
-        // Group A: Read, Group B: Write → effektiv Read | Write
+        // Group A: Read, Group B: Write → effective Read | Write
         let p = eval(
             user(USER),
             vec![membership(USER, GROUP_A), membership(USER, GROUP_B)],
@@ -2404,7 +2404,7 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 Runde 4 Finding 1: ein gescheiterter
+    /// Review 2026-06-04 round 4 finding 1: a failed
     /// `GroupResolutionFailed { reason }`-Marker.
     /// Round 4 finding 1: failed group resolution after identity hit.
     #[test]

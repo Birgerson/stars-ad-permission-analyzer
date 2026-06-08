@@ -160,7 +160,7 @@ impl LdapResolver {
         )
         .await?;
 
-        // Review 2026-06-04 Runde 3 Finding 1 (Cache-Vergiftung):
+        // Review 2026-06-04 round 3 finding 1 (cache poisoning):
         //
         // Review 2026-06-04 round 3 finding 1 (cache poisoning):
         // `Orphaned` identities were cached unconditionally. A
@@ -215,7 +215,7 @@ impl LdapResolver {
     ) -> Result<Vec<GroupMembership>, CoreError> {
         let mut ldap = ldap_client::connect(&self.config).await?;
 
-        // 1) Principal-Entry laden.
+        // 1) Load the principal entry.
         // 1) Load the principal entry.
         let Some(entry) =
             ldap_client::search_by_sid(&mut ldap, &self.config.base_dn, &sid.0).await?
