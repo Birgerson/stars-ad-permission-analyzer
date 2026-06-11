@@ -471,15 +471,26 @@ pub enum PermissionDiagnostic {
     /// Closes ChatGPT code review 2026-06-04 round 4 finding 1.
     IdentityLookupFailed { reason: String },
 
-    /// `GroupResolutionStatus::NotAttempted` in einem Cross-Domain-
-    ///
-    ///
     /// Recursive group resolution failed or was skipped. ACEs on
     /// domain groups may be missed — this marker is an incompleteness
     /// trigger.
     ///
     /// Closes ChatGPT code review 2026-06-04 round 4 finding 1.
     GroupResolutionFailed { reason: String },
+
+    /// The DACL contains at least one ACE for the well-known SID
+    /// `S-1-3-4` ("OWNER RIGHTS") **and** the analyzed identity is the
+    /// owner of the object. Per Windows semantics (Server 2008+), the
+    /// OWNER RIGHTS entries replace the implicit owner grant of
+    /// `READ_CONTROL + WRITE_DAC` — the engine therefore evaluated the
+    /// S-1-3-4 ACEs in DACL order instead of applying the implicit
+    /// grant. This marker is informational, not an incompleteness
+    /// trigger: the evaluation is exact, the marker only surfaces that
+    /// the unusual owner-rights mechanism was in play so an auditor
+    /// does not expect the implicit owner bonus.
+    ///
+    /// Engine review 2026-06-09 finding 1.
+    OwnerRightsAceApplied,
 }
 
 /// Explainable permission path

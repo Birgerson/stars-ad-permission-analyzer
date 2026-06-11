@@ -329,6 +329,19 @@ fn write_permissions_table(
                         escape_html(reason)
                     ));
                 }
+                PermissionDiagnostic::OwnerRightsAceApplied => {
+                    diag_parts.push(
+                        "<span class=\"badge badge-info\" \
+                         title=\"The DACL contains an OWNER RIGHTS \
+                         (S-1-3-4) entry and the analyzed identity is \
+                         the object's owner. Per Windows semantics that \
+                         entry governs the owner's rights — the implicit \
+                         READ_CONTROL + WRITE_DAC owner grant was \
+                         suppressed. The evaluation is exact; this is \
+                         informational.\">ℹ OWNER RIGHTS ACE applied</span>"
+                            .to_string(),
+                    );
+                }
             }
         }
         let diagnostics = if diag_parts.is_empty() {

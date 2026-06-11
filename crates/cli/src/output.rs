@@ -219,6 +219,12 @@ pub fn print_report(
                     println!("      ACEs on domain groups may be missing from the computed");
                     println!("      effective right. Treat as incomplete.");
                 }
+                PermissionDiagnostic::OwnerRightsAceApplied => {
+                    println!("  [i] OWNER RIGHTS (S-1-3-4) ACE present and the identity is the");
+                    println!("      object's owner. That DACL entry governs the owner's rights;");
+                    println!("      the implicit READ_CONTROL + WRITE_DAC owner grant was");
+                    println!("      suppressed. The evaluation is exact — informational only.");
+                }
             }
         }
     }

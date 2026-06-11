@@ -49,26 +49,64 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             input.access_context,
         );
 
-        // NULL DACL means "no access control" — Windows grants everyone full access.
-        // An empty DACL (dacl == [] && null_dacl == false) by contrast denies everything.
-        let (mut ntfs_raw, denied_raw) = if input.file_system_object.null_dacl {
-            (MASK_FULL_CONTROL, 0u32)
+        // Owner handling (engine review 2026-06-09 finding 1).
+        //
+        // Windows semantics: the owner of an object is implicitly granted
+        // READ_CONTROL + WRITE_DAC — UNLESS the DACL contains an ACE for
+        // the well-known SID S-1-3-4 ("OWNER RIGHTS", Server 2008+). When
+        // such an ACE exists, it REPLACES the implicit grant: the S-1-3-4
+        // entries are evaluated in DACL order as if they named the owner,
+        // and no implicit bonus applies.
+        let user_is_owner = input
+            .file_system_object
+            .owner_sid
+            .as_ref()
+            .is_some_and(|owner| user_sids.contains(&owner.0));
+        let owner_rights_ace_present = user_is_owner
+            && input
+                .file_system_object
+                .dacl
+                .iter()
+                .any(|ace| ace.sid.0 == SID_OWNER_RIGHTS && ace_applies_to_current_object(ace));
+
+        // The SID set used for ACE matching. When the user is the owner,
+        // S-1-3-4 entries apply to them — extend the match set so the
+        // stored-order walk picks those ACEs up naturally.
+        let match_sids: HashSet<String> = if user_is_owner {
+            let mut s = user_sids.clone();
+            s.insert(SID_OWNER_RIGHTS.to_string());
+            s
         } else {
-            evaluate_dacl_ordered(
-                &input.file_system_object.dacl,
-                &user_sids,
-                &input.file_system_object.path.0,
-            )
+            user_sids.clone()
         };
 
-        // Owner special rule: owner always gets READ_CONTROL + WRITE_DAC regardless of the DACL.
-        if let Some(ref owner_sid) = input.file_system_object.owner_sid {
-            if user_sids.contains(&owner_sid.0) {
-                ntfs_raw |= FILE_READ_CONTROL | FILE_WRITE_DAC;
+        // NULL DACL means "no access control" — Windows grants everyone full access.
+        // An empty DACL (dacl == [] && null_dacl == false) by contrast denies everything.
+        let walk = if input.file_system_object.null_dacl {
+            DaclWalkOutcome {
+                granted: MASK_FULL_CONTROL,
+                denied: 0,
+                contributions: Vec::new(),
             }
-        }
+        } else {
+            walk_dacl_stored_order(&input.file_system_object.dacl, &match_sids)
+        };
+        let mut ntfs_raw = walk.granted;
+        let denied_raw = walk.denied;
+        let contributing_sids = walk.contributions;
 
-        // Evaluate share status: NotApplicable → effective = NTFS;
+        // Implicit owner grant — only when no OWNER RIGHTS ACE governs
+        // the owner's rights. The grant bypasses the DACL entirely in
+        // Windows (it is applied before AccessCheck walks the DACL), so
+        // OR-ing after the walk is equivalent: even explicitly denied
+        // READ_CONTROL/WRITE_DAC bits are restored for the owner.
+        let owner_implicit_bits: u32 = if user_is_owner && !owner_rights_ace_present {
+            FILE_READ_CONTROL | FILE_WRITE_DAC
+        } else {
+            0
+        };
+        ntfs_raw |= owner_implicit_bits;
+
         // Evaluate the share status: NotApplicable → effective = NTFS;
         // Applied → effective = NTFS ∩ Share; ReadFailed → effective = NTFS but
         // the result carries the ReadFailed marker (incomplete).
@@ -88,22 +126,22 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             }
         };
 
-        let path_explanation = build_explanation(
-            &input.identity,
-            &input.group_memberships,
-            &input.file_system_object.dacl,
-            &user_sids,
+        let path_explanation = build_explanation(ExplanationInput {
+            identity: &input.identity,
+            memberships: &input.group_memberships,
+            dacl: &input.file_system_object.dacl,
+            match_sids: &match_sids,
             ntfs_raw,
             denied_raw,
-            share_mask_for_output,
+            owner_implicit_bits,
+            owner_rights_ace_present,
+            owner_sid: input.file_system_object.owner_sid.as_ref(),
+            share_mask: share_mask_for_output,
             effective_raw,
-            &input.sid_names,
-        );
+            sid_names: &input.sid_names,
+        });
 
-        let contributing_sids =
-            collect_contributing_sids(&input.file_system_object.dacl, &user_sids);
-
-        let matched_aces = collect_matched_aces(&input.file_system_object.dacl, &user_sids);
+        let matched_aces = collect_matched_aces(&input.file_system_object.dacl, &match_sids);
 
         // Structured diagnostic markers.
         //  - Follow-up finding 3 (NTFS): non-canonical DACL ordering. A
@@ -159,6 +197,12 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if let Some(reason) = input.group_resolution_failure_reason {
             diagnostics.push(PermissionDiagnostic::GroupResolutionFailed { reason });
         }
+        // Engine review 2026-06-09 finding 1: OWNER RIGHTS (S-1-3-4)
+        // governed the owner's rights instead of the implicit grant.
+        // Informational, not an incompleteness trigger.
+        if owner_rights_ace_present {
+            diagnostics.push(PermissionDiagnostic::OwnerRightsAceApplied);
+        }
 
         let result = EffectivePermission {
             identity: input.identity,
@@ -188,7 +232,6 @@ impl PermissionEvaluator for DefaultPermissionEngine {
 
 /// Builds the token SID set for a user.
 ///
-///
 /// Contains the user SID, all group SIDs, and the implicit well-known principals
 /// `Everyone` (S-1-1-0) and `Authenticated Users` (S-1-5-11), which are present
 /// in every Windows access token.
@@ -196,15 +239,14 @@ impl PermissionEvaluator for DefaultPermissionEngine {
 /// Use this function everywhere a SID set is needed — CLI output, GUI share mask,
 /// and the permission engine — so all three stay consistent.
 ///
-/// therefore does not add context-specific well-knowns like `NETWORK`.
+/// Note: uses `AccessContext::Unspecified` and therefore does not add
+/// context-specific well-knowns like `NETWORK`.
 pub fn build_token_sids(user_sid: &str, memberships: &[GroupMembership]) -> HashSet<String> {
     build_token_sids_with_context(user_sid, memberships, &[], AccessContext::Unspecified)
 }
 
 /// Like [`build_token_sids`], plus additional SIDs of local groups on the target
 /// server (e.g. `BUILTIN\Administrators`) in which the user is a member.
-///
-/// explizitem `AccessContext::for_path(path)` nutzen.
 ///
 /// **Deprecated:** implicitly uses `AccessContext::Unspecified` and therefore
 /// adds no context-specific well-knowns — for SMB paths e.g. `NETWORK` is
@@ -231,10 +273,6 @@ pub fn build_token_sids_with_local(
     )
 }
 
-///
-/// - `RemoteSmb` → `NETWORK` (S-1-5-2)
-/// - `LocalInteractive` → `INTERACTIVE` (S-1-5-4) + `LOCAL` (S-1-2-0)
-///
 /// Full token construction: own SID, AD groups, local server groups, the
 /// universal well-knowns (`Everyone`, `Authenticated Users`), and the
 /// context-specific well-knowns:
@@ -259,7 +297,8 @@ pub fn build_token_sids_with_context(
     // Implicit well-known principals present in every Windows access token
     sids.insert("S-1-1-0".to_string()); // Everyone
     sids.insert("S-1-5-11".to_string()); // Authenticated Users
-                                         // Kontextspezifische Well-Knowns / context-specific well-knowns
+
+    // Context-specific well-knowns.
     match access_context {
         AccessContext::RemoteSmb => {
             sids.insert("S-1-5-2".to_string()); // NETWORK
@@ -289,7 +328,6 @@ fn collect_user_sids(
 
 /// Checks whether an ACE applies to the current object.
 ///
-///
 /// ACEs flagged with INHERIT_ONLY_ACE apply only to children and must not
 /// contribute to the effective permission on the current object. Without
 /// this filter the engine would, for example, grant a directory rights
@@ -298,39 +336,51 @@ fn ace_applies_to_current_object(ace: &AceEntry) -> bool {
     ace.propagation_flags & INHERIT_ONLY_ACE == 0
 }
 
-/// Collects Allow ACEs that **actually decided** at least one bit during
-/// the stored-order DACL walk, with the bits they contributed accumulated
-/// per SID.
+/// Well-known SID "OWNER RIGHTS" (Windows Server 2008+). When the DACL
+/// contains an ACE for this SID and the analyzed identity is the object's
+/// owner, the ACE governs the owner's rights and the implicit
+/// `READ_CONTROL + WRITE_DAC` owner grant is suppressed.
+pub const SID_OWNER_RIGHTS: &str = "S-1-3-4";
+
+/// Result of the single stored-order DACL walk: the granted/denied bit
+/// sets plus the per-SID contribution provenance, all derived from the
+/// same pass so they cannot drift apart (engine review 2026-06-09
+/// finding 4 — the 2026-06-08 provenance bug existed precisely because
+/// two separate walks diverged).
+struct DaclWalkOutcome {
+    granted: u32,
+    denied: u32,
+    contributions: Vec<ContributingAce>,
+}
+
+/// Walks the DACL in its stored order — the single source of truth for
+/// evaluation AND provenance.
 ///
-/// Used by the risk engine to detect whether write access originated from
-/// broad principals (Everyone, Authenticated Users) — and exactly which
-/// bits they contributed.
+/// For each right-bit the first matching decision wins, analogous to
+/// Windows `AccessCheck`. Generic rights (GENERIC_*) are expanded into
+/// specific file bits before evaluation; ACEs flagged INHERIT_ONLY_ACE
+/// are skipped for the current object.
 ///
-/// Review 2026-06-08 finding 2: the previous implementation attributed
-/// bits via mask overlap with the final `ntfs_raw`, without honouring
-/// stored-order precedence. A later Allow Everyone Modify was attributed
-/// the same bits as an earlier Allow specific-group Modify, and Deny ACEs
-/// that took bits before any Allow could grant them were ignored. This
-/// produced false BROAD_GROUP_WRITE / DIRECT_USER_ACE findings.
-///
-/// The fix walks the DACL in the same stored order as
-/// [`evaluate_dacl_ordered`] and records only the `bits` value that a
-/// specific Allow ACE actually flipped from undecided to granted.
-fn collect_contributing_sids(
-    dacl: &[AceEntry],
-    user_sids: &HashSet<String>,
-) -> Vec<ContributingAce> {
-    let mut by_sid: HashMap<String, u32> = HashMap::new();
+/// `granted` is the effective NTFS mask. `denied` is the union of bits a
+/// Deny ACE decided before any Allow could grant them — surfaced
+/// separately so the explanation path can call out "those bits were
+/// decided by Deny". `contributions` records, per Allow-ACE SID, exactly
+/// the bits that ACE flipped from undecided to granted (review
+/// 2026-06-08 finding 2: provenance must follow stored order, not mask
+/// overlap).
+fn walk_dacl_stored_order(dacl: &[AceEntry], match_sids: &HashSet<String>) -> DaclWalkOutcome {
     let mut granted: u32 = 0;
     let mut denied: u32 = 0;
+    let mut by_sid: HashMap<String, u32> = HashMap::new();
     for ace in dacl {
         if !ace_applies_to_current_object(ace) {
             continue;
         }
-        if !user_sids.contains(&ace.sid.0) {
+        if !match_sids.contains(&ace.sid.0) {
             continue;
         }
         let mask = expand_generic_rights(ace.mask.0);
+        // First decision per bit wins — bits already decided cannot flip.
         let undecided = !(granted | denied);
         let bits = mask & undecided;
         if bits == 0 {
@@ -341,24 +391,25 @@ fn collect_contributing_sids(
                 granted |= bits;
                 *by_sid.entry(ace.sid.0.clone()).or_insert(0) |= bits;
             }
-            AceKind::Deny => {
-                denied |= bits;
-            }
+            AceKind::Deny => denied |= bits,
         }
     }
-    by_sid
-        .into_iter()
-        .map(|(sid_str, mask)| ContributingAce {
-            sid: Sid(sid_str),
-            mask: AccessMask(mask),
-        })
-        .collect()
+    DaclWalkOutcome {
+        granted,
+        denied,
+        contributions: by_sid
+            .into_iter()
+            .map(|(sid_str, mask)| ContributingAce {
+                sid: Sid(sid_str),
+                mask: AccessMask(mask),
+            })
+            .collect(),
+    }
 }
 
 /// Collects DACL entries that actually apply to the current object and whose
-/// trustee SID belongs to the user's token SID set.
-///
-///
+/// trustee SID belongs to the match SID set (token plus `S-1-3-4` when the
+/// user is the owner).
 ///
 /// **Important:** ACEs flagged `INHERIT_ONLY_ACE` are filtered out. They
 /// apply only to children; a risk rule like `DirectUserAceRule` would
@@ -371,68 +422,19 @@ fn collect_matched_aces(dacl: &[AceEntry], user_sids: &HashSet<String>) -> Vec<A
         .collect()
 }
 
-/// Evaluates the DACL in its stored order.
-///
-///
-/// For each right-bit the first matching decision wins — analogous to
-/// Windows `AccessCheck`. Before evaluation, generic rights (GENERIC_*) are
-/// expanded into specific file bits and ACEs flagged INHERIT_ONLY_ACE are
-/// skipped for the current object. If the DACL does not follow Windows
-/// canonical order (explicit-deny → explicit-allow → inherited-deny →
-/// inherited-allow) a warning is logged; the result still follows the
-/// stored order.
-/// Returns `(granted, denied)`. `granted` is the effective NTFS mask. `denied`
-/// is the union of bits that were taken by a Deny ACE before any Allow ACE
-/// could grant them — surfaced separately so the explanation path can call out
-/// "those bits got blocked by Deny" instead of leaving the reader to derive
-/// it from the raw hex value of the effective mask.
-fn evaluate_dacl_ordered(
-    dacl: &[AceEntry],
-    user_sids: &HashSet<String>,
-    _path: &str,
-) -> (u32, u32) {
-    // lands in the `EffectivePermission.diagnostics` list (follow-up finding 3).
-    // Diagnostic detection (incl. warn log) lives centrally in
-    // in the structured `EffectivePermission.diagnostics` list (follow-up
-    // finding 3).
-    let mut granted: u32 = 0;
-    let mut denied: u32 = 0;
-    for ace in dacl {
-        if !ace_applies_to_current_object(ace) {
-            continue;
-        }
-        if !user_sids.contains(&ace.sid.0) {
-            continue;
-        }
-        let mask = expand_generic_rights(ace.mask.0);
-        // First decision per bit wins — bits already decided cannot flip.
-        let undecided = !(granted | denied);
-        let bits = mask & undecided;
-        if bits == 0 {
-            continue;
-        }
-        match ace.kind {
-            AceKind::Allow => granted |= bits,
-            AceKind::Deny => denied |= bits,
-        }
-    }
-    (granted, denied)
-}
-
-/// Exports.
-///
-/// Collects structured diagnostic markers attached to an effective permission
-/// emits a `warn!` — the structured list flows into
-/// `EffectivePermission.diagnostics` and from there into DB history and
-/// exports.
+/// Collects structured diagnostic markers for the DACL itself; also emits
+/// a `warn!` per finding. The structured list flows into
+/// `EffectivePermission.diagnostics` and from there into the DB history
+/// and exports.
 fn collect_diagnostics(dacl: &[AceEntry], path: &str) -> Vec<PermissionDiagnostic> {
     let mut out = Vec::new();
     if let Some(at) = first_non_canonical_position(dacl) {
         warn!(
             path,
             at,
-            "Non-canonical DACL ordering detected — evaluation follows stored ACE order \
-             (matches Windows AccessCheck), but tools like icacls flag this as anomalous"
+            "DACL ordering differs from single-level canonical form — evaluation follows \
+             stored ACE order (matches Windows AccessCheck). Note: with multi-level \
+             inheritance this ordering can be legitimate; see docs/known-limitations.md"
         );
         out.push(PermissionDiagnostic::NonCanonicalDaclOrder { at_index: at });
     }
@@ -544,32 +546,57 @@ fn format_membership_step(
     format!("Member of {target_display} [via {chain_joined}, source: {source}]")
 }
 
-/// Creates an explainable permission path.
-#[allow(clippy::too_many_arguments)]
-fn build_explanation(
-    identity: &Identity,
-    memberships: &[GroupMembership],
-    dacl: &[adpa_core::model::AceEntry],
-    user_sids: &HashSet<String>,
+/// Bundles the inputs for [`build_explanation`] — replaces the previous
+/// 9-argument signature with named fields (engine review 2026-06-09).
+struct ExplanationInput<'a> {
+    identity: &'a Identity,
+    memberships: &'a [GroupMembership],
+    dacl: &'a [AceEntry],
+    /// SID set used for ACE matching — includes `S-1-3-4` when the user
+    /// is the owner, so OWNER RIGHTS ACEs show up in the step list.
+    match_sids: &'a HashSet<String>,
     ntfs_raw: u32,
     denied_raw: u32,
+    /// Bits added by the implicit owner rule (`0` when the rule did not
+    /// fire or was suppressed by an OWNER RIGHTS ACE).
+    owner_implicit_bits: u32,
+    /// True when an `S-1-3-4` ACE governed the owner's rights.
+    owner_rights_ace_present: bool,
+    owner_sid: Option<&'a Sid>,
     share_mask: Option<AccessMask>,
     effective_raw: u32,
-    sid_names: &std::collections::BTreeMap<String, String>,
-) -> PermissionPath {
+    sid_names: &'a std::collections::BTreeMap<String, String>,
+}
+
+/// Creates an explainable permission path.
+fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
+    let ExplanationInput {
+        identity,
+        memberships,
+        dacl,
+        match_sids,
+        ntfs_raw,
+        denied_raw,
+        owner_implicit_bits,
+        owner_rights_ace_present,
+        owner_sid,
+        share_mask,
+        effective_raw,
+        sid_names,
+    } = input;
     let mut steps: Vec<String> = Vec::new();
 
     let display_name = identity.name.as_deref().unwrap_or(identity.sid.0.as_str());
     steps.push(format!("User: {} ({})", display_name, identity.sid.0));
 
-    // 2. Gruppenmitgliedschaften / group memberships
+    // 2. Group memberships.
     for gm in memberships {
         steps.push(format_membership_step(gm, sid_names));
     }
 
-    // 3. Zutreffende ACEs / matching ACEs
+    // 3. Matching ACEs.
     for ace in dacl {
-        if !user_sids.contains(&ace.sid.0) {
+        if !match_sids.contains(&ace.sid.0) {
             continue;
         }
         let kind = match ace.kind {
@@ -614,19 +641,40 @@ fn build_explanation(
         }
     }
 
-    // nur SYNCHRONIZE uebrig).
-    // 3b. Explicit deny aggregation step: makes it visible that the NTFS
-    // mask below was reduced by Deny ACEs. Without it the reader has to
-    // diff the hex values to realize Allow bits got blocked (especially
+    // 3b. Deny aggregation step: makes it visible that the NTFS mask
+    // below was reduced by Deny ACEs. Without it the reader has to diff
+    // the hex values to realize Allow bits got blocked (especially
     // confusing when the result is "Special (0x00100000)" — only the
     // SYNCHRONIZE bit left).
-    if denied_raw != 0 {
-        let deny_rights = NormalizedRights::new(denied_raw);
+    //
+    // Engine review 2026-06-09 finding 2: bits the implicit owner rule
+    // restores are excluded from this step — otherwise the text would
+    // claim bits were "decided by Deny" while the final NTFS mask
+    // contains them again via the owner rule.
+    let denied_for_display = denied_raw & !owner_implicit_bits;
+    if denied_for_display != 0 {
+        let deny_rights = NormalizedRights::new(denied_for_display);
         steps.push(format!(
-            "Deny aggregation: {} (0x{:08X}) blocked by Deny ACEs — those bits were removed from the effective NTFS mask",
+            "Deny aggregation: {} (0x{:08X}) decided by Deny ACEs before any Allow could grant them — removed from the effective NTFS mask",
             deny_rights.display_name(),
-            denied_raw,
+            denied_for_display,
         ));
+    }
+
+    // 3c. Owner special rule (engine review 2026-06-09 findings 1+2):
+    // either the implicit grant fired — then say so, because no listed
+    // ACE explains those bits — or an OWNER RIGHTS ACE replaced it.
+    if owner_implicit_bits != 0 {
+        let owner_display = owner_sid
+            .map(|s| display_for_sid(s, None, sid_names))
+            .unwrap_or_else(|| "(unknown)".to_string());
+        steps.push(format!(
+            "Owner special rule: READ_CONTROL + WRITE_DAC granted implicitly (owner: {owner_display})"
+        ));
+    } else if owner_rights_ace_present {
+        steps.push(
+            "OWNER RIGHTS (S-1-3-4) ACE present — owner rights are governed by that DACL entry; the implicit owner grant is suppressed".to_string(),
+        );
     }
 
     // 4. NTFS effective
@@ -1047,6 +1095,179 @@ mod tests {
     fn non_owner_gets_no_owner_bonus() {
         let p = eval(user(USER), vec![], fso(Some(OTHER), vec![]), None);
         assert_eq!(p.ntfs_mask.0, 0);
+    }
+
+    // --- OWNER RIGHTS SID S-1-3-4 (engine review 2026-06-09 finding 1) ---
+
+    /// An OWNER RIGHTS ACE replaces the implicit owner grant. Here it
+    /// allows Read only — the owner must get exactly Read, NOT the
+    /// implicit READ_CONTROL + WRITE_DAC bonus on top.
+    #[test]
+    fn owner_rights_ace_replaces_implicit_owner_grant() {
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(
+                Some(USER),
+                vec![allow_ace(SID_OWNER_RIGHTS, MASK_READ, false)],
+            ),
+            None,
+        );
+        assert_eq!(
+            p.ntfs_mask.0, MASK_READ,
+            "owner must get exactly what the OWNER RIGHTS ACE grants"
+        );
+        assert_eq!(
+            p.ntfs_mask.0 & FILE_WRITE_DAC,
+            0,
+            "implicit WRITE_DAC must be suppressed when S-1-3-4 governs owner rights"
+        );
+        assert!(
+            p.diagnostics
+                .iter()
+                .any(|d| matches!(d, PermissionDiagnostic::OwnerRightsAceApplied)),
+            "OwnerRightsAceApplied diagnostic must be present; got: {:?}",
+            p.diagnostics
+        );
+    }
+
+    /// An OWNER RIGHTS Deny ACE blocks bits for the owner that the
+    /// implicit rule would otherwise have granted.
+    #[test]
+    fn owner_rights_deny_ace_blocks_owner_bits() {
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(
+                Some(USER),
+                vec![
+                    deny_ace(SID_OWNER_RIGHTS, FILE_WRITE_DAC, false),
+                    allow_ace(USER, MASK_READ, false),
+                ],
+            ),
+            None,
+        );
+        assert_eq!(
+            p.ntfs_mask.0 & FILE_WRITE_DAC,
+            0,
+            "S-1-3-4 Deny must block WRITE_DAC for the owner — the implicit grant must not restore it"
+        );
+        assert_ne!(p.ntfs_mask.0 & MASK_READ, 0, "regular Allow still applies");
+    }
+
+    /// A non-owner is unaffected by OWNER RIGHTS ACEs — they apply only
+    /// to the object's owner.
+    #[test]
+    fn owner_rights_ace_ignored_for_non_owner() {
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(
+                Some(OTHER),
+                vec![allow_ace(SID_OWNER_RIGHTS, MASK_FULL_CONTROL, false)],
+            ),
+            None,
+        );
+        assert_eq!(
+            p.ntfs_mask.0, 0,
+            "S-1-3-4 ACE must not grant anything to a non-owner"
+        );
+        assert!(
+            !p.diagnostics
+                .iter()
+                .any(|d| matches!(d, PermissionDiagnostic::OwnerRightsAceApplied)),
+            "diagnostic must not fire for non-owners"
+        );
+    }
+
+    /// An INHERIT_ONLY S-1-3-4 ACE does not apply to the current object
+    /// — the implicit owner grant must still fire.
+    #[test]
+    fn inherit_only_owner_rights_ace_keeps_implicit_grant() {
+        let mut ace = allow_ace(SID_OWNER_RIGHTS, MASK_READ, false);
+        ace.propagation_flags = INHERIT_ONLY_ACE;
+        let p = eval(user(USER), vec![], fso(Some(USER), vec![ace]), None);
+        assert_ne!(
+            p.ntfs_mask.0 & FILE_WRITE_DAC,
+            0,
+            "inherit-only S-1-3-4 does not govern the current object — implicit grant applies"
+        );
+    }
+
+    // --- Owner rule in the explanation path (finding 2) ---
+
+    /// When the implicit owner grant fires, the explanation must say so —
+    /// otherwise the NTFS-effective step shows bits no listed ACE grants.
+    #[test]
+    fn explanation_contains_owner_special_rule_step() {
+        let p = eval(user(USER), vec![], fso(Some(USER), vec![]), None);
+        assert!(
+            p.path_explanation
+                .steps
+                .iter()
+                .any(|s| s.contains("Owner special rule")),
+            "explanation must name the owner special rule; got: {:?}",
+            p.path_explanation.steps
+        );
+    }
+
+    /// When an OWNER RIGHTS ACE suppresses the implicit grant, the
+    /// explanation must name that instead.
+    #[test]
+    fn explanation_names_owner_rights_ace_suppression() {
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(
+                Some(USER),
+                vec![allow_ace(SID_OWNER_RIGHTS, MASK_READ, false)],
+            ),
+            None,
+        );
+        assert!(
+            p.path_explanation
+                .steps
+                .iter()
+                .any(|s| s.contains("OWNER RIGHTS (S-1-3-4)")),
+            "explanation must surface the S-1-3-4 mechanism; got: {:?}",
+            p.path_explanation.steps
+        );
+        assert!(
+            !p.path_explanation
+                .steps
+                .iter()
+                .any(|s| s.contains("Owner special rule")),
+            "implicit-grant step must not appear when S-1-3-4 governs"
+        );
+    }
+
+    /// Deny step interaction (finding 2): a Deny that takes READ_CONTROL/
+    /// WRITE_DAC from the owner is overridden by the implicit grant — the
+    /// deny-aggregation step must not claim those bits were removed.
+    #[test]
+    fn deny_step_excludes_owner_restored_bits() {
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(
+                Some(USER),
+                vec![deny_ace(USER, FILE_READ_CONTROL | FILE_WRITE_DAC, false)],
+            ),
+            None,
+        );
+        assert_ne!(
+            p.ntfs_mask.0 & (FILE_READ_CONTROL | FILE_WRITE_DAC),
+            0,
+            "implicit owner grant restores the denied bits"
+        );
+        assert!(
+            !p.path_explanation
+                .steps
+                .iter()
+                .any(|s| s.contains("Deny aggregation")),
+            "deny step must not claim bits were removed that the owner rule restored; got: {:?}",
+            p.path_explanation.steps
+        );
     }
 
     // --- Share-∩-NTFS-Kombination / share ∩ NTFS combination ---
@@ -2786,12 +3007,11 @@ mod tests {
             MASK_MODIFY
         );
         assert!(
-            deny_step.contains("blocked by Deny ACEs"),
-            "Deny aggregation step must spell out 'blocked by Deny ACEs'; got: {deny_step}"
+            deny_step.contains("decided by Deny ACEs"),
+            "Deny aggregation step must spell out 'decided by Deny ACEs'; got: {deny_step}"
         );
     }
 
-    /// — sonst spammt er jeden normalen Bericht.
     /// Complement: if there is no Deny ACE, the new step must not appear,
     /// otherwise it would clutter every normal report.
     #[test]

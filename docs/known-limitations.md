@@ -335,6 +335,44 @@ Out of scope.
 
 ---
 
+## L9 — Canonical-order detector can flag legitimate multi-level inheritance
+
+**Priority:** Low
+**Tracking:** documentation only — exact detection is impossible with the available data
+
+### Problem
+
+The `NonCanonicalDaclOrder` diagnostic uses a single-level 4-phase model:
+explicit-deny → explicit-allow → inherited-deny → inherited-allow.
+Windows canonical order, however, sorts inherited ACEs **per ancestor
+level**: first all ACEs inherited from the parent (deny before allow),
+then from the grandparent, and so on. A DACL like
+`[inherited-Allow from parent, inherited-Deny from grandparent]` is
+fully canonical in Windows but is flagged by Stars.
+
+### Effect
+
+The diagnostic marker can appear on perfectly healthy ACLs in deep
+directory trees where an ancestor carries Deny ACEs. **Evaluation is
+not affected** — the engine always walks the stored order, which is
+exactly what Windows `AccessCheck` does. Only the informational marker
+can be a false positive.
+
+### Why not fixed
+
+`AceEntry` carries no ancestry information (Windows does not expose
+which ancestor an inherited ACE came from through
+`GetNamedSecurityInfoW`). An exact canonical check per inheritance
+level is therefore impossible. The diagnostic text and the engine log
+message state this limitation explicitly.
+
+### Test plan
+
+Not testable beyond the wording — the marker semantics are documented
+here and in the diagnostic tooltip texts.
+
+---
+
 ## Status overview
 
 | Limit | Priority | Marker present? | Resolvable? |
@@ -347,6 +385,7 @@ Out of scope.
 | L6 — Live tests | High | n/a | yes, with setup |
 | L7 — Token privileges | Low | no | deliberately out of scope |
 | L8 — DAC | Low | yes (incomplete) | deliberately out of scope |
+| L9 — Canonical-order false positives | Low | yes (informational) | no (missing ancestry data) |
 
 ## Contribution policy
 
