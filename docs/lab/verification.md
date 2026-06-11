@@ -989,3 +989,57 @@ diagnostic appears. Bonus observation: the German-localized display name
 
 Fixtures `C:\ReVerify\*` and share `BGWTest` remain on tier0 for future
 regression sessions.
+
+---
+
+## Block J — Attempt to live-verify the FSP (L1) and GC (L2) LDAP paths (2026-06-11)
+
+The v1.6 work added two LDAP-only features — Foreign Security Principal
+resolution (L1) and Global Catalog bind (L2). Both are covered by unit
+and fake-backend integration tests. Block J attempted to additionally
+exercise them **live** against the lab. Documented here honestly: the
+live LDAP path is blocked by the Windows Server 2025 platform, not by
+Stars.
+
+### What was tried
+
+1. **Plain LDAP (`--insecure-ldap`) against tier0.** Rejected with
+   `rc=8 (strongerAuthRequired)`: "The server requires binds to turn on
+   integrity checking if SSL/TLS are not already active." This is the
+   2025 LDAP-signing enforcement.
+2. **Loosened `LDAPServerIntegrity`.** The Default Domain Controllers
+   GPO already had it at `1` (Negotiate, *not* Require). Setting the
+   live registry value to `1` and then `0`, each with an NTDS restart,
+   did **not** lift the rejection — Server 2025 hard-blocks unsigned
+   cleartext simple binds independently of this value.
+3. **Self-signed LDAPS cert.** Created a `CN=tier0.lab` cert (Server
+   Authentication EKU), placed it in `LocalMachine\My`, the local
+   Trusted Root (so Stars' `ldap3` TLS validation would pass), and
+   imported it into the NTDS service store; restarted NTDS. The TLS
+   handshake on port 636 still reset (`os error 10054`), and a
+   server-local `SslStream` test to `tier0.lab:636` reset as well —
+   AD DS did not serve the cert for LDAPS. A `renewServerCertificate`
+   trigger on rootDSE failed because that bind is itself subject to the
+   signing enforcement.
+
+### Conclusion
+
+Live LDAP verification on this lab needs a **proper LDAPS certificate
+chain** — in practice an enterprise CA (AD CS), which the lab does not
+have — or a domain-joined client using SASL sign/seal (a different bind
+mode than Stars' simple bind). This is exactly the limitation already
+documented in H.6.4 and in the README's Server 2025 note. It is a
+property of the hardened platform, not a Stars defect.
+
+The FSP (L1) and GC (L2) logic is therefore verified by the test suite
+(fake LDAP backends exercise the precise branch logic, the engine marker
+propagation, and the risk-incompleteness flagging), not by a live lab
+bind. The SAM/LSA path — the recommended production mode when Stars runs
+on a DC — continues to work live and was re-confirmed at the end of this
+block (mm0001 resolved as User with the full membership chain).
+
+### Lab left clean
+
+`LDAPServerIntegrity` restored to `1` (the GPO value), the self-signed
+cert removed from the `My`, `Root`, and NTDS stores, `gpupdate /force`
+applied, and NTDS restarted. No persistent change to the DC.
