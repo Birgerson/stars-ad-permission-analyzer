@@ -84,13 +84,13 @@ System requirements: Windows 10, Windows 11, or Windows Server. No additional ru
 So you can confirm your download is bit-for-bit identical to the build produced by GitHub Actions:
 
 ```powershell
-$exe = "Stars-v1.5.17-Setup.exe"  # adapt to your version
+$exe = "Stars-v1.5.18-Setup.exe"  # adapt to your version
 $expected = (Get-Content "$exe.sha256").Split("  ")[0]
 $actual   = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
 if ($actual -eq $expected) { "OK — file matches" } else { "MISMATCH — do NOT use" }
 ```
 
-On WSL / Linux / macOS, `sha256sum -c Stars-v1.5.17-Setup.exe.sha256` works directly.
+On WSL / Linux / macOS, `sha256sum -c Stars-v1.5.18-Setup.exe.sha256` works directly.
 
 > **What the hash file gives you — and what it doesn't:** The hash protects against tampered downloads (mirror modification, MITM). It does **not** replace code signing — you verify the authenticity of the source through the GitHub repo itself, not through the hash. Code signing is planned; see [`docs/codesigning.md`](docs/codesigning.md) for status.
 
@@ -128,7 +128,7 @@ Stars reads Windows access control lists (ACLs) directly from the file system:
 - Allow and Deny ACEs
 - Explicit and inherited entries
 - Inheritance breaks
-- Owner special rule (owner always receives READ_CONTROL + WRITE_DAC)
+- Owner special rule (implicit READ_CONTROL + WRITE_DAC — correctly suppressed when an OWNER RIGHTS / S-1-3-4 entry governs the owner)
 - Reparse points, junctions, and symbolic links (without infinite loops)
 
 #### Active Directory
@@ -163,7 +163,7 @@ User max.muster → member of "Accounting" → member of "FileServer_Read"
 
 ### How is Stars started?
 
-Stars is distributed as a **setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.5.17-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and installs **no background services** and **no auto-start components**.
+Stars is distributed as a **setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.5.18-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and installs **no background services** and **no auto-start components**.
 
 > **Note on code signing:** The installer is currently **not code-signed**. Windows SmartScreen will warn on first launch ("Windows protected your PC — unrecognized publisher"). A code-signing certificate is planned but not yet in place — see [`docs/codesigning.md`](docs/codesigning.md). Until then, you can verify the integrity of the file via the SHA256 hash above.
 

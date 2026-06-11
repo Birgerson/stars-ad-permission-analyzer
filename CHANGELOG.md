@@ -10,7 +10,44 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.5.17 below for the latest release.)
+(No unreleased changes — see v1.5.18 below for the latest release.)
+
+---
+
+## [1.5.18] — 2026-06-09
+
+**Engine correctness patch.** Closes the findings from a self-review of the permission engine (Claude Fable 5, documented in the repo-local review). v1.5.17 users should upgrade if they audit environments that use the OWNER RIGHTS mechanism.
+
+### Finding 1 (Medium) — OWNER RIGHTS SID (S-1-3-4) is now handled
+
+Windows (Server 2008+) semantics: when the DACL contains an ACE for the well-known SID `S-1-3-4` ("OWNER RIGHTS"), that entry **replaces** the implicit owner grant of `READ_CONTROL + WRITE_DAC`. Administrators use this deliberately to restrict owner rights (e.g. so service accounts cannot rewrite the ACLs of their own files).
+
+Stars previously ignored the S-1-3-4 ACE (it matched no token SID) **and** still applied the implicit grant — overstating the owner's effective rights in exactly the case where someone had deliberately restricted them.
+
+- When the analyzed identity is the object's owner, S-1-3-4 entries are now evaluated in stored DACL order like any other ACE.
+- The implicit grant fires only when no applicable S-1-3-4 ACE exists (inherit-only entries do not count, matching Windows).
+- New informational diagnostic `OwnerRightsAceApplied` (not an incompleteness trigger — the evaluation is exact), rendered in CLI output and HTML reports. No DB migration needed (tagged-enum diagnostics are forward-compatible since schema v6).
+
+### Finding 2 (Medium) — owner grant is now explained
+
+The implicit `READ_CONTROL + WRITE_DAC` bits appeared in "NTFS effective" without any explanation step — breaking the "every bit explainable" promise. New steps: "Owner special rule: READ_CONTROL + WRITE_DAC granted implicitly (owner: …)" when the rule fires, or a step naming the S-1-3-4 mechanism when an OWNER RIGHTS ACE suppressed it. The deny-aggregation step now excludes owner-restored bits so it no longer claims bits were removed that the owner rule restored.
+
+### Finding 4 (Low) — single stored-order walk
+
+`evaluate_dacl_ordered` and `collect_contributing_sids` implemented the same stored-order algorithm twice — the v1.5.17 provenance bug existed precisely because the two walks diverged. Both replaced by a single `walk_dacl_stored_order` returning `(granted, denied, contributions)` from one pass.
+
+### Finding 3 (documentation) — canonical-order detector limitation
+
+The `NonCanonicalDaclOrder` diagnostic uses a single-level 4-phase model and can flag legitimate multi-level inheritance orderings (parent-allow before grandparent-deny is canonical in Windows). Exact detection is impossible without ancestry data, which `GetNamedSecurityInfoW` does not expose. The warn log states this; `docs/known-limitations.md` gains entry **L9**.
+
+### Tests
+
+- **`cargo test --workspace`: 537 passed** (was 530; +7 new S-1-3-4 / owner-explanation regression tests). 0 failed, 7 ignored.
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `python scripts/check-language.py`: all clean.
+
+### Documentation
+
+README owner-rule bullet updated; download examples set to `v1.5.18`.
 
 ---
 
