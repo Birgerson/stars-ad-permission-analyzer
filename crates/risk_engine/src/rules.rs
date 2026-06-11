@@ -50,6 +50,9 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
                     // Known-limitations L1: trust-forest memberships
                     // unknown when resolved through an FSP object.
                     | PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
+                    // Known-limitations L2: GC bind — only universal
+                    // group memberships replicate fully.
+                    | PermissionDiagnostic::GroupResolutionViaGlobalCatalog
             )
         })
 }
@@ -897,6 +900,22 @@ mod tests {
         assert!(
             r[0].incomplete,
             "IdentityResolvedViaForeignSecurityPrincipal -> finding must be flagged incomplete (L1)"
+        );
+    }
+
+    /// Known-limitations L2: memberships from a Global Catalog bind are
+    /// potentially partial — derived findings must be flagged incomplete.
+    #[test]
+    fn full_control_marks_finding_incomplete_on_gc_resolution() {
+        use adpa_core::model::PermissionDiagnostic;
+        let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
+        p.diagnostics
+            .push(PermissionDiagnostic::GroupResolutionViaGlobalCatalog);
+        let r = FullControlRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(
+            r[0].incomplete,
+            "GroupResolutionViaGlobalCatalog -> finding must be flagged incomplete (L2)"
         );
     }
 

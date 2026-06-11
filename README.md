@@ -216,6 +216,10 @@ adpa.exe analyze --path "\\server\share\Data" --user S-1-5-21-... ^
 > The password is passed through `ADPA_BIND_PASSWORD`, not as a CLI argument
 > (CLI arguments are visible in process lists and shell history).
 > For test environments without LDAPS, add `--insecure-ldap`.
+> For multi-domain forests, add `--global-catalog`: Stars binds against the
+> Global Catalog (port 3269/3268), identity lookups become forest-wide and
+> `--base-dn` may be omitted. GC-resolved group memberships are marked
+> potentially incomplete (only universal groups replicate fully to the GC).
 >
 > **Note for Windows Server 2025:** Server 2025 enforces LDAP signing by default
 > (`rc=8 strongerAuthRequired` for unencrypted binds). To use `--insecure-ldap`

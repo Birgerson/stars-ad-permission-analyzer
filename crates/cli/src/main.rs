@@ -79,6 +79,13 @@ enum Commands {
         /// Unencrypted LDAP (port 389) — password in plaintext. Test environments only.
         #[arg(long)]
         insecure_ldap: bool,
+        /// Bind against the Global Catalog (port 3269 LDAPS / 3268 with
+        /// --insecure-ldap). Identity lookups become forest-wide; --base-dn
+        /// becomes optional (empty = all partitions). Group memberships
+        /// resolved via the GC are marked potentially incomplete — only
+        /// universal groups replicate fully.
+        #[arg(long)]
+        global_catalog: bool,
         /// Optional CSV export path
         #[arg(short = 'o', long)]
         output: Option<String>,
@@ -115,6 +122,13 @@ enum Commands {
         /// Unencrypted LDAP (port 389) — password in plaintext. Test environments only.
         #[arg(long)]
         insecure_ldap: bool,
+        /// Bind against the Global Catalog (port 3269 LDAPS / 3268 with
+        /// --insecure-ldap). Identity lookups become forest-wide; --base-dn
+        /// becomes optional (empty = all partitions). Group memberships
+        /// resolved via the GC are marked potentially incomplete — only
+        /// universal groups replicate fully.
+        #[arg(long)]
+        global_catalog: bool,
         /// SQLite database file for results (created if absent)
         #[arg(long)]
         db: Option<String>,
@@ -152,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
             bind_dn,
             bind_password,
             insecure_ldap,
+            global_catalog,
             output,
             smb_server,
             share_name,
@@ -169,6 +184,7 @@ async fn main() -> anyhow::Result<()> {
                     smb_server,
                     share_name,
                     insecure_ldap,
+                    global_catalog,
                     force,
                 },
             )
@@ -182,6 +198,7 @@ async fn main() -> anyhow::Result<()> {
             bind_dn,
             bind_password,
             insecure_ldap,
+            global_catalog,
             db,
             max_depth,
             output,
@@ -203,6 +220,7 @@ async fn main() -> anyhow::Result<()> {
                     smb_server,
                     share_name,
                     insecure_ldap,
+                    global_catalog,
                     force,
                 },
             )
@@ -316,13 +334,20 @@ async fn resolve_identity(
     bind_dn: Option<String>,
     bind_password: Option<String>,
     insecure_ldap: bool,
+    global_catalog: bool,
 ) -> anyhow::Result<ResolvedIdentity> {
     if let Some(server) = server {
-        let base = base_dn.ok_or_else(|| {
-            anyhow::anyhow!(
-                "--base-dn is required when --server is specified (e.g. DC=corp,DC=local)"
-            )
-        })?;
+        // In Global Catalog mode an empty base searches all forest
+        // partitions — --base-dn becomes optional (known-limitations L2).
+        let base = match base_dn {
+            Some(b) => b,
+            None if global_catalog => String::new(),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "--base-dn is required when --server is specified                      (e.g. DC=corp,DC=local). With --global-catalog it may                      be omitted (forest-wide search)."
+                ))
+            }
+        };
         let bind = bind_dn.ok_or_else(|| {
             anyhow::anyhow!(
                 "--bind-dn is required when --server is specified \
@@ -353,10 +378,13 @@ async fn resolve_identity(
             );
         }
 
-        let config = if insecure_ldap {
-            LdapConfig::new_insecure(&server, &base, &bind, &password)
-        } else {
-            LdapConfig::new(&server, &base, &bind, &password)
+        let config = match (global_catalog, insecure_ldap) {
+            (true, true) => {
+                LdapConfig::new_global_catalog_insecure(&server, &base, &bind, &password)
+            }
+            (true, false) => LdapConfig::new_global_catalog(&server, &base, &bind, &password),
+            (false, true) => LdapConfig::new_insecure(&server, &base, &bind, &password),
+            (false, false) => LdapConfig::new(&server, &base, &bind, &password),
         };
         let ldap_resolver = std::sync::Arc::new(LdapResolver::new(config));
         let backend = LdapIdentityBackend::new(ldap_resolver);
@@ -416,6 +444,7 @@ async fn resolve_identity(
                 disabled_status,
                 diagnostics,
                 resolved_via_fsp: false,
+                resolved_via_global_catalog: false,
             };
             Ok(ResolvedIdentity {
                 resolution,
@@ -467,6 +496,7 @@ struct AnalyzeOptions {
     smb_server: Option<String>,
     share_name: Option<String>,
     insecure_ldap: bool,
+    global_catalog: bool,
     force: bool,
 }
 
@@ -484,6 +514,7 @@ async fn run_analyze(
         smb_server,
         share_name,
         insecure_ldap,
+        global_catalog,
         force,
     } = opts;
 
@@ -527,6 +558,7 @@ async fn run_analyze(
         bind_dn,
         bind_password,
         insecure_ldap,
+        global_catalog,
     )
     .await?;
 
@@ -607,6 +639,7 @@ async fn run_analyze(
         identity_lookup_failure_reason: engine_flags.identity_lookup_failure_reason.clone(),
         group_resolution_failure_reason: engine_flags.group_resolution_failure_reason.clone(),
         identity_resolved_via_fsp: engine_flags.identity_resolved_via_fsp,
+        group_resolution_via_global_catalog: engine_flags.group_resolution_via_global_catalog,
     };
     let result = DefaultPermissionEngine
         .evaluate(input)
@@ -673,6 +706,7 @@ struct ScanOptions {
     smb_server: Option<String>,
     share_name: Option<String>,
     insecure_ldap: bool,
+    global_catalog: bool,
     force: bool,
 }
 
@@ -692,6 +726,7 @@ async fn run_scan(
         smb_server,
         share_name,
         insecure_ldap,
+        global_catalog,
         force,
     } = opts;
 
@@ -739,6 +774,7 @@ async fn run_scan(
         bind_dn,
         bind_password,
         insecure_ldap,
+        global_catalog,
     )
     .await?;
 
@@ -928,6 +964,8 @@ async fn run_scan(
                 .group_resolution_failure_reason
                 .clone(),
             identity_resolved_via_fsp: scan_engine_flags.identity_resolved_via_fsp,
+            group_resolution_via_global_catalog: scan_engine_flags
+                .group_resolution_via_global_catalog,
         };
         let result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
             anyhow::anyhow!("Permission evaluation failed for '{}': {e}", fso.path.0)

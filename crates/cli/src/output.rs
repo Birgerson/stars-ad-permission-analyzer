@@ -232,6 +232,12 @@ pub fn print_report(
                     println!("      memberships in its own forest are unknown. Treat as");
                     println!("      incomplete.");
                 }
+                PermissionDiagnostic::GroupResolutionViaGlobalCatalog => {
+                    println!("  [!] Group memberships were resolved through a Global Catalog");
+                    println!("      bind. Only universal group memberships replicate fully to");
+                    println!("      the GC — global and domain-local memberships of foreign");
+                    println!("      domains can be missing. Treat as incomplete.");
+                }
             }
         }
     }

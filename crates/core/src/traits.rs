@@ -106,6 +106,13 @@ pub struct PermissionEvaluationInput {
     /// and risk findings are flagged incomplete. Default `false`.
     /// Closes known-limitations entry L1.
     pub identity_resolved_via_fsp: bool,
+    /// `true` when group memberships were resolved through a Global
+    /// Catalog bind. Only universal group memberships replicate fully
+    /// to the GC — the engine pushes a
+    /// `PermissionDiagnostic::GroupResolutionViaGlobalCatalog` and risk
+    /// findings are flagged incomplete. Default `false`.
+    /// Closes known-limitations entry L2.
+    pub group_resolution_via_global_catalog: bool,
 }
 
 pub struct RiskContext {

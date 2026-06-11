@@ -113,6 +113,11 @@ impl LdapResolver {
         .await
     }
 
+    /// `true` when the configuration targets the Global Catalog.
+    pub fn is_global_catalog(&self) -> bool {
+        self.config.global_catalog
+    }
+
     /// Returns the number of cached identities (for tests and diagnostics).
     pub async fn cache_size(&self) -> usize {
         self.identity_cache.lock().await.len()

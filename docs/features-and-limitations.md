@@ -181,10 +181,18 @@ permanently not part of the product:
   error** with the hint to bind against the Global Catalog
   (`port 3268`) or to use the `DOMAIN\user` / direct-SID input
   form. No silent fallback. See ADR 0036.
-- **Solution (manual):** Run a second Stars analysis with the
-  `base_dn` of the partner domain, or bind against the Global
-  Catalog (`gc://…:3268/…`). See ADR 0034 (initial fix, only
-  `DOMAIN\user`) and ADR 0036 (generalization to all input forms).
+- **Solution (built-in since 2026-06-11):** pass `--global-catalog`
+  (CLI). Stars then binds against the Global Catalog (port 3269
+  LDAPS / 3268 with `--insecure-ldap`); `--base-dn` becomes optional
+  (empty = all forest partitions) and identity lookups (SID, UPN)
+  are forest-wide. **Caveat:** only universal group memberships
+  replicate fully to the GC — Stars marks GC-resolved findings with
+  `GroupResolutionViaGlobalCatalog` (incomplete trigger). See
+  ADR 0034 (initial fix, only `DOMAIN\user`), ADR 0036
+  (generalization to all input forms), and known-limitations L2
+  (closed).
+- **Solution (manual, still valid):** run a second Stars analysis
+  with the `base_dn` of the partner domain.
 
 ### 3. Access denied during scan
 

@@ -151,6 +151,10 @@ pub struct PrincipalResolution {
     /// Home-domain group memberships were resolved through the FSP
     /// object; trust-forest memberships are unknown.
     pub resolved_via_fsp: bool,
+    /// `true` when group memberships were resolved through a Global
+    /// Catalog bind (known-limitations L2) — only universal group
+    /// memberships replicate fully to the GC.
+    pub resolved_via_global_catalog: bool,
 }
 
 impl PrincipalResolution {
@@ -198,6 +202,7 @@ impl PrincipalResolution {
             identity_lookup_failure_reason,
             group_resolution_failure_reason,
             identity_resolved_via_fsp: self.resolved_via_fsp,
+            group_resolution_via_global_catalog: self.resolved_via_global_catalog,
         }
     }
 }
@@ -215,6 +220,9 @@ pub struct EngineFlags {
     /// Engine pushes
     /// `PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal`.
     pub identity_resolved_via_fsp: bool,
+    /// Engine pushes
+    /// `PermissionDiagnostic::GroupResolutionViaGlobalCatalog`.
+    pub group_resolution_via_global_catalog: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +247,15 @@ pub trait IdentityBackend: Send + Sync {
 
     /// Recursive group resolution.
     async fn resolve_memberships(&self, sid: &Sid) -> Result<Vec<GroupMembership>, CoreError>;
+
+    /// `true` when this backend searches the whole forest (Global
+    /// Catalog bind). Identity misses then mean "not in the forest"
+    /// rather than "outside the configured base", and group
+    /// memberships are potentially incomplete (only universal groups
+    /// replicate fully to the GC). Default: `false`.
+    fn is_forest_wide(&self) -> bool {
+        false
+    }
 }
 
 /// LSA backend for Windows reverse lookups.
@@ -305,6 +322,10 @@ impl IdentityBackend for LdapIdentityBackend {
     async fn resolve_memberships(&self, sid: &Sid) -> Result<Vec<GroupMembership>, CoreError> {
         use adpa_core::traits::IdentityResolver;
         self.inner.resolve_group_memberships(sid).await
+    }
+
+    fn is_forest_wide(&self) -> bool {
+        self.inner.is_global_catalog()
     }
 }
 
@@ -437,18 +458,28 @@ where
                     disabled_status,
                     diagnostics,
                     resolved_via_fsp: false,
+                    resolved_via_global_catalog: self.identity_backend.is_forest_wide(),
                 })
             }
             None => {
-                // Fallback. ChatGPT review 2026-06-04 round 3 Finding
-                // auseinanderlaufen.
-                // UPN missing in configured base_dn — return a clean
-                // error rather than fabricating a fallback identity.
-                Err(CoreError::Validation(format!(
-                    "UPN '{upn}' not found under the configured LDAP base. \
-                     For forest-wide UPN resolution bind against a Global \
-                     Catalog (port 3268) or use DOMAIN\\user / direct SID."
-                )))
+                // UPN missing — return a clean error rather than
+                // fabricating a fallback identity. The hint depends on
+                // the bind scope: against a Global Catalog the search
+                // was already forest-wide (known-limitations L2).
+                if self.identity_backend.is_forest_wide() {
+                    Err(CoreError::Validation(format!(
+                        "UPN '{upn}' not found in the Global Catalog — the \
+                         search was forest-wide. Check the spelling or use \
+                         DOMAIN\\user / direct SID."
+                    )))
+                } else {
+                    Err(CoreError::Validation(format!(
+                        "UPN '{upn}' not found under the configured LDAP base. \
+                         For forest-wide UPN resolution bind against a Global \
+                         Catalog (--global-catalog, port 3269/3268) or use \
+                         DOMAIN\\user / direct SID."
+                    )))
+                }
             }
         }
     }
@@ -484,6 +515,7 @@ where
                     disabled_status,
                     diagnostics,
                     resolved_via_fsp: false,
+                    resolved_via_global_catalog: self.identity_backend.is_forest_wide(),
                 })
             }
             None => Err(CoreError::Validation(format!(
@@ -523,6 +555,7 @@ where
                     disabled_status,
                     diagnostics,
                     resolved_via_fsp: false,
+                    resolved_via_global_catalog: self.identity_backend.is_forest_wide(),
                 })
             }
             Ok(None) => self.fall_back_to_lsa(&sid).await,
@@ -583,6 +616,7 @@ where
                     disabled_status,
                     diagnostics,
                     resolved_via_fsp: false,
+                    resolved_via_global_catalog: false,
                 })
             }
             Err(_) => {
@@ -669,6 +703,7 @@ where
             disabled_status,
             diagnostics,
             resolved_via_fsp: true,
+            resolved_via_global_catalog: self.identity_backend.is_forest_wide(),
         })
     }
 
@@ -706,6 +741,7 @@ where
             disabled_status: DisabledStatus::Unknown,
             diagnostics: Vec::new(),
             resolved_via_fsp: false,
+            resolved_via_global_catalog: false,
         }
     }
 
@@ -727,6 +763,7 @@ where
             disabled_status: DisabledStatus::Unknown,
             diagnostics: Vec::new(),
             resolved_via_fsp: false,
+            resolved_via_global_catalog: false,
         }
     }
 }
@@ -1342,5 +1379,97 @@ mod tests {
             d,
             PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
         )));
+    }
+
+    // -----------------------------------------------------------------
+    // Known-limitations L2: Global Catalog bind.
+    // -----------------------------------------------------------------
+
+    /// Forest-wide fake backend wrapping the standard fake.
+    struct ForestWideFake(FakeLdapBackend);
+
+    #[async_trait]
+    impl IdentityBackend for ForestWideFake {
+        async fn lookup_identity_by_sid(&self, sid: &Sid) -> Result<Option<Identity>, CoreError> {
+            self.0.lookup_identity_by_sid(sid).await
+        }
+        async fn lookup_identity_by_upn(
+            &self,
+            upn: &str,
+        ) -> Result<Option<(Sid, Identity)>, CoreError> {
+            self.0.lookup_identity_by_upn(upn).await
+        }
+        async fn lookup_identities_by_sam(
+            &self,
+            sam: &str,
+        ) -> Result<Vec<(Sid, Identity)>, CoreError> {
+            self.0.lookup_identities_by_sam(sam).await
+        }
+        async fn resolve_memberships(&self, sid: &Sid) -> Result<Vec<GroupMembership>, CoreError> {
+            self.0.resolve_memberships(sid).await
+        }
+        fn is_forest_wide(&self) -> bool {
+            true
+        }
+    }
+
+    /// GC hit: memberships resolve, the resolution is flagged
+    /// resolved_via_global_catalog and the engine flag follows.
+    #[tokio::test]
+    async fn gc_hit_flags_group_resolution_via_global_catalog() {
+        let sid = Sid("S-1-5-21-2-2-2-1001".to_owned());
+        let mut ldap = FakeLdapBackend::new();
+        ldap.by_sid.insert(
+            sid.0.clone(),
+            mk_identity(&sid.0, "bob", "CHILD", IdentityKind::User),
+        );
+        let resolver = PrincipalResolver::new(ForestWideFake(ldap), None::<FakeLsaBackend>);
+        let res = resolver
+            .resolve(PrincipalInput::Sid(sid))
+            .await
+            .expect("resolution must succeed");
+        assert!(res.resolved_via_global_catalog);
+        assert!(res.engine_flags().group_resolution_via_global_catalog);
+    }
+
+    /// Non-GC hit: the flag stays off (regression guard).
+    #[tokio::test]
+    async fn regular_hit_does_not_flag_global_catalog() {
+        let sid = Sid("S-1-5-21-2-2-2-1002".to_owned());
+        let mut ldap = FakeLdapBackend::new();
+        ldap.by_sid.insert(
+            sid.0.clone(),
+            mk_identity(&sid.0, "carol", "EXAMPLE", IdentityKind::User),
+        );
+        let resolver = PrincipalResolver::new(ldap, None::<FakeLsaBackend>);
+        let res = resolver
+            .resolve(PrincipalInput::Sid(sid))
+            .await
+            .expect("resolution must succeed");
+        assert!(!res.resolved_via_global_catalog);
+        assert!(!res.engine_flags().group_resolution_via_global_catalog);
+    }
+
+    /// UPN miss against the GC names the forest-wide scope instead of
+    /// recommending a GC bind the caller is already using.
+    #[tokio::test]
+    async fn gc_upn_miss_reports_forest_wide_error() {
+        let resolver = PrincipalResolver::new(
+            ForestWideFake(FakeLdapBackend::new()),
+            None::<FakeLsaBackend>,
+        );
+        let err = resolver
+            .resolve(PrincipalInput::Upn("ghost@nowhere.lab".to_owned()))
+            .await
+            .expect_err("UPN miss must be an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("forest-wide"),
+            "GC miss must say the search was already forest-wide; got: {msg}"
+        );
+        assert!(
+            !msg.contains("--global-catalog"),
+            "GC miss must not recommend the flag that is already active; got: {msg}"
+        );
     }
 }

@@ -355,6 +355,12 @@ fn write_permissions_table(
                             .to_string(),
                     );
                 }
+                PermissionDiagnostic::GroupResolutionViaGlobalCatalog => {
+                    diag_parts.push(
+                        "<span class=\"badge badge-medium\"                          title=\"Group memberships were resolved through                          a Global Catalog bind. Only universal group                          memberships replicate fully to the GC — global                          and domain-local memberships of foreign domains                          can be missing. Treat the finding as                          incomplete.\">⚠ groups via Global Catalog — may be partial</span>"
+                            .to_string(),
+                    );
+                }
             }
         }
         let diagnostics = if diag_parts.is_empty() {

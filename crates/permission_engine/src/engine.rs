@@ -210,6 +210,12 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if input.identity_resolved_via_fsp {
             diagnostics.push(PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal);
         }
+        // Known-limitations L2: memberships came from a Global Catalog
+        // bind — only universal group memberships replicate fully to
+        // the GC. Incompleteness trigger.
+        if input.group_resolution_via_global_catalog {
+            diagnostics.push(PermissionDiagnostic::GroupResolutionViaGlobalCatalog);
+        }
 
         let result = EffectivePermission {
             identity: input.identity,
@@ -842,6 +848,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap()
     }
@@ -870,6 +877,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap()
     }
@@ -898,6 +906,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap()
     }
@@ -1505,6 +1514,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         assert_eq!(
@@ -1537,6 +1547,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         assert!(NormalizedRights::new(p.effective_mask.0).is_read());
@@ -1565,6 +1576,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         assert_eq!(
@@ -2081,6 +2093,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         assert!(
@@ -2112,6 +2125,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         assert!(
@@ -2176,6 +2190,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         let member_step = p
@@ -2216,6 +2231,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         let ace_step = p
@@ -2712,6 +2728,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         assert!(
@@ -2747,6 +2764,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         assert!(
@@ -2781,6 +2799,7 @@ mod tests {
                 ),
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         let found = result
@@ -2821,6 +2840,7 @@ mod tests {
                     "LDAP group query timed out after 30s".to_owned(),
                 ),
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         let found = result
@@ -2859,6 +2879,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: true,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         assert!(
@@ -2867,6 +2888,40 @@ mod tests {
                 PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
             )),
             "FSP marker must be present; got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    /// Known-limitations L2: the GC flag must surface as a structured
+    /// marker so reports and risk rules see the partial-membership gap.
+    #[test]
+    fn gc_flag_pushes_group_resolution_via_global_catalog_diagnostic() {
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![],
+                file_system_object: fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                access_context: AccessContext::Unspecified,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: true,
+            })
+            .unwrap();
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d, PermissionDiagnostic::GroupResolutionViaGlobalCatalog)),
+            "GC marker must be present; got: {:?}",
             result.diagnostics
         );
     }
@@ -2927,6 +2982,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
 
@@ -2988,6 +3044,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
 
@@ -3038,6 +3095,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
 
@@ -3091,6 +3149,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
 
@@ -3135,6 +3194,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         assert_eq!(
@@ -3167,6 +3227,7 @@ mod tests {
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
                 identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
             })
             .unwrap();
         assert_eq!(

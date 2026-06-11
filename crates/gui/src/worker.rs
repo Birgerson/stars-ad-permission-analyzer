@@ -692,6 +692,7 @@ async fn handle_analyze(
             identity_lookup_failure_reason: engine_flags.identity_lookup_failure_reason,
             group_resolution_failure_reason: engine_flags.group_resolution_failure_reason,
             identity_resolved_via_fsp: engine_flags.identity_resolved_via_fsp,
+            group_resolution_via_global_catalog: engine_flags.group_resolution_via_global_catalog,
         })
         .map_err(|e| format!("Permission engine error: {e}"))
 }
@@ -836,6 +837,7 @@ async fn handle_scan(
     let identity_lookup_failure_reason = engine_flags.identity_lookup_failure_reason;
     let group_resolution_failure_reason = engine_flags.group_resolution_failure_reason;
     let identity_resolved_via_fsp = engine_flags.identity_resolved_via_fsp;
+    let group_resolution_via_global_catalog = engine_flags.group_resolution_via_global_catalog;
     let identity = res.identity;
     let memberships = res.memberships;
 
@@ -972,6 +974,7 @@ async fn handle_scan(
             identity_lookup_failure_reason: identity_lookup_failure_reason.clone(),
             group_resolution_failure_reason: group_resolution_failure_reason.clone(),
             identity_resolved_via_fsp,
+            group_resolution_via_global_catalog,
         }) {
             Ok(perm) => {
                 let label = NormalizedRights::new(perm.effective_mask.0)
@@ -1582,6 +1585,7 @@ async fn resolve_identity_sids(
         disabled_status,
         diagnostics,
         resolved_via_fsp: false,
+        resolved_via_global_catalog: false,
     })
 }
 

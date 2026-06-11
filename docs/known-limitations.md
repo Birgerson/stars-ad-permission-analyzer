@@ -92,8 +92,24 @@ home-domain group, new marker appears.
 ## L2 — Global Catalog (GC) bind is not supported
 
 **Priority:** High
-**Tracking:** v1.6.0 candidate
+**Tracking:** **closed on main, 2026-06-11** (ships with the next release)
 **References:** ADR 0034, features-and-limitations.md section 2
+
+> **Status update (2026-06-11):** implemented. `LdapConfig` gains
+> `new_global_catalog` (port 3269 LDAPS) and
+> `new_global_catalog_insecure` (port 3268); an empty `base_dn` is
+> permitted in GC mode (searches all forest partitions). The CLI
+> exposes `--global-catalog`; `--base-dn` becomes optional with it.
+> Identity lookups (SID, UPN) are forest-wide — the UPN miss error in
+> GC mode now says "the search was forest-wide" instead of
+> recommending the flag that is already active. **Honest caveat:**
+> only universal group memberships replicate fully to the GC; global
+> and domain-local memberships of foreign domains can be missing.
+> Stars therefore pushes the structured marker
+> `GroupResolutionViaGlobalCatalog` on every GC-resolved finding and
+> the risk engine flags them `incomplete = true`. Covered by config,
+> fake-backend, engine, and risk-rule tests. GUI integration of a GC
+> toggle is a follow-up.
 
 ### Problem
 
@@ -395,7 +411,7 @@ here and in the diagnostic tooltip texts.
 | Limit | Priority | Marker present? | Resolvable? |
 | --- | --- | --- | --- |
 | L1 — FSP | High | **yes** (IdentityResolvedViaForeignSecurityPrincipal) | **closed 2026-06-11** (trust-side groups still need L2) |
-| L2 — GC bind | High | partially (Outside + UPN error) | yes, with implementation |
+| L2 — GC bind | High | **yes** (GroupResolutionViaGlobalCatalog) | **closed 2026-06-11** (GUI toggle is a follow-up) |
 | L3 — SID History | Medium | **no** | yes, with implementation |
 | L4 — Cross-forest filter | Medium | no | no (documentation only) |
 | L5 — Empty memberships | Medium | yes (incomplete) | only via L1/L2 |

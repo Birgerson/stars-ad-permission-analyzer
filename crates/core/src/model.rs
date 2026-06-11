@@ -509,6 +509,16 @@ pub enum PermissionDiagnostic {
     /// Closes known-limitations entry L1 (engine review 2026-06-09 /
     /// v1.6 work package).
     IdentityResolvedViaForeignSecurityPrincipal,
+
+    /// Group memberships were resolved through a **Global Catalog**
+    /// bind (port 3269/3268). The GC indexes identities forest-wide,
+    /// but only **universal** group memberships replicate completely
+    /// to the GC — global and domain-local memberships of foreign
+    /// domains can be missing from the token. Risk findings for this
+    /// permission must carry `incomplete = true`.
+    ///
+    /// Closes known-limitations entry L2 (v1.6 work package).
+    GroupResolutionViaGlobalCatalog,
 }
 
 /// Explainable permission path

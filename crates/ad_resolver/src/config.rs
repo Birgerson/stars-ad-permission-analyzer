@@ -27,10 +27,13 @@ pub struct LdapConfig {
     /// LDAP server address (IP or hostname).
     pub server: String,
 
-    /// LDAP port (default: 636 for LDAPS, 389 for unencrypted LDAP).
+    /// LDAP port (default: 636 for LDAPS, 389 for unencrypted LDAP,
+    /// 3269/3268 for the Global Catalog).
     pub port: u16,
 
     /// Base DN for all searches, e.g. "DC=testdomain,DC=local".
+    /// May be empty in Global Catalog mode — the GC indexes the whole
+    /// forest and an empty base searches all partitions.
     pub base_dn: String,
 
     /// Bind DN for authentication, e.g. "CN=Administrator,CN=Users,DC=testdomain,DC=local".
@@ -44,6 +47,15 @@ pub struct LdapConfig {
 
     /// TLS mode. Default: Ldaps (encrypted).
     pub tls_mode: TlsMode,
+
+    /// `true` when the connection targets the Global Catalog
+    /// (port 3269 LDAPS / 3268 plain). The GC indexes the entire
+    /// forest, so identity lookups (SID, UPN) are forest-wide — but
+    /// only **universal** group memberships are replicated completely;
+    /// global and domain-local memberships of foreign domains can be
+    /// missing. Consumers must treat GC-resolved memberships as
+    /// potentially incomplete (known-limitations L2).
+    pub global_catalog: bool,
 }
 
 impl LdapConfig {
@@ -62,6 +74,7 @@ impl LdapConfig {
             bind_password: bind_password.into(),
             timeout_secs: 10,
             tls_mode: TlsMode::Ldaps,
+            global_catalog: false,
         }
     }
 
@@ -82,6 +95,53 @@ impl LdapConfig {
             bind_password: bind_password.into(),
             timeout_secs: 10,
             tls_mode: TlsMode::Insecure,
+            global_catalog: false,
+        }
+    }
+
+    /// Creates a Global Catalog configuration over LDAPS (port 3269).
+    ///
+    /// `base_dn` may be empty — the GC indexes the whole forest and an
+    /// empty base searches all partitions. Identity lookups (SID, UPN)
+    /// become forest-wide; group memberships resolved through the GC are
+    /// potentially incomplete (only universal groups replicate fully) —
+    /// Stars marks them accordingly (known-limitations L2).
+    pub fn new_global_catalog(
+        server: impl Into<String>,
+        base_dn: impl Into<String>,
+        bind_dn: impl Into<String>,
+        bind_password: impl Into<String>,
+    ) -> Self {
+        Self {
+            server: server.into(),
+            port: 3269,
+            base_dn: base_dn.into(),
+            bind_dn: bind_dn.into(),
+            bind_password: bind_password.into(),
+            timeout_secs: 10,
+            tls_mode: TlsMode::Ldaps,
+            global_catalog: true,
+        }
+    }
+
+    /// Creates an unencrypted Global Catalog configuration (port 3268).
+    ///
+    /// Only for test and development environments without LDAPS support.
+    pub fn new_global_catalog_insecure(
+        server: impl Into<String>,
+        base_dn: impl Into<String>,
+        bind_dn: impl Into<String>,
+        bind_password: impl Into<String>,
+    ) -> Self {
+        Self {
+            server: server.into(),
+            port: 3268,
+            base_dn: base_dn.into(),
+            bind_dn: bind_dn.into(),
+            bind_password: bind_password.into(),
+            timeout_secs: 10,
+            tls_mode: TlsMode::Insecure,
+            global_catalog: true,
         }
     }
 
@@ -110,6 +170,7 @@ impl std::fmt::Debug for LdapConfig {
             .field("bind_password", &pw_placeholder)
             .field("timeout_secs", &self.timeout_secs)
             .field("tls_mode", &self.tls_mode)
+            .field("global_catalog", &self.global_catalog)
             .finish()
     }
 }
@@ -130,6 +191,31 @@ mod tests {
             dbg.contains("***"),
             "Debug must show a masking placeholder; got: {dbg}"
         );
+    }
+
+    #[test]
+    fn global_catalog_uses_port_3269_with_ldaps() {
+        let cfg = LdapConfig::new_global_catalog("dc.test.local", "", "CN=Admin", "pw");
+        assert_eq!(cfg.port, 3269);
+        assert_eq!(cfg.tls_mode, TlsMode::Ldaps);
+        assert!(cfg.global_catalog);
+        assert_eq!(cfg.url(), "ldaps://dc.test.local:3269");
+        assert!(cfg.base_dn.is_empty(), "empty base = all forest partitions");
+    }
+
+    #[test]
+    fn global_catalog_insecure_uses_port_3268_plain() {
+        let cfg = LdapConfig::new_global_catalog_insecure("dc.test.local", "", "CN=Admin", "pw");
+        assert_eq!(cfg.port, 3268);
+        assert_eq!(cfg.tls_mode, TlsMode::Insecure);
+        assert!(cfg.global_catalog);
+        assert_eq!(cfg.url(), "ldap://dc.test.local:3268");
+    }
+
+    #[test]
+    fn regular_configs_are_not_global_catalog() {
+        assert!(!LdapConfig::new("s", "b", "d", "p").global_catalog);
+        assert!(!LdapConfig::new_insecure("s", "b", "d", "p").global_catalog);
     }
 
     #[test]

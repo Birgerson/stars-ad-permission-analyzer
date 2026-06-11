@@ -10,6 +10,35 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Global Catalog bind (closes known-limitations L2)
+
+New CLI flag `--global-catalog`: Stars binds against the Global Catalog
+(port 3269 LDAPS / 3268 with `--insecure-ldap`). Identity lookups (SID,
+UPN) become forest-wide and `--base-dn` becomes optional (empty = all
+forest partitions) — multi-domain audits no longer need one Stars run
+per domain.
+
+Honest caveat, marked structurally: only **universal** group
+memberships replicate fully to the GC — global and domain-local
+memberships of foreign domains can be missing. Every GC-resolved
+finding carries the new structured marker
+`GroupResolutionViaGlobalCatalog` (rendered in CLI output and HTML
+reports) and the risk engine flags it `incomplete = true`.
+
+Details:
+
+- `LdapConfig::new_global_catalog` / `new_global_catalog_insecure`;
+  `global_catalog` field on the config (Debug-safe).
+- `IdentityBackend::is_forest_wide()` (default `false`) lets the
+  principal resolver know the search scope; the UPN miss error in GC
+  mode now says "the search was forest-wide" instead of recommending
+  the flag that is already active.
+- GUI integration of a GC toggle is a follow-up; the engine flag and
+  marker plumbing is shared and ready.
+
+Tests: +8 (config ports/URLs, forest-wide fake backend, UPN miss
+wording, engine marker propagation, risk-rule incompleteness).
+
 ### Foreign Security Principal resolution (closes known-limitations L1)
 
 Cross-forest trust principals are represented in the home domain as a
