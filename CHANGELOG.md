@@ -10,7 +10,38 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.5.18 below for the latest release.)
+### Foreign Security Principal resolution (closes known-limitations L1)
+
+Cross-forest trust principals are represented in the home domain as a
+**Foreign Security Principal** object (`CN=ForeignSecurityPrincipals,…`).
+Pre-fix behaviour was worse than L1 documented: when an FSP existed, the
+LDAP SID search *found* it, parsed it as `IdentityKind::Unknown` with the
+raw SID string as display name, classified the scope as
+`InsideConfiguredLdapBase`, and set **no marker** — the missing
+trust-forest memberships were silently invisible, violating the
+no-silent-skips principle.
+
+New behaviour:
+
+- `classify_identity` recognizes `objectClass=foreignSecurityPrincipal`
+  → new `IdentityKind::ForeignSecurityPrincipal`.
+- `PrincipalResolver::resolve_by_sid` routes FSP hits through a
+  dedicated path: the identity is enriched via LSA reverse lookup
+  (real `TRUSTDOM\user` name, domain, and principal type), home-domain
+  groups are resolved through the FSP DN (transitive LDAP chain), and
+  the disabled state is honestly reported as Unknown (the FSP object
+  carries no `userAccountControl`).
+- New structured marker
+  `PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal`,
+  rendered in CLI output and HTML reports; an incompleteness trigger
+  in the risk engine (the principal's memberships in its **own forest**
+  remain unknown — resolving those needs a trust-side query, see L2).
+- GUI identity picker shows `F` for FSP-fallback identities.
+- No DB migration needed (tagged-enum diagnostics, kind string map
+  extended).
+
+Tests: +4 (fake-backend FSP resolution with and without LSA, engine
+marker propagation, risk-rule incompleteness).
 
 ---
 

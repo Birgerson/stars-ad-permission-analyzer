@@ -116,6 +116,7 @@ fn kind_to_str(kind: &IdentityKind) -> &'static str {
         IdentityKind::Group => "Group",
         IdentityKind::Computer => "Computer",
         IdentityKind::WellKnown => "WellKnown",
+        IdentityKind::ForeignSecurityPrincipal => "ForeignSecurityPrincipal",
         IdentityKind::Orphaned => "Orphaned",
         IdentityKind::Unknown => "Unknown",
     }
@@ -127,6 +128,7 @@ fn kind_from_str(s: &str) -> IdentityKind {
         "Group" => IdentityKind::Group,
         "Computer" => IdentityKind::Computer,
         "WellKnown" => IdentityKind::WellKnown,
+        "ForeignSecurityPrincipal" => IdentityKind::ForeignSecurityPrincipal,
         "Orphaned" => IdentityKind::Orphaned,
         _ => IdentityKind::Unknown,
     }

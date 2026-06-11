@@ -25,6 +25,11 @@ pub enum IdentityKind {
     Group,
     Computer,
     WellKnown,
+    /// A Foreign Security Principal object
+    /// (`CN=ForeignSecurityPrincipals,…`) standing in for a principal
+    /// from a trusted forest. Used as the fallback kind when the FSP
+    /// could not be enriched via LSA into the real principal type.
+    ForeignSecurityPrincipal,
     Orphaned,
     Unknown,
 }
@@ -491,6 +496,19 @@ pub enum PermissionDiagnostic {
     ///
     /// Engine review 2026-06-09 finding 1.
     OwnerRightsAceApplied,
+
+    /// The analyzed identity is a principal from a trusted forest whose
+    /// SID was found as a **Foreign Security Principal** object
+    /// (`CN=ForeignSecurityPrincipals,…`) in the configured home domain.
+    /// Home-domain group memberships were resolved through the FSP
+    /// object — but the trust domain itself was not queried, so the
+    /// principal's memberships **in its own forest** are unknown. The
+    /// token SID set can be incomplete; risk findings for this
+    /// permission must carry `incomplete = true`.
+    ///
+    /// Closes known-limitations entry L1 (engine review 2026-06-09 /
+    /// v1.6 work package).
+    IdentityResolvedViaForeignSecurityPrincipal,
 }
 
 /// Explainable permission path

@@ -47,6 +47,9 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
                     | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
                     | PermissionDiagnostic::IdentityLookupFailed { .. }
                     | PermissionDiagnostic::GroupResolutionFailed { .. }
+                    // Known-limitations L1: trust-forest memberships
+                    // unknown when resolved through an FSP object.
+                    | PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
             )
         })
 }
@@ -877,6 +880,23 @@ mod tests {
         assert!(
             r[0].incomplete,
             "IdentityLookupFailed -> finding must be flagged incomplete (review 2026-06-04 round 4 finding 1)"
+        );
+    }
+
+    /// Known-limitations L1: identity resolved through a Foreign
+    /// Security Principal — trust-forest memberships are unknown, so
+    /// derived findings must be flagged incomplete.
+    #[test]
+    fn full_control_marks_finding_incomplete_on_fsp_resolution() {
+        use adpa_core::model::PermissionDiagnostic;
+        let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
+        p.diagnostics
+            .push(PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal);
+        let r = FullControlRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(
+            r[0].incomplete,
+            "IdentityResolvedViaForeignSecurityPrincipal -> finding must be flagged incomplete (L1)"
         );
     }
 

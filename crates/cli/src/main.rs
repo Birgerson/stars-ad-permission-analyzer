@@ -415,6 +415,7 @@ async fn resolve_identity(
                 group_resolution_status: GroupResolutionStatus::SamFlat,
                 disabled_status,
                 diagnostics,
+                resolved_via_fsp: false,
             };
             Ok(ResolvedIdentity {
                 resolution,
@@ -605,6 +606,7 @@ async fn run_analyze(
         identity_disabled_status_unknown: engine_flags.identity_disabled_status_unknown,
         identity_lookup_failure_reason: engine_flags.identity_lookup_failure_reason.clone(),
         group_resolution_failure_reason: engine_flags.group_resolution_failure_reason.clone(),
+        identity_resolved_via_fsp: engine_flags.identity_resolved_via_fsp,
     };
     let result = DefaultPermissionEngine
         .evaluate(input)
@@ -925,6 +927,7 @@ async fn run_scan(
             group_resolution_failure_reason: scan_engine_flags
                 .group_resolution_failure_reason
                 .clone(),
+            identity_resolved_via_fsp: scan_engine_flags.identity_resolved_via_fsp,
         };
         let result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
             anyhow::anyhow!("Permission evaluation failed for '{}': {e}", fso.path.0)

@@ -203,6 +203,13 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if owner_rights_ace_present {
             diagnostics.push(PermissionDiagnostic::OwnerRightsAceApplied);
         }
+        // Known-limitations L1: cross-forest principal resolved through
+        // a Foreign Security Principal object — home-domain groups are
+        // in the token, trust-forest groups are unknown. Incompleteness
+        // trigger for derived risk findings.
+        if input.identity_resolved_via_fsp {
+            diagnostics.push(PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal);
+        }
 
         let result = EffectivePermission {
             identity: input.identity,
@@ -834,6 +841,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap()
     }
@@ -861,6 +869,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap()
     }
@@ -888,6 +897,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap()
     }
@@ -1494,6 +1504,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
         assert_eq!(
@@ -1525,6 +1536,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
         assert!(NormalizedRights::new(p.effective_mask.0).is_read());
@@ -1552,6 +1564,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
         assert_eq!(
@@ -2067,6 +2080,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
         assert!(
@@ -2097,6 +2111,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
         assert!(
@@ -2160,6 +2175,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
         let member_step = p
@@ -2199,6 +2215,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
         let ace_step = p
@@ -2694,6 +2711,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
         assert!(
@@ -2728,6 +2746,7 @@ mod tests {
                 identity_disabled_status_unknown: true,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
         assert!(
@@ -2761,6 +2780,7 @@ mod tests {
                     "LDAP bind failed: connection refused".to_owned(),
                 ),
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
         let found = result
@@ -2800,6 +2820,7 @@ mod tests {
                 group_resolution_failure_reason: Some(
                     "LDAP group query timed out after 30s".to_owned(),
                 ),
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
         let found = result
@@ -2813,6 +2834,40 @@ mod tests {
         assert!(
             found.contains("timed out"),
             "reason must carry the underlying message, got: {found}"
+        );
+    }
+
+    /// Known-limitations L1: when the identity was resolved through a
+    /// Foreign Security Principal, the engine must push the structured
+    /// marker so reports and risk rules see the trust-side gap.
+    #[test]
+    fn fsp_flag_pushes_identity_resolved_via_fsp_diagnostic() {
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![],
+                file_system_object: fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                access_context: AccessContext::Unspecified,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: true,
+            })
+            .unwrap();
+        assert!(
+            result.diagnostics.iter().any(|d| matches!(
+                d,
+                PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
+            )),
+            "FSP marker must be present; got: {:?}",
+            result.diagnostics
         );
     }
 
@@ -2871,6 +2926,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
 
@@ -2931,6 +2987,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
 
@@ -2980,6 +3037,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
 
@@ -3032,6 +3090,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
 
@@ -3075,6 +3134,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
         assert_eq!(
@@ -3106,6 +3166,7 @@ mod tests {
                 identity_disabled_status_unknown: false,
                 identity_lookup_failure_reason: None,
                 group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
             })
             .unwrap();
         assert_eq!(

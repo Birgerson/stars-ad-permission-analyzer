@@ -144,9 +144,13 @@ pub struct PrincipalResolution {
     pub scope_status: IdentityScopeStatus,
     pub group_resolution_status: GroupResolutionStatus,
     pub disabled_status: DisabledStatus,
-    /// Bereits aufgesammelte Diagnose-Marker (z. B. aus Sub-Resolvern).
     /// Pre-collected diagnostic markers.
     pub diagnostics: Vec<PermissionDiagnostic>,
+    /// `true` when the identity was resolved through a Foreign Security
+    /// Principal object in the home domain (known-limitations L1).
+    /// Home-domain group memberships were resolved through the FSP
+    /// object; trust-forest memberships are unknown.
+    pub resolved_via_fsp: bool,
 }
 
 impl PrincipalResolution {
@@ -193,6 +197,7 @@ impl PrincipalResolution {
             ),
             identity_lookup_failure_reason,
             group_resolution_failure_reason,
+            identity_resolved_via_fsp: self.resolved_via_fsp,
         }
     }
 }
@@ -203,10 +208,13 @@ pub struct EngineFlags {
     pub identity_not_in_configured_ldap_base: bool,
     pub identity_disabled_status_unknown: bool,
     pub group_resolution_via_sam_fallback: bool,
-    /// Engine pusht `PermissionDiagnostic::IdentityLookupFailed`,
-    /// Risk-Engine markiert incomplete. Default `None`.
+    /// Engine pushes `PermissionDiagnostic::IdentityLookupFailed`;
+    /// the risk engine marks derived findings incomplete. Default `None`.
     pub identity_lookup_failure_reason: Option<String>,
     pub group_resolution_failure_reason: Option<String>,
+    /// Engine pushes
+    /// `PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal`.
+    pub identity_resolved_via_fsp: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +436,7 @@ where
                     group_resolution_status: group_status,
                     disabled_status,
                     diagnostics,
+                    resolved_via_fsp: false,
                 })
             }
             None => {
@@ -474,6 +483,7 @@ where
                     group_resolution_status: group_status,
                     disabled_status,
                     diagnostics,
+                    resolved_via_fsp: false,
                 })
             }
             None => Err(CoreError::Validation(format!(
@@ -482,13 +492,19 @@ where
         }
     }
 
-    /// Direkte SID → LDAP-Lookup, bei Miss LSA-Reverse-Crosscheck.
     /// Direct SID path → LDAP, on miss LSA reverse cross-check.
     async fn resolve_by_sid(&self, sid: Sid) -> Result<PrincipalResolution, CoreError> {
         let ldap_result = self.identity_backend.lookup_identity_by_sid(&sid).await;
 
         match ldap_result {
             Ok(Some(identity)) => {
+                // Known-limitations L1: a hit can be the Foreign Security
+                // Principal object standing in for a cross-forest trust
+                // principal — handled by a dedicated path that enriches
+                // the identity via LSA and flags the trust-side gap.
+                if identity.kind == IdentityKind::ForeignSecurityPrincipal {
+                    return self.resolve_fsp_hit(sid, identity).await;
+                }
                 let (memberships, group_status) = self.resolve_groups(&sid).await;
                 let disabled_status = disabled_from_ldap(&identity);
                 let mut diagnostics = Vec::with_capacity(2);
@@ -506,6 +522,7 @@ where
                     group_resolution_status: group_status,
                     disabled_status,
                     diagnostics,
+                    resolved_via_fsp: false,
                 })
             }
             Ok(None) => self.fall_back_to_lsa(&sid).await,
@@ -565,6 +582,7 @@ where
                     group_resolution_status: GroupResolutionStatus::NotAttempted,
                     disabled_status,
                     diagnostics,
+                    resolved_via_fsp: false,
                 })
             }
             Err(_) => {
@@ -572,6 +590,86 @@ where
                 Ok(self.orphaned_resolution(sid.clone()))
             }
         }
+    }
+
+    /// LDAP hit on a Foreign Security Principal object
+    /// (known-limitations L1).
+    ///
+    /// The FSP stands in for a cross-forest trust principal: its
+    /// `objectSid` is the trust SID, and home-domain group memberships
+    /// run through the FSP's DN. Three things differ from a normal hit:
+    ///
+    /// 1. The FSP carries no usable display data (its CN is the raw SID
+    ///    string, kind would be `ForeignSecurityPrincipal`) — enrich the
+    ///    identity via LSA reverse lookup when a backend is available so
+    ///    the auditor sees `TRUSTDOM\user` and the real principal type.
+    /// 2. The FSP has no `userAccountControl` — the disabled state of
+    ///    the real principal lives in the trust forest. Report
+    ///    `DisabledStatus::Unknown` instead of silently claiming
+    ///    "active".
+    /// 3. Home-domain groups resolve through the FSP DN (the regular
+    ///    transitive chain search works), but the principal's
+    ///    memberships **in its own forest** are unknown — flagged via
+    ///    `resolved_via_fsp` so the engine pushes the structured marker
+    ///    and risk findings are treated as incomplete.
+    async fn resolve_fsp_hit(
+        &self,
+        sid: Sid,
+        fsp_identity: Identity,
+    ) -> Result<PrincipalResolution, CoreError> {
+        // Home-domain memberships via the FSP object's DN.
+        let (memberships, group_status) = self.resolve_groups(&sid).await;
+
+        // LSA enrichment: real name / domain / kind from the trust.
+        let identity = match self.lsa_backend.as_ref() {
+            Some(lsa) => match lsa.lookup_account_for_sid(&sid) {
+                Ok(account) => Identity {
+                    sid: sid.clone(),
+                    name: if account.name.is_empty() {
+                        fsp_identity.name.clone()
+                    } else {
+                        Some(account.name)
+                    },
+                    domain: if account.domain.is_empty() {
+                        fsp_identity.domain.clone()
+                    } else {
+                        Some(account.domain)
+                    },
+                    kind: account.kind,
+                    disabled: false,
+                    user_principal_name: None,
+                },
+                Err(e) => {
+                    debug!(sid = %sid.0, error = %e, "FSP hit: LSA enrichment failed — keeping FSP identity");
+                    fsp_identity
+                }
+            },
+            None => fsp_identity,
+        };
+
+        // The FSP carries no userAccountControl — disabled state unknown.
+        let disabled_status = DisabledStatus::Unknown;
+        let scope = IdentityScopeStatus::InsideConfiguredLdapBase;
+        let mut diagnostics = Vec::with_capacity(3);
+        push_diagnostics(&mut diagnostics, &scope, disabled_status, false);
+        diagnostics.push(PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal);
+
+        debug!(
+            sid = %sid.0,
+            home_groups = memberships.len(),
+            "Resolved cross-forest principal via FSP object"
+        );
+
+        Ok(PrincipalResolution {
+            sid,
+            identity,
+            memberships,
+            scope_status: scope,
+            group_resolution_status: group_status,
+            disabled_status,
+            diagnostics,
+            resolved_via_fsp: true,
+        })
     }
 
     /// Helper: recursive groups via the LDAP backend.
@@ -607,6 +705,7 @@ where
             group_resolution_status: GroupResolutionStatus::NotAttempted,
             disabled_status: DisabledStatus::Unknown,
             diagnostics: Vec::new(),
+            resolved_via_fsp: false,
         }
     }
 
@@ -627,6 +726,7 @@ where
             group_resolution_status: GroupResolutionStatus::NotAttempted,
             disabled_status: DisabledStatus::Unknown,
             diagnostics: Vec::new(),
+            resolved_via_fsp: false,
         }
     }
 }
@@ -1148,5 +1248,99 @@ mod tests {
             other => panic!("expected SamAccount, got {other:?}"),
         }
         assert!(PrincipalInput::Auto("   ".to_owned()).classify().is_err());
+    }
+
+    // -----------------------------------------------------------------
+    // Known-limitations L1: Foreign Security Principal resolution.
+    // -----------------------------------------------------------------
+
+    /// FSP hit with LSA enrichment: the LDAP hit is the FSP object
+    /// (kind = ForeignSecurityPrincipal, CN = raw SID string), the LSA
+    /// supplies the real trust-principal data, and the home-domain
+    /// group resolved through the FSP DN lands in the memberships.
+    #[tokio::test]
+    async fn fsp_hit_resolves_home_domain_groups_with_lsa_enrichment() {
+        let sid = Sid("S-1-5-21-7-7-7-1501".to_owned());
+        let home_group = Sid("S-1-5-21-1-1-1-2000".to_owned());
+        let mut ldap = FakeLdapBackend::new();
+        // The FSP object as the LDAP SID search returns it: CN is the
+        // raw SID string, objectClass foreignSecurityPrincipal.
+        ldap.by_sid.insert(
+            sid.0.clone(),
+            mk_identity(
+                &sid.0,
+                &sid.0,
+                "home.example",
+                IdentityKind::ForeignSecurityPrincipal,
+            ),
+        );
+        // Home-domain group membership resolved through the FSP DN.
+        ldap.memberships.insert(
+            sid.0.clone(),
+            vec![GroupMembership {
+                member_sid: sid.clone(),
+                group_sid: home_group.clone(),
+                direct: true,
+                group_name: Some("HomeDomain-FileAdmins".to_owned()),
+                path: None,
+            }],
+        );
+        let mut lsa = FakeLsaBackend::new();
+        lsa.sid_to_account
+            .insert(sid.0.clone(), mk_lsa("mm0501", "T1LAB", IdentityKind::User));
+
+        let resolver = PrincipalResolver::new(ldap, Some(lsa));
+        let res = resolver
+            .resolve(PrincipalInput::Sid(sid.clone()))
+            .await
+            .expect("resolution must succeed");
+
+        // LSA enrichment: real principal data instead of the FSP shell.
+        assert_eq!(res.identity.name.as_deref(), Some("mm0501"));
+        assert_eq!(res.identity.domain.as_deref(), Some("T1LAB"));
+        assert_eq!(res.identity.kind, IdentityKind::User);
+        // Home-domain groups are in the token.
+        assert_eq!(res.memberships.len(), 1);
+        assert_eq!(res.memberships[0].group_sid, home_group);
+        // The trust-side gap is flagged.
+        assert!(res.resolved_via_fsp);
+        assert!(res.diagnostics.iter().any(|d| matches!(
+            d,
+            PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
+        )));
+        // FSP carries no userAccountControl — disabled state unknown.
+        assert_eq!(res.disabled_status, DisabledStatus::Unknown);
+        let flags = res.engine_flags();
+        assert!(flags.identity_resolved_via_fsp);
+        assert!(flags.identity_disabled_status_unknown);
+    }
+
+    /// FSP hit without an LSA backend: the FSP identity is kept as the
+    /// honest fallback (kind ForeignSecurityPrincipal, SID-string name)
+    /// and the marker still fires.
+    #[tokio::test]
+    async fn fsp_hit_without_lsa_keeps_fsp_identity_and_marker() {
+        let sid = Sid("S-1-5-21-7-7-7-1502".to_owned());
+        let mut ldap = FakeLdapBackend::new();
+        ldap.by_sid.insert(
+            sid.0.clone(),
+            mk_identity(
+                &sid.0,
+                &sid.0,
+                "home.example",
+                IdentityKind::ForeignSecurityPrincipal,
+            ),
+        );
+        let resolver = PrincipalResolver::new(ldap, None::<FakeLsaBackend>);
+        let res = resolver
+            .resolve(PrincipalInput::Sid(sid))
+            .await
+            .expect("resolution must succeed");
+        assert_eq!(res.identity.kind, IdentityKind::ForeignSecurityPrincipal);
+        assert!(res.resolved_via_fsp);
+        assert!(res.diagnostics.iter().any(|d| matches!(
+            d,
+            PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
+        )));
     }
 }

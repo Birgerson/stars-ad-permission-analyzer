@@ -225,6 +225,13 @@ pub fn print_report(
                     println!("      the implicit READ_CONTROL + WRITE_DAC owner grant was");
                     println!("      suppressed. The evaluation is exact — informational only.");
                 }
+                PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal => {
+                    println!("  [!] Identity is a trust-forest principal found as a Foreign");
+                    println!("      Security Principal object in the home domain. Home-domain");
+                    println!("      groups were resolved through the FSP — but the principal's");
+                    println!("      memberships in its own forest are unknown. Treat as");
+                    println!("      incomplete.");
+                }
             }
         }
     }

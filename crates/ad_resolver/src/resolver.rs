@@ -559,6 +559,12 @@ fn classify_identity(object_classes: &[&str]) -> IdentityKind {
         IdentityKind::Group
     } else if object_classes.contains(&"user") {
         IdentityKind::User
+    } else if object_classes.contains(&"foreignSecurityPrincipal") {
+        // Cross-forest trust principal represented as an FSP object in
+        // the home domain (CN=ForeignSecurityPrincipals,…). The real
+        // principal type lives in the trust forest; callers should
+        // enrich via LSA when possible (known-limitations L1).
+        IdentityKind::ForeignSecurityPrincipal
     } else {
         IdentityKind::Unknown
     }

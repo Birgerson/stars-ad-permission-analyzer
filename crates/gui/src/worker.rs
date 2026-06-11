@@ -691,6 +691,7 @@ async fn handle_analyze(
             identity_disabled_status_unknown: engine_flags.identity_disabled_status_unknown,
             identity_lookup_failure_reason: engine_flags.identity_lookup_failure_reason,
             group_resolution_failure_reason: engine_flags.group_resolution_failure_reason,
+            identity_resolved_via_fsp: engine_flags.identity_resolved_via_fsp,
         })
         .map_err(|e| format!("Permission engine error: {e}"))
 }
@@ -834,6 +835,7 @@ async fn handle_scan(
     let identity_disabled_status_unknown = engine_flags.identity_disabled_status_unknown;
     let identity_lookup_failure_reason = engine_flags.identity_lookup_failure_reason;
     let group_resolution_failure_reason = engine_flags.group_resolution_failure_reason;
+    let identity_resolved_via_fsp = engine_flags.identity_resolved_via_fsp;
     let identity = res.identity;
     let memberships = res.memberships;
 
@@ -969,6 +971,7 @@ async fn handle_scan(
             identity_disabled_status_unknown,
             identity_lookup_failure_reason: identity_lookup_failure_reason.clone(),
             group_resolution_failure_reason: group_resolution_failure_reason.clone(),
+            identity_resolved_via_fsp,
         }) {
             Ok(perm) => {
                 let label = NormalizedRights::new(perm.effective_mask.0)
@@ -1234,6 +1237,8 @@ fn kind_to_icon(kind: &IdentityKind, domain: &str) -> &'static str {
         IdentityKind::Group => "G",
         IdentityKind::WellKnown => "W",
         IdentityKind::Computer => "C",
+        // FSP fallback (LSA enrichment unavailable) — trust principal.
+        IdentityKind::ForeignSecurityPrincipal => "F",
         IdentityKind::Orphaned | IdentityKind::Unknown => "?",
     }
 }
@@ -1576,6 +1581,7 @@ async fn resolve_identity_sids(
         group_resolution_status: ad_resolver::GroupResolutionStatus::SamFlat,
         disabled_status,
         diagnostics,
+        resolved_via_fsp: false,
     })
 }
 

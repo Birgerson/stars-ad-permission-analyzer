@@ -98,6 +98,14 @@ pub struct PermissionEvaluationInput {
     /// deliberately skipped while groups would have mattered. Marker +
     /// risk-incomplete propagation.
     pub group_resolution_failure_reason: Option<String>,
+    /// `true` when the identity was resolved through a Foreign Security
+    /// Principal object in the home domain (cross-forest trust user).
+    /// Home-domain groups were resolved via the FSP; the principal's
+    /// memberships in its own forest are unknown. The engine pushes a
+    /// `PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal`
+    /// and risk findings are flagged incomplete. Default `false`.
+    /// Closes known-limitations entry L1.
+    pub identity_resolved_via_fsp: bool,
 }
 
 pub struct RiskContext {

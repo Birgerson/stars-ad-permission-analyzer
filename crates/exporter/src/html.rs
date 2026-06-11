@@ -342,6 +342,19 @@ fn write_permissions_table(
                             .to_string(),
                     );
                 }
+                PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal => {
+                    diag_parts.push(
+                        "<span class=\"badge badge-medium\" \
+                         title=\"The identity is a principal from a \
+                         trusted forest, found as a Foreign Security \
+                         Principal object in the home domain. \
+                         Home-domain group memberships were resolved \
+                         through the FSP — but the principal's \
+                         memberships in its own forest are unknown. \
+                         Treat the finding as incomplete.\">⚠ resolved via FSP — trust-side groups unknown</span>"
+                            .to_string(),
+                    );
+                }
             }
         }
         let diagnostics = if diag_parts.is_empty() {

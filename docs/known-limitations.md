@@ -23,8 +23,25 @@ contributions can address them individually.
 ## L1 — Foreign Security Principals (FSP) are not explicitly recognized
 
 **Priority:** High
-**Tracking:** v1.6.0 candidate
+**Tracking:** **closed on main, 2026-06-11** (ships with the next release)
 **References:** ADR 0036 (extension point), ADR 0034
+
+> **Status update (2026-06-11):** implemented. The LDAP SID search finds
+> the FSP object (its `objectSid` is the trust SID and the
+> `CN=ForeignSecurityPrincipals` container lives inside `base_dn`); the
+> principal resolver now recognizes `objectClass=foreignSecurityPrincipal`
+> (`IdentityKind::ForeignSecurityPrincipal`), enriches the identity via
+> LSA reverse lookup (real name / domain / kind from the trust), resolves
+> home-domain groups through the FSP DN, reports the disabled state
+> honestly as Unknown (the FSP carries no `userAccountControl`), and
+> pushes the structured marker
+> `IdentityResolvedViaForeignSecurityPrincipal`. The marker is an
+> incompleteness trigger — the principal's memberships in its **own
+> forest** remain unknown (that part needs a trust-side query, see L2).
+> Worse than documented below: pre-fix, an existing FSP was an LDAP *hit*
+> classified `Unknown` with the raw SID as display name, scope
+> `InsideConfiguredLdapBase`, and **no marker at all** — silently
+> incomplete. Covered by fake-backend, engine, and risk-rule tests.
 
 ### Problem
 
@@ -377,7 +394,7 @@ here and in the diagnostic tooltip texts.
 
 | Limit | Priority | Marker present? | Resolvable? |
 | --- | --- | --- | --- |
-| L1 — FSP | High | partially (Outside + GroupResolutionFailed) | yes, with implementation |
+| L1 — FSP | High | **yes** (IdentityResolvedViaForeignSecurityPrincipal) | **closed 2026-06-11** (trust-side groups still need L2) |
 | L2 — GC bind | High | partially (Outside + UPN error) | yes, with implementation |
 | L3 — SID History | Medium | **no** | yes, with implementation |
 | L4 — Cross-forest filter | Medium | no | no (documentation only) |
