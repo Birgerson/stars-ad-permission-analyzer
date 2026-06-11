@@ -167,6 +167,8 @@ ALLOWLIST = [
     # names that Stars correctly resolves on a Server 2025 trust.
     ("docs/lab/verification.md", "VORDEFINIERT"),
     ("docs/lab/verification.md", "Domänen-Benutzer"),
+    ("docs/lab/verification.md", "Jeder"),
+    ("docs/lab/verification.md", "EIGENTÜMERRECHTE"),
     # This script itself describes the German words it checks for.
     ("scripts/check-language.py", None),
     # Real test fixture data: the lab uses a German user name as a

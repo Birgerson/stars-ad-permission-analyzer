@@ -889,3 +889,103 @@ Explanation Path
 | Delta comparison between two scan runs (H.6.10) | Block C / screenshots from 2022, delta engine platform independent | low |
 
 **Recommendation:** Do the GUI walkthrough with the trustee tab and the delta tab on Server 2025 together as the next test session — both are just "click the GUI on 2025" and done in 15 minutes.
+
+---
+
+## Block I — Re-verification of the v1.5.17/v1.5.18 engine fixes (2026-06-11)
+
+After the v1.5.16 verification in Block H, three engine correctness fixes shipped:
+v1.5.17 (BroadGroupWriteRule write-specific bits; stored-order provenance) and
+v1.5.18 (OWNER RIGHTS / S-1-3-4 handling + owner step in the explanation path).
+Block I re-verifies the release binary live against the same lab.
+
+**Setup:** `adpa.exe` v1.5.18 built from tag `v1.5.18` (`1c99d10`), uploaded to
+tier0 (`C:\Stars\adpa.exe`) via the SMB admin share. Execution via
+`qm guest exec` from the PVE host. All three DCs running.
+
+### I.1 — Version check
+
+`adpa.exe --version` → `adpa 1.5.18`. ✓
+
+### I.2 — Baseline smoke (regression guard for the H.4 scenarios)
+
+`analyze --path C:\Data\Engineering\Project01 --user T0LAB\mm0001` (SAM/LSA
+path, no LDAP flags — the recommended mode on a DC):
+
+- Identity: `T0LAB\mm0001`, Status Active, **Kind: User** ✓
+- Membership chain resolved: `Sales-Alpha [direct]`, `Domänen-Benutzer
+  [direct]`, `VORDEFINIERT\Benutzer [via mm0001 → Domänen-Benutzer →
+  VORDEFINIERT\Benutzer, source: LocalGroup]` ✓
+- Matching inherited ACEs for BUILTIN\Users picked up; `NTFS effective:
+  Read & Execute (0x001200AF)` ✓ (mm0001 is in Sales, not Engineering —
+  no Modify expected)
+- Risk findings: 0 ✓
+
+Side observation (not a regression): with `--insecure-ldap` against the
+Server 2025 DC the bind is still rejected with `strongerAuthRequired`,
+exactly as documented in H.6.4 — Stars continues with the LSA identity,
+sets `IdentityLookupFailed` and reports honestly incomplete.
+
+### I.3 — v1.5.17 finding 1 live: no BROAD_GROUP_WRITE when the share caps to Read
+
+Fixture `C:\ReVerify\BGW`: `icacls /grant "Jeder:(OI)(CI)M"` (NTFS Modify via
+Everyone) plus SMB share `BGWTest` with **Read** access for Everyone.
+
+`analyze --path C:\ReVerify\BGW --user T0LAB\mm0001 --smb-server localhost
+--share-name BGWTest`:
+
+```text
+Allow ACE [explicit] for Jeder (S-1-1-0) → Modify (0x001301BF)
+NTFS effective:  Modify (0x001301BF)
+Share permission: Read & Execute (0x001200A9)
+Effective (NTFS ∩ Share): Read & Execute (0x001200A9)
+Risk Findings (0)
+```
+
+**Verified:** the final effective permission is Read & Execute and the risk
+engine reports **zero** findings. v1.5.16 produced a critical
+`BROAD_GROUP_WRITE` here (the composite `MASK_WRITE` gate matched the
+READ_CONTROL/SYNCHRONIZE overlap of a Read-only mask). The false positive in
+the NTFS + SMB combination is gone.
+
+### I.4 — v1.5.18 live: OWNER RIGHTS (S-1-3-4)
+
+**I.4a control — owner without S-1-3-4** (`C:\ReVerify\OwnerCtl`, owner set to
+`T0LAB\mm0001`):
+
+```text
+14. Owner special rule: READ_CONTROL + WRITE_DAC granted implicitly (owner: T0LAB\mm0001)
+```
+
+The implicit owner grant is now an explicit step in the explanation path —
+previously these bits appeared in "NTFS effective" with no step explaining
+them.
+
+**I.4b — owner with an OWNER RIGHTS ACE** (`C:\ReVerify\OwnerFsp`, owner
+`T0LAB\mm0001`, inheritance removed, `icacls /grant "*S-1-3-4:(R)"`):
+
+```text
+icacls:  EIGENTÜMERRECHTE:(R)
+adpa:    Allow ACE [explicit] for EIGENTÜMERRECHTE (S-1-3-4) → Read (0x00120089)
+10. OWNER RIGHTS (S-1-3-4) ACE present — owner rights are governed by that DACL entry; the implicit owner grant is suppressed
+NTFS effective: Read & Execute (0x001200AF)
+Diagnostics: [i] OWNER RIGHTS (S-1-3-4) ACE present and the identity is the object's owner …
+```
+
+**Verified:** the effective mask contains **no WRITE_DAC bit (0x40000)** — the
+implicit grant is correctly suppressed, the S-1-3-4 ACE is evaluated in DACL
+order, the suppression is named in the explanation path, and the informational
+diagnostic appears. Bonus observation: the German-localized display name
+`EIGENTÜMERRECHTE` resolves cleanly through the SID name map.
+
+### I.5 — Result
+
+| Test | v1.5.16 behaviour | v1.5.18 behaviour | Status |
+|---|---|---|---|
+| I.2 baseline smoke | works | works identically | ✓ no regression |
+| I.3 Everyone-Modify ∩ Share-Read | false critical BROAD_GROUP_WRITE | 0 risk findings | ✓ fix confirmed live |
+| I.4a implicit owner grant | bits unexplained | explicit explanation step | ✓ fix confirmed live |
+| I.4b OWNER RIGHTS ACE | grant wrongly applied on top | grant suppressed, ACE evaluated, diagnostic set | ✓ fix confirmed live |
+
+Fixtures `C:\ReVerify\*` and share `BGWTest` remain on tier0 for future
+regression sessions.
