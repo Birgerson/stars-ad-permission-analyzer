@@ -79,6 +79,12 @@ Get the current Windows installer from the **[Releases page](https://github.com/
 
 System requirements: Windows 10, Windows 11, or Windows Server. No additional runtime needed.
 
+> ⚠️ **Antivirus false positive (incl. v1.6.2).** Because the installer is **not yet code-signed**, Microsoft Defender — and some other engines — may flag it with a **generic, machine-learning heuristic** such as `Trojan:Win32/Wacatac.C!ml`. The `!ml` suffix means "flagged by an ML model," **not** a match against known malware; `Wacatac` is Defender's catch-all label and is the single most common false positive for new, unsigned, freshly-compiled binaries. It is triggered by the combination of *unsigned + zero reputation + AD/SMB enumeration behaviour* — exactly what a read-only permission auditor legitimately does.
+>
+> **This is a false positive, and you can prove it yourself:** verify the SHA256 below. If the hash matches the one published on the release, the file is bit-for-bit the build GitHub Actions produced from this source — by definition nothing could have been injected. For v1.6.2 the published checksum is `2f561853d1169e50f56f25ffef1fc9ea8bf6ef75c9bd450d632a4a871d2f46e7`.
+>
+> To remove the warning: verify the hash, then allow the file in Defender (Protection history → the entry → Allow), and optionally report it to Microsoft at <https://www.microsoft.com/en-us/wdsi/filesubmission>. The permanent fix is code signing — see [`docs/codesigning.md`](docs/codesigning.md).
+
 #### Verify integrity (SHA256)
 
 So you can confirm your download is bit-for-bit identical to the build produced by GitHub Actions:

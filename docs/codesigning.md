@@ -4,6 +4,8 @@
 
 The Stars installer is **not code-signed**. On first launch Windows SmartScreen shows "Windows protected your PC — unrecognized publisher". Users have to click "More info → Run anyway".
 
+Because the installer is unsigned and each new release starts with zero cloud reputation, Microsoft Defender may additionally raise a **generic machine-learning false positive** such as `Trojan:Win32/Wacatac.C!ml` (observed on v1.6.2). The `!ml` suffix marks an ML-heuristic detection, not a signature match; `Wacatac` is Defender's catch-all family name and the most common false positive for new, unsigned binaries. It is driven by *unsigned + no reputation + AD/SMB enumeration behaviour*. The SHA256 verification proves the file is the unmodified GitHub Actions build; users can allow it in Defender and report it via <https://www.microsoft.com/en-us/wdsi/filesubmission>. Code signing (below) is the permanent fix.
+
 **What we ship instead** (see the README, "Verify integrity" section): every release build publishes a `.sha256` file. Users can check that their downloaded file is bit-for-bit identical to the build produced by GitHub Actions. That protects against tampered downloads but does not replace code-signing.
 
 ### Why no code-signing (yet)
