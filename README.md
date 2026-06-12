@@ -11,7 +11,7 @@ For every user, the tool shows the effective access rights that actually apply t
 
 > **Stars is exclusively a read-and-analyze tool. It does not modify any permissions, groups, or AD objects.**
 
-![Stars Analyze tab (v1.5.16) — target path, identity, resolution mode, SMB share fields, and the two action buttons "Analyze" and "Who has access?"](docs/screenshots/stars-analyze-tab.png)
+![Stars Analyze tab (v1.6.0) — target path, identity, resolution mode, SMB share fields, and the two action buttons "Analyze" and "Who has access?"](docs/screenshots/stars-analyze-tab.png)
 
 ### Concrete example in 10 seconds
 
@@ -141,6 +141,8 @@ Stars resolves users and groups via LDAP:
 - Disabled accounts
 - Orphaned SIDs
 - Cyclic group structures
+- **Cross-forest trust users (Foreign Security Principals):** a trust user's home-domain group memberships are resolved through the FSP object and credited to the effective permission — the trust-side gap is flagged, never silently dropped
+- **Multi-domain forests via the Global Catalog (`--global-catalog`):** forest-wide identity lookups in a single run; memberships that the GC only partially replicates are marked accordingly
 
 #### SMB shares
 
