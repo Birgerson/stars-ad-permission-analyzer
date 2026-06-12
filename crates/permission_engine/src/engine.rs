@@ -141,6 +141,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             owner_rights_ace_present,
             owner_sid: input.file_system_object.owner_sid.as_ref(),
             share_mask: share_mask_for_output,
+            share_status: &output_share_status,
             effective_raw,
             sid_names: &input.sid_names,
         });
@@ -597,6 +598,11 @@ struct ExplanationInput<'a> {
     owner_rights_ace_present: bool,
     owner_sid: Option<&'a Sid>,
     share_mask: Option<AccessMask>,
+    /// The resolved share-side status. Drives an explicit share-step so
+    /// the audit text spells out *why* the effective mask equals NTFS in
+    /// the unrestricted / read-failed / no-SMB cases instead of silently
+    /// omitting the share line (engine review 2026-06-12 finding 5).
+    share_status: &'a ShareEvalStatus,
     effective_raw: u32,
     sid_names: &'a std::collections::BTreeMap<String, String>,
 }
@@ -615,6 +621,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         owner_rights_ace_present,
         owner_sid,
         share_mask,
+        share_status,
         effective_raw,
         sid_names,
     } = input;
@@ -742,19 +749,44 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         ntfs_raw
     ));
 
-    if let Some(share) = share_mask {
-        let share_rights = NormalizedRights::new(share.0);
-        steps.push(format!(
-            "Share permission: {} (0x{:08X})",
-            share_rights.display_name(),
-            share.0
-        ));
-        let eff_rights = NormalizedRights::new(effective_raw);
-        steps.push(format!(
-            "Effective (NTFS \u{2229} Share): {} (0x{:08X})",
-            eff_rights.display_name(),
-            effective_raw
-        ));
+    // 5. Share side. Every share state gets an explicit step so the audit
+    // text explains *why* the effective mask is what it is — the data
+    // model already carries the state; the explanation must not omit it
+    // (engine review 2026-06-12 finding 5).
+    match share_status {
+        ShareEvalStatus::Applied => {
+            if let Some(share) = share_mask {
+                let share_rights = NormalizedRights::new(share.0);
+                steps.push(format!(
+                    "Share permission: {} (0x{:08X})",
+                    share_rights.display_name(),
+                    share.0
+                ));
+                let eff_rights = NormalizedRights::new(effective_raw);
+                steps.push(format!(
+                    "Effective (NTFS \u{2229} Share): {} (0x{:08X})",
+                    eff_rights.display_name(),
+                    effective_raw
+                ));
+            }
+        }
+        ShareEvalStatus::Unrestricted => {
+            steps.push(
+                "Share DACL unrestricted (NULL share DACL): SMB does not reduce the NTFS rights — effective = NTFS"
+                    .to_string(),
+            );
+        }
+        ShareEvalStatus::ReadFailed(reason) => {
+            steps.push(format!(
+                "Share DACL read failed ({reason}): the displayed effective mask is NTFS-only and incomplete"
+            ));
+        }
+        ShareEvalStatus::NotApplicable => {
+            steps.push(
+                "No SMB context: effective permission is NTFS-only (no share combination applied)"
+                    .to_string(),
+            );
+        }
     }
 
     PermissionPath { steps }
@@ -942,6 +974,35 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 access_context,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                group_resolution_via_sam_fallback: false,
+                identity_not_in_configured_ldap_base: false,
+                identity_disabled_status_unknown: false,
+                identity_lookup_failure_reason: None,
+                group_resolution_failure_reason: None,
+                identity_resolved_via_fsp: false,
+                group_resolution_via_global_catalog: false,
+            })
+            .unwrap()
+    }
+
+    /// Evaluates with an explicit share status — needed to exercise the
+    /// Unrestricted / ReadFailed share-explanation steps (finding 5).
+    fn eval_with_share(
+        identity: Identity,
+        file_system_object: FileSystemObject,
+        share_status: ShareMaskStatus,
+    ) -> EffectivePermission {
+        DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity,
+                group_memberships: vec![],
+                file_system_object,
+                share_status,
+                local_group_sids: vec![],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 group_resolution_via_sam_fallback: false,
@@ -1329,6 +1390,85 @@ mod tests {
                 .iter()
                 .any(|s| s.contains("Deny aggregation")),
             "deny step must not claim bits were removed that the owner rule restored; got: {:?}",
+            p.path_explanation.steps
+        );
+    }
+
+    // --- Share-side explanation steps (engine review 2026-06-12 finding 5) ---
+
+    /// A local NTFS-only analysis spells out that no SMB combination was
+    /// applied, instead of silently omitting the share line.
+    #[test]
+    fn explanation_states_ntfs_only_when_no_smb_context() {
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            None,
+        );
+        assert!(
+            p.path_explanation
+                .steps
+                .iter()
+                .any(|s| s.contains("No SMB context") && s.contains("NTFS-only")),
+            "NTFS-only analysis must state the no-SMB reason; got: {:?}",
+            p.path_explanation.steps
+        );
+    }
+
+    /// A NULL share DACL (unrestricted) is spelled out as "SMB does not
+    /// reduce the NTFS rights".
+    #[test]
+    fn explanation_states_unrestricted_share() {
+        let p = eval_with_share(
+            user(USER),
+            fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+            ShareMaskStatus::Unrestricted,
+        );
+        assert!(
+            p.path_explanation
+                .steps
+                .iter()
+                .any(|s| s.contains("Share DACL unrestricted") && s.contains("effective = NTFS")),
+            "unrestricted share must be explained; got: {:?}",
+            p.path_explanation.steps
+        );
+    }
+
+    /// A failed share-DACL read is spelled out as incomplete / NTFS-only.
+    #[test]
+    fn explanation_states_share_read_failed() {
+        let p = eval_with_share(
+            user(USER),
+            fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+            ShareMaskStatus::ReadFailed("access denied".to_owned()),
+        );
+        assert!(
+            p.path_explanation.steps.iter().any(|s| {
+                s.contains("Share DACL read failed")
+                    && s.contains("access denied")
+                    && s.contains("incomplete")
+            }),
+            "share read failure must be explained as incomplete; got: {:?}",
+            p.path_explanation.steps
+        );
+    }
+
+    /// The applied-share case still renders the intersection step.
+    #[test]
+    fn explanation_states_applied_share_intersection() {
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+            Some(AccessMask(MASK_READ)),
+        );
+        assert!(
+            p.path_explanation
+                .steps
+                .iter()
+                .any(|s| s.contains("Effective (NTFS \u{2229} Share)")),
+            "applied share must render the intersection step; got: {:?}",
             p.path_explanation.steps
         );
     }
