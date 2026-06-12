@@ -10,7 +10,68 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.6.0 below for the latest release.)
+(No unreleased changes — see v1.6.1 below for the latest release.)
+
+---
+
+## [1.6.1] — 2026-06-12
+
+**Engine maturity release.** Closes all six findings of the 2026-06-12
+deep engine review. No behavioural change to the effective-mask
+calculation — these are correctness-of-explanation, visibility,
+validation, hygiene, and proof improvements.
+
+### Explanation path is now contribution-accurate (finding 1)
+
+ACE steps were listed identically whether an ACE actually decided bits or
+merely matched the token. Each step is now annotated from the same
+stored-order walk that produces the effective mask:
+`[granted <rights>]` / `[denied <rights>]` / `[matched, no effective bits
+contributed]` / `[inherit-only — not applied]`. An auditor can no longer
+mistake a merely-matched ACE for one that mattered.
+
+### Explicit share-side explanation for every state (finding 5)
+
+The explanation previously omitted the share line unless a concrete share
+mask was applied. Now each share state is spelled out: applied
+intersection, NULL share DACL (unrestricted), share read failure
+(NTFS-only / incomplete), and no-SMB context.
+
+### Unsupported NTFS ACEs are a first-class incompleteness state (finding 3)
+
+New structured diagnostic `UnsupportedNtfsAces` plus an explicit
+"lower-confidence approximation" warning in the explanation, CLI, and
+HTML — not just a bare count. The wording states that a hidden Deny among
+the skipped ACEs could change the result.
+
+### Validated core constructors (finding 4)
+
+`Sid::try_new` / `NormalizedPath::try_new` (plus documented
+`new_unchecked` escape hatches) enforce the type invariants;
+`validation::validate_sid` now delegates to `Sid::try_new`, so there is
+exactly one SID validator in the workspace.
+
+### Language / encoding hygiene (finding 6)
+
+The CI language gate gained mojibake detection and a broader (collision-
+free) German-word denylist; ~25 remaining German doc-comment remnants
+were removed across the workspace.
+
+### Windows authorization conformance harness (finding 2)
+
+New `crates/permission_engine/tests/windows_conformance.rs` proves the
+stored-order DACL algorithm against the OS itself: it builds a real
+in-memory Windows ACL, reads the effective rights via
+`GetEffectiveRightsFromAclW`, and asserts the engine agrees bit-for-bit.
+`#[ignore]` by default; run with
+`cargo test -p permission_engine --test windows_conformance -- --ignored`.
+
+### Verification
+
+- `cargo fmt` / `cargo clippy --workspace --all-targets -- -D warnings` /
+  `python scripts/check-language.py`: clean.
+- `cargo test --workspace`: 563 passed, 0 failed, 11 ignored.
+- Conformance harness: 4 passed against a live Windows session.
 
 ---
 

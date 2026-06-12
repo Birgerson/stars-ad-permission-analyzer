@@ -17,7 +17,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.6.0"
+version = "1.6.1"
 edition = "2021"
 authors = ["Birger Labinsch — Fachinformatiker AE / Prompt Engineer <birger@labinsch.de>"]
 license = "AGPL-3.0-or-later"
