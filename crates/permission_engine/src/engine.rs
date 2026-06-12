@@ -87,6 +87,8 @@ impl PermissionEvaluator for DefaultPermissionEngine {
                 granted: MASK_FULL_CONTROL,
                 denied: 0,
                 contributions: Vec::new(),
+                // A NULL DACL has no ACEs to attribute contributions to.
+                decided_per_ace: Vec::new(),
             }
         } else {
             walk_dacl_stored_order(&input.file_system_object.dacl, &match_sids)
@@ -94,6 +96,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         let mut ntfs_raw = walk.granted;
         let denied_raw = walk.denied;
         let contributing_sids = walk.contributions;
+        let decided_per_ace = walk.decided_per_ace;
 
         // Implicit owner grant — only when no OWNER RIGHTS ACE governs
         // the owner's rights. The grant bypasses the DACL entirely in
@@ -131,6 +134,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             memberships: &input.group_memberships,
             dacl: &input.file_system_object.dacl,
             match_sids: &match_sids,
+            decided_per_ace: &decided_per_ace,
             ntfs_raw,
             denied_raw,
             owner_implicit_bits,
@@ -364,6 +368,15 @@ struct DaclWalkOutcome {
     granted: u32,
     denied: u32,
     contributions: Vec<ContributingAce>,
+    /// Index-aligned with the input DACL: for each ACE, exactly the bits
+    /// that ACE decided during the stored-order walk (granted bits for an
+    /// Allow, denied bits for a Deny). `0` means the ACE either did not
+    /// apply (inherit-only / not in the token) or matched but contributed
+    /// nothing because all its bits had already been decided by an earlier
+    /// ACE. The explanation path uses this to mark each ACE step as
+    /// actually-contributing vs. matched-only (engine review 2026-06-12
+    /// finding 1: traceability must be as exact as the calculation).
+    decided_per_ace: Vec<u32>,
 }
 
 /// Walks the DACL in its stored order — the single source of truth for
@@ -385,7 +398,8 @@ fn walk_dacl_stored_order(dacl: &[AceEntry], match_sids: &HashSet<String>) -> Da
     let mut granted: u32 = 0;
     let mut denied: u32 = 0;
     let mut by_sid: HashMap<String, u32> = HashMap::new();
-    for ace in dacl {
+    let mut decided_per_ace = vec![0u32; dacl.len()];
+    for (idx, ace) in dacl.iter().enumerate() {
         if !ace_applies_to_current_object(ace) {
             continue;
         }
@@ -399,6 +413,7 @@ fn walk_dacl_stored_order(dacl: &[AceEntry], match_sids: &HashSet<String>) -> Da
         if bits == 0 {
             continue;
         }
+        decided_per_ace[idx] = bits;
         match ace.kind {
             AceKind::Allow => {
                 granted |= bits;
@@ -417,6 +432,7 @@ fn walk_dacl_stored_order(dacl: &[AceEntry], match_sids: &HashSet<String>) -> Da
                 mask: AccessMask(mask),
             })
             .collect(),
+        decided_per_ace,
     }
 }
 
@@ -568,6 +584,10 @@ struct ExplanationInput<'a> {
     /// SID set used for ACE matching — includes `S-1-3-4` when the user
     /// is the owner, so OWNER RIGHTS ACEs show up in the step list.
     match_sids: &'a HashSet<String>,
+    /// Index-aligned with `dacl`: the exact bits each ACE decided during
+    /// the stored-order walk (engine review 2026-06-12 finding 1). `0`
+    /// means the ACE matched the token but contributed no effective bits.
+    decided_per_ace: &'a [u32],
     ntfs_raw: u32,
     denied_raw: u32,
     /// Bits added by the implicit owner rule (`0` when the rule did not
@@ -588,6 +608,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         memberships,
         dacl,
         match_sids,
+        decided_per_ace,
         ntfs_raw,
         denied_raw,
         owner_implicit_bits,
@@ -608,7 +629,18 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     }
 
     // 3. Matching ACEs.
-    for ace in dacl {
+    //
+    // Each ACE step is annotated with what it *actually contributed* to
+    // the result, not just that its trustee was in the token (engine
+    // review 2026-06-12 finding 1). `decided_per_ace[i]` carries the exact
+    // bits this ACE decided during the stored-order walk:
+    //   - inherit-only ACE → "not applied to this object";
+    //   - applied ACE that decided bits → "→ granted/denied <bits>";
+    //   - applied ACE that decided nothing (all bits already decided by an
+    //     earlier ACE) → "matched, no effective bits contributed".
+    // This keeps the audit text as exact as the calculation: a reader can
+    // no longer mistake a merely-matched ACE for one that mattered.
+    for (idx, ace) in dacl.iter().enumerate() {
         if !match_sids.contains(&ace.sid.0) {
             continue;
         }
@@ -625,10 +657,22 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         // Control" instead of "Special".
         let expanded = expand_generic_rights(ace.mask.0);
         let rights = NormalizedRights::new(expanded);
-        let inherit_only_note = if ace_applies_to_current_object(ace) {
-            ""
+        let decided = decided_per_ace.get(idx).copied().unwrap_or(0);
+        let contribution_note = if !ace_applies_to_current_object(ace) {
+            " [inherit-only — not applied to this object]".to_string()
+        } else if decided == 0 {
+            " [matched, no effective bits contributed]".to_string()
         } else {
-            " [inherit-only — not applied to this object]"
+            let verb = match ace.kind {
+                AceKind::Allow => "granted",
+                AceKind::Deny => "denied",
+            };
+            let decided_rights = NormalizedRights::new(decided);
+            format!(
+                " [{verb} {} (0x{:08X})]",
+                decided_rights.display_name(),
+                decided
+            )
         };
         let trustee_display = sid_names.get(&ace.sid.0);
         match trustee_display {
@@ -640,7 +684,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
                 ace.sid.0,
                 rights.display_name(),
                 ace.mask.0,
-                inherit_only_note,
+                contribution_note,
             )),
             None => steps.push(format!(
                 "{} ACE {} for {} → {} (0x{:08X}){}",
@@ -649,7 +693,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
                 ace.sid.0,
                 rights.display_name(),
                 ace.mask.0,
-                inherit_only_note,
+                contribution_note,
             )),
         }
     }
@@ -1286,6 +1330,92 @@ mod tests {
                 .any(|s| s.contains("Deny aggregation")),
             "deny step must not claim bits were removed that the owner rule restored; got: {:?}",
             p.path_explanation.steps
+        );
+    }
+
+    // --- Contribution-aware explanation (engine review 2026-06-12 finding 1) ---
+
+    /// An ACE that actually decided bits is labeled with what it granted,
+    /// not merely listed as "matched".
+    #[test]
+    fn explanation_labels_contributing_allow_with_granted_bits() {
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            None,
+        );
+        let step = p
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("Allow ACE") && s.contains(USER))
+            .expect("Allow ACE step must exist");
+        assert!(
+            step.contains("granted"),
+            "a contributing Allow must be labeled 'granted'; got: {step}"
+        );
+        assert!(
+            step.contains(&format!("0x{:08X}", MASK_READ)),
+            "the step must name the exact contributed bits; got: {step}"
+        );
+    }
+
+    /// A later ACE whose bits were all already decided is labeled
+    /// "matched, no effective bits contributed" — the reader must not
+    /// mistake it for an ACE that mattered.
+    #[test]
+    fn explanation_marks_noncontributing_ace_as_matched_only() {
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(
+                None,
+                vec![
+                    allow_ace(USER, MASK_MODIFY, false),
+                    // Everyone (always in the token) Allow Modify — decides
+                    // nothing because the USER ACE already granted these bits.
+                    allow_ace("S-1-1-0", MASK_MODIFY, false),
+                ],
+            ),
+            None,
+        );
+        let everyone_step = p
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("S-1-1-0"))
+            .expect("Everyone ACE step must exist");
+        assert!(
+            everyone_step.contains("matched, no effective bits contributed"),
+            "a non-contributing ACE must be labeled matched-only; got: {everyone_step}"
+        );
+    }
+
+    /// A Deny ACE that decided bits is labeled with what it denied.
+    #[test]
+    fn explanation_labels_contributing_deny_with_denied_bits() {
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(
+                None,
+                vec![
+                    deny_ace(USER, MASK_WRITE, false),
+                    allow_ace(USER, MASK_FULL_CONTROL, false),
+                ],
+            ),
+            None,
+        );
+        let deny_step = p
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("Deny ACE"))
+            .expect("Deny ACE step must exist");
+        assert!(
+            deny_step.contains("denied"),
+            "a contributing Deny must be labeled 'denied'; got: {deny_step}"
         );
     }
 
