@@ -205,6 +205,56 @@ impl<'a> ScanStore<'a> {
         Ok(())
     }
 
+    /// Persists a complete scan run — the run row, all effective
+    /// permissions, and all scan errors — in a **single transaction**.
+    ///
+    /// Engine review 2026-06-12 finding 1: the previous caller-side loop
+    /// inserted each permission in its own implicit transaction (one
+    /// SQLite commit + fsync per path — the dominant cost of a large
+    /// scan) and only `warn!`-logged a failed row, so a partial scan
+    /// could be stored while the `scan_runs` row still looked complete.
+    ///
+    /// This method is all-or-nothing: a `BEGIN IMMEDIATE` wraps the whole
+    /// run, any failure triggers a `ROLLBACK` and returns the error, and
+    /// success commits once. The history is therefore never silently
+    /// partial.
+    pub fn persist_scan_atomic(
+        &self,
+        run: &ScanRun,
+        permissions: &[EffectivePermission],
+        errors: &[ScanError],
+    ) -> Result<(), CoreError> {
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| CoreError::Database(format!("persist_scan_atomic BEGIN failed: {e}")))?;
+
+        let body = (|| -> Result<(), CoreError> {
+            self.insert_scan_run(run)?;
+            for perm in permissions {
+                self.insert_permission(&run.id, perm)?;
+            }
+            for error in errors {
+                self.insert_error(&run.id, error)?;
+            }
+            Ok(())
+        })();
+
+        match body {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT").map_err(|e| {
+                    CoreError::Database(format!("persist_scan_atomic COMMIT failed: {e}"))
+                })?;
+                Ok(())
+            }
+            Err(e) => {
+                // Explicit rollback; the original cause matters more than a
+                // secondary rollback error.
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
     /// Stores a scan error.
     pub fn insert_error(&self, scan_run_id: &Uuid, error: &ScanError) -> Result<(), CoreError> {
         self.conn
@@ -529,6 +579,55 @@ mod tests {
         store.finish_scan_run(&run.id, finished).unwrap();
         let runs = store.list_scan_runs().unwrap();
         assert!(runs[0].finished_at.is_some());
+    }
+
+    #[test]
+    fn persist_scan_atomic_writes_run_permissions_and_errors() {
+        let conn = setup();
+        let store = ScanStore::new(&conn);
+        let run = make_run(r"C:\atomic");
+        let perms = vec![
+            make_perm("S-1-5-21-1-2-3-1000", r"C:\atomic\a", 1, None, 1),
+            make_perm("S-1-5-21-1-2-3-1001", r"C:\atomic\b", 1, None, 1),
+        ];
+        let errors = vec![ScanError {
+            path: Some(NormalizedPath(r"C:\atomic\denied".to_owned())),
+            message: "access denied".to_owned(),
+        }];
+        store.persist_scan_atomic(&run, &perms, &errors).unwrap();
+
+        assert_eq!(store.list_scan_runs().unwrap().len(), 1);
+        assert_eq!(store.get_permissions(&run.id).unwrap().len(), 2);
+        assert_eq!(store.list_errors_for(&run.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn persist_scan_atomic_rolls_back_on_failure() {
+        let conn = setup();
+        let store = ScanStore::new(&conn);
+        let run = make_run(r"C:\atomic");
+
+        // First batch commits cleanly.
+        let first = vec![make_perm("S-1-5-21-1-2-3-1000", r"C:\atomic\a", 1, None, 1)];
+        store.persist_scan_atomic(&run, &first, &[]).unwrap();
+        assert_eq!(store.get_permissions(&run.id).unwrap().len(), 1);
+
+        // Second batch reuses the same run id → the scan_runs INSERT
+        // fails on the primary key. The whole batch (including the new
+        // permissions) must roll back, leaving the first batch intact.
+        let second = vec![
+            make_perm("S-1-5-21-1-2-3-2000", r"C:\atomic\x", 1, None, 1),
+            make_perm("S-1-5-21-1-2-3-2001", r"C:\atomic\y", 1, None, 1),
+        ];
+        let result = store.persist_scan_atomic(&run, &second, &[]);
+        assert!(result.is_err(), "duplicate run id must fail the batch");
+
+        // Nothing from the failed batch leaked in.
+        assert_eq!(
+            store.get_permissions(&run.id).unwrap().len(),
+            1,
+            "rollback must leave only the first batch's single permission"
+        );
     }
 
     #[test]

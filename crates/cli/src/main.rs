@@ -784,20 +784,12 @@ async fn run_scan(
         .transpose()
         .map_err(|e| anyhow::anyhow!("Cannot open database: {e}"))?;
 
-    // 3. Scan-Lauf registrieren / register scan run
+    // 3. Prepare the scan run. It is persisted atomically at the end —
+    // the whole run, all permissions and all errors in one transaction
+    // (engine review 2026-06-12 finding 1), instead of one implicit
+    // transaction per inserted row.
     let run_id = Uuid::new_v4();
     let started_at = Utc::now();
-    if let Some(ref db) = db {
-        db.scan_store()
-            .insert_scan_run(&ScanRun {
-                id: run_id,
-                started_at,
-                finished_at: None,
-                target: path.clone(),
-                errors: vec![],
-            })
-            .map_err(|e| anyhow::anyhow!("Cannot create scan run: {e}"))?;
-    }
 
     //     Resolve local server groups before the share mask — otherwise the local
     //     group SIDs are missing from the token evaluated against the share DACL.
@@ -1001,51 +993,42 @@ async fn run_scan(
             println!("  {:14}  {}", rights.display_name(), fso.path.0);
         }
 
-        if let Some(ref db) = db {
-            db.scan_store()
-                .insert_permission(&run_id, &result)
-                .map_err(|e| anyhow::anyhow!("Failed to store permission: {e}"))?;
-        }
         all_permissions.push(result);
     }
 
+    // Collect scan errors for the database (still printed inline below).
+    let mut scan_errors_for_db: Vec<ScanError> = Vec::new();
     for walk_err in &walk.errors {
         println!("  [Error]         {}: {}", walk_err.path, walk_err.error);
-        if let Some(ref db) = db {
-            db.scan_store()
-                .insert_error(
-                    &run_id,
-                    &ScanError {
-                        path: Some(NormalizedPath(walk_err.path.clone())),
-                        message: walk_err.error.to_string(),
-                    },
-                )
-                .ok();
-        }
+        scan_errors_for_db.push(ScanError {
+            path: Some(NormalizedPath(walk_err.path.clone())),
+            message: walk_err.error.to_string(),
+        });
     }
 
-    // 6b. Abbruch behandeln — partiellen Lauf als abgebrochen kennzeichnen.
-    // Handle cancellation — mark the partial run as aborted.
+    // 6b. Handle cancellation — mark the partial run as aborted, both on
+    // screen and as a recorded scan error.
     if walk.cancelled {
         println!();
         println!("  [Aborted] Scan cancelled by user — results are partial.");
-        if let Some(ref db) = db {
-            db.scan_store()
-                .insert_error(
-                    &run_id,
-                    &ScanError {
-                        path: None,
-                        message: "Scan cancelled by user — results are partial".to_owned(),
-                    },
-                )
-                .ok();
-        }
+        scan_errors_for_db.push(ScanError {
+            path: None,
+            message: "Scan cancelled by user — results are partial".to_owned(),
+        });
     }
 
+    // 7. Persist the complete run in a single transaction.
     if let Some(ref db) = db {
+        let run = ScanRun {
+            id: run_id,
+            started_at,
+            finished_at: Some(Utc::now()),
+            target: path.clone(),
+            errors: vec![],
+        };
         db.scan_store()
-            .finish_scan_run(&run_id, Utc::now())
-            .map_err(|e| anyhow::anyhow!("Failed to finish scan run: {e}"))?;
+            .persist_scan_atomic(&run, &all_permissions, &scan_errors_for_db)
+            .map_err(|e| anyhow::anyhow!("Failed to persist scan: {e}"))?;
     }
 
     // 8. Zusammenfassung / summary

@@ -1110,39 +1110,30 @@ fn persist_scan(
     cancelled: bool,
 ) -> Result<String, String> {
     let run_id = Uuid::new_v4();
+    let now = Utc::now();
     let run = ScanRun {
         id: run_id,
-        started_at: Utc::now(),
-        finished_at: Some(Utc::now()),
+        started_at: now,
+        finished_at: Some(now),
         target: target.to_string(),
         errors: vec![],
     };
-    let store = db.scan_store();
-    if let Err(e) = store.insert_scan_run(&run) {
-        warn!(error = %e, "Failed to persist scan run");
-        return Err(format!("could not create scan run: {e}"));
-    }
-    for perm in permissions {
-        if let Err(e) = store.insert_permission(&run_id, perm) {
-            warn!(error = %e, "Failed to persist permission");
-        }
-    }
-    for err in errors {
-        if let Err(e) = store.insert_error(&run_id, err) {
-            warn!(error = %e, "Failed to persist scan error");
-        }
-    }
+
+    // Engine review 2026-06-12 finding 1: persist the whole run in one
+    // transaction. A cancelled scan appends a pathless diagnostic note so
+    // the partial state is explicit rather than silently incomplete.
+    let mut all_errors: Vec<ScanError> = errors.to_vec();
     if cancelled {
-        let _ = store.insert_error(
-            &run_id,
-            &ScanError {
-                path: None,
-                message: "Scan cancelled by user — results are partial".to_owned(),
-            },
-        );
+        all_errors.push(ScanError {
+            path: None,
+            message: "Scan cancelled by user — results are partial".to_owned(),
+        });
     }
-    if let Err(e) = store.finish_scan_run(&run_id, Utc::now()) {
-        warn!(error = %e, "Failed to finish scan run");
+
+    let store = db.scan_store();
+    if let Err(e) = store.persist_scan_atomic(&run, permissions, &all_errors) {
+        warn!(error = %e, "Failed to persist scan run");
+        return Err(format!("could not persist scan: {e}"));
     }
     Ok(run_id.to_string())
 }
