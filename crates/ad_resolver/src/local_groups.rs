@@ -28,11 +28,9 @@ use windows_sys::Win32::NetworkManagement::NetManagement::{
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::LookupAccountNameW;
 
-/// User-Not-Found-Statuscode aus lmerr.h / NERR_UserNotFound from lmerr.h.
+/// NERR_UserNotFound status code from lmerr.h.
 const NERR_USER_NOT_FOUND: u32 = 2221;
 
-/// Bestandteile (mindestens ein `.`)? In Trust-/Multi-Domain-Szenarien
-/// als UPN-Suffix valide.
 /// Heuristic: does the domain string look like a DNS suffix (contains a
 /// dot)? In trust / multi-domain scenarios LSA usually returns the NetBIOS
 /// name (`TRUSTED`); `name@TRUSTED` is NOT a valid account reference for
@@ -42,12 +40,6 @@ fn looks_like_dns_domain(domain: &str) -> bool {
     domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
 }
 
-///
-/// blind `name@domain`, was bei NetBIOS-Domains (`alice@TRUSTED` statt
-///
-/// Order:
-///    konstruiert.
-/// 4. `name` (bare) — local accounts without a domain.
 ///
 /// Returns a **candidate list** of account names for
 /// `NetUserGetLocalGroups`, in preference order. The caller iterates
@@ -119,7 +111,6 @@ pub fn resolve_local_group_sids(
     }
 }
 
-/// Unterscheidung, um Kandidatenlisten durchzuprobieren ohne stille
 /// Skips.
 /// Strict variant — distinguishes "not found" from "found, no groups".
 pub fn resolve_local_group_sids_strict(
@@ -195,13 +186,10 @@ pub fn resolve_local_group_sids_strict(
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
-/// ([`format_account_candidates_for_local_groups`]) durch.
-///
-/// - `Err(...)` bei anderen technischen Fehlern (Access Denied, NetAPI-
-///
-///
 /// Tries to resolve local groups for `identity` on `server`, iterating
-/// over candidate account name forms.
+/// over candidate account name forms
+/// ([`format_account_candidates_for_local_groups`]). Returns `Err(...)`
+/// on technical failures (Access Denied, NetAPI errors).
 pub fn resolve_local_group_sids_for_identity(
     server: Option<&str>,
     identity: &Identity,
@@ -260,7 +248,6 @@ pub struct LocalGroupMember {
     /// Member SID (None only when conversion failed — should be vanishingly
     /// rare).
     pub sid: Option<Sid>,
-    /// `DOMAIN\Name`-Darstellung wie von Windows geliefert; bei lokalen
     /// `DOMAIN\name` form as returned by Windows; for local accounts without
     /// a domain it may just be `Name`.
     pub display_name: Option<String>,

@@ -26,7 +26,6 @@ pub fn sid_str_to_ldap_filter(sid: &str) -> Result<String, CoreError> {
 /// Converts a SID string to its binary byte representation.
 pub fn sid_str_to_bytes(sid: &str) -> Result<Vec<u8>, CoreError> {
     let parts: Vec<&str> = sid.trim().split('-').collect();
-    // Mindestformat: S-R-I (d.h. mindestens 3 Teile)
     // Minimum format: S-R-I (at least 3 parts)
     if parts.len() < 3 || parts[0] != "S" {
         return Err(CoreError::SidResolution(format!(

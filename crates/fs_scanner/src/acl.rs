@@ -275,7 +275,6 @@ unsafe fn parse_dacl(dacl: *const ACL) -> (Vec<AceEntry>, Vec<UnsupportedAce>) {
     (entries, unsupported)
 }
 
-/// Parst einen einzelnen ACE-Zeiger.
 /// Parses a single ACE pointer.
 ///
 /// # Safety

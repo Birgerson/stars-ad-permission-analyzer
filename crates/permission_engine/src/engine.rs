@@ -194,7 +194,6 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if input.identity_not_in_configured_ldap_base {
             diagnostics.push(PermissionDiagnostic::IdentityNotInConfiguredLdapBase);
         }
-        // ermittelbar.
         // Review 2026-06-04 round 2 finding 5: disabled status could not be
         // determined.
         if input.identity_disabled_status_unknown {
@@ -3111,7 +3110,6 @@ mod tests {
         );
     }
 
-    /// "sauber" aus.
     /// Round 4 finding 1: an LDAP identity lookup error must surface.
     #[test]
     fn engine_pushes_identity_lookup_failed_diagnostic_with_reason() {

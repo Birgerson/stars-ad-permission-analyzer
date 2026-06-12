@@ -213,8 +213,6 @@ pub struct GroupMembership {
     pub member_sid: Sid,
     pub group_sid: Sid,
     pub direct: bool,
-    /// `BUILTIN\Administrators` aus LookupAccountSidW). `None` bedeutet
-    /// kompatibel.
     /// Human-readable group name when the resolver was able to provide
     /// one (e.g. `Domain Admins` from LDAP/NetUserGetGroups or
     /// `BUILTIN\Administrators` from LookupAccountSidW). `None` does not

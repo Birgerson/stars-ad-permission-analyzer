@@ -32,6 +32,16 @@ import sys
 UMLAUT_RE = re.compile(r"[äöüÄÖÜß]")
 
 
+# Mojibake: UTF-8 bytes that were decoded as Latin-1/CP1252 and re-saved.
+# These sequences (e.g. "â€”" for an em dash, "Ã¤" for "ä") indicate a
+# corrupted file and must never appear in a tracked text file. Catching
+# them here turns an invisible encoding regression into a hard CI failure
+# (engine review 2026-06-12 finding 6).
+MOJIBAKE_RE = re.compile(
+    r"Ã[¤¶¼„–œŸ©Ÿ]|â€[”“˜™œ]|â†['’]|Â[·\xa0]|â‚¬|Ã\x9f"
+)
+
+
 # Whole-word ASCII denylist for German words that cannot collide with
 # English. These are matched case-insensitively as standalone words
 # (word boundary on both sides). Add new entries here when they show up
@@ -140,6 +150,24 @@ DE_WORDS = [
     "soll", "sollen", "sollte", "sollten",
     "darf", "duerfen", "durfte", "durften",
     "moechte", "moechten",
+    # Engine review 2026-06-12 finding 6: German remnants the earlier
+    # denylist missed (orphaned doc-comment fragments).
+    "aus", "bedeutet", "aufbauen", "setzt", "durch", "Zeiger", "Parst",
+    "Statuscode", "Eltern", "wendet", "ausstehenden", "Migrationen",
+    "kompatibel", "anderen", "technischen", "Fehlern",
+    "lokal", "lokale", "lokalen", "Anzeigeform", "Mischung",
+    "Schritt", "Versionierte", "indexiert", "stammt", "ersetzen",
+    "Sicherheits", "Puffer", "Darstellung", "geliefert", "lesbar",
+    "Erklaerungspfad", "Serialisiert", "nachvollziehbar",
+    # Further German-only words found in orphaned doc fragments.
+    "Bestandteile", "valide", "konstruiert", "konstruieren",
+    "Unterscheidung", "durchzuprobieren", "stille", "Kandidatenlisten",
+    "mindestens", "Szenarien", "uebrig", "ueblich",
+    "Funktion", "gelieferten", "bleibt", "ausgeschlossen",
+    "Bezeichnung", "Sekundenbruchteile", "beenden", "manueller",
+    "Volle", "Eindeutigkeitssuche", "Vorpruefung", "umgangen",
+    "ermittelt", "ermittelbar", "erweitert", "vorhanden",
+    "zugehoerige", "zugehoerigen", "benoetigt", "benoetigten",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -229,7 +257,11 @@ def check():
         try:
             with open(path, "r", encoding="utf-8") as f:
                 for line_no, line in enumerate(f, start=1):
-                    if UMLAUT_RE.search(line) or DE_WORDS_RE.search(line):
+                    if (
+                        UMLAUT_RE.search(line)
+                        or DE_WORDS_RE.search(line)
+                        or MOJIBAKE_RE.search(line)
+                    ):
                         if not is_allowlisted(path, line):
                             hits.append((path, line_no, line.rstrip("\n")))
         except (UnicodeDecodeError, OSError):

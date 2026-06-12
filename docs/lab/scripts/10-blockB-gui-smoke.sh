@@ -3,7 +3,7 @@
 # Prerequisites:
 #
 # What this does: start the process, wait 15s, check that it still exists,
-# sauber beenden. Volle UI-Validierung bleibt manueller Schritt (qm guest
+# then shut it down cleanly. Full UI validation remains a manual step (qm guest
 set -eu
 
 cat > /tmp/gui-smoke.ps1 <<'PSEOF'

@@ -261,8 +261,6 @@ impl LdapResolver {
 
         ldap_client::disconnect(ldap).await;
 
-        // 5) Forward-Graph aufbauen: group_dn → Liste von Eltern-DNs (aus
-        //    deren `memberOf`-Attribut). Eine Kante G_x → G_y bedeutet
         // 5) Build the forward graph: group_dn → list of parent DNs (from
         //    its `memberOf` attribute). Edge G_x → G_y means "G_x is a
         //    direct member of G_y", i.e. "G_y contains G_x". SID and name
@@ -626,7 +624,6 @@ async fn resolve_primary_group(
     if parts.len() < 4 {
         return None;
     }
-    // Letzten Teil (RID) durch primaryGroupID ersetzen
     // Replace last part (RID) with primaryGroupID
     *parts.last_mut()? = "";
     let domain_sid_prefix = parts[..parts.len() - 1].join("-");

@@ -52,7 +52,7 @@ pub struct NetApiBuffer<T> {
 }
 
 impl<T> NetApiBuffer<T> {
-    /// `NetApi*`-Funktion gelieferten Puffer-Pointer.
+    /// Wraps a buffer pointer returned by a `NetApi*` function.
     ///
     /// # Safety
     ///

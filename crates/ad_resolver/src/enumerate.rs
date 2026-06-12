@@ -212,7 +212,6 @@ fn list_global_groups(
         };
 
         if !buf.is_null() && entries_read > 0 {
-            // SAFETY: GROUP_INFO_1-Array aus NetApi-Puffer.
             // SAFETY: GROUP_INFO_1 array from NetApi buffer.
             let entries =
                 unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };

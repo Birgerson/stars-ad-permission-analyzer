@@ -136,7 +136,6 @@ fn local_group_status_fields(status: &LocalGroupEvalStatus) -> (String, String) 
     }
 }
 
-/// Serialisiert `matched_aces` als kompaktes JSON-Array. Audit-Pipelines,
 /// Serializes `matched_aces` as a compact JSON array. Audit pipelines
 /// needing structured access to the matched ACEs can parse this field
 /// directly — for the full detail tree use the JSON exporter.

@@ -163,10 +163,6 @@ pub fn validate_local_path(input: &str) -> Result<ValidatedLocalPath, CoreError>
 }
 
 ///
-/// - Windows-Long-Path-Form `\\?\X:\…` (lokal)
-/// - Windows-Long-Path-UNC-Form `\\?\UNC\server\share\…`
-///
-///
 /// Validates a user-supplied path and returns the canonical display form.
 ///
 /// Accepts:
@@ -184,7 +180,6 @@ pub fn validate_path(input: &str) -> Result<NormalizedPath, CoreError> {
         let canonical = format!(r"\\{rest}");
         return validate_unc_path(&canonical).map(Into::into);
     }
-    // \\?\X:\… → lokale Anzeigeform X:\…
     // \\?\X:\… → local display form X:\…
     if let Some(rest) = trimmed.strip_prefix(r"\\?\") {
         return validate_local_path(rest).map(Into::into);
@@ -254,7 +249,6 @@ impl From<&ValidatedUncPath> for WindowsApiPath {
 /// The GUI had a similar local-path guard already; the CLI did not. This
 /// function is the *single* source of truth for both CLI and GUI.
 pub fn parse_unc_components(path: &str) -> Option<(String, String)> {
-    // Server. Lokale Long-Path-Form (`\\?\C:\…`) bleibt ausgeschlossen,
     // Normalize long-path UNC first — otherwise the split would treat `?`
     // as the server. Local long-path form (`\\?\C:\…`) is excluded by the
     // strip because it starts with a drive letter, not `\\`.
@@ -364,8 +358,6 @@ pub fn strip_long_path_prefix(path: &str) -> String {
     path.to_string()
 }
 
-///
-/// - Lokal `C:\…` → `\\?\C:\…`
 ///
 /// Converts a path into the long-path form required by Win32 wide APIs
 /// for paths exceeding `MAX_PATH`:
@@ -839,7 +831,6 @@ mod tests {
         assert_eq!(ctx.share, "backup");
     }
 
-    /// `("C", "Windows")` aus `C:\Windows\…`).
     /// Local path without flags → no SMB context (no silent
     /// `("C", "Windows")` derived from `C:\Windows\…`).
     #[test]
@@ -861,7 +852,6 @@ mod tests {
         );
     }
 
-    /// Mischung: Server explizit, Share aus UNC.
     /// Mix: server explicit, share from UNC.
     #[test]
     fn smb_audit_context_mixed_explicit_server_unc_share() {

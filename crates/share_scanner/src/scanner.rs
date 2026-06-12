@@ -853,7 +853,6 @@ mod tests {
             matches!(deny_all, ShareDacl::Acl(p) if p.is_empty()),
             "deny-all share must carry Acl(vec![]) status"
         );
-        // Sicherheits-Roundtrip durch effective_share_mask:
         // Safety roundtrip via effective_share_mask:
         //   NullDacl → None  (no restriction — NTFS stays authoritative)
         //   Acl([])  → Some(0) (no access)

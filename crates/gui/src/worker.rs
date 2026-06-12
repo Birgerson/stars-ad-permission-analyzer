@@ -247,8 +247,6 @@ pub struct TrusteeRow {
     pub mask_hex: String,
     /// `"explicit"` or `"inherited"`.
     pub source: String,
-    /// Windows-typische „Applies to"-Bezeichnung (z. B. „This folder,
-    /// Propagation-Flags.
     /// Windows-style "Applies to" label (e.g. "This folder, subfolders
     /// and files"), derived from inheritance and propagation flags.
     pub applies_to: String,
@@ -1198,7 +1196,6 @@ fn list_scan_run_summaries(db: &Database) -> Result<Vec<ScanRunSummary>, String>
         .into_iter()
         .map(|r| ScanRunSummary {
             id: r.id.to_string(),
-            // Format ohne Sekundenbruchteile, lokal lesbar.
             // Format without sub-second fractions, locally readable.
             started_at: r.started_at.format("%Y-%m-%d %H:%M:%S").to_string(),
             target: r.target,
@@ -1268,7 +1265,6 @@ const CONTAINER_INHERIT_ACE_FLAG: u32 = 0x02;
 const NO_PROPAGATE_INHERIT_ACE_FLAG: u32 = 0x04;
 const INHERIT_ONLY_ACE_FLAG: u32 = 0x08;
 
-/// Sicherheits-GUI bekannte „Applies to"-Bezeichnung ab.
 /// Maps Windows inheritance / propagation flags to the "Applies to" label
 /// known from the security GUI.
 fn applies_to_label(inheritance_flags: u32, propagation_flags: u32) -> String {

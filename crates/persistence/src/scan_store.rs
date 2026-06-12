@@ -302,8 +302,6 @@ impl<'a> ScanStore<'a> {
         &self,
         scan_run_id: &Uuid,
     ) -> Result<Vec<EffectivePermission>, CoreError> {
-        // Code Review 2026-06-07 Finding 1: Identity ausschliesslich aus
-        // potenziell veraenderten Wert zu zeigen.
         // Code review 2026-06-07 finding 1: read identity exclusively
         // from the per-permission snapshot — no more JOIN against the
         // global `identities` table. This makes history truly

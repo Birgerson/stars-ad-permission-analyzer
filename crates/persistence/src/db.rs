@@ -17,7 +17,6 @@ pub struct Database {
 }
 
 impl Database {
-    /// wendet alle ausstehenden Migrationen an.
     /// Opens or creates a SQLite database at the given path and applies
     /// all pending migrations.
     pub fn open(path: &str) -> Result<Self, CoreError> {

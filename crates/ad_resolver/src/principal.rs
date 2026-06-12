@@ -94,7 +94,6 @@ pub enum IdentityScopeStatus {
     /// `IdentityKind` classification).
     /// LDAP hit inside the configured `base_dn`.
     InsideConfiguredLdapBase,
-    /// Domain indexiert. Identity stammt aus LSA-Reverse-Lookup;
     /// LDAP miss, but LSA resolved the SID — typical in multi-domain
     /// forests / trusts.
     OutsideConfiguredLdapBase,
@@ -484,7 +483,6 @@ where
         }
     }
 
-    /// Plain `sAMAccountName` → LDAP-Eindeutigkeitssuche.
     /// Plain `sAMAccountName` path.
     async fn resolve_by_sam(&self, sam: &str) -> Result<PrincipalResolution, CoreError> {
         let entries = self.identity_backend.lookup_identities_by_sam(sam).await?;
@@ -1060,7 +1058,6 @@ mod tests {
         assert!(flags.identity_disabled_status_unknown);
     }
 
-    /// `disabled_status_unknown` bleibt false.
     /// LDAP-disabled account: `IdentityDisabled` marker, no Unknown.
     #[tokio::test]
     async fn ldap_disabled_account_pushes_identity_disabled_marker() {

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Versionierte Schema-Migrationen via PRAGMA user_version.
 //! Versioned schema migrations using PRAGMA user_version.
 
 use adpa_core::error::CoreError;
@@ -212,8 +211,6 @@ mod tests {
         assert_eq!(defaults.6, None);
         assert_eq!(defaults.7, "[]");
 
-        // Schritt 6 (Code Review 2026-06-07, Finding 1): v7-Backfill aus
-        // gegen identities lesbar bleibt.
         // Step 6 (code review 2026-06-07, finding 1): v7 backfill from
         // the identities table. The legacy identity (legacy.user,
         // OLDCORP, User, disabled=false) must land in the new snapshot

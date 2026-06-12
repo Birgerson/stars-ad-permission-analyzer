@@ -811,7 +811,6 @@ mod tests {
         );
     }
 
-    /// `PermissionDiagnostic::DomainGroupRecursionIncomplete` setzt
     /// ChatGPT review 2026-06-04 round 2, finding 4: when the engine
     /// sets `PermissionDiagnostic::DomainGroupRecursionIncomplete`
     /// (SAM/LSA fallback without LDAP), risk findings for that

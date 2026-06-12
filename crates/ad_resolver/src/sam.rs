@@ -48,7 +48,7 @@ use windows_sys::Win32::Security::{
 // resolve_local_group_chains variant; the pure-SID fallback is no longer
 // needed here.
 
-/// User-Not-Found-Statuscode aus lmerr.h / NERR_UserNotFound from lmerr.h.
+/// NERR_UserNotFound status code from lmerr.h.
 const NERR_USER_NOT_FOUND: u32 = 2221;
 
 /// Resolution result of `LookupAccountSidW`.

@@ -1179,7 +1179,6 @@ fn collect_local_group_sids_for_path(
 
     let server_owned = effective_smb_target(path, explicit_smb_server);
     let server = server_owned.as_deref();
-    // Erklaerungspfad jeden Token-Schritt nachvollziehbar darstellt.
     // Round 6 finding 1: resolve local server groups as
     // GroupMembership instances so the explanation path renders each
     // mediator step explicitly. SIDs come from the memberships;
