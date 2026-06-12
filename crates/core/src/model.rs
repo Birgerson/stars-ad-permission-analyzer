@@ -331,6 +331,16 @@ pub struct FileSystemObject {
     /// (`dacl` empty but `null_dacl == false`), which means "no access".
     #[serde(default)]
     pub null_dacl: bool,
+    /// Stable hash of the raw security descriptor bytes, when known.
+    /// Identical security descriptors (the common case for a directory
+    /// tree that inherits one DACL from a shared parent) produce the same
+    /// hash, so the scanner can parse/evaluate each distinct descriptor
+    /// once and storage can deduplicate (engine review 2026-06-12
+    /// finding 2). `None` when the object was constructed without a
+    /// descriptor read. `#[serde(default)]` keeps older cache entries
+    /// readable.
+    #[serde(default)]
+    pub sd_hash: Option<u64>,
 }
 
 /// SMB share

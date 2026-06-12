@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use adpa_core::{error::CoreError, model::FileSystemObject};
 use tracing::{debug, info, warn};
 
-use crate::acl::read_file_system_object;
+use crate::acl::read_file_system_object_cached;
 use crate::cancel::CancellationToken;
 
 /// Configuration for the walker.
@@ -61,6 +61,11 @@ pub fn walk_tree(root: &str, config: &WalkConfig, cancel: &CancellationToken) ->
     let mut objects = Vec::new();
     let mut errors = Vec::new();
     let mut visited_canonical: HashSet<String> = HashSet::new();
+    // One security-descriptor cache for the whole tree so an inherited
+    // DACL shared by many directories is parsed once, not once per object
+    // (engine review 2026-06-12 finding 2). A cache hit is byte-validated
+    // inside the reader, so it can never assign a wrong DACL.
+    let mut sd_cache = crate::acl::SdCache::new();
     // Canonicalize the root up front and seed the visited set with it so
     // that reparse points pointing back to the scan root are detected as a
     // cycle right away.
@@ -75,6 +80,7 @@ pub fn walk_tree(root: &str, config: &WalkConfig, cancel: &CancellationToken) ->
         &mut objects,
         &mut errors,
         &mut visited_canonical,
+        &mut sd_cache,
     );
     let cancelled = cancel.is_cancelled();
     info!(
@@ -103,6 +109,7 @@ fn canonicalize_path(path: &str) -> Option<String> {
         .map(|p| p.to_string_lossy().to_string().to_ascii_lowercase())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk_dir(
     path: &str,
     current_depth: u32,
@@ -111,11 +118,12 @@ fn walk_dir(
     objects: &mut Vec<FileSystemObject>,
     errors: &mut Vec<WalkError>,
     visited_canonical: &mut HashSet<String>,
+    sd_cache: &mut crate::acl::SdCache,
 ) {
     if cancel.is_cancelled() {
         return;
     }
-    match read_file_system_object(path) {
+    match read_file_system_object_cached(path, sd_cache) {
         Err(e) => {
             warn!(path, error = %e, "Cannot read security descriptor");
             errors.push(WalkError {
@@ -211,6 +219,7 @@ fn walk_dir(
                                         objects,
                                         errors,
                                         visited_canonical,
+                                        sd_cache,
                                     );
                                 }
                             }

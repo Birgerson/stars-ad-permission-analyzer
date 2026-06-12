@@ -909,6 +909,7 @@ mod tests {
             is_reparse_point: false,
             unsupported_aces: vec![],
             null_dacl: false,
+            sd_hash: None,
         }
     }
 
@@ -922,6 +923,7 @@ mod tests {
             is_reparse_point: false,
             unsupported_aces: vec![],
             null_dacl: true,
+            sd_hash: None,
         }
     }
 
@@ -2898,6 +2900,7 @@ mod tests {
             is_reparse_point: false,
             unsupported_aces: vec![],
             null_dacl: false,
+            sd_hash: None,
         }
     }
 

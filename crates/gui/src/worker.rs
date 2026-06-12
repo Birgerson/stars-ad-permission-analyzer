@@ -1813,6 +1813,7 @@ mod tests {
             is_reparse_point: false,
             unsupported_aces: vec![],
             null_dacl: false,
+            sd_hash: None,
         };
         let overlay = ShareTrusteeOverlay {
             trustees: vec![adpa_core::model::PathTrusteeEntry::Ace(PathTrustee {
@@ -1869,6 +1870,7 @@ mod tests {
             is_reparse_point: false,
             unsupported_aces: vec![],
             null_dacl: false,
+            sd_hash: None,
         };
         let empty_map: std::collections::BTreeMap<String, String> =
             std::collections::BTreeMap::new();

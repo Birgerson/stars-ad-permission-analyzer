@@ -14,11 +14,14 @@ use adpa_core::{
 };
 use tracing::{debug, warn};
 
+use std::collections::HashMap;
+
 use windows_sys::Win32::Foundation::{LocalFree, ERROR_ACCESS_DENIED, ERROR_SUCCESS, FALSE};
 use windows_sys::Win32::Security::{
     AclSizeInformation, GetAce, GetAclInformation, GetSecurityDescriptorControl,
-    ACCESS_ALLOWED_ACE, ACCESS_DENIED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION,
-    DACL_SECURITY_INFORMATION, INHERITED_ACE, OWNER_SECURITY_INFORMATION, SE_DACL_PROTECTED,
+    GetSecurityDescriptorLength, ACCESS_ALLOWED_ACE, ACCESS_DENIED_ACE, ACE_HEADER, ACL,
+    ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, INHERITED_ACE, OWNER_SECURITY_INFORMATION,
+    SE_DACL_PROTECTED,
 };
 
 // Not exported as constants in windows-sys 0.59 — raw values from WinNT.h
@@ -80,15 +83,112 @@ unsafe fn sid_ptr_to_string(sid: *const core::ffi::c_void) -> Result<String, Cor
     Ok(sid_string)
 }
 
-/// Reads attributes, owner SID and DACL for a path.
+/// Parsed, owned result of reading a security descriptor — cacheable by
+/// SD hash (engine review 2026-06-12 finding 2). Carries the raw SD bytes
+/// so a hash hit is confirmed by a full byte comparison before reuse:
+/// correctness before speed, a collision degrades to a fresh parse rather
+/// than a wrong DACL.
+#[derive(Clone)]
+pub struct ParsedSecurity {
+    sd_bytes: Vec<u8>,
+    owner_sid: Option<Sid>,
+    dacl: Vec<AceEntry>,
+    unsupported_aces: Vec<UnsupportedAce>,
+    null_dacl: bool,
+    inheritance_disabled: bool,
+}
+
+/// Per-scan cache: SD hash → parsed security descriptor. On a directory
+/// tree where most objects inherit one DACL from a shared parent, this
+/// turns thousands of repeated `parse_dacl` + SID-string conversions into
+/// a single parse per distinct descriptor.
+pub type SdCache = HashMap<u64, ParsedSecurity>;
+
+/// Stable 64-bit FNV-1a hash over the raw security-descriptor bytes.
+/// Deterministic (no random seed) so the value is also usable as a
+/// storage-side dedup key across runs.
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
+}
+
+/// Parses owner, DACL, and inheritance state from a live security
+/// descriptor into an owned [`ParsedSecurity`].
 ///
+/// # Safety
+/// `psid_owner`, `p_dacl`, and `p_sd` must be valid pointers into the same
+/// live security descriptor (valid until the caller frees `p_sd`).
+unsafe fn parse_security(
+    psid_owner: *mut core::ffi::c_void,
+    p_dacl: *mut ACL,
+    p_sd: *mut core::ffi::c_void,
+    sd_bytes: Vec<u8>,
+) -> ParsedSecurity {
+    let owner_sid = if psid_owner.is_null() {
+        None
+    } else {
+        sid_ptr_to_string(psid_owner).ok().map(Sid)
+    };
+
+    // Distinguish NULL DACL from empty DACL:
+    // - NULL DACL → null_dacl = true, dacl empty (engine treats as full access).
+    // - DACL present but empty → null_dacl = false, dacl empty (deny all).
+    let (dacl, unsupported_aces, null_dacl) = if p_dacl.is_null() {
+        (Vec::new(), Vec::new(), true)
+    } else {
+        let (entries, unsupported) = parse_dacl(p_dacl);
+        (entries, unsupported, false)
+    };
+
+    // Inheritance protection: SE_DACL_PROTECTED in the SD control field.
+    let inheritance_disabled = if p_sd.is_null() {
+        false
+    } else {
+        let mut control: u16 = 0;
+        let mut revision: u32 = 0;
+        let ok = GetSecurityDescriptorControl(p_sd, &mut control, &mut revision);
+        ok != FALSE && (control & SE_DACL_PROTECTED != 0)
+    };
+
+    ParsedSecurity {
+        sd_bytes,
+        owner_sid,
+        dacl,
+        unsupported_aces,
+        null_dacl,
+        inheritance_disabled,
+    }
+}
+
+/// Reads attributes, owner SID and DACL for a single path.
 ///
 /// The input path is converted into long-path form (`\\?\C:\…` or
 /// `\\?\UNC\server\share\…`) before any Win32 call, so paths longer than
 /// `MAX_PATH` (260 characters) can be read reliably. The path stored in
 /// the resulting `FileSystemObject` remains the original input form
 /// (without the prefix), keeping reports human-readable.
+///
+/// For a tree walk use [`read_file_system_object_cached`] with a shared
+/// [`SdCache`] so an inherited DACL is parsed once, not once per object.
 pub fn read_file_system_object(path: &str) -> Result<FileSystemObject, CoreError> {
+    let mut cache = SdCache::new();
+    read_file_system_object_cached(path, &mut cache)
+}
+
+/// Like [`read_file_system_object`], but reuses an already-parsed security
+/// descriptor from `cache` when this object's descriptor is byte-identical
+/// to one seen earlier in the same scan (engine review 2026-06-12
+/// finding 2).
+pub fn read_file_system_object_cached(
+    path: &str,
+    cache: &mut SdCache,
+) -> Result<FileSystemObject, CoreError> {
     let api_path = validation::path::to_windows_api_path(path);
     let wide_path = to_wide_null(&api_path);
 
@@ -155,34 +255,40 @@ pub fn read_file_system_object(path: &str) -> Result<FileSystemObject, CoreError
 
     // p_sd is now valid and must be freed with LocalFree before all return paths below.
 
-    let owner_sid = if psid_owner.is_null() {
-        None
+    // Dedup by raw-SD hash (finding 2). Copy the descriptor bytes, hash
+    // them, and reuse a cached parse only after a full byte comparison
+    // confirms the match — a hash collision must never yield a wrong DACL.
+    // SAFETY: p_sd points to a valid SD of `sd_len` bytes until LocalFree.
+    let sd_len = if p_sd.is_null() {
+        0usize
     } else {
-        // SAFETY: psid_owner points into the p_sd buffer, valid until LocalFree is called.
-        unsafe { sid_ptr_to_string(psid_owner) }.ok().map(Sid)
+        unsafe { GetSecurityDescriptorLength(p_sd) as usize }
     };
-
-    // - NULL-DACL → null_dacl = true, dacl leer (Engine wertet als Vollzugriff).
-    // Distinguish NULL DACL from empty DACL:
-    // - NULL DACL → null_dacl = true, dacl empty (engine treats as full access).
-    // - DACL present but empty → null_dacl = false, dacl empty (deny all).
-    let (dacl, unsupported_aces, null_dacl) = if p_dacl.is_null() {
-        (Vec::new(), Vec::new(), true)
+    let sd_bytes: Vec<u8> = if p_sd.is_null() || sd_len == 0 {
+        Vec::new()
     } else {
-        // SAFETY: p_dacl points into the p_sd buffer, valid until LocalFree is called.
-        let (entries, unsupported) = unsafe { parse_dacl(p_dacl) };
-        (entries, unsupported, false)
+        unsafe { std::slice::from_raw_parts(p_sd as *const u8, sd_len) }.to_vec()
     };
+    let sd_hash = fnv1a_64(&sd_bytes);
 
-    // Inheritance protection: SE_DACL_PROTECTED in the Security Descriptor control field.
-    let inheritance_disabled = if p_sd.is_null() {
-        false
-    } else {
-        let mut control: u16 = 0;
-        let mut revision: u32 = 0;
-        // SAFETY: p_sd is a valid security descriptor until LocalFree is called.
-        let ok = unsafe { GetSecurityDescriptorControl(p_sd, &mut control, &mut revision) };
-        ok != FALSE && (control & SE_DACL_PROTECTED != 0)
+    // Validate before reuse: a hash hit is only trusted when the raw bytes
+    // are identical. Compute the decision first so the immutable cache
+    // borrow ends before the (mutable) insert on a miss.
+    let hit: Option<ParsedSecurity> = match cache.get(&sd_hash) {
+        Some(cached) if cached.sd_bytes == sd_bytes => Some(cached.clone()),
+        _ => None,
+    };
+    let parsed = match hit {
+        Some(p) => p,
+        None => {
+            // Miss or (rare) collision: parse fresh.
+            // SAFETY: psid_owner, p_dacl and p_sd are valid until LocalFree below.
+            let p = unsafe { parse_security(psid_owner, p_dacl, p_sd, sd_bytes) };
+            // `or_insert_with` keeps an existing entry on a collision rather
+            // than evicting the descriptor that legitimately owns the slot.
+            cache.entry(sd_hash).or_insert_with(|| p.clone());
+            p
+        }
     };
 
     // SAFETY: p_sd was allocated by GetNamedSecurityInfoW via LocalAlloc and is non-null.
@@ -194,8 +300,8 @@ pub fn read_file_system_object(path: &str) -> Result<FileSystemObject, CoreError
         path,
         is_directory,
         is_reparse_point,
-        aces = dacl.len(),
-        inheritance_disabled,
+        aces = parsed.dacl.len(),
+        inheritance_disabled = parsed.inheritance_disabled,
         "FSO read successfully"
     );
     // Store the FSO path without the long-path prefix so reports/CSV/HTML
@@ -205,12 +311,13 @@ pub fn read_file_system_object(path: &str) -> Result<FileSystemObject, CoreError
     Ok(FileSystemObject {
         path: NormalizedPath(display_path),
         is_directory,
-        owner_sid,
-        dacl,
-        inheritance_disabled,
+        owner_sid: parsed.owner_sid,
+        dacl: parsed.dacl,
+        inheritance_disabled: parsed.inheritance_disabled,
         is_reparse_point,
-        unsupported_aces,
-        null_dacl,
+        unsupported_aces: parsed.unsupported_aces,
+        null_dacl: parsed.null_dacl,
+        sd_hash: Some(sd_hash),
     })
 }
 
@@ -466,5 +573,51 @@ mod tests {
             }
             _ => panic!("expected ParseAceOutcome::Unsupported for type 2"),
         }
+    }
+
+    // --- Security-descriptor dedup (engine review 2026-06-12 finding 2) ---
+
+    #[test]
+    fn fnv1a_64_is_deterministic_and_distinguishes() {
+        assert_eq!(fnv1a_64(b"abc"), fnv1a_64(b"abc"), "same bytes → same hash");
+        assert_ne!(
+            fnv1a_64(b"abc"),
+            fnv1a_64(b"abd"),
+            "different bytes → different hash (FNV-1a)"
+        );
+        assert_eq!(
+            fnv1a_64(b""),
+            0xcbf2_9ce4_8422_2325,
+            "FNV-1a empty = offset basis"
+        );
+    }
+
+    #[test]
+    fn read_sets_sd_hash() {
+        let fso = read_file_system_object("C:\\Windows").unwrap();
+        assert!(
+            fso.sd_hash.is_some(),
+            "a read object must carry its SD hash"
+        );
+    }
+
+    #[test]
+    fn sd_cache_reuses_identical_descriptor() {
+        // Reading the same path twice through one cache must key on a single
+        // descriptor and reuse it — the cache holds exactly one entry and the
+        // two reads report the same hash.
+        let mut cache = SdCache::new();
+        let a = read_file_system_object_cached("C:\\Windows", &mut cache).unwrap();
+        let b = read_file_system_object_cached("C:\\Windows", &mut cache).unwrap();
+        assert_eq!(
+            cache.len(),
+            1,
+            "identical descriptor must occupy one cache slot"
+        );
+        assert_eq!(
+            a.sd_hash, b.sd_hash,
+            "identical descriptor → identical hash"
+        );
+        assert_eq!(a.dacl.len(), b.dacl.len(), "reused parse must match");
     }
 }

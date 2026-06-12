@@ -168,6 +168,7 @@ fn stars_effective_mask(fixture: &[FixtureAce], sid_str: &str) -> u32 {
         is_reparse_point: false,
         unsupported_aces: vec![],
         null_dacl: false,
+        sd_hash: None,
     };
 
     let identity = Identity {

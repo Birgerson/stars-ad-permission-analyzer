@@ -1235,6 +1235,16 @@ Consumers:
 
 Unit tests inside the module verify on crate level: NTFS-only trustees, NULL DACL is rendered as a typed Allow-row (not a Diagnostic — see `null_dacl_yields_typed_diagnostic_not_synthetic_ace`), share overlay appended, and share-read-failure surfaces as `PathTrusteeEntry::Diagnostic` with the typed `code` field. Platform-independent — the SID-to-name resolution is `cfg(windows)`-only, on CI Linux `display_name` fields just stay `None`.
 
+### 12.5 Large-environment behaviour: transactional persistence and SD deduplication
+
+Large file servers are the design default, not the exception. Two mechanisms keep a scan of thousands of paths fast and storage-efficient (engine review 2026-06-12, findings 1 and 2).
+
+**Transactional scan persistence.** A completed scan run — the `scan_runs` row plus every `effective_permissions` row and every `scan_errors` row — is written in a **single transaction** via `ScanStore::persist_scan_atomic` (`BEGIN IMMEDIATE` … `COMMIT`, with `ROLLBACK` on any error). The earlier per-row inserts each ran in their own implicit transaction — one SQLite commit and fsync per path, the dominant cost of persisting a 5000-path scan — and a failed row was only warn-logged, so a partial scan could be stored while the run row still looked complete. The atomic write is all-or-nothing: the history is never silently partial.
+
+**Security-descriptor deduplication, validated before reuse.** On a directory tree almost every object inherits the same DACL from a shared parent. The scanner therefore keeps a per-run cache (`fs_scanner::acl::SdCache`, keyed by a stable 64-bit FNV-1a hash of the raw security-descriptor bytes) so each *distinct* descriptor is parsed — ACEs walked, SIDs stringified — exactly once instead of once per object. The hash is also stored on the `FileSystemObject` (`sd_hash`) so the persistence layer can deduplicate identical descriptor blobs.
+
+Because correctness ranks above speed, **a cache hit is validated before it is reused**: the cache stores the raw descriptor bytes alongside the parsed result, and a hash match is only trusted after a full byte-for-byte comparison confirms the descriptors are truly identical. A (vanishingly rare) hash collision therefore degrades to a fresh parse — it can **never** assign a wrong DACL to a path. The reused parse is, by construction, bit-for-bit what a fresh parse would have produced, so deduplication changes performance and storage only, never the computed effective rights.
+
 ---
 
 ## 13. Validation at system boundaries
