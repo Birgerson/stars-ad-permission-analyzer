@@ -88,9 +88,19 @@ unsafe fn sid_ptr_to_string(sid: *const core::ffi::c_void) -> Result<String, Cor
 /// so a hash hit is confirmed by a full byte comparison before reuse:
 /// correctness before speed, a collision degrades to a fresh parse rather
 /// than a wrong DACL.
-#[derive(Clone)]
+///
+/// The fields that flow into a `FileSystemObject` live in the inner
+/// [`ParsedFields`]; on a cache hit only those are cloned — the raw
+/// validation bytes stay in the cache and are never copied per object
+/// (self-review follow-up to finding 2).
 pub struct ParsedSecurity {
     sd_bytes: Vec<u8>,
+    fields: ParsedFields,
+}
+
+/// The parse outcome that each `FileSystemObject` needs an owned copy of.
+#[derive(Clone)]
+struct ParsedFields {
     owner_sid: Option<Sid>,
     dacl: Vec<AceEntry>,
     unsupported_aces: Vec<UnsupportedAce>,
@@ -158,11 +168,13 @@ unsafe fn parse_security(
 
     ParsedSecurity {
         sd_bytes,
-        owner_sid,
-        dacl,
-        unsupported_aces,
-        null_dacl,
-        inheritance_disabled,
+        fields: ParsedFields {
+            owner_sid,
+            dacl,
+            unsupported_aces,
+            null_dacl,
+            inheritance_disabled,
+        },
     }
 }
 
@@ -272,22 +284,25 @@ pub fn read_file_system_object_cached(
     let sd_hash = fnv1a_64(&sd_bytes);
 
     // Validate before reuse: a hash hit is only trusted when the raw bytes
-    // are identical. Compute the decision first so the immutable cache
-    // borrow ends before the (mutable) insert on a miss.
-    let hit: Option<ParsedSecurity> = match cache.get(&sd_hash) {
-        Some(cached) if cached.sd_bytes == sd_bytes => Some(cached.clone()),
+    // are identical. On a hit only the parsed fields are cloned — the raw
+    // validation bytes stay in the cache and are never copied per object.
+    // The decision is computed first so the immutable cache borrow ends
+    // before the (mutable) insert on a miss.
+    let hit: Option<ParsedFields> = match cache.get(&sd_hash) {
+        Some(cached) if cached.sd_bytes == sd_bytes => Some(cached.fields.clone()),
         _ => None,
     };
     let parsed = match hit {
-        Some(p) => p,
+        Some(fields) => fields,
         None => {
             // Miss or (rare) collision: parse fresh.
             // SAFETY: psid_owner, p_dacl and p_sd are valid until LocalFree below.
             let p = unsafe { parse_security(psid_owner, p_dacl, p_sd, sd_bytes) };
+            let fields = p.fields.clone();
             // `or_insert_with` keeps an existing entry on a collision rather
             // than evicting the descriptor that legitimately owns the slot.
-            cache.entry(sd_hash).or_insert_with(|| p.clone());
-            p
+            cache.entry(sd_hash).or_insert(p);
+            fields
         }
     };
 

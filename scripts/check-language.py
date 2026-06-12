@@ -168,6 +168,7 @@ DE_WORDS = [
     "Volle", "Eindeutigkeitssuche", "Vorpruefung", "umgangen",
     "ermittelt", "ermittelbar", "erweitert", "vorhanden",
     "zugehoerige", "zugehoerigen", "benoetigt", "benoetigten",
+    "braucht", "unbegrenzt", "Rekursionstiefe", "Maximale",
 ]
 
 DE_WORDS_RE = re.compile(

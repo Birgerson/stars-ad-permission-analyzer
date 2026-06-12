@@ -517,8 +517,8 @@ struct ScanSummary {
     /// formatted `TrusteeRow` data inside each `ScanRow`.
     path_trustees: Vec<adpa_core::model::PathTrustees>,
     /// Structured walk, eval and validation errors. Written to the scan
-    /// history via `insert_error` in `persist_scan` so that GUI scans get
-    /// the same audit trail as CLI scans.
+    /// history atomically by `persist_scan` (one transaction per run) so
+    /// that GUI scans get the same audit trail as CLI scans.
     errors: Vec<ScanError>,
     total: usize,
     /// true if the scan was cancelled by the user.
@@ -1099,9 +1099,10 @@ async fn handle_search(
 ///
 ///
 /// Structured walk/eval errors from `errors` are written to `scan_errors`
-/// via `store.insert_error` — giving GUI scans the same audit trail as
-/// CLI scans (Finding 6). When `cancelled`, an additional pathless
-/// diagnostic note is appended.
+/// as part of one atomic transaction (`persist_scan_atomic`) — giving GUI
+/// scans the same audit trail as CLI scans. When `cancelled`, an
+/// additional pathless diagnostic note is appended so the partial state
+/// is explicit.
 fn persist_scan(
     db: &Database,
     target: &str,

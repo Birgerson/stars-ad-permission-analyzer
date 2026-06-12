@@ -2,10 +2,6 @@
 // Copyright (c) 2026 Birger Labinsch
 
 //! Recursive directory walker with error tolerance.
-//! Recursive directory walker with error tolerance.
-//!
-//! (`C:\Windows\SYSVOL\sysvol\<domain>` → `C:\Windows\SYSVOL\domain`)
-//! Junctions braucht.
 //!
 //! Reparse points (symlinks, junctions) are followed by default with
 //! loop detection via the canonicalized target. Whenever a cycle is
@@ -26,8 +22,7 @@ use crate::cancel::CancellationToken;
 
 /// Configuration for the walker.
 pub struct WalkConfig {
-    /// Maximale Rekursionstiefe. `None` = unbegrenzt. / Maximum recursion depth. `None` = unlimited.
-    /// Depth 0 = root only, 1 = root + direct children, etc.
+    /// Maximum recursion depth. `None` = unlimited.
     /// Depth 0 = root only, 1 = root + direct children, etc.
     pub max_depth: Option<u32>,
 }
@@ -116,21 +111,32 @@ pub fn walk_tree_streaming(
     if let Some(canon) = canonicalize_path(root) {
         visited_canonical.insert(canon);
     }
-    let mut count = 0usize;
+    // Count objects and errors in a wrapping closure so the recursive walk
+    // needs no extra counter parameters and the completion log keeps both
+    // figures (self-review follow-up: the error count must not be lost).
+    let mut object_count = 0usize;
+    let mut error_count = 0usize;
+    let mut counting_sink = |item: WalkItem| {
+        match &item {
+            WalkItem::Object(_) => object_count += 1,
+            WalkItem::Error(_) => error_count += 1,
+        }
+        on_item(item);
+    };
     walk_dir(
         root,
         0,
         config,
         cancel,
-        &mut on_item,
-        &mut count,
+        &mut counting_sink,
         &mut visited_canonical,
         &mut sd_cache,
     );
     let cancelled = cancel.is_cancelled();
     info!(
         root,
-        paths = count,
+        paths = object_count,
+        errors = error_count,
         cancelled,
         "Directory tree walk complete"
     );
@@ -156,7 +162,6 @@ fn walk_dir(
     config: &WalkConfig,
     cancel: &CancellationToken,
     on_item: &mut dyn FnMut(WalkItem),
-    count: &mut usize,
     visited_canonical: &mut HashSet<String>,
     sd_cache: &mut crate::acl::SdCache,
 ) {
@@ -175,7 +180,6 @@ fn walk_dir(
             let is_dir = fso.is_directory;
             let is_reparse = fso.is_reparse_point;
             debug!(path, is_dir, is_reparse, depth = current_depth, "Read FSO");
-            *count += 1;
             on_item(WalkItem::Object(fso));
 
             // For a reparse point we try to determine the canonical target.
@@ -257,7 +261,6 @@ fn walk_dir(
                                         config,
                                         cancel,
                                         on_item,
-                                        count,
                                         visited_canonical,
                                         sd_cache,
                                     );
