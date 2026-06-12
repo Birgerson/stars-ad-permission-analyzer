@@ -10,7 +10,69 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.6.1 below for the latest release.)
+(No unreleased changes — see v1.6.2 below for the latest release.)
+
+---
+
+## [1.6.2] — 2026-06-12
+
+**Scaling and polish release.** Closes the three Medium findings of the
+2026-06-12 full-repository review (the large-environment behaviour the
+project is built for) plus four self-review follow-ups. No change to the
+effective-rights calculation.
+
+### Transactional scan persistence (review finding 1)
+
+A completed scan run — the run row, every permission, every error — is
+now written in a **single transaction** (`ScanStore::persist_scan_atomic`,
+`BEGIN IMMEDIATE` … `COMMIT` with `ROLLBACK` on error). Previously each
+permission ran in its own implicit transaction (one commit + fsync per
+path — the dominant cost of a large scan) and a failed row was only
+warn-logged, so a partial scan could be stored looking complete. The
+history is now all-or-nothing; CLI and GUI both use the atomic path.
+
+### Security-descriptor deduplication, validated before reuse (review finding 2)
+
+On a tree where most directories inherit one DACL from a shared parent,
+each distinct descriptor is now parsed **once** instead of once per
+object: a per-scan cache keyed by a stable 64-bit FNV-1a hash of the raw
+descriptor bytes. `FileSystemObject` carries the hash (`sd_hash`) so
+storage can deduplicate too.
+
+Correctness before speed: a cache hit is only trusted after a **full
+byte-for-byte comparison** of the raw descriptor bytes — a hash collision
+degrades to a fresh parse and can never assign a wrong DACL. Dedup
+changes performance and storage only, never computed rights. Documented
+in technical-documentation §12.5.
+
+### Streaming tree walk; parallelization deliberately deferred (review finding 3)
+
+New `walk_tree_streaming` delivers each object/error through a callback
+as it is discovered, so a memory-sensitive consumer never holds the whole
+tree (performance rule 7). `walk_tree` is now a thin buffering wrapper —
+identical traversal, ordering, loop detection. The walk stays
+**sequential** on purpose: parallelizing the order-sensitive
+reparse-loop-detection state is a separate, riskier step. The decision
+and its full justification are recorded in **ADR 0049**.
+
+### Self-review follow-ups
+
+- SD-cache hits no longer clone the raw validation bytes (only the
+  parsed fields) — removes pointless per-object allocations.
+- The walk completion log carries the error count again.
+- GUI scan history stores the **real scan duration**: `started_at` is
+  captured before the work begins instead of at persist time (previously
+  every GUI run showed a duration of zero).
+- Doc drift fixed (worker.rs comments now describe the atomic write);
+  two German doc remnants removed and their words added to the
+  language-gate denylist.
+
+### Verification
+
+- `cargo fmt` / `clippy --workspace --all-targets -- -D warnings` /
+  `python scripts/check-language.py`: clean.
+- `cargo test --workspace`: 571 passed, 0 failed, 11 ignored
+  (was 563 at v1.6.1; +8 new regression tests).
 
 ---
 
