@@ -119,6 +119,24 @@ It consists of two programs:
 
 Both programs analyze the same data and use the same permission logic.
 
+### Engineering maturity
+
+Stars is no longer a playground or a mere prototype. The core logic rests
+on a clean, layered architecture, covers a wide range of important Windows
+edge cases, is backed by an extensive test suite, and passes
+`cargo clippy --workspace --all-targets -- -D warnings` (warnings treated
+as errors).
+
+The evaluation engine is particularly solid in the areas that decide
+whether an effective-rights result is actually correct:
+
+- **DACL ordering** — ACEs are evaluated in stored order, matching Windows `AccessCheck`; the first decision per right-bit wins.
+- **Deny / Allow handling** — explicit and inherited Deny entries are honoured, never silently dropped.
+- **Generic rights** — `GENERIC_*` masks are expanded into specific file rights before evaluation.
+- **NULL DACL vs. empty DACL** — "no access control" (full access for everyone) and "empty DACL" (no access for anyone) are distinguished correctly.
+- **Share / NTFS combination** — the effective permission over SMB is the more restrictive of the two (`NTFS ∩ Share`).
+- **Diagnostic markers for incomplete results** — wherever Stars cannot guarantee a complete picture (unreadable share DACL, unsupported ACE types, SAM-fallback group resolution, cross-forest / Global-Catalog gaps, …) the finding is explicitly flagged instead of looking deceptively clean.
+
 ### What does Stars analyze?
 
 #### NTFS permissions
