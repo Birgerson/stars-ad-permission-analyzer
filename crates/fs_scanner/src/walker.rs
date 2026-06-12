@@ -310,24 +310,51 @@ mod tests {
     /// The streaming walk must produce exactly the same objects (in the
     /// same order) and the same errors as the buffering wrapper — the
     /// callback only changes the sink, not the traversal (finding 3).
+    ///
+    /// Walks a controlled temp tree rather than a live system directory:
+    /// `C:\Windows` mutates between two independent walks (logs / temp
+    /// files), which would make a "same objects in the same order"
+    /// assertion flaky on CI.
     #[test]
     fn streaming_matches_buffered() {
-        let cfg = depth(2);
-        let buffered = walk("C:\\Windows", &cfg);
+        use std::path::PathBuf;
+        let stamp = format!(
+            "{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let root: PathBuf = std::env::temp_dir().join(format!("adpa-stream-{stamp}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub_a").join("nested")).expect("create sub_a/nested");
+        std::fs::create_dir_all(root.join("sub_b")).expect("create sub_b");
+        std::fs::write(root.join("sub_a").join("file.txt"), b"x").expect("write file");
+        let root_str = root.to_string_lossy().into_owned();
+
+        let cfg = unlimited();
+        let buffered = walk(&root_str, &cfg);
 
         let mut streamed_objects = Vec::new();
         let mut streamed_errors = Vec::new();
-        let cancelled = walk_tree_streaming(
-            "C:\\Windows",
-            &cfg,
-            &CancellationToken::new(),
-            |item| match item {
-                WalkItem::Object(o) => streamed_objects.push(o.path.0),
-                WalkItem::Error(e) => streamed_errors.push(e.path),
-            },
-        );
+        let cancelled =
+            walk_tree_streaming(
+                &root_str,
+                &cfg,
+                &CancellationToken::new(),
+                |item| match item {
+                    WalkItem::Object(o) => streamed_objects.push(o.path.0),
+                    WalkItem::Error(e) => streamed_errors.push(e.path),
+                },
+            );
+
+        let _ = std::fs::remove_dir_all(&root);
 
         assert!(!cancelled);
+        assert!(
+            buffered.objects.len() >= 4,
+            "fixture tree must yield at least root + sub_a + nested + sub_b"
+        );
         let buffered_paths: Vec<String> =
             buffered.objects.iter().map(|o| o.path.0.clone()).collect();
         assert_eq!(
