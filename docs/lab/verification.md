@@ -1043,3 +1043,119 @@ block (mm0001 resolved as User with the full membership chain).
 `LDAPServerIntegrity` restored to `1` (the GPO value), the self-signed
 cert removed from the `My`, `Root`, and NTDS stores, `gpupdate /force`
 applied, and NTDS restarted. No persistent change to the DC.
+
+---
+
+## Block K — LDAPS via AD CS, then live verification of FSP (L1) and GC (L2) (2026-06-12)
+
+Block J established that the Server 2025 platform blocks plain LDAP and a
+bare self-signed LDAPS cert. To verify the v1.6 LDAP-only features live,
+Block K set up a real certificate chain via **AD CS** and then exercised
+both features end-to-end.
+
+### K.1 — AD CS Enterprise Root CA on tier0
+
+`Install-WindowsFeature ADCS-Cert-Authority` + `Install-AdcsCertificationAuthority
+-CAType EnterpriseRootCA -CACommonName "Stars-Lab-Root-CA"`. The DC then
+auto-enrolled a Domain-Controller-Authentication certificate
+(`CN=tier0.tier0.lab`, issued by `Stars-Lab-Root-CA`); `certutil -pulse`
++ NTDS restart. A server-local `SslStream` test to `tier0.lab:636`
+completed the TLS handshake — LDAPS now served by a trusted chain.
+
+### K.2 — Stars baseline over LDAPS (port 636)
+
+`analyze --user T0LAB\mm0001 --server tier0.tier0.lab --base-dn DC=tier0,DC=lab
+--bind-dn … ` (no `--insecure-ldap`). The TLS bind succeeded and — unlike
+the SAM/LSA path — full **recursive LDAP** group resolution appeared:
+
+```text
+2. Member of Domänen-Benutzer (…-513) [direct, source: PrimaryGroup]
+3. Member of Dept-Sales (…-1104) [via mm0001 → Sales-Alpha → Dept-Sales, source: DomainGroup]
+4. Member of Sales-Alpha (…-1105) [direct, source: DomainGroup]
+5. Member of BUILTIN\Users (…) [via mm0001 → Domänen-Benutzer → BUILTIN\Users, source: LocalGroup]
+NTFS effective: Read & Execute (0x001200AF)
+```
+
+This alone confirms the LDAP code path (previously blocked on this lab)
+runs correctly live.
+
+### K.3 — L2 Global Catalog bind (live)
+
+`analyze --user T0LAB\mm0001 --server tier0.tier0.lab --bind-dn …
+--global-catalog` (**no `--base-dn`** — forest-wide):
+
+```text
+Status : Active · Kind: User
+Diagnostics (structured)
+  [!] Group memberships were resolved through a Global Catalog … can be
+      missing. Treat as incomplete.
+2. Member of Domänen-Benutzer (…-513) [direct, source: PrimaryGroup]
+3. Member of Dept-Sales (…-1104) [via mm0001 → Sales-Alpha → Dept-Sales, source: DomainGroup]
+NTFS effective: Read & Execute (0x001200AF)
+```
+
+**Confirmed live:** the GC bind on port 3269 (LDAPS) works, `--base-dn`
+is optional (empty = all partitions), recursive resolution runs, and the
+`GroupResolutionViaGlobalCatalog` marker fires exactly as designed.
+
+### K.4 — L1 Foreign Security Principal resolution (live)
+
+The Block-H rebuild gave the forests new domain SIDs and removed the old
+cross-forest users, and the trust name-translation quirk (A.5) is still
+present. A fresh fixture was therefore built:
+
+1. tier1: new user `T1LAB\xfsp1` (SID `…-1437207643-…-1425`).
+2. tier0: domain-local group `FSP-ResourceAccess`; the foreign SID added
+   via a `<SID=…>` member bind, which auto-created the FSP object
+   `CN=S-1-5-21-…-1425,CN=ForeignSecurityPrincipals,DC=tier0,DC=lab`
+   (member of the group).
+3. tier0: `C:\ReVerify\FSPGroup` with a `T0LAB\FSP-ResourceAccess:(OI)(CI)M`
+   ACE (inheritance removed).
+
+`analyze --path C:\ReVerify\FSPGroup --user S-1-5-21-…-1425 --server
+tier0.tier0.lab --base-dn DC=tier0,DC=lab --bind-dn …` (LDAPS):
+
+```text
+User   : T1LAB\xfsp1            ← LSA enrichment gave the real cross-forest name
+Status : Active · Kind: User
+2. Member of FSP-ResourceAccess (…-1625) [direct, source: DomainGroup]
+4. Allow ACE [explicit] for FSP-ResourceAccess (…-1625) → Modify (0x001301BF)
+5. NTFS effective: Modify (0x001301BF)
+Diagnostics:
+  [!] Identity is a trust-forest principal found as a Foreign Security
+      Principal … memberships in its own forest are unknown. Treat as incomplete.
+Risk Findings (2)
+  [HIGH]   WRITE_ACCESS  'xfsp1' has Modify access …  [INCOMPLETE]
+  [MEDIUM] DELETE_RIGHT  'xfsp1' can delete this object …  [INCOMPLETE]
+```
+
+**Confirmed live — this is the exact capability L1 adds:** binding against
+the resource domain (tier0), Stars resolved the foreign SID to its **FSP
+object**, enriched the identity via LSA to `T1LAB\xfsp1` (not a raw SID),
+resolved the **home-domain group membership through the FSP**
+(`FSP-ResourceAccess`), credited that group's Modify ACE to the effective
+permission, fired the `IdentityResolvedViaForeignSecurityPrincipal`
+marker, and flagged the derived risk findings `[INCOMPLETE]`. Before the
+v1.6 fix this SID would have resolved as `Unknown` with no marker and the
+FSP→group→ACE chain would have been silently missed — understating the
+trust user's rights.
+
+### K.5 — Result
+
+| Feature | Test suite | Live (this block) | Status |
+|---|---|---|---|
+| LDAPS via a trusted chain (AD CS) | n/a | TLS handshake + bind OK | ✓ |
+| Recursive LDAP group resolution | yes | mm0001 chain via LDAPS | ✓ |
+| L2 — Global Catalog bind (`--global-catalog`) | yes | forest-wide, marker fires | ✓ |
+| L1 — FSP resolution (SID→FSP→home group→ACE) | yes | xfsp1 Modify via FSP, marker, incomplete | ✓ |
+
+### Lab state after Block K
+
+- **AD CS (Enterprise Root CA `Stars-Lab-Root-CA`) remains installed on
+  tier0** — a deliberate improvement: LDAPS is now permanently available
+  for future live LDAP tests. The DC holds a proper
+  Domain-Controller-Authentication certificate.
+- `LDAPServerIntegrity` is at the GPO value `1`; the Block-J self-signed
+  cert was already removed.
+- Test fixtures kept for regression: `T1LAB\xfsp1`, tier0 group
+  `FSP-ResourceAccess` + its FSP member, and `C:\ReVerify\FSPGroup`.
