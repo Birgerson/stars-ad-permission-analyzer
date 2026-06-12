@@ -5,14 +5,108 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Typed SID — prevents accidental mix-ups with arbitrary strings
-/// Typed SID — prevents confusion with arbitrary strings
+use crate::error::CoreError;
+
+/// Typed SID — prevents accidental mix-ups with arbitrary strings.
+///
+/// The inner field stays public for serde round-tripping and for
+/// trusted, already-validated construction (LDAP/LSA results,
+/// well-known SIDs). Production code that turns **untrusted input**
+/// into a `Sid` should go through [`Sid::try_new`], which enforces the
+/// `S-1-…` syntax invariant, rather than the bare tuple constructor
+/// (engine review 2026-06-12 finding 4).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Sid(pub String);
 
-/// Normalized, validated path
+impl Sid {
+    /// Validates the `S-1-<authority>(-<sub-authority>)+` syntax and
+    /// returns a `Sid` on success. This is the single canonical SID
+    /// syntax check in the workspace — `validation::validate_sid`
+    /// delegates to it.
+    ///
+    /// Rules: non-empty (after trim), starts with `S-1-`, at least four
+    /// `-`-separated components (`S-1-X-Y`), and every component after
+    /// the leading `S` is numeric. The value is trimmed.
+    pub fn try_new(input: &str) -> Result<Self, CoreError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Validation("SID must not be empty".into()));
+        }
+        if !trimmed.starts_with("S-1-") {
+            return Err(CoreError::Validation(format!(
+                "Invalid SID format (must start with 'S-1-'): {trimmed}"
+            )));
+        }
+        let parts: Vec<&str> = trimmed.split('-').collect();
+        if parts.len() < 4 {
+            return Err(CoreError::Validation(format!(
+                "SID has too few components (minimum S-1-X-Y): {trimmed}"
+            )));
+        }
+        for part in &parts[1..] {
+            if part.parse::<u64>().is_err() {
+                return Err(CoreError::Validation(format!(
+                    "SID contains non-numeric component '{part}': {trimmed}"
+                )));
+            }
+        }
+        Ok(Sid(trimmed.to_string()))
+    }
+
+    /// Constructs a `Sid` without validation — for trusted sources that
+    /// already produce well-formed SIDs (LDAP `objectSid` conversion,
+    /// LSA lookups, hard-coded well-known SIDs, deserialization). Use
+    /// [`Sid::try_new`] for untrusted input.
+    pub fn new_unchecked(value: impl Into<String>) -> Self {
+        Sid(value.into())
+    }
+
+    /// `true` when `input` is a syntactically valid SID per
+    /// [`Sid::try_new`].
+    pub fn is_valid_syntax(input: &str) -> bool {
+        Self::try_new(input).is_ok()
+    }
+}
+
+/// Normalized, validated path.
+///
+/// As with [`Sid`], the inner field is public for serde and trusted
+/// construction; untrusted input should be funneled through
+/// [`NormalizedPath::try_new`], which rejects the structurally invalid
+/// cases that must never reach filesystem or display logic (engine
+/// review 2026-06-12 finding 4).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NormalizedPath(pub String);
+
+impl NormalizedPath {
+    /// Validates a path string and returns a `NormalizedPath`. The check
+    /// is deliberately conservative — full UNC/local-path validation
+    /// lives in the `validation` crate; this guards the core invariant
+    /// that a `NormalizedPath` is never empty and never carries NUL or
+    /// other control characters (which would corrupt Win32 calls, logs,
+    /// and reports). The value is trimmed of surrounding whitespace.
+    pub fn try_new(input: &str) -> Result<Self, CoreError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Validation("Path must not be empty".into()));
+        }
+        if let Some(bad) = trimmed.chars().find(|c| *c == '\0' || c.is_control()) {
+            return Err(CoreError::Validation(format!(
+                "Path contains an invalid control character (U+{:04X})",
+                bad as u32
+            )));
+        }
+        Ok(NormalizedPath(trimmed.to_string()))
+    }
+
+    /// Constructs a `NormalizedPath` without validation — for values
+    /// already normalized by the scanner or filesystem layer, and for
+    /// deserialization. Use [`NormalizedPath::try_new`] for untrusted
+    /// input.
+    pub fn new_unchecked(value: impl Into<String>) -> Self {
+        NormalizedPath(value.into())
+    }
+}
 
 /// Windows Access Mask (raw u32 value)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -672,6 +766,54 @@ pub enum RiskSeverity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Validated construction (engine review 2026-06-12 finding 4) ---
+
+    #[test]
+    fn sid_try_new_accepts_wellknown_and_user_sids() {
+        assert_eq!(Sid::try_new("S-1-5-18").unwrap().0, "S-1-5-18");
+        assert!(Sid::try_new("S-1-5-21-1-2-3-1001").is_ok());
+        // Trimmed.
+        assert_eq!(Sid::try_new("  S-1-5-18  ").unwrap().0, "S-1-5-18");
+    }
+
+    #[test]
+    fn sid_try_new_rejects_malformed() {
+        assert!(Sid::try_new("").is_err());
+        assert!(Sid::try_new("not-a-sid").is_err());
+        assert!(Sid::try_new("X-1-5-18").is_err());
+        assert!(Sid::try_new("S-1-5").is_err()); // too few components
+        assert!(Sid::try_new("S-1-5-abc").is_err()); // non-numeric component
+    }
+
+    #[test]
+    fn sid_is_valid_syntax_matches_try_new() {
+        assert!(Sid::is_valid_syntax("S-1-5-32-544"));
+        assert!(!Sid::is_valid_syntax("garbage"));
+    }
+
+    #[test]
+    fn sid_new_unchecked_bypasses_validation() {
+        // Deliberately allowed for trusted construction paths.
+        assert_eq!(Sid::new_unchecked("anything").0, "anything");
+    }
+
+    #[test]
+    fn normalized_path_try_new_accepts_and_trims() {
+        assert_eq!(
+            NormalizedPath::try_new(r"  C:\Data\Share  ").unwrap().0,
+            r"C:\Data\Share"
+        );
+        assert!(NormalizedPath::try_new(r"\\server\share\folder").is_ok());
+    }
+
+    #[test]
+    fn normalized_path_try_new_rejects_empty_and_control_chars() {
+        assert!(NormalizedPath::try_new("").is_err());
+        assert!(NormalizedPath::try_new("   ").is_err());
+        assert!(NormalizedPath::try_new("C:\\a\0b").is_err()); // NUL
+        assert!(NormalizedPath::try_new("C:\\a\tb").is_err()); // control char
+    }
 
     #[test]
     fn access_context_default_is_unspecified() {

@@ -7,32 +7,15 @@ use adpa_core::{error::CoreError, model::Sid};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedSid(pub String);
 
+/// Validates a SID string and returns a [`ValidatedSid`].
+///
+/// The syntax check is delegated to [`Sid::try_new`] — the single
+/// canonical SID validator in the workspace (engine review 2026-06-12
+/// finding 4). This wrapper exists so callers that want the distinct
+/// `ValidatedSid` marker type keep working.
 pub fn validate_sid(input: &str) -> Result<ValidatedSid, CoreError> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return Err(CoreError::Validation("SID must not be empty".into()));
-    }
-    if !trimmed.starts_with("S-1-") {
-        return Err(CoreError::Validation(format!(
-            "Invalid SID format (must start with 'S-1-'): {trimmed}"
-        )));
-    }
-    let parts: Vec<&str> = trimmed.split('-').collect();
-    // Minimum: S-1-<authority>-<sub-authority> → 4 components
-    if parts.len() < 4 {
-        return Err(CoreError::Validation(format!(
-            "SID has too few components (minimum S-1-X-Y): {trimmed}"
-        )));
-    }
-    // Every component after the leading 'S' must be numeric
-    for part in &parts[1..] {
-        if part.parse::<u64>().is_err() {
-            return Err(CoreError::Validation(format!(
-                "SID contains non-numeric component '{part}': {trimmed}"
-            )));
-        }
-    }
-    Ok(ValidatedSid(trimmed.to_string()))
+    let sid = Sid::try_new(input)?;
+    Ok(ValidatedSid(sid.0))
 }
 
 impl From<ValidatedSid> for Sid {
