@@ -135,6 +135,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             dacl: &input.file_system_object.dacl,
             match_sids: &match_sids,
             decided_per_ace: &decided_per_ace,
+            unsupported_ntfs_count: input.file_system_object.unsupported_aces.len(),
             ntfs_raw,
             denied_raw,
             owner_implicit_bits,
@@ -165,6 +166,15 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if input.unsupported_share_ace_count > 0 {
             diagnostics.push(PermissionDiagnostic::UnsupportedShareAces {
                 count: input.unsupported_share_ace_count,
+            });
+        }
+        // Engine review 2026-06-12 finding 3: NTFS ACEs the parser could
+        // not interpret are now a first-class structured diagnostic, not
+        // only a bare count — surfaced uniformly in every output.
+        let unsupported_ntfs_count = input.file_system_object.unsupported_aces.len();
+        if unsupported_ntfs_count > 0 {
+            diagnostics.push(PermissionDiagnostic::UnsupportedNtfsAces {
+                count: unsupported_ntfs_count,
             });
         }
         // Finding 6: SAM fallback without LDAP — nested domain groups are
@@ -589,6 +599,10 @@ struct ExplanationInput<'a> {
     /// the stored-order walk (engine review 2026-06-12 finding 1). `0`
     /// means the ACE matched the token but contributed no effective bits.
     decided_per_ace: &'a [u32],
+    /// Number of NTFS ACEs the parser could not interpret. When >0 the
+    /// explanation adds an explicit lower-confidence warning so a reader
+    /// does not take the NTFS-effective mask as final (finding 3).
+    unsupported_ntfs_count: usize,
     ntfs_raw: u32,
     denied_raw: u32,
     /// Bits added by the implicit owner rule (`0` when the rule did not
@@ -615,6 +629,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         dacl,
         match_sids,
         decided_per_ace,
+        unsupported_ntfs_count,
         ntfs_raw,
         denied_raw,
         owner_implicit_bits,
@@ -748,6 +763,16 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         ntfs_rights.display_name(),
         ntfs_raw
     ));
+
+    // 4b. Lower-confidence warning when ACEs could not be evaluated
+    // (engine review 2026-06-12 finding 3). A hidden Deny among the
+    // skipped ACEs could change the result, so the mask above is an
+    // approximation, not a final answer.
+    if unsupported_ntfs_count > 0 {
+        steps.push(format!(
+            "WARNING: {unsupported_ntfs_count} NTFS ACE(s) on this path could not be evaluated (object / callback / conditional / vendor-specific) — the NTFS effective mask above is a lower-confidence approximation and may be too permissive or too restrictive"
+        ));
+    }
 
     // 5. Share side. Every share state gets an explicit step so the audit
     // text explains *why* the effective mask is what it is — the data
@@ -1687,6 +1712,46 @@ mod tests {
         assert_eq!(
             p.unsupported_ace_count, 2,
             "unsupported ACE count must be propagated from the FSO into the result"
+        );
+        // Finding 3: also surfaced as a first-class structured diagnostic.
+        assert!(
+            p.diagnostics
+                .iter()
+                .any(|d| matches!(d, PermissionDiagnostic::UnsupportedNtfsAces { count: 2 })),
+            "unsupported NTFS ACEs must appear as a structured diagnostic; got: {:?}",
+            p.diagnostics
+        );
+        // ... and as an explicit lower-confidence step in the explanation.
+        assert!(
+            p.path_explanation
+                .steps
+                .iter()
+                .any(|s| s.contains("lower-confidence approximation")),
+            "explanation must warn the result is approximate; got: {:?}",
+            p.path_explanation.steps
+        );
+    }
+
+    #[test]
+    fn no_unsupported_aces_yields_no_ntfs_diagnostic_or_warning() {
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            None,
+        );
+        assert!(
+            !p.diagnostics
+                .iter()
+                .any(|d| matches!(d, PermissionDiagnostic::UnsupportedNtfsAces { .. })),
+            "no unsupported NTFS diagnostic when there are no unsupported ACEs"
+        );
+        assert!(
+            !p.path_explanation
+                .steps
+                .iter()
+                .any(|s| s.contains("lower-confidence approximation")),
+            "no approximation warning on a clean DACL"
         );
     }
 

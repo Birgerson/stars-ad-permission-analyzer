@@ -43,6 +43,11 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
             matches!(
                 d,
                 PermissionDiagnostic::UnsupportedShareAces { .. }
+                    // Engine review 2026-06-12 finding 3: unsupported NTFS
+                    // ACEs make the effective mask an approximation. (Also
+                    // covered by unsupported_ace_count above; listed here
+                    // so the two paths cannot drift.)
+                    | PermissionDiagnostic::UnsupportedNtfsAces { .. }
                     | PermissionDiagnostic::DomainGroupRecursionIncomplete
                     | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
                     | PermissionDiagnostic::IdentityLookupFailed { .. }

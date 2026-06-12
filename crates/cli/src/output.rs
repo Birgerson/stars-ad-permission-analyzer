@@ -183,6 +183,17 @@ pub fn print_report(
                     println!("      Share mask is potentially incomplete; risk findings are");
                     println!("      flagged 'incomplete' for this path.");
                 }
+                PermissionDiagnostic::UnsupportedNtfsAces { count } => {
+                    println!(
+                        "  [!] {count} NTFS ACE(s) could not be evaluated (object / callback /"
+                    );
+                    println!("      conditional / vendor-specific). The displayed effective");
+                    println!(
+                        "      permission is a LOWER-CONFIDENCE APPROXIMATION — a hidden Deny"
+                    );
+                    println!("      among them could change the result. Risk findings are flagged");
+                    println!("      'incomplete' for this path.");
+                }
                 PermissionDiagnostic::DomainGroupRecursionIncomplete => {
                     println!("  [!] Group resolution ran through the SAM/LSA fallback (no LDAP).");
                     println!("      NetUserGetGroups returns only direct global groups — nested");

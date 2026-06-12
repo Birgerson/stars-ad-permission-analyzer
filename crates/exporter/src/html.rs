@@ -260,6 +260,17 @@ fn write_permissions_table(
                          potentially incomplete.\">⚠ {count} unsupported share ACE(s)</span>"
                     ));
                 }
+                PermissionDiagnostic::UnsupportedNtfsAces { count } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-medium\" \
+                         title=\"The NTFS DACL contained {count} ACE type(s) \
+                         the parser could not interpret (object/callback/\
+                         conditional/Dynamic Access Control or vendor-specific). \
+                         The displayed effective permission is a lower-confidence \
+                         approximation — a hidden Deny among them could change \
+                         the result.\">⚠ {count} unsupported NTFS ACE(s) — approximate result</span>"
+                    ));
+                }
                 PermissionDiagnostic::DomainGroupRecursionIncomplete => {
                     diag_parts.push(
                         "<span class=\"badge badge-medium\" \

@@ -404,6 +404,21 @@ pub enum PermissionDiagnostic {
     /// the 2026-05-25 review).
     UnsupportedShareAces { count: usize },
 
+    /// The NTFS DACL parser skipped ACE types it cannot interpret
+    /// (object, callback, conditional / Dynamic Access Control, or
+    /// vendor-specific ACEs). A hidden Deny among them could materially
+    /// change the result, so the displayed effective permission is a
+    /// **lower-confidence approximation** — risk findings for this
+    /// permission carry `incomplete = true`. `count` is the number of
+    /// skipped NTFS ACEs.
+    ///
+    /// This is the structured, first-class counterpart to the raw
+    /// `unsupported_ace_count` on `EffectivePermission`, mirroring
+    /// `UnsupportedShareAces` for the NTFS side (engine review
+    /// 2026-06-12 finding 3): the gap is now surfaced uniformly through
+    /// the diagnostics list in every output, not only as a bare count.
+    UnsupportedNtfsAces { count: usize },
+
     ///
     /// Closes ChatGPT code review 2026-06-04 finding 6.
     ///
