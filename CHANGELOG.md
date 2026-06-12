@@ -10,6 +10,17 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+(No unreleased changes — see v1.6.0 below for the latest release.)
+
+---
+
+## [1.6.0] — 2026-06-12
+
+**Cross-forest and multi-domain feature release.** Closes the two
+High-priority gaps from `known-limitations.md` (L1 + L2). Both features
+are unit/integration tested and were additionally **live-verified**
+against the 3-forest lab over LDAPS (lab verification Block K).
+
 ### Global Catalog bind (closes known-limitations L2)
 
 New CLI flag `--global-catalog`: Stars binds against the Global Catalog
