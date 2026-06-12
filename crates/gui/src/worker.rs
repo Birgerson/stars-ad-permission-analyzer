@@ -342,6 +342,7 @@ pub fn spawn_worker(
                     smb_server,
                     share_name,
                 } => {
+                    let started_at = Utc::now();
                     let result = rt.block_on(handle_analyze(
                         &path,
                         &sid,
@@ -354,23 +355,29 @@ pub fn spawn_worker(
                     // in the Delta tab (previously only ScanTree wrote to the
                     // DB, which surfaced to end users as "the list does not
                     // show my analysis result").
-                    let (scan_run_id, persistence_error) = match (&result, &db) {
-                        (Ok(perm), Some(d)) => {
-                            match persist_scan(d, &path, std::slice::from_ref(perm), &[], false) {
-                                Ok(id) => (Some(id), None),
-                                Err(e) => (None, Some(e)),
+                    let (scan_run_id, persistence_error) =
+                        match (&result, &db) {
+                            (Ok(perm), Some(d)) => {
+                                match persist_scan(
+                                    d,
+                                    &path,
+                                    std::slice::from_ref(perm),
+                                    &[],
+                                    false,
+                                    started_at,
+                                ) {
+                                    Ok(id) => (Some(id), None),
+                                    Err(e) => (None, Some(e)),
+                                }
                             }
-                        }
-                        (Ok(_), None) => {
-                            (
+                            (Ok(_), None) => (
                                 None,
                                 Some(db_open_error.clone().unwrap_or_else(|| {
                                     "scan database is not available".to_string()
                                 })),
-                            )
-                        }
-                        (Err(_), _) => (None, None),
-                    };
+                            ),
+                            (Err(_), _) => (None, None),
+                        };
                     let _ = evt_tx.send(WorkerEvent::AnalyzeDone {
                         result: Box::new(result),
                         scan_run_id,
@@ -386,6 +393,7 @@ pub fn spawn_worker(
                     share_name,
                     ldap,
                 } => {
+                    let started_at = Utc::now();
                     let scan_result = rt.block_on(handle_scan(
                         &root,
                         &sid,
@@ -411,6 +419,7 @@ pub fn spawn_worker(
                             &scan_result.permissions,
                             &scan_result.errors,
                             scan_result.cancelled,
+                            started_at,
                         ),
                         None => Err(db_open_error
                             .clone()
@@ -1109,13 +1118,16 @@ fn persist_scan(
     permissions: &[EffectivePermission],
     errors: &[ScanError],
     cancelled: bool,
+    started_at: chrono::DateTime<Utc>,
 ) -> Result<String, String> {
     let run_id = Uuid::new_v4();
-    let now = Utc::now();
+    // `started_at` is captured by the caller before the work begins, so
+    // the stored run carries the real scan duration instead of
+    // started == finished (self-review follow-up, point 4).
     let run = ScanRun {
         id: run_id,
-        started_at: now,
-        finished_at: Some(now),
+        started_at,
+        finished_at: Some(Utc::now()),
         target: target.to_string(),
         errors: vec![],
     };
@@ -1733,7 +1745,7 @@ mod tests {
             },
         ];
 
-        let run_id_str = persist_scan(&db, r"C:\Root", &[], &errors, false)
+        let run_id_str = persist_scan(&db, r"C:\Root", &[], &errors, false, Utc::now())
             .expect("persist_scan should succeed");
         let run_id = Uuid::parse_str(&run_id_str).expect("valid UUID");
 
@@ -1765,8 +1777,8 @@ mod tests {
             message: "Access denied".to_owned(),
         }];
 
-        let run_id_str =
-            persist_scan(&db, r"C:\Root", &[], &errors, true).expect("persist_scan should succeed");
+        let run_id_str = persist_scan(&db, r"C:\Root", &[], &errors, true, Utc::now())
+            .expect("persist_scan should succeed");
         let run_id = Uuid::parse_str(&run_id_str).unwrap();
 
         let persisted = db.scan_store().list_errors_for(&run_id).unwrap();
@@ -1779,12 +1791,35 @@ mod tests {
     #[test]
     fn persist_scan_with_no_errors_yields_empty_scan_errors_when_not_cancelled() {
         let db = Database::open_in_memory().expect("in-memory DB");
-        let run_id_str = persist_scan(&db, r"C:\Root", &[], &[], false).unwrap();
+        let run_id_str = persist_scan(&db, r"C:\Root", &[], &[], false, Utc::now()).unwrap();
         let run_id = Uuid::parse_str(&run_id_str).unwrap();
         let persisted = db.scan_store().list_errors_for(&run_id).unwrap();
         assert!(
             persisted.is_empty(),
             "without walk errors and without cancellation there must be no entries in scan_errors"
+        );
+    }
+
+    /// Self-review follow-up point 4: the stored run must carry the real
+    /// scan duration — started_at is the caller-captured begin time, not
+    /// the persist time, so started_at < finished_at.
+    #[test]
+    fn persist_scan_stores_real_started_at() {
+        let db = Database::open_in_memory().expect("in-memory DB");
+        let begun = Utc::now() - chrono::Duration::seconds(42);
+        let run_id_str = persist_scan(&db, r"C:\Root", &[], &[], false, begun).unwrap();
+        let run_id = Uuid::parse_str(&run_id_str).unwrap();
+        let runs = db.scan_store().list_scan_runs().unwrap();
+        let run = runs.iter().find(|r| r.id == run_id).expect("run stored");
+        assert_eq!(
+            run.started_at.timestamp(),
+            begun.timestamp(),
+            "started_at must be the caller-captured begin time"
+        );
+        let finished = run.finished_at.expect("finished_at must be set");
+        assert!(
+            finished > run.started_at,
+            "finished_at must lie after started_at (real duration, not zero)"
         );
     }
 
