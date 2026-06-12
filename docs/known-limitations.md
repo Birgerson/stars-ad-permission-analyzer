@@ -307,6 +307,22 @@ specific trust configurations) are not covered. Structurally correct
 Its own task; probably initially manual, later as `#[ignore]` test
 with documented prerequisites.
 
+> **Partial progress (2026-06-12):** a Windows authorization
+> **conformance harness** now exists at
+> `crates/permission_engine/tests/windows_conformance.rs` (engine review
+> 2026-06-12 finding 2). It builds a real in-memory Windows ACL for the
+> current user, reads the OS-authoritative effective rights via
+> `GetEffectiveRightsFromAclW`, runs the same ACE sequence through the
+> Stars engine, and asserts the two effective masks agree bit-for-bit.
+> Covered fixtures: Allow Read & Execute, Allow Full Control, Deny Write
+> over Allow Full (canonical order), two accumulating Allows. The tests
+> are `#[ignore]` (require a Windows session) — run with
+> `cargo test -p permission_engine --test windows_conformance -- --ignored`.
+> This proves the core stored-order algorithm against Windows for a
+> single trustee. The remaining open work is full **token-based**,
+> multi-group conformance against `AccessCheck` / `AuthzAccessCheck`
+> (the harness documents this as the next extension).
+
 ---
 
 ## L7 — Token privileges (`SeBackupPrivilege`, …) are not modelled

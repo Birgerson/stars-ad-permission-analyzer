@@ -6,7 +6,7 @@
 pub mod engine;
 pub mod mask;
 
-pub use engine::{build_token_sids, build_token_sids_with_context};
+pub use engine::{build_token_sids, build_token_sids_with_context, DefaultPermissionEngine};
 // `build_token_sids_with_local` has been deprecated since ADR 0019 but is kept
 // as a convenience re-export. External callers will see the deprecation
 // warning in the normal build output.

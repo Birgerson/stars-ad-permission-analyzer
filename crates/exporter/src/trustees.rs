@@ -48,7 +48,7 @@ pub fn read_share_overlay(server: &str, share_name: &str) -> ShareTrusteeOverlay
                     trustees.push(PathTrusteeEntry::Ace(PathTrustee {
                         sid: p.sid.clone(),
                         display_name: None,
-                        kind: p.kind.clone(),
+                        kind: p.kind,
                         mask: p.mask,
                         inherited: false,
                         inheritance_flags: 0,
@@ -178,7 +178,7 @@ pub fn build_path_trustees_with_share_and_names(
             out.push(PathTrusteeEntry::Ace(PathTrustee {
                 sid: ace.sid.clone(),
                 display_name: None,
-                kind: ace.kind.clone(),
+                kind: ace.kind,
                 mask: ace.mask,
                 inherited: ace.inherited,
                 inheritance_flags: ace.inheritance_flags,

@@ -9,3 +9,9 @@ adpa_core = { path = "../core" }
 thiserror.workspace = true
 serde.workspace = true
 tracing.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+# Used only by the ignored Windows conformance harness
+# (tests/windows_conformance.rs), which compares the engine's effective
+# mask against the OS authorization API GetEffectiveRightsFromAclW.
+windows-sys = { workspace = true }
