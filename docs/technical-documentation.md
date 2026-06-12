@@ -1245,6 +1245,8 @@ Large file servers are the design default, not the exception. Two mechanisms kee
 
 Because correctness ranks above speed, **a cache hit is validated before it is reused**: the cache stores the raw descriptor bytes alongside the parsed result, and a hash match is only trusted after a full byte-for-byte comparison confirms the descriptors are truly identical. A (vanishingly rare) hash collision therefore degrades to a fresh parse — it can **never** assign a wrong DACL to a path. The reused parse is, by construction, bit-for-bit what a fresh parse would have produced, so deduplication changes performance and storage only, never the computed effective rights.
 
+**Streaming tree walk.** `walk_tree_streaming` invokes a callback for each object and error as the walk discovers it, so a memory-sensitive consumer never has to hold the whole tree in memory (performance rule 7). `walk_tree` is now a thin buffering wrapper over it for callers that need the full set (risk analysis over all paths, export, delta). The traversal stays **sequential** — the reparse-point loop detection is order-sensitive shared state, and parallelizing it is a deliberately deferred, separately-tested step (correctness before speed). The decision, its justification, and the deferred parallelization are recorded in **ADR 0049**.
+
 ---
 
 ## 13. Validation at system boundaries

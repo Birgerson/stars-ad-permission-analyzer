@@ -46,6 +46,16 @@ pub struct WalkResult {
     pub cancelled: bool,
 }
 
+/// A single item produced during a streaming walk — either a successfully
+/// read object or a per-path error. Emitted as soon as it is discovered,
+/// so a caller can consume incrementally instead of buffering the whole
+/// tree in memory (engine review 2026-06-12 finding 3, performance
+/// rule 7). See [`walk_tree_streaming`] and ADR 0049.
+pub enum WalkItem {
+    Object(FileSystemObject),
+    Error(WalkError),
+}
+
 /// Reads a directory subtree recursively, collecting FSOs and errors separately.
 ///
 /// - Access-denied errors on individual paths are recorded; the scan continues.
@@ -53,13 +63,47 @@ pub struct WalkResult {
 ///   canonicalized targets. Cycles or unresolvable targets produce a visible
 ///   entry in `errors` — never silent skips.
 pub fn walk_tree(root: &str, config: &WalkConfig, cancel: &CancellationToken) -> WalkResult {
+    // Buffering wrapper over the streaming walk: collect every item into
+    // the classic WalkResult. Callers that must hold the full result set
+    // (risk analysis over all paths, export, delta) use this; callers that
+    // can consume incrementally use walk_tree_streaming directly.
+    let mut objects = Vec::new();
+    let mut errors = Vec::new();
+    let cancelled = walk_tree_streaming(root, config, cancel, |item| match item {
+        WalkItem::Object(o) => objects.push(o),
+        WalkItem::Error(e) => errors.push(e),
+    });
+    WalkResult {
+        objects,
+        errors,
+        cancelled,
+    }
+}
+
+/// Streaming variant of [`walk_tree`]: invokes `on_item` for each object
+/// and error **as it is discovered**, so a memory-sensitive caller never
+/// has to hold the whole tree at once (performance rule 7).
+///
+/// The traversal is identical to [`walk_tree`] — sequential depth-first,
+/// with the same reparse-point loop detection and the same per-scan
+/// security-descriptor cache. Only the sink differs (a callback instead
+/// of a `Vec`), so results and ordering are byte-for-byte the same. The
+/// walk is deliberately kept sequential (correctness before speed —
+/// parallelizing the shared loop-detection state is a separate, riskier
+/// step); see ADR 0049.
+///
+/// Returns `true` if the walk ended early because of cancellation.
+pub fn walk_tree_streaming(
+    root: &str,
+    config: &WalkConfig,
+    cancel: &CancellationToken,
+    mut on_item: impl FnMut(WalkItem),
+) -> bool {
     info!(
         root,
         max_depth = ?config.max_depth,
         "Starting directory tree walk"
     );
-    let mut objects = Vec::new();
-    let mut errors = Vec::new();
     let mut visited_canonical: HashSet<String> = HashSet::new();
     // One security-descriptor cache for the whole tree so an inherited
     // DACL shared by many directories is parsed once, not once per object
@@ -72,29 +116,25 @@ pub fn walk_tree(root: &str, config: &WalkConfig, cancel: &CancellationToken) ->
     if let Some(canon) = canonicalize_path(root) {
         visited_canonical.insert(canon);
     }
+    let mut count = 0usize;
     walk_dir(
         root,
         0,
         config,
         cancel,
-        &mut objects,
-        &mut errors,
+        &mut on_item,
+        &mut count,
         &mut visited_canonical,
         &mut sd_cache,
     );
     let cancelled = cancel.is_cancelled();
     info!(
         root,
-        paths = objects.len(),
-        errors = errors.len(),
+        paths = count,
         cancelled,
         "Directory tree walk complete"
     );
-    WalkResult {
-        objects,
-        errors,
-        cancelled,
-    }
+    cancelled
 }
 
 ///
@@ -115,8 +155,8 @@ fn walk_dir(
     current_depth: u32,
     config: &WalkConfig,
     cancel: &CancellationToken,
-    objects: &mut Vec<FileSystemObject>,
-    errors: &mut Vec<WalkError>,
+    on_item: &mut dyn FnMut(WalkItem),
+    count: &mut usize,
     visited_canonical: &mut HashSet<String>,
     sd_cache: &mut crate::acl::SdCache,
 ) {
@@ -126,16 +166,17 @@ fn walk_dir(
     match read_file_system_object_cached(path, sd_cache) {
         Err(e) => {
             warn!(path, error = %e, "Cannot read security descriptor");
-            errors.push(WalkError {
+            on_item(WalkItem::Error(WalkError {
                 path: path.to_owned(),
                 error: e,
-            });
+            }));
         }
         Ok(fso) => {
             let is_dir = fso.is_directory;
             let is_reparse = fso.is_reparse_point;
             debug!(path, is_dir, is_reparse, depth = current_depth, "Read FSO");
-            objects.push(fso);
+            *count += 1;
+            on_item(WalkItem::Object(fso));
 
             // For a reparse point we try to determine the canonical target.
             // If it is already part of the current walk, descending further
@@ -145,13 +186,13 @@ fn walk_dir(
                 match canonicalize_path(path) {
                     None => {
                         warn!(path, "Reparse point target could not be resolved");
-                        errors.push(WalkError {
+                        on_item(WalkItem::Error(WalkError {
                             path: path.to_owned(),
                             error: CoreError::AccessDenied(
                                 "Reparse point target could not be resolved — recursion stopped at this junction/link. The object itself is in the result with its DACL; objects behind the link were not enumerated."
                                     .to_owned(),
                             ),
-                        });
+                        }));
                         return;
                     }
                     Some(target) => {
@@ -161,12 +202,12 @@ fn walk_dir(
                                 target = %target,
                                 "Reparse point target already visited — recursion stopped to avoid loop"
                             );
-                            errors.push(WalkError {
+                            on_item(WalkItem::Error(WalkError {
                                 path: path.to_owned(),
                                 error: CoreError::AccessDenied(format!(
                                     "Reparse point target already visited in this scan — recursion stopped to avoid an infinite loop. Target: {target}. The object itself is in the result with its DACL; objects behind the link were not enumerated again."
                                 )),
-                            });
+                            }));
                             return;
                         }
                         visited_canonical.insert(target);
@@ -176,7 +217,6 @@ fn walk_dir(
 
             let depth_ok = config.max_depth.is_none_or(|max| current_depth < max);
             if is_dir && depth_ok {
-                // doppelt.
                 // Apply the long-path prefix before `read_dir` so that
                 // directories with paths > MAX_PATH can be enumerated
                 // reliably. The `entry.path()` results carry the prefix
@@ -186,12 +226,12 @@ fn walk_dir(
                 match std::fs::read_dir(&api_path) {
                     Err(e) => {
                         warn!(path, error = %e, "Cannot enumerate directory");
-                        errors.push(WalkError {
+                        on_item(WalkItem::Error(WalkError {
                             path: path.to_owned(),
                             error: CoreError::AccessDenied(format!(
                                 "Cannot enumerate directory: {e}"
                             )),
-                        });
+                        }));
                     }
                     Ok(entries) => {
                         for entry_result in entries {
@@ -202,12 +242,12 @@ fn walk_dir(
                             match entry_result {
                                 Err(e) => {
                                     warn!(path, error = %e, "Directory entry error");
-                                    errors.push(WalkError {
+                                    on_item(WalkItem::Error(WalkError {
                                         path: path.to_owned(),
                                         error: CoreError::AccessDenied(format!(
                                             "Directory entry error: {e}"
                                         )),
-                                    });
+                                    }));
                                 }
                                 Ok(entry) => {
                                     let child = entry.path().to_string_lossy().into_owned();
@@ -216,8 +256,8 @@ fn walk_dir(
                                         current_depth + 1,
                                         config,
                                         cancel,
-                                        objects,
-                                        errors,
+                                        on_item,
+                                        count,
                                         visited_canonical,
                                         sd_cache,
                                     );
@@ -233,7 +273,7 @@ fn walk_dir(
 
 #[cfg(test)]
 mod tests {
-    use super::{walk_tree, WalkConfig, WalkResult};
+    use super::{walk_tree, walk_tree_streaming, WalkConfig, WalkItem, WalkResult};
     use crate::cancel::CancellationToken;
 
     fn unlimited() -> WalkConfig {
@@ -262,6 +302,60 @@ mod tests {
         assert_eq!(result.objects.len(), 1);
         assert_eq!(result.objects[0].path.0, "C:\\Windows");
         assert!(result.errors.is_empty());
+    }
+
+    /// The streaming walk must produce exactly the same objects (in the
+    /// same order) and the same errors as the buffering wrapper — the
+    /// callback only changes the sink, not the traversal (finding 3).
+    #[test]
+    fn streaming_matches_buffered() {
+        let cfg = depth(2);
+        let buffered = walk("C:\\Windows", &cfg);
+
+        let mut streamed_objects = Vec::new();
+        let mut streamed_errors = Vec::new();
+        let cancelled = walk_tree_streaming(
+            "C:\\Windows",
+            &cfg,
+            &CancellationToken::new(),
+            |item| match item {
+                WalkItem::Object(o) => streamed_objects.push(o.path.0),
+                WalkItem::Error(e) => streamed_errors.push(e.path),
+            },
+        );
+
+        assert!(!cancelled);
+        let buffered_paths: Vec<String> =
+            buffered.objects.iter().map(|o| o.path.0.clone()).collect();
+        assert_eq!(
+            streamed_objects, buffered_paths,
+            "streaming objects must match the buffered walk exactly, in order"
+        );
+        assert_eq!(
+            streamed_errors.len(),
+            buffered.errors.len(),
+            "streaming must report the same number of errors"
+        );
+    }
+
+    /// The callback is invoked incrementally — the first object arrives
+    /// before the walk has finished collecting the whole tree.
+    #[test]
+    fn streaming_emits_root_first() {
+        let mut first: Option<String> = None;
+        walk_tree_streaming(
+            "C:\\Windows",
+            &depth(1),
+            &CancellationToken::new(),
+            |item| {
+                if first.is_none() {
+                    if let WalkItem::Object(o) = item {
+                        first = Some(o.path.0);
+                    }
+                }
+            },
+        );
+        assert_eq!(first.as_deref(), Some("C:\\Windows"));
     }
 
     #[test]

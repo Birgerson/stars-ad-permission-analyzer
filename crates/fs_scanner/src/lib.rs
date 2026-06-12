@@ -10,4 +10,4 @@ pub mod walker;
 
 pub use cancel::CancellationToken;
 pub use scanner::{read_fso, NtfsScanner};
-pub use walker::{walk_tree, WalkConfig, WalkResult};
+pub use walker::{walk_tree, walk_tree_streaming, WalkConfig, WalkItem, WalkResult};
