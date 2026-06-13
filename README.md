@@ -63,7 +63,7 @@ Stars always reports the **highest** matching level (precedence `F > M > RX > RW
 
 ### Can Stars help you? — 30-second overview
 
-> **Full overview:** [`docs/can-stars-help-you.md`](docs/can-stars-help-you.md) — decision matrix.
+> **Full overview:** [![Decision matrix](https://img.shields.io/badge/Decision_matrix-c2410c?style=flat-square)](docs/can-stars-help-you.md) — when Stars fits and when another tool is better.
 
 **✅ Stars is the right tool when you need to:**
 
@@ -479,12 +479,12 @@ Stars persists its scan history in `%APPDATA%\Stars\stars_data.db` (SQLite, sepa
 
 ### Documentation
 
-- **[User Guide](docs/user-guide.md)** — step-by-step walkthrough of the GUI and CLI, every tab explained, identity input, AD binding, marker reading, FAQ. **Start here when using Stars for the first time.**
-- **[Technical Documentation](docs/technical-documentation.md)** — how Stars works internally: architecture, crate layering, Principal pipeline, permission engine algorithm, diagnostic marker system, threading model. **Start here when reading or contributing code.**
-- **[Features, limits and how to read the results](docs/features-and-limitations.md)** — what Stars reliably covers, what is deliberately out of scope, and how the diagnostic markers (`DomainGroupRecursionIncomplete`, `IdentityNotInConfiguredLdapBase`, …) should be read. **Start here when a finding is unexpected.**
-- **[Known limitations and roadmap (v1.6+)](docs/known-limitations.md)** — structural gaps (FSP, GC bind, SID history, cross-forest) that Stars flags but does not resolve. Roadmap tracking for future releases.
-- **[Audit Criteria and Evaluation Principles](docs/audit-criteria.md)** — a complete write-up of which rules Stars uses to evaluate permissions, which risk rules are implemented, what severities they carry, and which permissions are considered optimal for which role.
-- **[Architecture Decision Records (ADRs)](docs/adr/)** — historical justifications for individual technology and model decisions.
+- [![User Guide](https://img.shields.io/badge/User_Guide-c2410c?style=flat-square)](docs/user-guide.md) — step-by-step walkthrough of the GUI and CLI, every tab explained, identity input, AD binding, marker reading, FAQ. **Start here when using Stars for the first time.**
+- [![Technical Documentation](https://img.shields.io/badge/Technical_Docs-c2410c?style=flat-square)](docs/technical-documentation.md) — how Stars works internally: architecture, crate layering, Principal pipeline, permission engine algorithm, diagnostic marker system, threading model. **Start here when reading or contributing code.**
+- [![Features and limits](https://img.shields.io/badge/Features_and_limits-c2410c?style=flat-square)](docs/features-and-limitations.md) — what Stars reliably covers, what is deliberately out of scope, and how the diagnostic markers (`DomainGroupRecursionIncomplete`, `IdentityNotInConfiguredLdapBase`, …) should be read. **Start here when a finding is unexpected.**
+- [![Known limitations](https://img.shields.io/badge/Known_limitations-c2410c?style=flat-square)](docs/known-limitations.md) — structural gaps (FSP, GC bind, SID history, cross-forest) that Stars flags but does not resolve. Roadmap tracking for future releases.
+- [![Audit Criteria](https://img.shields.io/badge/Audit_Criteria-c2410c?style=flat-square)](docs/audit-criteria.md) — a complete write-up of which rules Stars uses to evaluate permissions, which risk rules are implemented, what severities they carry, and which permissions are considered optimal for which role.
+- [![ADRs](https://img.shields.io/badge/ADRs-c2410c?style=flat-square)](docs/adr/) — historical justifications for individual technology and model decisions.
 - **[Security Policy](SECURITY.md)** — how to report security vulnerabilities.
 
 ### About the project
