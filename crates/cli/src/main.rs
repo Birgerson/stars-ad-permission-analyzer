@@ -426,8 +426,13 @@ async fn resolve_identity(
         // SAM-only path: still the workhorse for DC-without-LDAP usage.
         #[cfg(windows)]
         {
+            // The `S-1-` prefix only dispatches SID-vs-name; the typed
+            // constructor does the actual syntax validation so a malformed
+            // SID-like string fails here rather than flowing into SAM
+            // resolution (review 2026-06-13 finding 5).
             let sid = if trimmed.starts_with("S-1-") {
-                adpa_core::model::Sid(trimmed.to_owned())
+                adpa_core::model::Sid::try_new(trimmed)
+                    .map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?
             } else {
                 ad_resolver::lookup_sid_for_account(None, trimmed)
                     .map_err(|e| anyhow::anyhow!("LSA name lookup failed: {e}"))?
@@ -473,7 +478,10 @@ async fn resolve_identity(
                      Use --server to resolve sAMAccountNames."
                 ));
             }
-            let sid = adpa_core::model::Sid(trimmed.to_owned());
+            // Typed constructor validates the SID syntax (review
+            // 2026-06-13 finding 5).
+            let sid = adpa_core::model::Sid::try_new(trimmed)
+                .map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?;
             let identity = Identity {
                 sid: sid.clone(),
                 name: Some(trimmed.to_owned()),
