@@ -249,6 +249,12 @@ pub fn print_report(
                     println!("      the GC — global and domain-local memberships of foreign");
                     println!("      domains can be missing. Treat as incomplete.");
                 }
+                PermissionDiagnostic::PersistedEvidenceDecodeFailed { detail } => {
+                    println!("  [!] A persisted (historical) row could not be fully decoded:");
+                    println!("      {detail}.");
+                    println!("      The reconstructed result may be less complete than it was");
+                    println!("      originally stored. Treat as incomplete.");
+                }
             }
         }
     }

@@ -7,7 +7,8 @@ use adpa_core::{
     error::CoreError,
     model::{
         AccessMask, AceEntry, ContributingAce, EffectivePermission, Identity, IdentityKind,
-        NormalizedPath, PermissionPath, ScanError, ScanRun, ShareEvalStatus, Sid,
+        NormalizedPath, PermissionDiagnostic, PermissionPath, ScanError, ScanRun, ShareEvalStatus,
+        Sid,
     },
 };
 use chrono::{DateTime, Utc};
@@ -378,88 +379,185 @@ impl<'a> ScanStore<'a> {
             )
             .map_err(|e| CoreError::Database(format!("prepare get_permissions: {e}")))?;
 
-        let rows = stmt
+        // Extract raw column values in the row closure; decode the JSON
+        // and build the typed result afterwards so a decode failure can
+        // surface as a structured `CoreError` instead of a silent default
+        // (engine review 2026-06-13 finding 3).
+        let raw_rows = stmt
             .query_map(params![scan_run_id.to_string()], |row| {
-                let sid: String = row.get(0)?;
-                let path: String = row.get(1)?;
-                let ntfs: i64 = row.get(2)?;
-                let share: Option<i64> = row.get(3)?;
-                let eff: i64 = row.get(4)?;
-                let expl: String = row.get(5)?;
-                let share_status_str: String = row.get(6)?;
-                let share_error: Option<String> = row.get(7)?;
-                let contributing_json: String = row.get(8)?;
-                let unsupported_ace_count: i64 = row.get(9)?;
-                let matched_aces_json: String = row.get(10)?;
-                let local_group_status_str: String = row.get(11)?;
-                let local_group_error: Option<String> = row.get(12)?;
-                let diagnostics_json: Option<String> = row.get(13)?;
-                // Identity snapshot (v7): single source. No fallback.
-                // identity_kind is NOT NULL DEFAULT 'Unknown', so String not
-                // Option<String>; identity_disabled is NOT NULL DEFAULT 0.
-                let name: Option<String> = row.get(14)?;
-                let domain: Option<String> = row.get(15)?;
-                let kind_str: String = row.get(16)?;
-                let disabled: i32 = row.get(17)?;
-
-                let steps: Vec<String> = serde_json::from_str(&expl).unwrap_or_default();
-                let contributing_sids: Vec<ContributingAce> =
-                    serde_json::from_str(&contributing_json).unwrap_or_default();
-                let matched_aces: Vec<AceEntry> =
-                    serde_json::from_str(&matched_aces_json).unwrap_or_default();
-                // diagnostics is new (follow-up finding 3); older rows
-                // without a column value return NULL → empty list.
-                let diagnostics: Vec<adpa_core::model::PermissionDiagnostic> = diagnostics_json
-                    .as_deref()
-                    .and_then(|s| serde_json::from_str(s).ok())
-                    .unwrap_or_default();
-                let share_status = match share_status_str.as_str() {
-                    "Applied" => ShareEvalStatus::Applied,
-                    "Unrestricted" => ShareEvalStatus::Unrestricted,
-                    "ReadFailed" => ShareEvalStatus::ReadFailed(share_error.unwrap_or_default()),
-                    // Treat unknown/legacy values conservatively as NotApplicable.
-                    _ => ShareEvalStatus::NotApplicable,
-                };
-                let local_group_status = match local_group_status_str.as_str() {
-                    "Applied" => adpa_core::model::LocalGroupEvalStatus::Applied,
-                    "NotAvailable" => adpa_core::model::LocalGroupEvalStatus::NotAvailable(
-                        local_group_error.unwrap_or_default(),
-                    ),
-                    _ => adpa_core::model::LocalGroupEvalStatus::NotQueried,
-                };
-                let kind = kind_from_str(&kind_str);
-
-                Ok(EffectivePermission {
-                    identity: Identity {
-                        sid: Sid(sid),
-                        name,
-                        domain,
-                        kind,
-                        disabled: disabled != 0,
-                        // UPN is not persisted today; it's only relevant for live AD/NetAPI
-                        // calls, not for historical reports.
-                        user_principal_name: None,
-                    },
-                    path: NormalizedPath(path),
-                    ntfs_mask: AccessMask(ntfs as u32),
-                    share_mask: share.map(|s| AccessMask(s as u32)),
-                    effective_mask: AccessMask(eff as u32),
-                    path_explanation: PermissionPath { steps },
-                    share_status,
-                    local_group_status,
-                    contributing_sids,
-                    unsupported_ace_count: unsupported_ace_count.max(0) as usize,
-                    matched_aces,
-                    diagnostics,
+                Ok(RawPermRow {
+                    sid: row.get(0)?,
+                    path: row.get(1)?,
+                    ntfs: row.get(2)?,
+                    share: row.get(3)?,
+                    eff: row.get(4)?,
+                    expl: row.get(5)?,
+                    share_status_str: row.get(6)?,
+                    share_error: row.get(7)?,
+                    contributing_json: row.get(8)?,
+                    unsupported_ace_count: row.get(9)?,
+                    matched_aces_json: row.get(10)?,
+                    local_group_status_str: row.get(11)?,
+                    local_group_error: row.get(12)?,
+                    diagnostics_json: row.get(13)?,
+                    name: row.get(14)?,
+                    domain: row.get(15)?,
+                    kind_str: row.get(16)?,
+                    disabled: row.get(17)?,
                 })
             })
             .map_err(|e| CoreError::Database(format!("query get_permissions: {e}")))?;
 
         let mut result = Vec::new();
-        for row in rows {
-            result.push(row.map_err(|e| CoreError::Database(e.to_string()))?);
+        for raw in raw_rows {
+            let raw = raw.map_err(|e| CoreError::Database(e.to_string()))?;
+            result.push(raw.into_permission()?);
         }
         Ok(result)
+    }
+}
+
+/// Raw column values of one `effective_permissions` row, before JSON
+/// decoding. Kept separate so decode failures become structured errors
+/// rather than silent defaults (engine review 2026-06-13 finding 3).
+struct RawPermRow {
+    sid: String,
+    path: String,
+    ntfs: i64,
+    share: Option<i64>,
+    eff: i64,
+    expl: String,
+    share_status_str: String,
+    share_error: Option<String>,
+    contributing_json: String,
+    unsupported_ace_count: i64,
+    matched_aces_json: String,
+    local_group_status_str: String,
+    local_group_error: Option<String>,
+    diagnostics_json: Option<String>,
+    name: Option<String>,
+    domain: Option<String>,
+    kind_str: String,
+    disabled: i32,
+}
+
+impl RawPermRow {
+    /// Decodes the row into an `EffectivePermission`.
+    ///
+    /// Required evidence fields (explanation, contributing SIDs, matched
+    /// ACEs) that fail to decode are a **hard error** — an audit history
+    /// must not silently reload as cleaner/less complete than it was
+    /// stored. Optional/legacy decode problems (a stored diagnostics list
+    /// that won't parse, an unrecognized status value) are surfaced via a
+    /// `PersistedEvidenceDecodeFailed` marker instead of a silent default.
+    fn into_permission(self) -> Result<EffectivePermission, CoreError> {
+        let RawPermRow {
+            sid,
+            path,
+            ntfs,
+            share,
+            eff,
+            expl,
+            share_status_str,
+            share_error,
+            contributing_json,
+            unsupported_ace_count,
+            matched_aces_json,
+            local_group_status_str,
+            local_group_error,
+            diagnostics_json,
+            name,
+            domain,
+            kind_str,
+            disabled,
+        } = self;
+
+        let decode_err = |field: &str, e: serde_json::Error| {
+            CoreError::Database(format!(
+                "corrupt persisted evidence: field '{field}' for path '{path}' could not be decoded: {e}"
+            ))
+        };
+
+        // Required evidence — a decode failure aborts loudly.
+        let steps: Vec<String> =
+            serde_json::from_str(&expl).map_err(|e| decode_err("explanation", e))?;
+        let contributing_sids: Vec<ContributingAce> = serde_json::from_str(&contributing_json)
+            .map_err(|e| decode_err("contributing_sids", e))?;
+        let matched_aces: Vec<AceEntry> =
+            serde_json::from_str(&matched_aces_json).map_err(|e| decode_err("matched_aces", e))?;
+
+        // Decode failures for optional/legacy fields are surfaced as a
+        // marker rather than silently swallowed.
+        let mut decode_markers: Vec<PermissionDiagnostic> = Vec::new();
+
+        // diagnostics: NULL (legacy row without the column value) → empty,
+        // no marker. Present but unparseable → marker.
+        let mut diagnostics: Vec<PermissionDiagnostic> = match diagnostics_json.as_deref() {
+            None => Vec::new(),
+            Some(s) => match serde_json::from_str(s) {
+                Ok(d) => d,
+                Err(e) => {
+                    decode_markers.push(PermissionDiagnostic::PersistedEvidenceDecodeFailed {
+                        detail: format!("stored diagnostics list could not be decoded: {e}"),
+                    });
+                    Vec::new()
+                }
+            },
+        };
+
+        let share_status = match share_status_str.as_str() {
+            "NotApplicable" => ShareEvalStatus::NotApplicable,
+            "Applied" => ShareEvalStatus::Applied,
+            "Unrestricted" => ShareEvalStatus::Unrestricted,
+            "ReadFailed" => ShareEvalStatus::ReadFailed(share_error.unwrap_or_default()),
+            other => {
+                // Unknown value: surface it, fall back conservatively.
+                decode_markers.push(PermissionDiagnostic::PersistedEvidenceDecodeFailed {
+                    detail: format!("unknown stored share status '{other}'"),
+                });
+                ShareEvalStatus::NotApplicable
+            }
+        };
+        let local_group_status = match local_group_status_str.as_str() {
+            "NotQueried" => adpa_core::model::LocalGroupEvalStatus::NotQueried,
+            "Applied" => adpa_core::model::LocalGroupEvalStatus::Applied,
+            "NotAvailable" => adpa_core::model::LocalGroupEvalStatus::NotAvailable(
+                local_group_error.unwrap_or_default(),
+            ),
+            other => {
+                decode_markers.push(PermissionDiagnostic::PersistedEvidenceDecodeFailed {
+                    detail: format!("unknown stored local-group status '{other}'"),
+                });
+                adpa_core::model::LocalGroupEvalStatus::NotQueried
+            }
+        };
+
+        diagnostics.extend(decode_markers);
+        let kind = kind_from_str(&kind_str);
+
+        Ok(EffectivePermission {
+            identity: Identity {
+                sid: Sid(sid),
+                name,
+                domain,
+                kind,
+                disabled: disabled != 0,
+                // UPN is not persisted today; it's only relevant for live AD/NetAPI
+                // calls, not for historical reports.
+                user_principal_name: None,
+            },
+            path: NormalizedPath(path),
+            ntfs_mask: AccessMask(ntfs as u32),
+            share_mask: share.map(|s| AccessMask(s as u32)),
+            effective_mask: AccessMask(eff as u32),
+            path_explanation: PermissionPath { steps },
+            share_status,
+            local_group_status,
+            contributing_sids,
+            unsupported_ace_count: unsupported_ace_count.max(0) as usize,
+            matched_aces,
+            diagnostics,
+        })
     }
 }
 
@@ -499,7 +597,8 @@ fn kind_from_str(s: &str) -> IdentityKind {
 mod tests {
     use adpa_core::model::{
         AccessMask, AceEntry, AceKind, ContributingAce, EffectivePermission, Identity,
-        IdentityKind, NormalizedPath, PermissionPath, ScanError, ScanRun, ShareEvalStatus, Sid,
+        IdentityKind, NormalizedPath, PermissionDiagnostic, PermissionPath, ScanError, ScanRun,
+        ShareEvalStatus, Sid,
     };
     use chrono::Utc;
     use rusqlite::Connection;
@@ -627,6 +726,99 @@ mod tests {
             store.get_permissions(&run.id).unwrap().len(),
             1,
             "rollback must leave only the first batch's single permission"
+        );
+    }
+
+    // --- Corrupt persisted evidence (engine review 2026-06-13 finding 3) ---
+
+    /// A required evidence field (the explanation) that cannot be decoded
+    /// must fail the read loudly — an audit history must never silently
+    /// reload as cleaner than it was stored.
+    #[test]
+    fn corrupt_required_evidence_field_fails_loudly() {
+        let conn = setup();
+        let store = ScanStore::new(&conn);
+        let run = make_run(r"C:\corrupt");
+        let perm = make_perm("S-1-5-21-1-2-3-1000", r"C:\corrupt\a", 1, None, 1);
+        store.persist_scan_atomic(&run, &[perm], &[]).unwrap();
+
+        // Damage the stored explanation JSON.
+        conn.execute(
+            "UPDATE effective_permissions SET explanation = 'this is not json'",
+            [],
+        )
+        .unwrap();
+
+        let result = store.get_permissions(&run.id);
+        assert!(
+            result.is_err(),
+            "a corrupt required evidence field must abort the read, not default to empty"
+        );
+        let msg = format!("{}", result.err().unwrap());
+        assert!(
+            msg.contains("explanation") && msg.contains("corrupt persisted evidence"),
+            "the error must name the corrupt field; got: {msg}"
+        );
+    }
+
+    /// A corrupt *optional* field (the stored diagnostics list) must not
+    /// abort the read, but must surface a PersistedEvidenceDecodeFailed
+    /// marker instead of silently becoming an empty list.
+    #[test]
+    fn corrupt_optional_diagnostics_yields_marker() {
+        let conn = setup();
+        let store = ScanStore::new(&conn);
+        let run = make_run(r"C:\corrupt");
+        let perm = make_perm("S-1-5-21-1-2-3-1000", r"C:\corrupt\a", 1, None, 1);
+        store.persist_scan_atomic(&run, &[perm], &[]).unwrap();
+
+        conn.execute(
+            "UPDATE effective_permissions SET diagnostics = '{ broken json'",
+            [],
+        )
+        .unwrap();
+
+        let perms = store.get_permissions(&run.id).expect("read must succeed");
+        assert_eq!(perms.len(), 1);
+        assert!(
+            perms[0].diagnostics.iter().any(|d| matches!(
+                d,
+                PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
+            )),
+            "a corrupt optional field must surface a decode-failed marker; got: {:?}",
+            perms[0].diagnostics
+        );
+    }
+
+    /// An unknown stored status value must surface a marker (and fall back
+    /// conservatively) rather than silently looking like a normal state.
+    #[test]
+    fn unknown_stored_share_status_yields_marker() {
+        let conn = setup();
+        let store = ScanStore::new(&conn);
+        let run = make_run(r"C:\corrupt");
+        let perm = make_perm("S-1-5-21-1-2-3-1000", r"C:\corrupt\a", 1, None, 1);
+        store.persist_scan_atomic(&run, &[perm], &[]).unwrap();
+
+        conn.execute(
+            "UPDATE effective_permissions SET share_status = 'BogusValue'",
+            [],
+        )
+        .unwrap();
+
+        let perms = store.get_permissions(&run.id).expect("read must succeed");
+        assert_eq!(perms.len(), 1);
+        assert!(matches!(
+            perms[0].share_status,
+            ShareEvalStatus::NotApplicable
+        ));
+        assert!(
+            perms[0].diagnostics.iter().any(|d| matches!(
+                d,
+                PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
+            )),
+            "an unknown stored status must surface a marker; got: {:?}",
+            perms[0].diagnostics
         );
     }
 

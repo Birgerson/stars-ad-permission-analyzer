@@ -58,6 +58,9 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
                     // Known-limitations L2: GC bind — only universal
                     // group memberships replicate fully.
                     | PermissionDiagnostic::GroupResolutionViaGlobalCatalog
+                    // Engine review 2026-06-13 finding 3: a historical row
+                    // that could not be fully decoded must not look clean.
+                    | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
             )
         })
 }

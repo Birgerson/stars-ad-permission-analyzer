@@ -372,6 +372,16 @@ fn write_permissions_table(
                             .to_string(),
                     );
                 }
+                PermissionDiagnostic::PersistedEvidenceDecodeFailed { detail } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-high\" \
+                         title=\"This historical row could not be fully decoded \
+                         from the database: {}. The reconstructed result may be \
+                         less complete than originally stored — treat as \
+                         incomplete.\">⚠ persisted evidence decode failed</span>",
+                        escape_html(detail)
+                    ));
+                }
             }
         }
         let diagnostics = if diag_parts.is_empty() {

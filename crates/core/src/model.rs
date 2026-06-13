@@ -636,6 +636,20 @@ pub enum PermissionDiagnostic {
     ///
     /// Closes known-limitations entry L2 (v1.6 work package).
     GroupResolutionViaGlobalCatalog,
+
+    /// A persisted scan row could not be decoded faithfully when read
+    /// back from the database: an optional JSON evidence field (e.g. the
+    /// stored diagnostics list) failed to parse, or a stored status value
+    /// was not recognized. Rather than silently substituting an empty
+    /// list or a normal-looking default — which would make damaged
+    /// historical evidence look cleaner and more complete than it is —
+    /// the reconstructed permission carries this marker so reports and
+    /// the risk engine treat it as incomplete. `detail` names what could
+    /// not be decoded. Required evidence fields (the explanation,
+    /// contributing SIDs, matched ACEs) are not defaulted at all — a
+    /// decode failure there is a hard database error. Engine review
+    /// 2026-06-13 (Codex) finding 3.
+    PersistedEvidenceDecodeFailed { detail: String },
 }
 
 /// Explainable permission path
