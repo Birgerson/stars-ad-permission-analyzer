@@ -327,6 +327,30 @@ fn validate_connection_inputs(
     })
 }
 
+/// Resolves the LDAP search base from the `--base-dn` argument and the
+/// `--global-catalog` flag.
+///
+/// - An explicit base DN is used verbatim.
+/// - In Global Catalog mode an absent base DN is allowed and resolves to
+///   an empty string, which searches all forest partitions
+///   (known-limitations L2).
+/// - Otherwise an absent base DN is a hard error: a directory search
+///   against a single DC needs a base.
+///
+/// Extracted as a pure helper so this wiring decision is unit-testable
+/// without an LDAP/LSA round-trip (review 2026-06-13 finding 3).
+fn resolve_search_base(base_dn: Option<String>, global_catalog: bool) -> anyhow::Result<String> {
+    match base_dn {
+        Some(b) => Ok(b),
+        None if global_catalog => Ok(String::new()),
+        None => Err(anyhow::anyhow!(
+            "--base-dn is required when --server is specified \
+             (e.g. DC=corp,DC=local). With --global-catalog it may \
+             be omitted (forest-wide search)."
+        )),
+    }
+}
+
 async fn resolve_identity(
     user: &str,
     server: Option<String>,
@@ -337,17 +361,7 @@ async fn resolve_identity(
     global_catalog: bool,
 ) -> anyhow::Result<ResolvedIdentity> {
     if let Some(server) = server {
-        // In Global Catalog mode an empty base searches all forest
-        // partitions — --base-dn becomes optional (known-limitations L2).
-        let base = match base_dn {
-            Some(b) => b,
-            None if global_catalog => String::new(),
-            None => {
-                return Err(anyhow::anyhow!(
-                    "--base-dn is required when --server is specified                      (e.g. DC=corp,DC=local). With --global-catalog it may                      be omitted (forest-wide search)."
-                ))
-            }
-        };
+        let base = resolve_search_base(base_dn, global_catalog)?;
         let bind = bind_dn.ok_or_else(|| {
             anyhow::anyhow!(
                 "--bind-dn is required when --server is specified \
@@ -1390,9 +1404,47 @@ fn print_scan_summary(
 
 #[cfg(test)]
 mod tests {
-    use super::check_overwrite_policy;
+    use super::{check_overwrite_policy, resolve_search_base};
     use std::path::PathBuf;
     use validation::export_path::{ExportPathStatus, ValidatedExportPath};
+
+    // --- Search-base resolution (review 2026-06-13 finding 3) ---
+    //
+    // The --global-catalog / --base-dn interaction is the kind of CLI
+    // wiring where a regression slips through silently. These pin it.
+
+    #[test]
+    fn search_base_uses_explicit_base_dn_verbatim() {
+        let base = resolve_search_base(Some("DC=corp,DC=local".to_owned()), false)
+            .expect("an explicit base DN must be accepted");
+        assert_eq!(base, "DC=corp,DC=local");
+    }
+
+    #[test]
+    fn search_base_uses_explicit_base_dn_even_in_global_catalog_mode() {
+        // An explicit base wins over the GC forest-wide default.
+        let base = resolve_search_base(Some("DC=corp,DC=local".to_owned()), true)
+            .expect("an explicit base DN must be accepted in GC mode too");
+        assert_eq!(base, "DC=corp,DC=local");
+    }
+
+    #[test]
+    fn search_base_empty_for_global_catalog_without_base_dn() {
+        // GC mode without a base searches all forest partitions (L2).
+        let base =
+            resolve_search_base(None, true).expect("--global-catalog makes --base-dn optional");
+        assert_eq!(base, "");
+    }
+
+    #[test]
+    fn search_base_missing_base_dn_without_global_catalog_is_error() {
+        let err = resolve_search_base(None, false)
+            .expect_err("a single-DC search needs an explicit base DN");
+        assert!(
+            err.to_string().contains("--base-dn is required"),
+            "error should name the missing --base-dn, got: {err}"
+        );
+    }
 
     fn validated() -> ValidatedExportPath {
         ValidatedExportPath(PathBuf::from("C:\\reports\\out.csv"))

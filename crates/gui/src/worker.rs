@@ -2050,4 +2050,65 @@ mod tests {
             "pre-existing file content must remain untouched"
         );
     }
+
+    /// Review 2026-06-13 finding 3: the worker's scan-to-persist hand-off
+    /// must carry the actual audit payload — not just the run row and
+    /// errors (already covered above). This pins that the `permissions`
+    /// slice passed to `persist_scan` reaches storage and round-trips with
+    /// its identity, masks, explanation and diagnostics intact.
+    #[test]
+    fn persist_scan_round_trips_the_permission_payload() {
+        use adpa_core::model::{
+            AccessMask, EffectivePermission, Identity, IdentityKind, LocalGroupEvalStatus,
+            NormalizedPath, PermissionDiagnostic, PermissionPath, ShareEvalStatus, Sid,
+        };
+
+        let perm = EffectivePermission {
+            identity: Identity {
+                sid: Sid("S-1-5-21-9-9-9-1234".to_owned()),
+                name: Some("WorkerUser".to_owned()),
+                domain: Some("CORP".to_owned()),
+                kind: IdentityKind::User,
+                disabled: false,
+                user_principal_name: None,
+            },
+            path: NormalizedPath(r"C:\Root\Sub".to_owned()),
+            ntfs_mask: AccessMask(0x001F01FF),
+            share_mask: None,
+            effective_mask: AccessMask(0x001F01FF),
+            path_explanation: PermissionPath {
+                steps: vec!["User -> Group A -> Allow Full Control".to_owned()],
+            },
+            share_status: ShareEvalStatus::NotApplicable,
+            local_group_status: LocalGroupEvalStatus::NotQueried,
+            contributing_sids: vec![],
+            unsupported_ace_count: 0,
+            matched_aces: vec![],
+            diagnostics: vec![PermissionDiagnostic::OwnerRightsAceApplied],
+        };
+
+        let db = Database::open_in_memory().expect("in-memory DB");
+        let run_id_str = persist_scan(&db, r"C:\Root", &[perm], &[], false, Utc::now())
+            .expect("persist_scan should succeed");
+        let run_id = Uuid::parse_str(&run_id_str).expect("valid UUID");
+
+        let loaded = db
+            .scan_store()
+            .get_permissions(&run_id)
+            .expect("get_permissions");
+        assert_eq!(loaded.len(), 1, "the single permission must be persisted");
+        let p = &loaded[0];
+        assert_eq!(p.path.0, r"C:\Root\Sub");
+        assert_eq!(p.identity.sid.0, "S-1-5-21-9-9-9-1234");
+        assert_eq!(p.effective_mask.0, 0x001F01FF);
+        assert_eq!(p.path_explanation.steps.len(), 1);
+        assert!(
+            matches!(
+                p.diagnostics.as_slice(),
+                [PermissionDiagnostic::OwnerRightsAceApplied]
+            ),
+            "the diagnostic payload must round-trip, got: {:?}",
+            p.diagnostics
+        );
+    }
 }
