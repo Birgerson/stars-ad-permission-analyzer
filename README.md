@@ -11,7 +11,7 @@ For every user, the tool shows the effective access rights that actually apply t
 
 > **Stars is exclusively a read-and-analyze tool. It does not modify any permissions, groups, or AD objects.**
 
-![Stars Analyze tab (v1.6.3) — target path, identity, resolution mode, SMB share fields, and the two action buttons "Analyze" and "Who has access?"](docs/screenshots/stars-analyze-tab.png)
+![Stars Analyze tab (v1.6.4) — target path, identity, resolution mode, SMB share fields, and the two action buttons "Analyze" and "Who has access?"](docs/screenshots/stars-analyze-tab.png)
 
 ### Concrete example in 10 seconds
 
@@ -79,7 +79,7 @@ Get the current Windows installer from the **[Releases page](https://github.com/
 
 System requirements: Windows 10, Windows 11, or Windows Server. No additional runtime needed.
 
-> ⚠️ **Antivirus false positive (every unsigned release, incl. v1.6.3).** Because the installer is **not yet code-signed**, Microsoft Defender — and some other engines — may flag it with a **generic, machine-learning heuristic** such as `Trojan:Win32/Wacatac.C!ml`. The `!ml` suffix means "flagged by an ML model," **not** a match against known malware; `Wacatac` is Defender's catch-all label and is the single most common false positive for new, unsigned, freshly-compiled binaries. It is triggered by the combination of *unsigned + zero reputation + AD/SMB enumeration behaviour* — exactly what a read-only permission auditor legitimately does.
+> ⚠️ **Antivirus false positive (every unsigned release, incl. v1.6.4).** Because the installer is **not yet code-signed**, Microsoft Defender — and some other engines — may flag it with a **generic, machine-learning heuristic** such as `Trojan:Win32/Wacatac.C!ml`. The `!ml` suffix means "flagged by an ML model," **not** a match against known malware; `Wacatac` is Defender's catch-all label and is the single most common false positive for new, unsigned, freshly-compiled binaries. It is triggered by the combination of *unsigned + zero reputation + AD/SMB enumeration behaviour* — exactly what a read-only permission auditor legitimately does.
 >
 > **This is a false positive, and you can prove it yourself:** verify the SHA256 (see below) against the `Stars-vX.Y.Z-Setup.exe.sha256` published next to the installer on the release page. A matching hash means the file is bit-for-bit the build GitHub Actions produced from this public source — by definition nothing could have been injected.
 >
@@ -90,13 +90,13 @@ System requirements: Windows 10, Windows 11, or Windows Server. No additional ru
 So you can confirm your download is bit-for-bit identical to the build produced by GitHub Actions:
 
 ```powershell
-$exe = "Stars-v1.6.3-Setup.exe"  # adapt to your version
+$exe = "Stars-v1.6.4-Setup.exe"  # adapt to your version
 $expected = (Get-Content "$exe.sha256").Split("  ")[0]
 $actual   = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
 if ($actual -eq $expected) { "OK — file matches" } else { "MISMATCH — do NOT use" }
 ```
 
-On WSL / Linux / macOS, `sha256sum -c Stars-v1.6.3-Setup.exe.sha256` works directly.
+On WSL / Linux / macOS, `sha256sum -c Stars-v1.6.4-Setup.exe.sha256` works directly.
 
 > **What the hash file gives you — and what it doesn't:** The hash protects against tampered downloads (mirror modification, MITM). It does **not** replace code signing — you verify the authenticity of the source through the GitHub repo itself, not through the hash. Code signing is planned; see [`docs/codesigning.md`](docs/codesigning.md) for status.
 
@@ -197,7 +197,7 @@ User max.muster → member of "Accounting" → member of "FileServer_Read"
 
 ### How is Stars started?
 
-Stars is distributed as a **setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.6.3-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and installs **no background services** and **no auto-start components**.
+Stars is distributed as a **setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.6.4-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and installs **no background services** and **no auto-start components**.
 
 > **Note on code signing:** The installer is currently **not code-signed**. Windows SmartScreen will warn on first launch ("Windows protected your PC — unrecognized publisher"). A code-signing certificate is planned but not yet in place — see [`docs/codesigning.md`](docs/codesigning.md). Until then, you can verify the integrity of the file via the SHA256 hash above.
 

@@ -10,7 +10,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-### CLI scan streams the tree instead of buffering it (review 2026-06-13 finding 1)
+(No unreleased changes — see v1.6.4 below for the latest release.)
+
+---
+
+## [1.6.4] — 2026-06-13
+
+**Large-environment and consistency release.** Closes all five open
+construction sites from the second 2026-06-13 full-repository review. No
+change to the effective-rights calculation; the read-only boundary is
+intact.
+
+### CLI scan streams the tree instead of buffering it (finding 1)
 
 The CLI scan (`run_scan`) no longer materializes the whole
 `Vec<FileSystemObject>` before evaluation. A new
@@ -21,7 +32,7 @@ Peak memory no longer holds the full object set, first results appear as
 enumeration proceeds, and cancellation is more responsive. The streamed
 result is identical to the previous buffered one (ADR 0050).
 
-### GUI scan rows now show *why* they are flagged, not just *that* they are (review 2026-06-13 finding 2)
+### GUI scan rows now show *why* they are flagged, not just *that* they are (finding 2)
 
 The `Scan Tree` table colored a path when it carried any diagnostic but
 did not say which uncertainty applied — weaker than the CLI, HTML and
@@ -30,6 +41,32 @@ now shows a **Diagnostics** block listing one human-readable line per
 marker, using a single source-of-truth `PermissionDiagnostic::summary()`
 shared across surfaces. Closes the last "show uncertainty in the GUI"
 consistency gap.
+
+### Shell-layer wiring pinned with focused tests (finding 3)
+
+The CLI argument mapping and the GUI worker's scan-to-persist hand-off
+were the thinnest-tested layers. The `--base-dn` / `--global-catalog`
+interaction was extracted into a pure, unit-tested `resolve_search_base`
+helper (+4 tests), and a test now pins that `persist_scan` round-trips
+the actual permission payload (identity, masks, explanation,
+diagnostics), not just the run row and errors.
+
+### Write-side serialization surfaces errors instead of defaulting silently (finding 4)
+
+Symmetric to the v1.6.3 read-side fix: `persistence::insert_permission`
+and the CSV exporter now propagate an error if JSON evidence
+serialization were to fail, instead of substituting an empty `[]`. For
+the plain types involved this is theoretical (serialization does not
+realistically fail), but for an audit tool the failure must be surfaced,
+not hidden.
+
+### SIDs constructed via the validating typed constructor (finding 5)
+
+The CLI's SAM-path SID construction now uses `Sid::try_new` (full syntax
+validation) instead of the bare constructor after a weak prefix check, so
+a malformed SID-like string fails at construction rather than flowing
+into resolution. Defense in depth — the invariant is now enforced by the
+type at the construction site.
 
 ---
 
