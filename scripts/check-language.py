@@ -169,6 +169,9 @@ DE_WORDS = [
     "ermittelt", "ermittelbar", "erweitert", "vorhanden",
     "zugehoerige", "zugehoerigen", "benoetigt", "benoetigten",
     "braucht", "unbegrenzt", "Rekursionstiefe", "Maximale",
+    # Engine review 2026-06-13 (Codex) finding 6: fragments the denylist
+    # missed (Cargo author title + traits.rs doc remnants).
+    "Fachinformatiker", "pusht", "markiert", "abgeleitete",
 ]
 
 DE_WORDS_RE = re.compile(

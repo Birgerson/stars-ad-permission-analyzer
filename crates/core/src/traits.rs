@@ -46,7 +46,6 @@ pub struct PermissionEvaluationInput {
     /// (`Unspecified`) behaves as before — only `Everyone` and
     /// `Authenticated Users` are added.
     pub access_context: AccessContext,
-    /// Engine pusht bei >0 einen `PermissionDiagnostic::UnsupportedShareAces`
     /// Number of share ACEs the share DACL parser could not interpret
     /// (e.g. object, callback or vendor-specific ACEs). When >0 the
     /// engine pushes a `PermissionDiagnostic::UnsupportedShareAces`
@@ -61,7 +60,6 @@ pub struct PermissionEvaluationInput {
     /// back to showing the raw SID. Defaulting to empty keeps existing
     /// callers compatible.
     pub sid_names: BTreeMap<String, String>,
-    /// compatible. Closes review finding 6.
     /// `true` when group resolution runs through the SAM/LSA fallback
     /// (`NetUserGetGroups`) instead of LDAP. In that case **nested domain
     /// groups are not recursively resolved** and the token SID set may be
@@ -71,29 +69,20 @@ pub struct PermissionEvaluationInput {
     /// Defaulting to `false` (LDAP path) keeps existing callers
     /// compatible. Closes review finding 6.
     pub group_resolution_via_sam_fallback: bool,
-    /// `PermissionDiagnostic::IdentityNotInConfiguredLdapBase`. Default
-    /// `false`. Closes review finding 1, 2026-06-04 round 2.
     /// `true` when the identity was resolved via LSA but the configured
     /// LDAP `base_dn` does not index that SID (typical in multi-domain
     /// forests). The engine then pushes a
     /// `PermissionDiagnostic::IdentityNotInConfiguredLdapBase`. Default
     /// `false`. Closes review 2026-06-04 round 2 finding 1.
     pub identity_not_in_configured_ldap_base: bool,
-    /// Default `false`. Closes review finding 5, 2026-06-04 round 2.
     /// `true` when the `disabled` flag on the identity could not be
     /// reliably determined (e.g. SAM path without `NetUserGetInfo`).
     /// Default `false`. Closes review 2026-06-04 round 2 finding 5.
     pub identity_disabled_status_unknown: bool,
-    /// Risk-Engine markiert abgeleitete Findings als
-    /// `incomplete = true`. Default `None`. Closes
-    /// Review finding 1, 2026-06-04 round 4.
     /// `Some(reason)` when the LDAP identity lookup failed with a
     /// technical error. The engine pushes an `IdentityLookupFailed`
     /// marker; risk findings are flagged incomplete. Default `None`.
     pub identity_lookup_failure_reason: Option<String>,
-    /// Engine pusht dann einen
-    /// Risk-Engine markiert abgeleitete Findings als
-    /// `incomplete = true`. Default `None`.
     /// `Some(reason)` when recursive group resolution failed or was
     /// deliberately skipped while groups would have mattered. Marker +
     /// risk-incomplete propagation.

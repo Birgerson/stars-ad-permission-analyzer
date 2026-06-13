@@ -50,7 +50,6 @@ pub enum PrincipalInput {
     /// Explizit eine SID (`S-1-…`).
     /// Explicit SID (`S-1-…`).
     Sid(Sid),
-    /// [`IdentityScopeStatus::OutsideConfiguredLdapBase`] markiert
     /// GUI name search.
     DisplayName(String),
 }
