@@ -10,7 +10,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.6.4 below for the latest release.)
+### GUI gains the Global Catalog LDAP mode (CLI/GUI parity)
+
+The Global Catalog bind existed only in the CLI (`--global-catalog`); the
+GUI could *display* the GC incompleteness diagnostic but offered no way to
+*select* GC. The Analyze and Scan Tree tabs now have a fourth LDAP mode
+**"Global Catalog — forest-wide, port 3269 (LDAPS)"**. In that mode the
+base DN may be left empty (forest-wide search) and memberships are flagged
+potentially incomplete (only universal groups replicate fully to the GC).
+The mode→parameters and parameters→`LdapConfig` mappings were extracted
+into the unit-tested `LdapParams::from_mode` / `to_config` helpers. The
+GUI LDAP help texts now also state the LDAPS certificate-trust requirement
+(CA-issued and host-trusted, FQDN not IP; self-signed is rejected).
 
 ---
 

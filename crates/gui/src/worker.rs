@@ -21,7 +21,7 @@ use ad_resolver::NoLsaBackend;
 use ad_resolver::WindowsLsaBackend;
 use ad_resolver::{
     ldap_client, principal::PrincipalInput, LdapConfig, LdapIdentityBackend, LdapResolver,
-    PrincipalResolution, PrincipalResolver, TlsMode,
+    PrincipalResolution, PrincipalResolver,
 };
 use adpa_core::{
     model::{
@@ -85,6 +85,13 @@ pub struct LdapParams {
     pub password: String,
     /// When true: unencrypted LDAP (port 389). Only for test environments.
     pub insecure: bool,
+    /// When true: bind against the Global Catalog (LDAPS 3269 / plain 3268)
+    /// instead of a single domain. Identity lookups become forest-wide and
+    /// `base_dn` may be empty. GC-resolved memberships are flagged
+    /// potentially incomplete (only universal groups replicate fully).
+    /// Mirrors the CLI `--global-catalog` flag — closes the GUI/CLI parity
+    /// gap where the GUI could display the GC diagnostic but not select GC.
+    pub global_catalog: bool,
 }
 
 impl std::fmt::Debug for LdapParams {
@@ -100,7 +107,62 @@ impl std::fmt::Debug for LdapParams {
             .field("bind_dn", &self.bind_dn)
             .field("password", &pw_placeholder)
             .field("insecure", &self.insecure)
+            .field("global_catalog", &self.global_catalog)
             .finish()
+    }
+}
+
+impl LdapParams {
+    /// Maps the GUI's LDAP-mode selector to LDAP parameters.
+    ///
+    /// `0` = Off (SAM/LSA, returns `None`), `1` = LDAPS (port 636),
+    /// `2` = plain LDAP (port 389, test only), `3` = Global Catalog
+    /// (LDAPS, port 3269, forest-wide). Kept as a pure function so the
+    /// mode→params wiring is unit-testable without the Slint UI.
+    pub fn from_mode(
+        mode: i32,
+        server: String,
+        base_dn: String,
+        bind_dn: String,
+        password: String,
+    ) -> Option<LdapParams> {
+        match mode {
+            1..=3 => Some(LdapParams {
+                server,
+                base_dn,
+                bind_dn,
+                password,
+                insecure: mode == 2,
+                global_catalog: mode == 3,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Builds the `LdapConfig` for these parameters, choosing the right port
+    /// and TLS mode for the (global_catalog, insecure) combination — the same
+    /// matrix the CLI uses (`ad_resolver::LdapConfig` constructors).
+    pub fn to_config(&self) -> LdapConfig {
+        match (self.global_catalog, self.insecure) {
+            (true, true) => LdapConfig::new_global_catalog_insecure(
+                &self.server,
+                &self.base_dn,
+                &self.bind_dn,
+                &self.password,
+            ),
+            (true, false) => LdapConfig::new_global_catalog(
+                &self.server,
+                &self.base_dn,
+                &self.bind_dn,
+                &self.password,
+            ),
+            (false, true) => {
+                LdapConfig::new_insecure(&self.server, &self.base_dn, &self.bind_dn, &self.password)
+            }
+            (false, false) => {
+                LdapConfig::new(&self.server, &self.base_dn, &self.bind_dn, &self.password)
+            }
+        }
     }
 }
 
@@ -603,9 +665,16 @@ fn validate_connection_inputs(
             let server = validate_ldap_endpoint(&p.server)
                 .map_err(|e| format!("Invalid LDAP server: {e}"))?
                 .0;
-            let base_dn = validate_dn(&p.base_dn)
-                .map_err(|e| format!("Invalid base DN: {e}"))?
-                .0;
+            // In Global Catalog mode an empty base DN is allowed and means
+            // "search all forest partitions" (mirrors the CLI). Otherwise a
+            // base DN is required and validated.
+            let base_dn = if p.global_catalog && p.base_dn.trim().is_empty() {
+                String::new()
+            } else {
+                validate_dn(&p.base_dn)
+                    .map_err(|e| format!("Invalid base DN: {e}"))?
+                    .0
+            };
             let bind_dn = validate_dn(&p.bind_dn)
                 .map_err(|e| format!("Invalid bind DN: {e}"))?
                 .0;
@@ -615,6 +684,7 @@ fn validate_connection_inputs(
                 bind_dn,
                 password: p.password.clone(),
                 insecure: p.insecure,
+                global_catalog: p.global_catalog,
             })
         }
         None => None,
@@ -1047,18 +1117,27 @@ async fn handle_search(
     let server = validate_ldap_endpoint(&ldap.server)
         .map_err(|e| format!("Invalid LDAP server: {e}"))?
         .0;
-    let base_dn = validate_dn(&ldap.base_dn)
-        .map_err(|e| format!("Invalid base DN: {e}"))?
-        .0;
+    // Global Catalog searches may omit the base DN (forest-wide).
+    let base_dn = if ldap.global_catalog && ldap.base_dn.trim().is_empty() {
+        String::new()
+    } else {
+        validate_dn(&ldap.base_dn)
+            .map_err(|e| format!("Invalid base DN: {e}"))?
+            .0
+    };
     let bind_dn = validate_dn(&ldap.bind_dn)
         .map_err(|e| format!("Invalid bind DN: {e}"))?
         .0;
 
-    let mut config = LdapConfig::new(&server, &base_dn, &bind_dn, &ldap.password);
-    if ldap.insecure {
-        config.tls_mode = TlsMode::Insecure;
-        config.port = 389;
+    let config = LdapParams {
+        server: server.clone(),
+        base_dn: base_dn.clone(),
+        bind_dn: bind_dn.clone(),
+        password: ldap.password.clone(),
+        insecure: ldap.insecure,
+        global_catalog: ldap.global_catalog,
     }
+    .to_config();
 
     // Review 2026-06-04 round 2, finding 3: the GUI identity search used to
     // bypass the LDAP timeout. connect() is internally guarded; the paged
@@ -1536,16 +1615,7 @@ async fn resolve_identity_sids(
     ldap: Option<&LdapParams>,
 ) -> Result<PrincipalResolution, String> {
     if let Some(params) = ldap {
-        let mut config = LdapConfig::new(
-            &params.server,
-            &params.base_dn,
-            &params.bind_dn,
-            &params.password,
-        );
-        if params.insecure {
-            config.tls_mode = TlsMode::Insecure;
-            config.port = 389;
-        }
+        let config = params.to_config();
         let resolver = std::sync::Arc::new(LdapResolver::new(config));
         let backend = LdapIdentityBackend::new(resolver);
         // Central principal pipeline — closes review round 3 finding 1.
@@ -2110,5 +2180,55 @@ mod tests {
             "the diagnostic payload must round-trip, got: {:?}",
             p.diagnostics
         );
+    }
+
+    // --- LDAP mode → params/config mapping (GUI Global Catalog support) ---
+
+    fn params(mode: i32) -> Option<LdapParams> {
+        LdapParams::from_mode(
+            mode,
+            "dc.corp.local".to_owned(),
+            "DC=corp,DC=local".to_owned(),
+            "CN=svc,DC=corp,DC=local".to_owned(),
+            "pw".to_owned(),
+        )
+    }
+
+    #[test]
+    fn ldap_mode_off_yields_no_params() {
+        assert!(params(0).is_none(), "mode 0 (Off) must mean no LDAP");
+    }
+
+    #[test]
+    fn ldap_mode_maps_to_flags() {
+        let ldaps = params(1).expect("mode 1");
+        assert!(!ldaps.insecure && !ldaps.global_catalog, "mode 1 = LDAPS");
+        let plain = params(2).expect("mode 2");
+        assert!(
+            plain.insecure && !plain.global_catalog,
+            "mode 2 = plain LDAP"
+        );
+        let gc = params(3).expect("mode 3");
+        assert!(
+            gc.global_catalog && !gc.insecure,
+            "mode 3 = Global Catalog over LDAPS"
+        );
+    }
+
+    #[test]
+    fn to_config_picks_port_and_tls_per_mode() {
+        use ad_resolver::TlsMode;
+        // LDAPS (mode 1): 636 + Ldaps
+        let c = params(1).unwrap().to_config();
+        assert_eq!(c.port, 636);
+        assert_eq!(c.tls_mode, TlsMode::Ldaps);
+        // Plain (mode 2): 389 + Insecure
+        let c = params(2).unwrap().to_config();
+        assert_eq!(c.port, 389);
+        assert_eq!(c.tls_mode, TlsMode::Insecure);
+        // Global Catalog (mode 3): 3269 + Ldaps
+        let c = params(3).unwrap().to_config();
+        assert_eq!(c.port, 3269);
+        assert_eq!(c.tls_mode, TlsMode::Ldaps);
     }
 }

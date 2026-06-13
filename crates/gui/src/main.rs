@@ -737,12 +737,13 @@ slint::slint! {
                                                 "Off — use SAM/LSA (recommended on a DC)",
                                                 "LDAPS — encrypted, port 636",
                                                 "Plain LDAP — port 389 (test only)",
+                                                "Global Catalog — forest-wide, port 3269 (LDAPS)",
                                             ];
                                             current-index <=> root.a-ldap-mode;
                                             horizontal-stretch: 1;
                                         }
                                         HelpTip {
-                                            tip: "How should identity and groups be resolved?\n\n• Off (recommended): uses the local Windows LSA/SAM. On a domain controller this returns complete data (users, global groups, local groups). No configuration, no certificate needed.\n\n• LDAPS: encrypted LDAP connection on port 636. Requires the DC to have a valid LDAPS certificate (AD Certificate Services or manually installed).\n\n• Plain LDAP: port 389, no TLS. For test environments only — transmits the password in cleartext.";
+                                            tip: "How should identity and groups be resolved?\n\n• Off (recommended): uses the local Windows LSA/SAM. On a domain controller this returns complete data (users, global groups, local groups). No configuration, no certificate needed.\n\n• LDAPS: encrypted LDAP connection on port 636. Requires the DC to have a valid LDAPS certificate that this machine trusts (AD CS enterprise CA); a self-signed certificate is rejected. Connect by FQDN, not IP.\n\n• Plain LDAP: port 389, no TLS. For test environments only — transmits the password in cleartext, and is refused by hardened Windows Server 2022/2025 DCs (LDAP signing).\n\n• Global Catalog: forest-wide bind over LDAPS (port 3269). Base DN may be left empty. Same certificate requirement as LDAPS. Only universal groups replicate fully to the GC, so memberships are flagged potentially incomplete.";
                                         }
                                     }
 
@@ -1106,12 +1107,13 @@ slint::slint! {
                                                 "Off — use SAM/LSA (recommended on a DC)",
                                                 "LDAPS — encrypted, port 636",
                                                 "Plain LDAP — port 389 (test only)",
+                                                "Global Catalog — forest-wide, port 3269 (LDAPS)",
                                             ];
                                             current-index <=> root.s-ldap-mode;
                                             horizontal-stretch: 1;
                                         }
                                         HelpTip {
-                                            tip: "How should identity and groups be resolved?\n\n• Off (recommended): uses the local Windows LSA/SAM. On a domain controller this returns complete data (users, global groups, local groups). No configuration, no certificate needed.\n\n• LDAPS: encrypted LDAP connection on port 636. Requires the DC to have a valid LDAPS certificate (AD Certificate Services or manually installed).\n\n• Plain LDAP: port 389, no TLS. For test environments only — transmits the password in cleartext.";
+                                            tip: "How should identity and groups be resolved?\n\n• Off (recommended): uses the local Windows LSA/SAM. On a domain controller this returns complete data (users, global groups, local groups). No configuration, no certificate needed.\n\n• LDAPS: encrypted LDAP connection on port 636. Requires the DC to have a valid LDAPS certificate that this machine trusts (AD CS enterprise CA); a self-signed certificate is rejected. Connect by FQDN, not IP.\n\n• Plain LDAP: port 389, no TLS. For test environments only — transmits the password in cleartext, and is refused by hardened Windows Server 2022/2025 DCs (LDAP signing).\n\n• Global Catalog: forest-wide bind over LDAPS (port 3269). Base DN may be left empty. Same certificate requirement as LDAPS. Only universal groups replicate fully to the GC, so memberships are flagged potentially incomplete.";
                                         }
                                     }
 
@@ -1989,17 +1991,16 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             return;
         }
 
-        // LDAP mode: 0 = off (SAM/LSA), 1 = LDAPS, 2 = plain LDAP.
-        let ldap = match ui.get_a_ldap_mode() {
-            1 | 2 => Some(LdapParams {
-                server: ui.get_a_ldap_server().to_string(),
-                base_dn: ui.get_a_ldap_base_dn().to_string(),
-                bind_dn: ui.get_a_ldap_bind_dn().to_string(),
-                password: ui.get_a_ldap_password().to_string(),
-                insecure: ui.get_a_ldap_mode() == 2,
-            }),
-            _ => None,
-        };
+        // LDAP mode: 0 = off (SAM/LSA), 1 = LDAPS, 2 = plain LDAP,
+        // 3 = Global Catalog (LDAPS 3269). Mapping lives in
+        // LdapParams::from_mode so it is unit-tested without the UI.
+        let ldap = LdapParams::from_mode(
+            ui.get_a_ldap_mode(),
+            ui.get_a_ldap_server().to_string(),
+            ui.get_a_ldap_base_dn().to_string(),
+            ui.get_a_ldap_bind_dn().to_string(),
+            ui.get_a_ldap_password().to_string(),
+        );
 
         let (smb_server, share_name) = if ui.get_a_smb_enabled() {
             (
@@ -2250,17 +2251,15 @@ fn wire_scan_tab(
                 None
             };
 
-            // LDAP mode analogous to the Analyze tab.
-            let ldap = match ui.get_s_ldap_mode() {
-                1 | 2 => Some(LdapParams {
-                    server: ui.get_s_ldap_server().to_string(),
-                    base_dn: ui.get_s_ldap_base_dn().to_string(),
-                    bind_dn: ui.get_s_ldap_bind_dn().to_string(),
-                    password: ui.get_s_ldap_password().to_string(),
-                    insecure: ui.get_s_ldap_mode() == 2,
-                }),
-                _ => None,
-            };
+            // LDAP mode analogous to the Analyze tab (0=off, 1=LDAPS,
+            // 2=plain, 3=Global Catalog). Mapping in LdapParams::from_mode.
+            let ldap = LdapParams::from_mode(
+                ui.get_s_ldap_mode(),
+                ui.get_s_ldap_server().to_string(),
+                ui.get_s_ldap_base_dn().to_string(),
+                ui.get_s_ldap_bind_dn().to_string(),
+                ui.get_s_ldap_password().to_string(),
+            );
 
             let (smb_server, share_name) = if ui.get_s_smb_enabled() {
                 (

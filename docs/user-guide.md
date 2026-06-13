@@ -317,6 +317,10 @@ In the **"Identity resolution"** section (inside the `Analyze` and
   environments.
 - **2 — Plain LDAP (port 389)** — **test only**. Password flows in
   plain text.
+- **3 — Global Catalog (LDAPS, port 3269)** — forest-wide identity and
+  group lookups; the base DN may be left empty. Same certificate
+  requirements as LDAPS (see below). Memberships are flagged potentially
+  incomplete because only universal groups replicate fully to the GC.
 
 Fields (all auto-trimmed before use):
 
@@ -367,13 +371,14 @@ identities via LSA and flags them as
 For **full** forest coverage:
 
 - Run a second Stars analysis with the partner domain's `base_dn`, or
-- Bind against the **Global Catalog** — available in the **CLI** via
-  `--global-catalog`. Stars then binds the GC (LDAPS port 3269 / plain
-  3268), identity lookups become forest-wide, and `--base-dn` may be
-  omitted. GC-resolved memberships are flagged potentially incomplete,
-  because only **universal** groups replicate fully to the Global Catalog.
-  Note: the GUI currently exposes only Off / LDAPS / Plain LDAP, so use the
-  CLI for Global Catalog binds.
+- Bind against the **Global Catalog** — in the **GUI** select LDAP mode
+  *"Global Catalog — forest-wide, port 3269"*, or in the **CLI** pass
+  `--global-catalog`. Stars then binds the GC (LDAPS port 3269; the CLI
+  also offers plain 3268 with `--insecure-ldap`), identity lookups become
+  forest-wide, and the base DN may be left empty. GC-resolved memberships
+  are flagged potentially incomplete, because only **universal** groups
+  replicate fully to the Global Catalog. The same LDAPS certificate-trust
+  rules as above apply (port 3269 is TLS).
 
 ---
 
