@@ -13,6 +13,19 @@ For every user, the tool shows the effective access rights that actually apply t
 
 ![Stars Analyze tab (v1.6.5) — target path, identity, resolution mode, SMB share fields, and the two action buttons "Analyze" and "Who has access?"](docs/screenshots/stars-analyze-tab.png)
 
+## Contents
+
+- **[Overview](#overview)** — what Stars does, rights labels, when to use it, privacy
+- **[Download & install](#download--install)** — installer, integrity check, antivirus note
+- **[What Stars is](#what-stars-is)** — background, scope, and what it analyzes
+- **[Using Stars](#using-stars)** — GUI tabs, identity input, CLI, and limits
+- **[Project & development](#project--development)** — structure, build, data, support, docs
+- **[Legal](#legal)** — disclaimer and license
+
+---
+
+## Overview
+
 ### Concrete example in 10 seconds
 
 For every path Stars answers **"what does the user have, and why"** — with the full permission chain:
@@ -84,6 +97,8 @@ Stars is a **local tool**. Concretely:
 
 This makes Stars suitable for isolated audit environments and air-gapped networks.
 
+## Download & install
+
 ### Download
 
 Get the current Windows installer from the **[Releases page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases)**.
@@ -119,6 +134,8 @@ On WSL / Linux / macOS, `sha256sum -c Stars-v1.6.5-Setup.exe.sha256` works direc
 > **Tested platforms:** Stars is verified against **Windows Server 2022 Standard** and **Windows Server 2025 Standard** (3-forest lab, 1000 test users, 5000 directories).
 >
 > **Use at your own risk. Make a full backup before any production use.** → [Full disclaimer](#disclaimer)
+
+## What Stars is
 
 ### How Stars came to be
 
@@ -210,6 +227,8 @@ User max.muster → member of "Accounting" → member of "FileServer_Read"
 → Share permission: Change
 → Effective (NTFS ∩ Share): Read & Execute
 ```
+
+## Using Stars
 
 ### How is Stars started?
 
@@ -396,6 +415,8 @@ Stars is deliberately limited to analysis. The following is **not** planned and 
 - Create, move, or delete files or folders on target systems
 - Apply automated repair suggestions
 
+## Project & development
+
 ### Project structure
 
 Stars is built as a Rust workspace with several independent modules:
@@ -473,6 +494,8 @@ Stars persists its scan history in `%APPDATA%\Stars\stars_data.db` (SQLite, sepa
 This attribution is deliberately transparent: Birger Labinsch did **not** write the code himself but, as a prompt engineer, directed the entire development process through the AI model — from architectural decisions to individual code changes to tests, bug fixes, and documentation. Every commit in this repository therefore also carries a `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>` line that makes the AI contribution visible per change.
 
 <a name="disclaimer"></a>
+
+## Legal
 
 ### Disclaimer
 
