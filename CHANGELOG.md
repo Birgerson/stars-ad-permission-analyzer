@@ -10,7 +10,68 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.6.2 below for the latest release.)
+(No unreleased changes — see v1.6.3 below for the latest release.)
+
+---
+
+## [1.6.3] — 2026-06-13
+
+**Audit-fidelity and hygiene release.** Closes six of the seven findings
+from the 2026-06-13 full-repository review (Codex). No change to the
+effective-rights calculation. The remaining finding — converting the
+CLI/GUI scans to streaming/batched evaluation — is a deliberate
+follow-up (it requires reworking the up-front SID-name collection into a
+lazy cache; tracked separately).
+
+### Corrupt persisted audit evidence no longer defaults silently (finding 3)
+
+Reading scan history back used `unwrap_or_default()` on JSON evidence and
+mapped unknown status strings to normal defaults — which for an audit
+tool can make damaged history look cleaner and more complete than it was.
+Now:
+
+- A required evidence field (explanation, contributing SIDs, matched
+  ACEs) that fails to decode is a **hard `CoreError`** naming the field
+  and path, instead of becoming an empty list.
+- Optional/legacy decode problems (an unparseable stored diagnostics
+  list, an unrecognized status value) surface a new
+  `PermissionDiagnostic::PersistedEvidenceDecodeFailed { detail }` marker
+  (an incompleteness trigger, rendered in CLI and HTML) and fall back
+  conservatively.
+
+### Windows authorization conformance now runs in CI per commit (finding 5)
+
+The `#[ignore]` conformance harness (engine effective mask vs.
+`GetEffectiveRightsFromAclW` single-trustee and `AccessCheck` token-based
+multi-group) now runs in a dedicated `conformance` CI job on
+`windows-latest` for **every push**, so conformance is verified per
+commit rather than only locally.
+
+### Robustness and honesty
+
+- **RAII for the security descriptor (finding 4):** new
+  `win_safe::localalloc::LocalFreeGuard` replaces the manual `LocalFree`
+  in the scanner, so a future early return can no longer leak the
+  descriptor.
+- **No production `unreachable!` (finding 7):** the resolver's
+  `PrincipalInput::Auto` arm returns a structured `CoreError` instead of
+  panicking if the classify-invariant is ever broken.
+- **SD deduplication scope stated honestly (finding 2):** the docs and
+  the `sd_hash` comment now make clear the dedup is **scan-local** (saves
+  repeated parsing), not storage-level; durable storage dedup is tracked
+  as known-limitation L10.
+- **Language/encoding gate tightened (finding 6):** remaining German
+  fragments removed (Cargo author title rendered in English, traits.rs
+  doc remnants); the denylist now catches them. The dash/arrow "mojibake"
+  the reviewer noted was verified to be valid UTF-8 punctuation.
+
+### Verification
+
+- `cargo fmt` / `clippy --workspace --all-targets -- -D warnings` /
+  `python scripts/check-language.py`: clean.
+- `cargo test --workspace`: 575 passed, 0 failed, 14 ignored
+  (+8 since v1.6.2).
+- `conformance` CI job (7 tests) green on windows-latest.
 
 ---
 
