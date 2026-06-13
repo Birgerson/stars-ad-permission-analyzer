@@ -19,12 +19,12 @@ For every user, the tool shows the effective access rights that actually apply t
 
 ## Contents
 
-- **[Overview](#overview)** — what Stars does, rights labels, when to use it, privacy
-- **[Download & install](#download--install)** — installer, integrity check, antivirus note
-- **[What Stars is](#what-stars-is)** — background, scope, and what it analyzes
-- **[Using Stars](#using-stars)** — GUI tabs, identity input, CLI, and limits
-- **[Project & development](#project--development)** — structure, build, data, support, docs
-- **[Legal](#legal)** — disclaimer and license
+- [![Overview](https://img.shields.io/badge/Overview-c2410c?style=flat-square)](#overview) — what Stars does, rights labels, when to use it, privacy
+- [![Download & install](https://img.shields.io/badge/Download-c2410c?style=flat-square)](#download--install) — installer, integrity check, antivirus note
+- [![What Stars is](https://img.shields.io/badge/What_Stars_is-c2410c?style=flat-square)](#what-stars-is) — background, scope, and what it analyzes
+- [![Using Stars](https://img.shields.io/badge/Using_Stars-c2410c?style=flat-square)](#using-stars) — GUI tabs, identity input, CLI, and limits
+- [![Project & development](https://img.shields.io/badge/Project-c2410c?style=flat-square)](#project--development) — structure, build, data, support, docs
+- [![Legal](https://img.shields.io/badge/Legal-c2410c?style=flat-square)](#legal) — disclaimer and license
 
 ---
 
