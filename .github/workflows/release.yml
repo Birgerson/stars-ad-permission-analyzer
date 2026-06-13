@@ -71,6 +71,7 @@ jobs:
           Move-Item installer-build\Stars-Setup.exe "Stars-${tag}-Setup.exe"
 
       - name: Compute SHA256 checksum
+        id: sha
         # Stars currently has no code-signing certificate — the installer
         # triggers SmartScreen "Unknown publisher". To let users at least
         # verify file integrity we drop a SHA256 hash next to the binary
@@ -82,6 +83,10 @@ jobs:
           $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
           # Double space is the sha256sum(1) format.
           "$hash  $exe" | Out-File -FilePath "$exe.sha256" -Encoding ascii -NoNewline
+          # Expose the hash so the release body can embed it in the
+          # antivirus false-positive note below (so every release carries
+          # the proof-of-integrity hash automatically, not just by hand).
+          "hash=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding ascii -Append
           Write-Host "Computed: $hash"
           Write-Host "Wrote: $exe.sha256"
 
@@ -93,6 +98,13 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
             ## Stars — AD Permission Analyzer ${{ github.ref_name }}
+
+            > ⚠️ **Antivirus false positive — this is expected and harmless.**
+            > Because this installer is **not yet code-signed**, Microsoft Defender may flag it as `Trojan:Win32/Wacatac.C!ml`. The `!ml` suffix means it was flagged by a **machine-learning heuristic**, not matched against known malware — `Wacatac` is Defender's generic catch-all and the most common false positive for new, unsigned binaries doing AD/SMB enumeration.
+            >
+            > **You can prove the file is clean:** its SHA256 must equal
+            > `${{ steps.sha.outputs.hash }}`
+            > (also published in `Stars-${{ github.ref_name }}-Setup.exe.sha256` below). A matching hash means the file is bit-for-bit the build GitHub Actions produced from the public source — nothing could have been injected. Allow it in Defender (Protection history → Allow) and optionally report the false positive at https://www.microsoft.com/en-us/wdsi/filesubmission. The permanent fix is code signing (planned).
 
             ### Installation
             1. Download **Stars-${{ github.ref_name }}-Setup.exe** below.
