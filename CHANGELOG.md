@@ -10,6 +10,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+(No unreleased changes — see v1.6.5 below for the latest release.)
+
+---
+
+## [1.6.5] — 2026-06-13
+
+**GUI parity, audit-trace polish, and CI maintenance.** Validated against
+a live three-domain Windows Server 2025 lab (deep cross-domain nesting,
+deny precedence, inheritance breaks, NTFS∩Share). The effective-rights
+engine matched the ground truth on every evaluable case; this release
+adds the GUI Global Catalog mode, removes a duplicate audit-trace line,
+and keeps CI green past the GitHub Actions Node 24 cutover.
+
 ### GUI gains the Global Catalog LDAP mode (CLI/GUI parity)
 
 The Global Catalog bind existed only in the CLI (`--global-catalog`); the
@@ -22,6 +35,33 @@ The mode→parameters and parameters→`LdapConfig` mappings were extracted
 into the unit-tested `LdapParams::from_mode` / `to_config` helpers. The
 GUI LDAP help texts now also state the LDAPS certificate-trust requirement
 (CA-issued and host-trusted, FQDN not IP; self-signed is rejected).
+
+### Explanation path no longer prints duplicate membership lines (lab finding F2)
+
+When the same membership edge was reached through more than one resolution
+path (e.g. a local group entered via two domain groups, or the SAM/LSA
+fallback adding the same local-group membership once per containing group),
+the explanation path printed the identical "Member of …" line twice. Such
+identical edges are now de-duplicated; the effective mask was always
+correct (token building already used a set) — this only cleans up the
+audit trace. Distinct via-chains to the same group still format
+differently and are all kept.
+
+### Documentation: LDAPS certificate requirements
+
+The user guide and README now state plainly that LDAPS/Global Catalog need
+a certificate the Stars host trusts (CA-issued; self-signed is rejected),
+connected by FQDN not IP, and that a failed LDAP bind aborts with a clear
+error rather than returning a result that looks complete. Corrected a
+stale "Global Catalog not implemented" note.
+
+### CI / release maintenance
+
+GitHub Actions were bumped to their Node 24 majors ahead of the runner
+cutover: `actions/checkout` v4→v5, `actions/cache` v4→v5,
+`actions/setup-python` v5→v6, `softprops/action-gh-release` v2→v3. The
+release workflow now also embeds the antivirus false-positive note with
+the build's SHA256 automatically (no per-release manual edit).
 
 ---
 

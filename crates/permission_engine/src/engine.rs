@@ -645,8 +645,22 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     steps.push(format!("User: {} ({})", display_name, identity.sid.0));
 
     // 2. Group memberships.
+    //
+    // De-duplicate identical edges: the same (target, via-chain, source) can
+    // be reached through more than one resolution path — e.g. a local group
+    // entered via two different domain groups, or the SAM/LSA fallback adding
+    // the same local-group membership once per containing group. That would
+    // otherwise print the exact same "Member of …" line twice and read like
+    // two distinct memberships (lab hard-test finding F2). Collapsing steps
+    // that render identically loses no information; the effective mask is
+    // unaffected (token building already uses a set). Distinct via-chains to
+    // the same group format differently and are therefore all kept.
+    let mut seen_membership_steps: HashSet<String> = HashSet::new();
     for gm in memberships {
-        steps.push(format_membership_step(gm, sid_names));
+        let step = format_membership_step(gm, sid_names);
+        if seen_membership_steps.insert(step.clone()) {
+            steps.push(step);
+        }
     }
 
     // 3. Matching ACEs.
@@ -1416,6 +1430,32 @@ mod tests {
                 .iter()
                 .any(|s| s.contains("Deny aggregation")),
             "deny step must not claim bits were removed that the owner rule restored; got: {:?}",
+            p.path_explanation.steps
+        );
+    }
+
+    /// Lab hard-test finding F2: when the same membership edge arrives more
+    /// than once (identical target + via-chain), the explanation path must
+    /// list it only once — not print the same "Member of …" line twice.
+    #[test]
+    fn explanation_dedups_identical_membership_steps() {
+        let p = eval(
+            user(USER),
+            // Two identical memberships in GROUP_A — as can happen when a
+            // group is reached through more than one resolution path.
+            vec![membership(USER, GROUP_A), membership(USER, GROUP_A)],
+            fso(None, vec![allow_ace(GROUP_A, MASK_READ, false)]),
+            None,
+        );
+        let member_steps = p
+            .path_explanation
+            .steps
+            .iter()
+            .filter(|s| s.starts_with("Member of") && s.contains(GROUP_A))
+            .count();
+        assert_eq!(
+            member_steps, 1,
+            "an identical membership edge must appear exactly once; got: {:?}",
             p.path_explanation.steps
         );
     }
