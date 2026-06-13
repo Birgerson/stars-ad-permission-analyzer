@@ -12,12 +12,17 @@
 //! equivalent `AceEntry` sequence into [`DefaultPermissionEngine`], and
 //! asserts the two effective masks agree.
 //!
-//! These tests are `#[ignore]` by default: they require a real Windows
-//! desktop/lab session and exercise Win32 APIs. Run them explicitly:
+//! These tests are `#[ignore]` by default — they require a real Windows
+//! session/token and exercise Win32 APIs, so they are kept out of the
+//! plain `cargo test --workspace` run. Run them explicitly:
 //!
 //! ```text
 //! cargo test -p permission_engine --test windows_conformance -- --ignored
 //! ```
+//!
+//! The CI workflow runs exactly this command in a dedicated `conformance`
+//! job on `windows-latest` for every push (`.github/workflows/ci.yml`),
+//! so conformance is verified per commit rather than only locally.
 //!
 //! Two levels of ground truth:
 //!

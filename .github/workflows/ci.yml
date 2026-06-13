@@ -71,6 +71,33 @@ jobs:
       # do not need network or the TESTDOMAIN VM.
       - run: cargo test --workspace
 
+  conformance:
+    # Windows authorization conformance: runs the #[ignore]-by-default
+    # harness that compares the engine's effective mask against the OS
+    # APIs (GetEffectiveRightsFromAclW for single-trustee, AccessCheck for
+    # token-based multi-group). It needs a real Windows session/token,
+    # which the windows-latest runner provides, so it runs on every push —
+    # making "conformance-verified for this commit" an honest claim rather
+    # than something only ever checked locally (engine review 2026-06-13
+    # finding 5). The AD/LSA/local-group #[ignore] tests still require a DC
+    # and are NOT run here.
+    name: windows authorization conformance
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-conformance-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-conformance-
+      - run: cargo test -p permission_engine --test windows_conformance -- --ignored
+
   language:
     name: language check (US English only)
     runs-on: ubuntu-latest

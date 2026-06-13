@@ -146,7 +146,10 @@ whether an effective-rights result is actually correct:
 The stored-order algorithm is not only reasoned about — it is checked
 against the operating system itself: a Windows conformance harness builds
 real in-memory ACLs and asserts the engine's effective mask matches the
-OS authorization API (`GetEffectiveRightsFromAclW`) bit-for-bit.
+OS authorization APIs bit-for-bit — `GetEffectiveRightsFromAclW` for a
+single trustee and `AccessCheck` (token-based) for the multi-group case.
+A dedicated CI job runs this harness on `windows-latest` for every push,
+so conformance is checked per commit, not just claimed.
 
 ### What does Stars analyze?
 

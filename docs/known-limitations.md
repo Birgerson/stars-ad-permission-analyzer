@@ -329,12 +329,16 @@ with documented prerequisites.
 >   pass — the engine's multi-principal token evaluation matches the OS
 >   authorization call.
 >
-> All seven conformance tests pass against a live Windows session. A
-> further extension to `AuthzAccessCheck` with a fully **synthetic** token
-> (arbitrary forged group memberships, beyond the principals the current
-> process actually holds) would need `SeCreateTokenPrivilege` and is left
-> as optional future work; the current `AccessCheck`-based harness already
-> exercises real multi-group token evaluation.
+> All seven conformance tests pass against a live Windows session, and a
+> dedicated `conformance` CI job on `windows-latest` runs
+> `cargo test -p permission_engine --test windows_conformance -- --ignored`
+> on **every push** (engine review 2026-06-13 finding 5) — so conformance
+> is verified per commit, not only locally. A further extension to
+> `AuthzAccessCheck` with a fully **synthetic** token (arbitrary forged
+> group memberships, beyond the principals the current process actually
+> holds) would need `SeCreateTokenPrivilege` and is left as optional
+> future work; the current `AccessCheck`-based harness already exercises
+> real multi-group token evaluation.
 
 ---
 
