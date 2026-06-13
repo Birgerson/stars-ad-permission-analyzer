@@ -15,4 +15,6 @@
 //! compiles empty so workspace builds (CI on Linux) do not fail.
 
 #[cfg(windows)]
+pub mod localalloc;
+#[cfg(windows)]
 pub mod netapi;

@@ -265,7 +265,13 @@ pub fn read_file_system_object_cached(
         };
     }
 
-    // p_sd is now valid and must be freed with LocalFree before all return paths below.
+    // p_sd is valid here; wrap it in a RAII guard so it is released with
+    // LocalFree on every exit path, including any future early return
+    // between here and the end of the function (engine review 2026-06-13
+    // finding 4). The owner / DACL / SD pointers below borrow into this
+    // buffer and stay valid while the guard is alive.
+    // SAFETY: p_sd is a LocalAlloc-owned pointer from GetNamedSecurityInfoW.
+    let _sd_guard = unsafe { win_safe::localalloc::LocalFreeGuard::new(p_sd) };
 
     // Dedup by raw-SD hash (finding 2). Copy the descriptor bytes, hash
     // them, and reuse a cached parse only after a full byte comparison
@@ -306,10 +312,8 @@ pub fn read_file_system_object_cached(
         }
     };
 
-    // SAFETY: p_sd was allocated by GetNamedSecurityInfoW via LocalAlloc and is non-null.
-    if !p_sd.is_null() {
-        unsafe { LocalFree(p_sd) };
-    }
+    // `_sd_guard` frees p_sd with LocalFree when it drops at the end of
+    // this function — no manual free needed.
 
     debug!(
         path,

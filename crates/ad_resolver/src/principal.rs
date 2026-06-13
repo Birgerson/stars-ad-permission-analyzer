@@ -408,7 +408,14 @@ where
     pub async fn resolve(&self, input: PrincipalInput) -> Result<PrincipalResolution, CoreError> {
         let classified = input.classify()?;
         match classified {
-            PrincipalInput::Auto(_) => unreachable!("classify() removes Auto"),
+            // `classify()` resolves `Auto` into a concrete variant, so this
+            // arm is not expected. Return a structured internal error
+            // rather than panicking in production resolver logic, in case a
+            // future refactor ever breaks that invariant (engine review
+            // 2026-06-13 finding 7).
+            PrincipalInput::Auto(_) => Err(CoreError::Validation(
+                "internal: PrincipalInput::Auto reached resolve() after classify()".to_owned(),
+            )),
             PrincipalInput::DomainQualified(name) => self.resolve_by_lsa_name(&name).await,
             PrincipalInput::DisplayName(name) => self.resolve_by_lsa_name(&name).await,
             PrincipalInput::Upn(upn) => self.resolve_by_upn(&upn).await,

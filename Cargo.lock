@@ -1361,6 +1361,7 @@ dependencies = [
  "tokio",
  "tracing",
  "validation",
+ "win_safe",
  "windows-sys 0.59.0",
 ]
 
