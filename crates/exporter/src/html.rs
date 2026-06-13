@@ -86,8 +86,8 @@ fn write_html_head(s: &mut String, timestamp: &str) {
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',Arial,sans-serif;font-size:14px;background:#1a1a2e;color:#e0e0e0;padding:20px}
-h1{font-size:22px;font-weight:600;color:#4fc3f7;margin-bottom:4px}
-h2{font-size:16px;font-weight:600;color:#90caf9;margin:20px 0 8px}
+h1{font-size:22px;font-weight:600;color:#ffa726;margin-bottom:4px}
+h2{font-size:16px;font-weight:600;color:#ffcc80;margin:20px 0 8px}
 .subtitle{color:#888;font-size:12px;margin-bottom:20px}
 .summary{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}
 .card{background:#0d1b2a;border:1px solid #263248;border-radius:6px;padding:12px 18px;min-width:120px;text-align:center}
@@ -97,9 +97,9 @@ h2{font-size:16px;font-weight:600;color:#90caf9;margin:20px 0 8px}
 .high .num{color:#ff7043}
 .medium .num{color:#ffa726}
 .low .num{color:#66bb6a}
-.info-card .num{color:#42a5f5}
+.info-card .num{color:#ffa726}
 table{width:100%;border-collapse:collapse;background:#0d1b2a;border-radius:6px;overflow:hidden;margin-bottom:20px}
-th{background:#263248;padding:8px 10px;text-align:left;font-size:12px;color:#90caf9;font-weight:600}
+th{background:#263248;padding:8px 10px;text-align:left;font-size:12px;color:#ffcc80;font-weight:600}
 td{padding:7px 10px;border-bottom:1px solid #1a2840;font-size:12px;vertical-align:top;word-break:break-word}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:#111d2e}

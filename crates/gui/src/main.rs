@@ -73,14 +73,16 @@ slint::slint! {
         out property <color> border:        dark ? #3a3a4a : #a8b1c2;
         out property <color> border-strong: dark ? #4a4a5c : #7a8499;
 
-        // --- Accent (Stars-Blau) ---
-        // interpretiert (`#2563EB` bricht ab — `2563E` erwartet
-        // denen nach einer Ziffer ein Buchstabe ≠ e/E kommt.
+        // --- Accent (Stars warm orange) ---
+        // A dark, warm orange reads more comfortably than blue for many
+        // eyes and gives Stars a distinct identity. On the light app
+        // background a deep orange keeps strong contrast; on dark mode a
+        // slightly muted warm tone is used for the soft accent.
         // Hex values deliberately avoid "digit(s) directly followed by
         // e/E", which Rust's tokenizer parses as a float exponent.
-        out property <color> accent:         #3B82F6;
-        out property <color> accent-hover:   #1D4ED8;
-        out property <color> accent-soft:    dark ? #3A4C8F : #DBEAFE;
+        out property <color> accent:         #C2410C;
+        out property <color> accent-hover:   #9A3412;
+        out property <color> accent-soft:    dark ? #7C3A12 : #FFEDD5;
         out property <color> accent-text:    #ffffff;
 
         // --- Semantic ---

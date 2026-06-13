@@ -1,6 +1,6 @@
 # Stars — AD Permission Analyzer
 
-[![Latest Release](https://img.shields.io/github/v/release/Birgerson/stars-ad-permission-analyzer?include_prereleases&label=Release&color=4fc3f7)](https://github.com/Birgerson/stars-ad-permission-analyzer/releases)
+[![Latest Release](https://img.shields.io/github/v/release/Birgerson/stars-ad-permission-analyzer?include_prereleases&label=Release&color=c2410c)](https://github.com/Birgerson/stars-ad-permission-analyzer/releases)
 [![CI](https://github.com/Birgerson/stars-ad-permission-analyzer/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Birgerson/stars-ad-permission-analyzer/actions/workflows/ci.yml)
 
 ---
