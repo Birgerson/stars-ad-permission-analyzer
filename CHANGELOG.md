@@ -10,6 +10,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+(No unreleased changes — see v1.7.0 below for the latest release.)
+
+---
+
+## [1.7.0] — 2026-06-13
+
+**Hardened-DC support (minor release).** The headline change closes lab
+finding F1: Stars can now query a default-hardened Windows Server
+2022/2025 domain controller — which enforces LDAP signing and may have no
+LDAPS certificate — and run its full recursive group resolution there.
+Also: a warm-orange UI accent for readability and a tidied README.
+
 ### Signed LDAP bind (SASL GSSAPI/Kerberos) — query hardened DCs without a certificate (lab finding F1)
 
 Stars could not connect to a default-hardened Windows Server 2022/2025
@@ -36,6 +48,21 @@ delegation will not have one).
 Verified live against a hardened Windows Server 2025 DC: the signed bind
 resolved a user's full five-level nested group chain over LDAP — which the
 certificate-less, signing-required DC had previously made impossible.
+
+### Warm-orange accent (readability)
+
+The UI accent changed from blue to a dark, warm orange — easier on the
+eyes and a distinct identity. The GUI (primary buttons, active-tab/focus
+accents), the HTML report headings, and the README release badge all use
+the new accent; the HTML report uses a lighter warm orange because its
+background is dark.
+
+### README tidied
+
+Added a table of contents and grouped the previously flat list of 21
+sections under six top-level headings (Overview, Download & install, What
+Stars is, Using Stars, Project & development, Legal) so a long page is
+easy to scan.
 
 ---
 
