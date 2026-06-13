@@ -67,13 +67,25 @@ pub fn write_csv<W: Write>(writer: W, permissions: &[EffectivePermission]) -> cs
     let mut wtr = csv::Writer::from_writer(writer);
     wtr.write_record(HEADERS)?;
     for perm in permissions {
-        wtr.write_record(record_for(perm))?;
+        wtr.write_record(record_for(perm)?)?;
     }
     wtr.flush()?;
     Ok(())
 }
 
-fn record_for(p: &EffectivePermission) -> [String; 20] {
+/// Converts a `serde_json` serialization failure into a `csv::Error` so it
+/// propagates out of `write_csv` instead of being swallowed into an empty
+/// `"[]"`. Symmetric to the persistence write-side fix (review 2026-06-13
+/// finding 4): for an audit export a silently-empty evidence column would
+/// look complete while having lost data; theoretical for these plain types,
+/// but the failure must be surfaced, not hidden.
+fn evidence_err(field: &str, e: serde_json::Error) -> csv::Error {
+    csv::Error::from(std::io::Error::other(format!(
+        "serializing CSV evidence field '{field}': {e}"
+    )))
+}
+
+fn record_for(p: &EffectivePermission) -> csv::Result<[String; 20]> {
     let kind = format!("{:?}", p.identity.kind);
     let ntfs = NormalizedRights::new(p.ntfs_mask.0);
     let (share_hex, share_label) = match p.share_mask {
@@ -86,11 +98,11 @@ fn record_for(p: &EffectivePermission) -> [String; 20] {
     let eff = NormalizedRights::new(p.effective_mask.0);
     let explanation = p.path_explanation.steps.join(" | ");
     let (lg_status, lg_error) = local_group_status_fields(&p.local_group_status);
-    let matched_aces_json = matched_aces_to_json(&p.matched_aces);
-    let contributing_sids_json = contributing_sids_to_json(&p.contributing_sids);
+    let matched_aces_json = matched_aces_to_json(&p.matched_aces)?;
+    let contributing_sids_json = contributing_sids_to_json(&p.contributing_sids)?;
     let diagnostics_json =
-        serde_json::to_string(&p.diagnostics).unwrap_or_else(|_| "[]".to_owned());
-    [
+        serde_json::to_string(&p.diagnostics).map_err(|e| evidence_err("diagnostics", e))?;
+    Ok([
         p.path.0.clone(),
         p.identity.sid.0.clone(),
         p.identity.name.clone().unwrap_or_default(),
@@ -111,7 +123,7 @@ fn record_for(p: &EffectivePermission) -> [String; 20] {
         matched_aces_json,
         contributing_sids_json,
         diagnostics_json,
-    ]
+    ])
 }
 
 /// Machine-readable label for the share_status CSV column.
@@ -139,7 +151,7 @@ fn local_group_status_fields(status: &LocalGroupEvalStatus) -> (String, String) 
 /// Serializes `matched_aces` as a compact JSON array. Audit pipelines
 /// needing structured access to the matched ACEs can parse this field
 /// directly — for the full detail tree use the JSON exporter.
-fn matched_aces_to_json(aces: &[adpa_core::model::AceEntry]) -> String {
+fn matched_aces_to_json(aces: &[adpa_core::model::AceEntry]) -> csv::Result<String> {
     #[derive(serde::Serialize)]
     struct Compact<'a> {
         sid: &'a str,
@@ -159,12 +171,12 @@ fn matched_aces_to_json(aces: &[adpa_core::model::AceEntry]) -> String {
             inherited: a.inherited,
         })
         .collect();
-    serde_json::to_string(&compact).unwrap_or_else(|_| "[]".to_owned())
+    serde_json::to_string(&compact).map_err(|e| evidence_err("matched_aces", e))
 }
 
 /// Serializes `contributing_sids` as a compact JSON array. Per SID it
 /// contains only the bits that actually contributed to the NTFS result.
-fn contributing_sids_to_json(sids: &[adpa_core::model::ContributingAce]) -> String {
+fn contributing_sids_to_json(sids: &[adpa_core::model::ContributingAce]) -> csv::Result<String> {
     #[derive(serde::Serialize)]
     struct Compact<'a> {
         sid: &'a str,
@@ -177,7 +189,7 @@ fn contributing_sids_to_json(sids: &[adpa_core::model::ContributingAce]) -> Stri
             mask: format!("0x{:08X}", c.mask.0),
         })
         .collect();
-    serde_json::to_string(&compact).unwrap_or_else(|_| "[]".to_owned())
+    serde_json::to_string(&compact).map_err(|e| evidence_err("contributing_sids", e))
 }
 
 #[cfg(test)]

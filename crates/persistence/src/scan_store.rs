@@ -136,13 +136,19 @@ impl<'a> ScanStore<'a> {
                 CoreError::Database(format!("identity upsert in insert_permission: {e}"))
             })?;
 
-        let explanation =
-            serde_json::to_string(&perm.path_explanation.steps).unwrap_or_else(|_| "[]".into());
+        // Review 2026-06-13 (Codex) finding 4: serialize the JSON evidence
+        // fields with explicit error propagation instead of silently
+        // substituting "[]". For these plain serializable types
+        // serialization does not realistically fail, but for an audit tool
+        // a silent empty list would write a row that looks complete while
+        // having lost evidence — the write side must be as loud as the
+        // read side (finding 3). `encode_evidence` names the field and path
+        // in the error so a failure is diagnosable.
+        let explanation = encode_evidence(&perm.path_explanation.steps, "explanation", &perm.path)?;
         let contributing =
-            serde_json::to_string(&perm.contributing_sids).unwrap_or_else(|_| "[]".into());
-        let matched_aces =
-            serde_json::to_string(&perm.matched_aces).unwrap_or_else(|_| "[]".into());
-        let diagnostics = serde_json::to_string(&perm.diagnostics).unwrap_or_else(|_| "[]".into());
+            encode_evidence(&perm.contributing_sids, "contributing_sids", &perm.path)?;
+        let matched_aces = encode_evidence(&perm.matched_aces, "matched_aces", &perm.path)?;
+        let diagnostics = encode_evidence(&perm.diagnostics, "diagnostics", &perm.path)?;
 
         // ShareEvalStatus in Status-Text + optionalen Fehlertext zerlegen.
         // Decompose ShareEvalStatus into a status string + optional error text.
@@ -567,6 +573,25 @@ pub fn load_permissions_for_run(
     scan_run_id: &Uuid,
 ) -> Result<Vec<EffectivePermission>, CoreError> {
     ScanStore::new(conn).get_permissions(scan_run_id)
+}
+
+/// Serializes a JSON evidence field for an `effective_permissions` row,
+/// propagating a `CoreError` on failure instead of silently substituting an
+/// empty list. The error names the `field` and the `path` of the permission
+/// row so a (theoretical) serialization failure is diagnosable rather than
+/// producing a row that looks complete while having dropped evidence
+/// (review 2026-06-13 finding 4).
+fn encode_evidence<T: serde::Serialize>(
+    value: &T,
+    field: &str,
+    path: &NormalizedPath,
+) -> Result<String, CoreError> {
+    serde_json::to_string(value).map_err(|e| {
+        CoreError::Database(format!(
+            "serializing evidence field '{field}' for path '{}': {e}",
+            path.0
+        ))
+    })
 }
 
 fn kind_to_str(kind: &IdentityKind) -> &'static str {
