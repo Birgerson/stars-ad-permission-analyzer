@@ -180,6 +180,14 @@ user can effectively do there.
 trustee table, and a **risk findings section** with the rules that
 fired per path. Auto-persisted to the SQLite scan history.
 
+A path whose evaluation is uncertain or informational is shown in the
+**error color** in the list. **Expand the row** (click it) to read the
+exact reason: a **Diagnostics** block lists one line per marker — the
+same wording the CLI and reports use — so you see *why* the row is
+flagged, not just *that* it is. See
+[Reading findings — diagnostic markers](#reading-findings--diagnostic-markers)
+for what each marker means.
+
 **Risk findings:** Stars applies six built-in risk rules to every
 finding:
 

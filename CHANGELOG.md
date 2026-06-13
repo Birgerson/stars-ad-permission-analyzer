@@ -10,7 +10,26 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.6.3 below for the latest release.)
+### CLI scan streams the tree instead of buffering it (review 2026-06-13 finding 1)
+
+The CLI scan (`run_scan`) no longer materializes the whole
+`Vec<FileSystemObject>` before evaluation. A new
+`ad_resolver::SidNameResolver` (an incremental SID→name cache) replaces
+the up-front SID-collection pass, so the blocking walk can stream each
+object through a bounded channel, be evaluated, and dropped immediately.
+Peak memory no longer holds the full object set, first results appear as
+enumeration proceeds, and cancellation is more responsive. The streamed
+result is identical to the previous buffered one (ADR 0050).
+
+### GUI scan rows now show *why* they are flagged, not just *that* they are (review 2026-06-13 finding 2)
+
+The `Scan Tree` table colored a path when it carried any diagnostic but
+did not say which uncertainty applied — weaker than the CLI, HTML and
+CSV/JSON outputs, which all spell out the reason. Expanding a flagged row
+now shows a **Diagnostics** block listing one human-readable line per
+marker, using a single source-of-truth `PermissionDiagnostic::summary()`
+shared across surfaces. Closes the last "show uncertainty in the GUI"
+consistency gap.
 
 ---
 

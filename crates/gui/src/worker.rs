@@ -170,6 +170,13 @@ pub struct ScanRow {
     /// Count of structured diagnostic markers (e.g. non-canonical DACL,
     /// follow-up finding 3). 0 = unremarkable.
     pub diagnostic_count: usize,
+    /// Human-readable, single-line reason for each structured diagnostic on
+    /// this path (`PermissionDiagnostic::summary()`). Surfaced in the
+    /// expanded scan-row detail so the GUI shows *why* a row is flagged, not
+    /// just *that* it is — closing the "show uncertainty in the GUI"
+    /// consistency gap (engine review 2026-06-13 finding 2). Empty when the
+    /// path carries no diagnostics.
+    pub diagnostics: Vec<String>,
     /// Path-centric trustee view — every ACE in the DACL resolved, with
     /// "Applies to" labels and Allow/Deny. Empty when the scan runs
     /// without trustee collection. Complement to the identity-based
@@ -994,6 +1001,7 @@ async fn handle_scan(
                     steps: perm.path_explanation.steps.clone(),
                     unsupported_ace_count: perm.unsupported_ace_count,
                     diagnostic_count: perm.diagnostics.len(),
+                    diagnostics: perm.diagnostics.iter().map(|d| d.summary()).collect(),
                     trustees: trustees_for_row,
                 }));
                 permissions.push(perm);

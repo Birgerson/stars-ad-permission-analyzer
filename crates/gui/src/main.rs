@@ -374,6 +374,10 @@ slint::slint! {
         trustees: [TrusteeRowVm],
         expanded: bool,
         has_diagnostic: bool,
+        // Per-diagnostic human-readable reasons for this row (engine review
+        // 2026-06-13 finding 2). Shown in the expanded detail so the GUI
+        // surfaces *why* a row is flagged, not just the colored flag.
+        diagnostics: [string],
     }
 
     // A scan error (a path could not be evaluated).
@@ -1258,6 +1262,28 @@ slint::slint! {
                                                 for step[j] in row.steps: Text {
                                                     text: (j + 1) + ". " + step;
                                                     color: #444;
+                                                    wrap: word-wrap;
+                                                }
+                                            }
+
+                                            // Diagnostic reasons — surface
+                                            // *why* this row is flagged
+                                            // (incompleteness / informational
+                                            // markers), not just the colored
+                                            // path. Mirrors the CLI/HTML/CSV
+                                            // diagnostics so uncertainty is
+                                            // visible in the GUI scan tree
+                                            // (review 2026-06-13 finding 2).
+                                            if row.diagnostics.length > 0: VerticalBox {
+                                                spacing: 1px;
+                                                Text {
+                                                    text: "Diagnostics (" + row.diagnostics.length + "):";
+                                                    color: Theme.error;
+                                                    font-weight: 700;
+                                                }
+                                                for diag[d] in row.diagnostics: Text {
+                                                    text: "⚠ " + diag;
+                                                    color: Theme.error;
                                                     wrap: word-wrap;
                                                 }
                                             }
@@ -2411,6 +2437,12 @@ fn handle_scan_item(ui: &MainWindow, row: ScanRow) {
         trustees: slint::ModelRc::new(slint::VecModel::from(trustee_vms)),
         expanded: false,
         has_diagnostic: row.diagnostic_count > 0 || row.unsupported_ace_count > 0,
+        diagnostics: slint::ModelRc::new(slint::VecModel::from(
+            row.diagnostics
+                .iter()
+                .map(|d| slint::SharedString::from(d.as_str()))
+                .collect::<Vec<_>>(),
+        )),
     };
     SCAN_STATE.with(|s| s.borrow_mut().all_rows.push(vm));
     let total = SCAN_STATE.with(|s| s.borrow().all_rows.len()) as i32;

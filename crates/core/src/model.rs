@@ -660,6 +660,81 @@ pub enum PermissionDiagnostic {
     PersistedEvidenceDecodeFailed { detail: String },
 }
 
+impl PermissionDiagnostic {
+    /// Concise, single-line, auditor-readable reason for this diagnostic.
+    ///
+    /// This is the **single source of truth** for the short human-readable
+    /// form of a diagnostic, intended for compact surfaces such as the GUI
+    /// scan-row detail or a tooltip. It is deliberately one sentence: the
+    /// CLI (`cli::output`) and the HTML report keep their own richer,
+    /// multi-line / badge presentations, but they all describe the same
+    /// underlying markers. Returning an owned `String` because the variants
+    /// carrying `count`/`reason`/`detail` need interpolation.
+    pub fn summary(&self) -> String {
+        match self {
+            PermissionDiagnostic::NonCanonicalDaclOrder { at_index } => format!(
+                "Non-canonical DACL order (first at ACE #{at_index}); evaluated in \
+                 stored order like Windows, may differ from canonical expectations."
+            ),
+            PermissionDiagnostic::UnsupportedShareAces { count } => format!(
+                "{count} share ACE(s) of an unsupported type were skipped — the share \
+                 mask is potentially incomplete."
+            ),
+            PermissionDiagnostic::UnsupportedNtfsAces { count } => format!(
+                "{count} NTFS ACE(s) could not be evaluated (object/callback/conditional/\
+                 vendor) — a hidden Deny among them could change the result."
+            ),
+            PermissionDiagnostic::DomainGroupRecursionIncomplete => {
+                "Group resolution used the SAM/LSA fallback (no LDAP); nested domain \
+                 groups are not resolved recursively, ACEs on them may be missed."
+                    .to_owned()
+            }
+            PermissionDiagnostic::IdentityDisabled => {
+                "Identity is flagged disabled in AD — rights are ACL-theoretically \
+                 correct, but the account normally cannot authenticate."
+                    .to_owned()
+            }
+            PermissionDiagnostic::IdentityNotInConfiguredLdapBase => {
+                "Identity resolved via LSA but the configured LDAP base DN does not index \
+                 its SID; cross-domain nested memberships may be missing."
+                    .to_owned()
+            }
+            PermissionDiagnostic::IdentityDisabledStatusUnknown => {
+                "The disabled flag for this identity could not be determined — rights are \
+                 correct, but whether the account is enabled is unknown."
+                    .to_owned()
+            }
+            PermissionDiagnostic::IdentityLookupFailed { reason } => format!(
+                "LDAP identity lookup failed ({reason}); analysis ran with a placeholder \
+                 identity, ACEs on domain groups may be missing."
+            ),
+            PermissionDiagnostic::GroupResolutionFailed { reason } => format!(
+                "Recursive group resolution failed or was skipped ({reason}); ACEs on \
+                 domain groups may be missing."
+            ),
+            PermissionDiagnostic::OwnerRightsAceApplied => {
+                "OWNER RIGHTS (S-1-3-4) ACE governs the owner's rights; the implicit \
+                 READ_CONTROL + WRITE_DAC owner grant was suppressed. Exact — informational."
+                    .to_owned()
+            }
+            PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal => {
+                "Identity is a trust-forest principal resolved via a Foreign Security \
+                 Principal; its memberships in its own forest are unknown."
+                    .to_owned()
+            }
+            PermissionDiagnostic::GroupResolutionViaGlobalCatalog => {
+                "Memberships came from a Global Catalog bind; only universal groups \
+                 replicate fully to the GC, foreign-domain global/domain-local may be missing."
+                    .to_owned()
+            }
+            PermissionDiagnostic::PersistedEvidenceDecodeFailed { detail } => format!(
+                "A persisted (historical) row could not be fully decoded ({detail}); the \
+                 reconstructed result may be less complete than the original."
+            ),
+        }
+    }
+}
+
 /// Explainable permission path
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionPath {
@@ -796,6 +871,66 @@ pub enum RiskSeverity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Diagnostic summaries (engine review 2026-06-13 finding 2) ---
+    //
+    // The GUI scan-row detail surfaces the per-variant reason via
+    // `summary()`. Guard that every variant yields a non-empty, single-line
+    // string with the interpolated payload present, so a newly added variant
+    // cannot silently render as an empty row.
+
+    #[test]
+    fn diagnostic_summary_is_non_empty_and_single_line() {
+        let variants = [
+            PermissionDiagnostic::NonCanonicalDaclOrder { at_index: 3 },
+            PermissionDiagnostic::UnsupportedShareAces { count: 2 },
+            PermissionDiagnostic::UnsupportedNtfsAces { count: 5 },
+            PermissionDiagnostic::DomainGroupRecursionIncomplete,
+            PermissionDiagnostic::IdentityDisabled,
+            PermissionDiagnostic::IdentityNotInConfiguredLdapBase,
+            PermissionDiagnostic::IdentityDisabledStatusUnknown,
+            PermissionDiagnostic::IdentityLookupFailed {
+                reason: "bind timeout".to_owned(),
+            },
+            PermissionDiagnostic::GroupResolutionFailed {
+                reason: "DC unreachable".to_owned(),
+            },
+            PermissionDiagnostic::OwnerRightsAceApplied,
+            PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal,
+            PermissionDiagnostic::GroupResolutionViaGlobalCatalog,
+            PermissionDiagnostic::PersistedEvidenceDecodeFailed {
+                detail: "diagnostics field".to_owned(),
+            },
+        ];
+        for d in &variants {
+            let s = d.summary();
+            assert!(!s.trim().is_empty(), "empty summary for {d:?}");
+            assert!(
+                !s.contains('\n'),
+                "summary must be single-line for GUI rows, got newline in {d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn diagnostic_summary_includes_payload() {
+        assert!(PermissionDiagnostic::UnsupportedNtfsAces { count: 7 }
+            .summary()
+            .contains('7'));
+        assert!(PermissionDiagnostic::NonCanonicalDaclOrder { at_index: 9 }
+            .summary()
+            .contains('9'));
+        assert!(PermissionDiagnostic::IdentityLookupFailed {
+            reason: "specific-reason-text".to_owned()
+        }
+        .summary()
+        .contains("specific-reason-text"));
+        assert!(PermissionDiagnostic::PersistedEvidenceDecodeFailed {
+            detail: "specific-detail-text".to_owned()
+        }
+        .summary()
+        .contains("specific-detail-text"));
+    }
 
     // --- Validated construction (engine review 2026-06-12 finding 4) ---
 
