@@ -39,3 +39,4 @@ scan-output.csv
 
 # Lokale Stand-Dokumente (nicht im Repo)
 aktuell.md
+__pycache__/
