@@ -271,13 +271,19 @@ adpa.exe analyze --path "\\server\share\Data" --user S-1-5-21-... ^
 > `--base-dn` may be omitted. GC-resolved group memberships are marked
 > potentially incomplete (only universal groups replicate fully to the GC).
 >
-> **Note for Windows Server 2025:** Server 2025 enforces LDAP signing by default
-> (`rc=8 strongerAuthRequired` for unencrypted binds). To use `--insecure-ldap`
-> against a 2025 target you would have to loosen this server-side — not advisable
-> in production. For LDAPS, the DC needs a valid computer certificate (typically
-> via AD CS); without a certificate the TLS handshake fails. Stars detects both
-> cases and surfaces a clear diagnostic marker instead of silently returning
-> incomplete results.
+> **Note for Windows Server 2022/2025:** these enforce LDAP signing by default
+> (`rc=8 strongerAuthRequired` for unencrypted binds), so `--insecure-ldap`
+> (plain port 389) is refused unless you loosen the server — not advisable in
+> production. LDAPS therefore needs a DC certificate that **the host running
+> Stars actually trusts**: issued by a CA in that host's trust store (typically
+> your AD CS enterprise CA) **and** matching the **FQDN** you connect to (use
+> the FQDN, e.g. `dc.corp.local`, not an IP). A **self-signed certificate is
+> rejected** — Stars validates the chain and has no "skip certificate" option.
+> If LDAPS with a trusted certificate is not available — and a hardened DC
+> refuses plain LDAP — the bind **fails with a clear error and the analysis
+> aborts**; it does **not** silently return an incomplete result. To analyze
+> without LDAP, omit `--server`: Stars uses the SAM/LSA fallback and flags
+> nested-group gaps with `DomainGroupRecursionIncomplete`.
 
 **CLI — UNC path with automatic share detection:**
 ```

@@ -327,6 +327,36 @@ Fields (all auto-trimmed before use):
 - **Password** — bind password. **Never stored**, only valid for the
   current session.
 
+### LDAPS certificate requirements (read this before using LDAPS)
+
+LDAPS mode (port 636) only connects if the domain controller presents a
+certificate that the **machine running Stars actually trusts**. This trips
+up many first-time setups, so concretely:
+
+- **The certificate must be issued by a trusted CA** — it must chain to a
+  Certification Authority in the Stars host's trust store, in practice a
+  certificate auto-enrolled from your **AD Certificate Services (AD CS)**
+  enterprise CA. A **self-signed certificate is rejected**: Stars validates
+  the full chain and has **no "ignore/skip certificate" option**. "Some
+  certificate" is not enough — it has to be a real, trusted one.
+- **Connect by FQDN, not by IP.** Put the DC's fully-qualified name
+  (`dc01.corp.local`) in the **Server** field, not its IP address — the
+  name you connect to must match the certificate's host name, or validation
+  fails.
+- **Cross-domain / cross-forest:** when you bind to a DC in another domain,
+  the Stars host must also trust *that* domain's CA.
+
+If LDAPS is not available (no certificate on the DC) the TLS handshake
+fails. Falling back to **Plain LDAP** (Mode 2 / CLI `--insecure-ldap`) does
+not help against a hardened DC: **Windows Server 2022 and 2025 enforce LDAP
+signing by default** and refuse the unencrypted bind with
+`strongerAuthRequired`. In both cases the bind **fails with a clear error
+and the analysis aborts** — Stars does *not* hand back a result that looks
+complete. To analyze without any LDAP, leave **LDAP mode Off** and rely on
+the SAM/LSA fallback; nested domain groups are then flagged
+`DomainGroupRecursionIncomplete` (see
+[Reading findings — diagnostic markers](#reading-findings--diagnostic-markers)).
+
 ### Multi-domain / trust relationships
 
 When the configured `base_dn` only indexes **a single domain**
@@ -336,11 +366,14 @@ identities via LSA and flags them as
 
 For **full** forest coverage:
 
-- Run a second Stars analysis with the partner domain's `base_dn`,
-  or
-- Bind against the **Global Catalog** (`gc://dc.corp.local:3268`) —
-  **not yet implemented in Stars**, see
-  [known-limitations.md L2](known-limitations.md).
+- Run a second Stars analysis with the partner domain's `base_dn`, or
+- Bind against the **Global Catalog** — available in the **CLI** via
+  `--global-catalog`. Stars then binds the GC (LDAPS port 3269 / plain
+  3268), identity lookups become forest-wide, and `--base-dn` may be
+  omitted. GC-resolved memberships are flagged potentially incomplete,
+  because only **universal** groups replicate fully to the Global Catalog.
+  Note: the GUI currently exposes only Off / LDAPS / Plain LDAP, so use the
+  CLI for Global Catalog binds.
 
 ---
 
