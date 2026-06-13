@@ -70,6 +70,11 @@ The raw Discretionary Access Control List of the path is read directly via Win32
 * explicit or inherited
 * inheritance and propagation flags
 
+The raw access mask is summarized into a readable label (`F`, `M`, `RX`,
+`RW`, `R`, `W`, or `(special)`) that matches the Windows `icacls`
+notation; the raw mask is always kept alongside it. The full legend is in
+the [user guide](user-guide.md#rights-labels--what-f-rx-rw-mean).
+
 ##### 2.4 SMB share DACL (optional)
 
 For UNC paths (`\\server\share\…`) Stars additionally reads the **share permissions**. The effective permission over SMB is then the **more restrictive** of the two sets:

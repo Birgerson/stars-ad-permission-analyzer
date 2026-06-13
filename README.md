@@ -28,6 +28,22 @@ User max.mustermann -> member of "Sales"
 
 You get this step-by-step chain — including diagnostic markers when something is uncertain — in the GUI, in the CSV/JSON/HTML report, and in the CLI output. For 1 path or 5000 paths alike.
 
+### Rights labels — what `F`, `RX`, `RW` mean
+
+Stars shows each effective right as a long form plus a short label, e.g. `Read & Execute (RX)`. The short labels are **identical to Windows `icacls`**, so they read the same as in the tools you already use:
+
+| Short | Long form | Meaning |
+|---|---|---|
+| `F` | Full Control | everything, including changing the ACL (`WRITE_DAC`) and taking ownership (`WRITE_OWNER`) |
+| `M` | Modify | read + write + delete, but **not** ACL or owner changes |
+| `RX` | Read & Execute | read, list, and run executables |
+| `RW` | Read & Write | read + write, **without** the execute right |
+| `R` | Read | read only |
+| `W` | Write | write only |
+| `(special)` | Special | a partial / custom access mask that matches none of the above — inspect the raw mask (`0x…`) |
+
+Stars always reports the **highest** matching level (precedence `F > M > RX > RW > R > W > (special)`); a higher level implies the lower ones (Full Control implies Modify, which implies Read & Execute, …). The full per-bit detail is preserved in the raw mask shown next to the label. See the [user guide](docs/user-guide.md#rights-labels--what-f-rx-rw-mean) for the same table with context.
+
 ### Can Stars help you? — 30-second overview
 
 > **Full overview:** [`docs/can-stars-help-you.md`](docs/can-stars-help-you.md) — decision matrix.

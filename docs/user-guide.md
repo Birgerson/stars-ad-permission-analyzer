@@ -20,13 +20,14 @@ SMB permissions **without changing anything**.
 5. [Identity input forms](#identity-input-forms)
 6. [Active Directory binding (optional)](#active-directory-binding-optional)
 7. [Local paths vs. SMB shares](#local-paths-vs-smb-shares)
-8. [Reading findings — diagnostic markers](#reading-findings--diagnostic-markers)
-9. [Exporting — CSV, JSON, HTML](#exporting--csv-json-html)
-10. [The CLI](#the-cli)
-11. [Where is data stored?](#where-is-data-stored)
-12. [Updates](#updates)
-13. [FAQ](#faq)
-14. [Further reading](#further-reading)
+8. [Rights labels — what F, RX, RW mean](#rights-labels--what-f-rx-rw-mean)
+9. [Reading findings — diagnostic markers](#reading-findings--diagnostic-markers)
+10. [Exporting — CSV, JSON, HTML](#exporting--csv-json-html)
+11. [The CLI](#the-cli)
+12. [Where is data stored?](#where-is-data-stored)
+13. [Updates](#updates)
+14. [FAQ](#faq)
+15. [Further reading](#further-reading)
 
 ---
 
@@ -364,6 +365,41 @@ GUI "SMB context" checkbox):
 These fields are only valid **as a pair**. Setting only one returns
 a clear error — otherwise it would silently affect token SID
 resolution.
+
+---
+
+## Rights labels — what F, RX, RW mean
+
+Stars shows every effective right as a **long form plus a short label**,
+for example `Read & Execute (RX)` or `Full Control (F)`. The short labels
+are **identical to the Windows `icacls` notation**, so they read exactly
+the same as in the tools you already use on the file server.
+
+| Short | Long form | Meaning |
+| --- | --- | --- |
+| `F` | Full Control | Everything, **including** changing the ACL itself (`WRITE_DAC`) and taking ownership (`WRITE_OWNER`). The most powerful — and most audit-relevant — right. |
+| `M` | Modify | Read + write + delete the object, but **not** ACL or owner changes. |
+| `RX` | Read & Execute | Read and list contents, and run executables. |
+| `RW` | Read & Write | Read + write, but **without** the execute right. |
+| `R` | Read | Read only. |
+| `W` | Write | Write only. |
+| `(special)` | Special | A partial or custom access mask that matches none of the levels above. Inspect the raw mask (`0x…`) shown next to the label for the exact bits. |
+
+Two things to keep in mind when reading these:
+
+- **Highest level wins.** Stars reports the highest matching level with
+  the precedence `F > M > RX > RW > R > W > (special)`. A higher level
+  implies the lower ones: Full Control implies Modify, which implies
+  Read & Execute, which implies Read. So a row showing `Modify (M)` also
+  has read and write — it just is not Full Control.
+- **Nothing is lost.** The label is a readable summary; the exact
+  per-bit access mask is always preserved in the raw hex value
+  (`0x001F01FF` etc.) next to it and in the CSV/JSON export, so special
+  permissions stay visible.
+
+This mapping comes from a single place in the engine
+(`NormalizedRights` in `crates/permission_engine/src/mask.rs`) and is the
+same across the GUI, the CLI, and every export format.
 
 ---
 
