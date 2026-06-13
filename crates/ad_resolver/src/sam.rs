@@ -532,42 +532,85 @@ pub fn build_sid_name_map<I>(
 where
     I: IntoIterator<Item = String>,
 {
-    use std::collections::{BTreeMap, HashSet};
+    let mut resolver = SidNameResolver::new(memberships);
+    resolver.resolve(extra_sids);
+    resolver.into_map()
+}
 
-    let mut map: BTreeMap<String, String> = BTreeMap::new();
-    let mut tried: HashSet<String> = HashSet::new();
+/// Incremental SID → name resolver: the streaming counterpart to
+/// [`build_sid_name_map`] (engine review 2026-06-13 finding 1).
+///
+/// `build_sid_name_map` resolves a whole batch of trustee SIDs at once,
+/// which forces a scanner to collect every SID up front and therefore
+/// buffer the whole object set. A streaming scan instead feeds each
+/// object's trustee SIDs to [`SidNameResolver::resolve`] as the object is
+/// processed; the resolver keeps the growing `map` and a `tried` set, so
+/// each distinct SID is still resolved via LSA **exactly once** across the
+/// whole scan, without an up-front collection pass. The per-object output
+/// (trustee table, explanation) only references that object's own SIDs,
+/// all of which are resolved before the object is rendered — so the
+/// streaming result is identical to the batched one.
+pub struct SidNameResolver {
+    map: std::collections::BTreeMap<String, String>,
+    tried: std::collections::HashSet<String>,
+}
 
-    // Memberships with a pre-set name go in verbatim.
-    for m in memberships {
-        if let Some(name) = m.group_name.as_deref().filter(|s| !s.is_empty()) {
-            map.insert(m.group_sid.0.clone(), name.to_owned());
-            tried.insert(m.group_sid.0.clone());
+impl SidNameResolver {
+    /// Seeds the resolver from group memberships: those with a pre-set
+    /// `group_name` go into the map verbatim (and count as resolved), the
+    /// rest are queued for LSA resolution on the first [`resolve`] call.
+    ///
+    /// [`resolve`]: SidNameResolver::resolve
+    pub fn new(memberships: &[GroupMembership]) -> Self {
+        let mut map = std::collections::BTreeMap::new();
+        let mut tried = std::collections::HashSet::new();
+        let mut pending: Vec<String> = Vec::new();
+        for m in memberships {
+            if let Some(name) = m.group_name.as_deref().filter(|s| !s.is_empty()) {
+                map.insert(m.group_sid.0.clone(), name.to_owned());
+                tried.insert(m.group_sid.0.clone());
+            } else {
+                pending.push(m.group_sid.0.clone());
+            }
         }
+        let mut resolver = Self { map, tried };
+        resolver.resolve(pending);
+        resolver
     }
 
-    // Resolve remaining SIDs (memberships without name + extras) via LSA.
-    let candidates = memberships
-        .iter()
-        .map(|m| m.group_sid.0.clone())
-        .chain(extra_sids);
-
-    for sid in candidates {
-        if !tried.insert(sid.clone()) {
-            continue;
-        }
-        if let Ok(info) = lookup_account_for_sid(&sid) {
-            let display = if info.domain.is_empty() {
-                info.name
-            } else {
-                format!("{}\\{}", info.domain, info.name)
-            };
-            if !display.is_empty() {
-                map.insert(sid, display);
+    /// Resolves any of `sids` not yet seen via `lookup_account_for_sid`,
+    /// caching the result. Already-tried SIDs are skipped, so this is safe
+    /// to call once per scanned object with that object's trustee SIDs.
+    pub fn resolve<I>(&mut self, sids: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        for sid in sids {
+            if !self.tried.insert(sid.clone()) {
+                continue;
+            }
+            if let Ok(info) = lookup_account_for_sid(&sid) {
+                let display = if info.domain.is_empty() {
+                    info.name
+                } else {
+                    format!("{}\\{}", info.domain, info.name)
+                };
+                if !display.is_empty() {
+                    self.map.insert(sid, display);
+                }
             }
         }
     }
 
-    map
+    /// The SID → name map resolved so far.
+    pub fn map(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.map
+    }
+
+    /// Consumes the resolver, returning the accumulated map.
+    pub fn into_map(self) -> std::collections::BTreeMap<String, String> {
+        self.map
+    }
 }
 
 /// Classifies the `SID_NAME_USE` field of the LSA response.
@@ -705,5 +748,59 @@ mod tests {
             res.disabled_known,
             "On a DC, NetUserGetInfo should be answerable for the built-in Administrator"
         );
+    }
+
+    // --- SidNameResolver (engine review 2026-06-13 finding 1) ---
+
+    fn membership(sid: &str, name: Option<&str>) -> GroupMembership {
+        GroupMembership {
+            member_sid: Sid("S-1-5-21-1-1-1-500".into()),
+            group_sid: Sid(sid.into()),
+            direct: true,
+            group_name: name.map(|s| s.to_owned()),
+            path: None,
+        }
+    }
+
+    #[test]
+    fn resolver_seeds_membership_names_verbatim() {
+        let r = SidNameResolver::new(&[
+            membership("S-1-5-21-9-9-9-1001", Some("CORP\\Sales")),
+            membership("S-1-5-21-9-9-9-1002", None),
+        ]);
+        // The named membership is in the map verbatim; the unnamed one is
+        // only present if LSA resolved it (a synthetic SID won't), so we
+        // only assert the named one deterministically.
+        assert_eq!(
+            r.map().get("S-1-5-21-9-9-9-1001").map(String::as_str),
+            Some("CORP\\Sales")
+        );
+    }
+
+    #[test]
+    fn resolver_resolves_each_sid_once() {
+        let mut r = SidNameResolver::new(&[]);
+        // An already-seeded SID is not retried; a synthetic SID resolves to
+        // nothing (LSA miss) but is marked tried, so a second resolve is a
+        // no-op and the map stays stable.
+        r.resolve(["S-1-5-21-9-9-9-7777".to_owned()]);
+        let after_first = r.map().len();
+        r.resolve(["S-1-5-21-9-9-9-7777".to_owned()]);
+        assert_eq!(
+            r.map().len(),
+            after_first,
+            "resolving the same SID twice must not change the map"
+        );
+    }
+
+    #[test]
+    fn build_sid_name_map_matches_resolver() {
+        // The batch helper must equal new() + resolve() + into_map().
+        let memberships = [membership("S-1-5-21-9-9-9-1001", Some("CORP\\Sales"))];
+        let extra = ["S-1-5-21-9-9-9-2002".to_owned()];
+        let batch = build_sid_name_map(&memberships, extra.iter().cloned());
+        let mut resolver = SidNameResolver::new(&memberships);
+        resolver.resolve(extra.iter().cloned());
+        assert_eq!(batch, resolver.into_map());
     }
 }

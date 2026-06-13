@@ -23,7 +23,7 @@ use adpa_core::{
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use exporter::{CsvExporter, HtmlExporter, JsonExporter};
-use fs_scanner::{read_fso, walk_tree, CancellationToken, WalkConfig};
+use fs_scanner::{read_fso, CancellationToken, WalkConfig};
 use permission_engine::{
     build_token_sids_with_context, engine::DefaultPermissionEngine, NormalizedRights,
 };
@@ -861,33 +861,12 @@ async fn run_scan(
         });
     }
 
-    let config = WalkConfig { max_depth };
-    let walk = {
-        let scan_path = path.clone();
-        let cancel = cancel.clone();
-        // The walk is blocking — run it on a blocking thread so the Ctrl-C handler
-        // can still react.
-        tokio::task::spawn_blocking(move || walk_tree(&scan_path, &config, &cancel))
-            .await
-            .map_err(|e| anyhow::anyhow!("Scan task failed: {e}"))?
-    };
-
-    let mut all_permissions = Vec::with_capacity(walk.objects.len());
-    let mut all_path_trustees: Vec<adpa_core::model::PathTrustees> =
-        Vec::with_capacity(walk.objects.len());
-    let mut unsupported_ace_paths = 0usize;
-
-    // build_path_trustees_with_share dieselbe Share-DACL anhaengt ohne
-    // Round-9 finding 1: read the share overlay once per scan (like the
-    // GUI does since ADR 0038) so every build_path_trustees_with_share
-    // call appends the same share DACL without re-reading it per path.
-    // Round-10 finding 1: server/share derivation now comes from
-    // `SmbAuditContext::resolve` — the same source the CLI analyze
-    // trustees and the `resolve_scan_share_status` helper use. A bare
-    // `\\fs01\data` without explicit flags now behaves consistently:
-    // all three trustee/status paths see the share layer.
-    // On non-Windows `read_share_overlay` is not callable — the CI
-    // build keeps the overlay None there.
+    // Read the share overlay once per scan (like the GUI since ADR 0038)
+    // so every per-path trustee build appends the same share DACL without
+    // re-reading it. Server/share derivation comes from
+    // `SmbAuditContext::resolve` — the same source the analyze trustees
+    // and the share-status helper use. On non-Windows `read_share_overlay`
+    // is not callable, so the overlay stays None there.
     let scan_smb_context = validation::path::SmbAuditContext::resolve(
         &path,
         smb_server.as_deref(),
@@ -902,113 +881,145 @@ async fn run_scan(
         let _ = &scan_smb_context;
         None
     };
-    // scan_local_group_sids was already resolved above (before the share mask).
-    // scan_access_context was likewise derived above before the share mask.
 
+    let mut all_permissions: Vec<EffectivePermission> = Vec::new();
+    let mut all_path_trustees: Vec<adpa_core::model::PathTrustees> = Vec::new();
+    let mut scan_errors_for_db: Vec<ScanError> = Vec::new();
+    let mut unsupported_ace_paths = 0usize;
+    let mut object_count = 0usize;
+    let mut walk_error_count = 0usize;
+
+    // Engine review 2026-06-13 finding 1: stream the walk instead of
+    // buffering the whole tree. The blocking walk runs on a worker thread
+    // and pushes each object/error through a bounded channel; this async
+    // task consumes them one at a time — evaluating, building trustees,
+    // and accumulating — then drops each FileSystemObject immediately, so
+    // the full-tree `Vec<FileSystemObject>` (the heaviest structure) is
+    // never held at once. The bounded channel also paces enumeration to
+    // consumption.
     //
-    //
-    // Build the SID→name table once for the whole scan. Trustee SIDs
-    // repeat across many paths (BUILTIN\Administrators,
-    // Authenticated Users, …), so we collect the unique SIDs from every
-    // DACL up front and perform one LSA lookup per SID instead of per
-    // path. Memberships are scan-wide constant anyway.
-    //
-    // (previously NTFS DACL only) AND is additionally handed to the
-    // trustee build function so `build_path_trustees_*` no longer makes
-    // per-path LSA calls.
+    // Trustee SIDs repeat across paths (BUILTIN\Administrators,
+    // Authenticated Users, …); the lazy `SidNameResolver` keeps a growing
+    // cache so each distinct SID is still resolved via LSA exactly once,
+    // without an up-front collection pass. A path's trustee table and
+    // explanation only reference that path's own SIDs, which are resolved
+    // right before the path is rendered — so the streamed result is
+    // identical to the previous buffered one.
     #[cfg(windows)]
-    let scan_sid_names = {
-        use std::collections::HashSet;
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut trustees: Vec<String> = Vec::new();
-        for fso in &walk.objects {
-            for sid in exporter::collect_ace_sids_for_resolution(fso, scan_share_overlay.as_ref()) {
-                if seen.insert(sid.clone()) {
-                    trustees.push(sid);
-                }
-            }
-        }
-        ad_resolver::build_sid_name_map(&resolved.resolution.memberships, trustees)
-    };
-    #[cfg(not(windows))]
-    let scan_sid_names = std::collections::BTreeMap::new();
+    let mut sid_resolver = ad_resolver::SidNameResolver::new(&resolved.resolution.memberships);
 
     let scan_engine_flags = resolved.resolution.engine_flags();
-    for fso in &walk.objects {
-        let input = PermissionEvaluationInput {
-            identity: resolved.resolution.identity.clone(),
-            group_memberships: scan_all_memberships.clone(),
-            file_system_object: fso.clone(),
-            share_status: scan_share_status.clone(),
-            local_group_sids: scan_local_group_sids.clone(),
-            local_group_status: scan_local_group_status.clone(),
-            access_context: scan_access_context,
-            unsupported_share_ace_count: scan_unsupported_share_ace_count,
-            sid_names: scan_sid_names.clone(),
-            group_resolution_via_sam_fallback: scan_engine_flags.group_resolution_via_sam_fallback,
-            identity_not_in_configured_ldap_base: scan_engine_flags
-                .identity_not_in_configured_ldap_base,
-            identity_disabled_status_unknown: scan_engine_flags.identity_disabled_status_unknown,
-            identity_lookup_failure_reason: scan_engine_flags
-                .identity_lookup_failure_reason
-                .clone(),
-            group_resolution_failure_reason: scan_engine_flags
-                .group_resolution_failure_reason
-                .clone(),
-            identity_resolved_via_fsp: scan_engine_flags.identity_resolved_via_fsp,
-            group_resolution_via_global_catalog: scan_engine_flags
-                .group_resolution_via_global_catalog,
-        };
-        let result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
-            anyhow::anyhow!("Permission evaluation failed for '{}': {e}", fso.path.0)
-        })?;
 
-        // angefragt.
-        // Round-9 finding 1: collect trustees per path — identical to
-        // the GUI since ADR 0038. The share overlay was read once and
-        // is only referenced here.
-        // Round-10 finding 2: hand the scan-wide SID→name map so the
-        // trustee build function does NOT make per-path LSA calls.
-        let trustees = exporter::build_path_trustees_with_share_and_names(
-            fso,
-            scan_share_overlay.as_ref(),
-            &scan_sid_names,
-        );
-        all_path_trustees.push(adpa_core::model::PathTrustees {
-            path: fso.path.clone(),
-            trustees,
-        });
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<fs_scanner::WalkItem>(256);
+    let walk_task = {
+        let scan_path = path.clone();
+        let cancel = cancel.clone();
+        let config = WalkConfig { max_depth };
+        // The walk is blocking — run it on a blocking thread so the Ctrl-C
+        // handler can still react. `blocking_send` applies backpressure
+        // when the consumer falls behind; a closed receiver just stops it.
+        tokio::task::spawn_blocking(move || {
+            fs_scanner::walk_tree_streaming(&scan_path, &config, &cancel, |item| {
+                let _ = tx.blocking_send(item);
+            })
+        })
+    };
 
-        let rights = NormalizedRights::new(result.effective_mask.0);
-        // Diagnostic: visibly flag paths with unevaluated ACE types.
-        if result.unsupported_ace_count > 0 {
-            unsupported_ace_paths += 1;
-            println!(
-                "  {:14}  {}  [!{} unsupported ACE(s)]",
-                rights.display_name(),
-                fso.path.0,
-                result.unsupported_ace_count
-            );
-        } else {
-            println!("  {:14}  {}", rights.display_name(), fso.path.0);
+    while let Some(item) = rx.recv().await {
+        match item {
+            fs_scanner::WalkItem::Error(walk_err) => {
+                walk_error_count += 1;
+                println!("  [Error]         {}: {}", walk_err.path, walk_err.error);
+                scan_errors_for_db.push(ScanError {
+                    path: Some(NormalizedPath(walk_err.path.clone())),
+                    message: walk_err.error.to_string(),
+                });
+            }
+            fs_scanner::WalkItem::Object(fso) => {
+                object_count += 1;
+
+                // Resolve this object's trustee SIDs into the lazy cache,
+                // then snapshot the map for this object's evaluation and
+                // trustee rendering (non-Windows keeps an empty map).
+                #[cfg(windows)]
+                let sid_names = {
+                    sid_resolver.resolve(exporter::collect_ace_sids_for_resolution(
+                        &fso,
+                        scan_share_overlay.as_ref(),
+                    ));
+                    sid_resolver.map().clone()
+                };
+                #[cfg(not(windows))]
+                let sid_names = std::collections::BTreeMap::new();
+
+                // Trustees and the printed path borrow the object before it
+                // is moved into the engine input below.
+                let trustees = exporter::build_path_trustees_with_share_and_names(
+                    &fso,
+                    scan_share_overlay.as_ref(),
+                    &sid_names,
+                );
+                all_path_trustees.push(adpa_core::model::PathTrustees {
+                    path: fso.path.clone(),
+                    trustees,
+                });
+                let path_display = fso.path.0.clone();
+
+                let input = PermissionEvaluationInput {
+                    identity: resolved.resolution.identity.clone(),
+                    group_memberships: scan_all_memberships.clone(),
+                    file_system_object: fso, // moved — no clone needed
+                    share_status: scan_share_status.clone(),
+                    local_group_sids: scan_local_group_sids.clone(),
+                    local_group_status: scan_local_group_status.clone(),
+                    access_context: scan_access_context,
+                    unsupported_share_ace_count: scan_unsupported_share_ace_count,
+                    sid_names,
+                    group_resolution_via_sam_fallback: scan_engine_flags
+                        .group_resolution_via_sam_fallback,
+                    identity_not_in_configured_ldap_base: scan_engine_flags
+                        .identity_not_in_configured_ldap_base,
+                    identity_disabled_status_unknown: scan_engine_flags
+                        .identity_disabled_status_unknown,
+                    identity_lookup_failure_reason: scan_engine_flags
+                        .identity_lookup_failure_reason
+                        .clone(),
+                    group_resolution_failure_reason: scan_engine_flags
+                        .group_resolution_failure_reason
+                        .clone(),
+                    identity_resolved_via_fsp: scan_engine_flags.identity_resolved_via_fsp,
+                    group_resolution_via_global_catalog: scan_engine_flags
+                        .group_resolution_via_global_catalog,
+                };
+                let result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
+                    anyhow::anyhow!("Permission evaluation failed for '{path_display}': {e}")
+                })?;
+
+                let rights = NormalizedRights::new(result.effective_mask.0);
+                if result.unsupported_ace_count > 0 {
+                    unsupported_ace_paths += 1;
+                    println!(
+                        "  {:14}  {}  [!{} unsupported ACE(s)]",
+                        rights.display_name(),
+                        path_display,
+                        result.unsupported_ace_count
+                    );
+                } else {
+                    println!("  {:14}  {}", rights.display_name(), path_display);
+                }
+
+                all_permissions.push(result);
+            }
         }
-
-        all_permissions.push(result);
     }
 
-    // Collect scan errors for the database (still printed inline below).
-    let mut scan_errors_for_db: Vec<ScanError> = Vec::new();
-    for walk_err in &walk.errors {
-        println!("  [Error]         {}: {}", walk_err.path, walk_err.error);
-        scan_errors_for_db.push(ScanError {
-            path: Some(NormalizedPath(walk_err.path.clone())),
-            message: walk_err.error.to_string(),
-        });
-    }
+    let cancelled = walk_task
+        .await
+        .map_err(|e| anyhow::anyhow!("Scan task failed: {e}"))?;
 
     // 6b. Handle cancellation — mark the partial run as aborted, both on
     // screen and as a recorded scan error.
-    if walk.cancelled {
+    if cancelled {
         println!();
         println!("  [Aborted] Scan cancelled by user — results are partial.");
         scan_errors_for_db.push(ScanError {
@@ -1034,8 +1045,8 @@ async fn run_scan(
     // 8. Zusammenfassung / summary
     let duration = (Utc::now() - started_at).num_milliseconds();
     print_scan_summary(
-        walk.objects.len(),
-        walk.errors.len(),
+        object_count,
+        walk_error_count,
         unsupported_ace_paths,
         duration,
         db_path.as_deref(),
