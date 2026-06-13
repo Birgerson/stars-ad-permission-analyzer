@@ -7,6 +7,7 @@ AGENTS.md
 .claude/
 review.md
 compare.md
+plan.md
 
 # Rust build artifacts
 /target/
