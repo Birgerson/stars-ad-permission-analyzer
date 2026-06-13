@@ -10,7 +10,32 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.6.5 below for the latest release.)
+### Signed LDAP bind (SASL GSSAPI/Kerberos) — query hardened DCs without a certificate (lab finding F1)
+
+Stars could not connect to a default-hardened Windows Server 2022/2025
+domain controller: plain LDAP (389) is rejected with `strongerAuthRequired`
+(LDAP signing enforced) and LDAPS (636) needs a trusted certificate the lab
+DCs did not have. Stars only did a `simple_bind`, never the SASL sign+seal
+bind that native Windows tools use — so its recursive nested-group
+resolution (the core feature) could not run there.
+
+New **signed-LDAP** mode binds on port 389 with **SASL GSSAPI/Kerberos
+sign+seal** (via the `ldap3` `gssapi` feature; Windows SSPI), which is
+encrypted, accepted by a hardened DC, and needs **no certificate**. It uses
+the **current Windows logon** (single sign-on; no bind DN or password) — so
+run Stars as the domain account whose context you want, from an interactive
+or service logon (Kerberos needs a real ticket; a bare remote shell without
+delegation will not have one).
+
+- CLI: `--ldap-signing` on `analyze` and `scan`. `--server` must be the
+  DC's FQDN; no `--bind-dn` / `ADPA_BIND_PASSWORD` needed.
+- GUI: a fifth LDAP mode "Signed LDAP — Kerberos sign & seal, port 389" on
+  the Analyze and Scan Tree tabs.
+- New `LdapConfig::new_signed` / `TlsMode::GssapiSign`; ADR 0051.
+
+Verified live against a hardened Windows Server 2025 DC: the signed bind
+resolved a user's full five-level nested group chain over LDAP — which the
+certificate-less, signing-required DC had previously made impossible.
 
 ---
 

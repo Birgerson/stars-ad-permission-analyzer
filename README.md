@@ -279,11 +279,18 @@ adpa.exe analyze --path "\\server\share\Data" --user S-1-5-21-... ^
 > your AD CS enterprise CA) **and** matching the **FQDN** you connect to (use
 > the FQDN, e.g. `dc.corp.local`, not an IP). A **self-signed certificate is
 > rejected** — Stars validates the chain and has no "skip certificate" option.
-> If LDAPS with a trusted certificate is not available — and a hardened DC
-> refuses plain LDAP — the bind **fails with a clear error and the analysis
-> aborts**; it does **not** silently return an incomplete result. To analyze
-> without LDAP, omit `--server`: Stars uses the SAM/LSA fallback and flags
-> nested-group gaps with `DomainGroupRecursionIncomplete`.
+> **No certificate? Use `--ldap-signing`.** It binds on port 389 with SASL
+> GSSAPI/Kerberos **sign+seal** — encrypted and accepted by a hardened DC,
+> **without any certificate** (the same mechanism `ldp.exe` / `Get-ADUser`
+> use). It authenticates with the **current Windows logon** (no `--bind-dn`,
+> no password); run Stars as a domain account from an interactive or service
+> logon (a bare remote shell without a Kerberos ticket won't have
+> credentials). `--server` must be the DC's FQDN. This is the recommended
+> way to get full recursive LDAP group resolution against a stock-hardened
+> Windows Server 2022/2025 DC. If you cannot use LDAP at all, omit
+> `--server`: Stars uses the SAM/LSA fallback and flags nested-group gaps
+> with `DomainGroupRecursionIncomplete` instead of silently returning an
+> incomplete result.
 
 **CLI — UNC path with automatic share detection:**
 ```

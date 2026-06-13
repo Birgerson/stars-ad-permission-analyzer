@@ -92,6 +92,12 @@ pub struct LdapParams {
     /// Mirrors the CLI `--global-catalog` flag — closes the GUI/CLI parity
     /// gap where the GUI could display the GC diagnostic but not select GC.
     pub global_catalog: bool,
+    /// When true: bind with SASL GSSAPI/Kerberos sign+seal over port 389,
+    /// using the current Windows logon (no bind DN / password). The
+    /// cert-free path for a hardened DC that enforces LDAP signing. Mirrors
+    /// the CLI `--ldap-signing` flag (ADR 0051). Mutually exclusive with
+    /// `insecure`; ignores `global_catalog`.
+    pub signing: bool,
 }
 
 impl std::fmt::Debug for LdapParams {
@@ -108,6 +114,7 @@ impl std::fmt::Debug for LdapParams {
             .field("password", &pw_placeholder)
             .field("insecure", &self.insecure)
             .field("global_catalog", &self.global_catalog)
+            .field("signing", &self.signing)
             .finish()
     }
 }
@@ -117,8 +124,9 @@ impl LdapParams {
     ///
     /// `0` = Off (SAM/LSA, returns `None`), `1` = LDAPS (port 636),
     /// `2` = plain LDAP (port 389, test only), `3` = Global Catalog
-    /// (LDAPS, port 3269, forest-wide). Kept as a pure function so the
-    /// mode→params wiring is unit-testable without the Slint UI.
+    /// (LDAPS, port 3269, forest-wide), `4` = Signed LDAP (GSSAPI/Kerberos
+    /// sign+seal, port 389, current Windows logon). Kept as a pure function
+    /// so the mode→params wiring is unit-testable without the Slint UI.
     pub fn from_mode(
         mode: i32,
         server: String,
@@ -127,22 +135,29 @@ impl LdapParams {
         password: String,
     ) -> Option<LdapParams> {
         match mode {
-            1..=3 => Some(LdapParams {
+            1..=4 => Some(LdapParams {
                 server,
                 base_dn,
                 bind_dn,
                 password,
                 insecure: mode == 2,
                 global_catalog: mode == 3,
+                signing: mode == 4,
             }),
             _ => None,
         }
     }
 
     /// Builds the `LdapConfig` for these parameters, choosing the right port
-    /// and TLS mode for the (global_catalog, insecure) combination — the same
-    /// matrix the CLI uses (`ad_resolver::LdapConfig` constructors).
+    /// and security mode — the same matrix the CLI uses
+    /// (`ad_resolver::LdapConfig` constructors).
     pub fn to_config(&self) -> LdapConfig {
+        // Signed bind (GSSAPI sign+seal) takes precedence: it is its own
+        // security mode (current Windows logon, no bind DN/password) and
+        // ignores the insecure/global_catalog flags.
+        if self.signing {
+            return LdapConfig::new_signed(&self.server, &self.base_dn);
+        }
         match (self.global_catalog, self.insecure) {
             (true, true) => LdapConfig::new_global_catalog_insecure(
                 &self.server,
@@ -675,9 +690,15 @@ fn validate_connection_inputs(
                     .map_err(|e| format!("Invalid base DN: {e}"))?
                     .0
             };
-            let bind_dn = validate_dn(&p.bind_dn)
-                .map_err(|e| format!("Invalid bind DN: {e}"))?
-                .0;
+            // Signed (GSSAPI) binds use the current Windows logon, so an
+            // empty bind DN is allowed; otherwise a bind DN is required.
+            let bind_dn = if p.signing && p.bind_dn.trim().is_empty() {
+                String::new()
+            } else {
+                validate_dn(&p.bind_dn)
+                    .map_err(|e| format!("Invalid bind DN: {e}"))?
+                    .0
+            };
             Some(LdapParams {
                 server,
                 base_dn,
@@ -685,6 +706,7 @@ fn validate_connection_inputs(
                 password: p.password.clone(),
                 insecure: p.insecure,
                 global_catalog: p.global_catalog,
+                signing: p.signing,
             })
         }
         None => None,
@@ -1125,9 +1147,14 @@ async fn handle_search(
             .map_err(|e| format!("Invalid base DN: {e}"))?
             .0
     };
-    let bind_dn = validate_dn(&ldap.bind_dn)
-        .map_err(|e| format!("Invalid bind DN: {e}"))?
-        .0;
+    // Signed (GSSAPI) binds use the current Windows logon — empty bind DN ok.
+    let bind_dn = if ldap.signing && ldap.bind_dn.trim().is_empty() {
+        String::new()
+    } else {
+        validate_dn(&ldap.bind_dn)
+            .map_err(|e| format!("Invalid bind DN: {e}"))?
+            .0
+    };
 
     let config = LdapParams {
         server: server.clone(),
@@ -1136,6 +1163,7 @@ async fn handle_search(
         password: ldap.password.clone(),
         insecure: ldap.insecure,
         global_catalog: ldap.global_catalog,
+        signing: ldap.signing,
     }
     .to_config();
 
@@ -2210,8 +2238,13 @@ mod tests {
         );
         let gc = params(3).expect("mode 3");
         assert!(
-            gc.global_catalog && !gc.insecure,
+            gc.global_catalog && !gc.insecure && !gc.signing,
             "mode 3 = Global Catalog over LDAPS"
+        );
+        let signed = params(4).expect("mode 4");
+        assert!(
+            signed.signing && !signed.insecure && !signed.global_catalog,
+            "mode 4 = signed LDAP (GSSAPI sign+seal)"
         );
     }
 
@@ -2230,5 +2263,13 @@ mod tests {
         let c = params(3).unwrap().to_config();
         assert_eq!(c.port, 3269);
         assert_eq!(c.tls_mode, TlsMode::Ldaps);
+        // Signed LDAP (mode 4): 389 + GssapiSign, no bind credentials
+        let c = params(4).unwrap().to_config();
+        assert_eq!(c.port, 389);
+        assert_eq!(c.tls_mode, TlsMode::GssapiSign);
+        assert!(
+            c.bind_dn.is_empty() && c.bind_password.is_empty(),
+            "signed bind uses the current Windows logon — no bind credentials"
+        );
     }
 }

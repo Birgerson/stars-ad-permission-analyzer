@@ -86,6 +86,12 @@ enum Commands {
         /// universal groups replicate fully.
         #[arg(long)]
         global_catalog: bool,
+        /// Bind with SASL GSSAPI/Kerberos sign+seal over port 389 using the
+        /// current Windows logon (no bind DN or password). The cert-free way
+        /// to query a hardened DC that enforces LDAP signing. --server must be
+        /// the DC's FQDN. Mutually exclusive with --insecure-ldap.
+        #[arg(long)]
+        ldap_signing: bool,
         /// Optional CSV export path
         #[arg(short = 'o', long)]
         output: Option<String>,
@@ -129,6 +135,12 @@ enum Commands {
         /// universal groups replicate fully.
         #[arg(long)]
         global_catalog: bool,
+        /// Bind with SASL GSSAPI/Kerberos sign+seal over port 389 using the
+        /// current Windows logon (no bind DN or password). The cert-free way
+        /// to query a hardened DC that enforces LDAP signing. --server must be
+        /// the DC's FQDN. Mutually exclusive with --insecure-ldap.
+        #[arg(long)]
+        ldap_signing: bool,
         /// SQLite database file for results (created if absent)
         #[arg(long)]
         db: Option<String>,
@@ -167,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
             bind_password,
             insecure_ldap,
             global_catalog,
+            ldap_signing,
             output,
             smb_server,
             share_name,
@@ -185,6 +198,7 @@ async fn main() -> anyhow::Result<()> {
                     share_name,
                     insecure_ldap,
                     global_catalog,
+                    ldap_signing,
                     force,
                 },
             )
@@ -199,6 +213,7 @@ async fn main() -> anyhow::Result<()> {
             bind_password,
             insecure_ldap,
             global_catalog,
+            ldap_signing,
             db,
             max_depth,
             output,
@@ -221,6 +236,7 @@ async fn main() -> anyhow::Result<()> {
                     share_name,
                     insecure_ldap,
                     global_catalog,
+                    ldap_signing,
                     force,
                 },
             )
@@ -351,6 +367,10 @@ fn resolve_search_base(base_dn: Option<String>, global_catalog: bool) -> anyhow:
     }
 }
 
+// CLI-internal plumbing helper: it forwards the validated connection inputs
+// to the resolver. The argument list mirrors the CLI flags 1:1; bundling them
+// into a struct here would only add an indirection without improving clarity.
+#[allow(clippy::too_many_arguments)]
 async fn resolve_identity(
     user: &str,
     server: Option<String>,
@@ -359,46 +379,66 @@ async fn resolve_identity(
     bind_password: Option<String>,
     insecure_ldap: bool,
     global_catalog: bool,
+    ldap_signing: bool,
 ) -> anyhow::Result<ResolvedIdentity> {
     if let Some(server) = server {
-        let base = resolve_search_base(base_dn, global_catalog)?;
-        let bind = bind_dn.ok_or_else(|| {
-            anyhow::anyhow!(
-                "--bind-dn is required when --server is specified \
-                 (e.g. CN=Administrator,CN=Users,DC=corp,DC=local)"
-            )
-        })?;
-        let password = if let Some(p) = bind_password {
-            eprintln!(
-                "[WARNING] --bind-password is DEPRECATED — credentials passed as a CLI argument \
-                 are visible in process listings and shell history. \
-                 Use the ADPA_BIND_PASSWORD environment variable instead. \
-                 --bind-password will be removed in a future release."
-            );
-            p
-        } else if let Ok(p) = std::env::var("ADPA_BIND_PASSWORD") {
-            p
-        } else {
-            return Err(anyhow::anyhow!(
-                "ADPA_BIND_PASSWORD environment variable is required (the --bind-password \
-                 argument exists for backwards compatibility but is deprecated)"
-            ));
-        };
-
-        if insecure_ldap {
-            eprintln!(
-                "[WARNING] --insecure-ldap: the bind password is transmitted in plaintext. \
-                 Use only in isolated test environments."
-            );
-        }
-
-        let config = match (global_catalog, insecure_ldap) {
-            (true, true) => {
-                LdapConfig::new_global_catalog_insecure(&server, &base, &bind, &password)
+        let config = if ldap_signing {
+            // GSSAPI/Kerberos sign+seal bind (ADR 0051): cert-free path for a
+            // hardened DC that enforces LDAP signing. Uses the current Windows
+            // logon (SSPI single sign-on), so no --bind-dn / password is read.
+            // `--server` must be the DC's FQDN (it forms the ldap/<fqdn> SPN).
+            // A base DN is required (this is a domain bind, not the GC).
+            let base = resolve_search_base(base_dn, false)?;
+            if global_catalog {
+                eprintln!(
+                    "[WARNING] --global-catalog is ignored together with --ldap-signing; \
+                     performing a signed bind against the domain DC on port 389."
+                );
             }
-            (true, false) => LdapConfig::new_global_catalog(&server, &base, &bind, &password),
-            (false, true) => LdapConfig::new_insecure(&server, &base, &bind, &password),
-            (false, false) => LdapConfig::new(&server, &base, &bind, &password),
+            LdapConfig::new_signed(&server, &base)
+        } else {
+            let base = resolve_search_base(base_dn, global_catalog)?;
+            let bind = bind_dn.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--bind-dn is required when --server is specified \
+                     (e.g. CN=Administrator,CN=Users,DC=corp,DC=local). \
+                     Tip: --ldap-signing binds with the current Windows logon \
+                     and needs no bind DN or password."
+                )
+            })?;
+            let password = if let Some(p) = bind_password {
+                eprintln!(
+                    "[WARNING] --bind-password is DEPRECATED — credentials passed as a CLI \
+                     argument are visible in process listings and shell history. \
+                     Use the ADPA_BIND_PASSWORD environment variable instead. \
+                     --bind-password will be removed in a future release."
+                );
+                p
+            } else if let Ok(p) = std::env::var("ADPA_BIND_PASSWORD") {
+                p
+            } else {
+                return Err(anyhow::anyhow!(
+                    "ADPA_BIND_PASSWORD environment variable is required (the --bind-password \
+                     argument exists for backwards compatibility but is deprecated). \
+                     Tip: --ldap-signing avoids passwords entirely (current-logon SSO)."
+                ));
+            };
+
+            if insecure_ldap {
+                eprintln!(
+                    "[WARNING] --insecure-ldap: the bind password is transmitted in plaintext. \
+                     Use only in isolated test environments."
+                );
+            }
+
+            match (global_catalog, insecure_ldap) {
+                (true, true) => {
+                    LdapConfig::new_global_catalog_insecure(&server, &base, &bind, &password)
+                }
+                (true, false) => LdapConfig::new_global_catalog(&server, &base, &bind, &password),
+                (false, true) => LdapConfig::new_insecure(&server, &base, &bind, &password),
+                (false, false) => LdapConfig::new(&server, &base, &bind, &password),
+            }
         };
         let ldap_resolver = std::sync::Arc::new(LdapResolver::new(config));
         let backend = LdapIdentityBackend::new(ldap_resolver);
@@ -519,6 +559,7 @@ struct AnalyzeOptions {
     share_name: Option<String>,
     insecure_ldap: bool,
     global_catalog: bool,
+    ldap_signing: bool,
     force: bool,
 }
 
@@ -537,6 +578,7 @@ async fn run_analyze(
         share_name,
         insecure_ldap,
         global_catalog,
+        ldap_signing,
         force,
     } = opts;
 
@@ -581,6 +623,7 @@ async fn run_analyze(
         bind_password,
         insecure_ldap,
         global_catalog,
+        ldap_signing,
     )
     .await?;
 
@@ -729,6 +772,7 @@ struct ScanOptions {
     share_name: Option<String>,
     insecure_ldap: bool,
     global_catalog: bool,
+    ldap_signing: bool,
     force: bool,
 }
 
@@ -749,6 +793,7 @@ async fn run_scan(
         share_name,
         insecure_ldap,
         global_catalog,
+        ldap_signing,
         force,
     } = opts;
 
@@ -797,6 +842,7 @@ async fn run_scan(
         bind_password,
         insecure_ldap,
         global_catalog,
+        ldap_signing,
     )
     .await?;
 

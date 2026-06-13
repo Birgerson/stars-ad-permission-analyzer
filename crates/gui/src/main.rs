@@ -738,12 +738,13 @@ slint::slint! {
                                                 "LDAPS — encrypted, port 636",
                                                 "Plain LDAP — port 389 (test only)",
                                                 "Global Catalog — forest-wide, port 3269 (LDAPS)",
+                                                "Signed LDAP — Kerberos sign & seal, port 389",
                                             ];
                                             current-index <=> root.a-ldap-mode;
                                             horizontal-stretch: 1;
                                         }
                                         HelpTip {
-                                            tip: "How should identity and groups be resolved?\n\n• Off (recommended): uses the local Windows LSA/SAM. On a domain controller this returns complete data (users, global groups, local groups). No configuration, no certificate needed.\n\n• LDAPS: encrypted LDAP connection on port 636. Requires the DC to have a valid LDAPS certificate that this machine trusts (AD CS enterprise CA); a self-signed certificate is rejected. Connect by FQDN, not IP.\n\n• Plain LDAP: port 389, no TLS. For test environments only — transmits the password in cleartext, and is refused by hardened Windows Server 2022/2025 DCs (LDAP signing).\n\n• Global Catalog: forest-wide bind over LDAPS (port 3269). Base DN may be left empty. Same certificate requirement as LDAPS. Only universal groups replicate fully to the GC, so memberships are flagged potentially incomplete.";
+                                            tip: "How should identity and groups be resolved?\n\n• Off (recommended): uses the local Windows LSA/SAM. On a domain controller this returns complete data (users, global groups, local groups). No configuration, no certificate needed.\n\n• LDAPS: encrypted LDAP connection on port 636. Requires the DC to have a valid LDAPS certificate that this machine trusts (AD CS enterprise CA); a self-signed certificate is rejected. Connect by FQDN, not IP.\n\n• Plain LDAP: port 389, no TLS. For test environments only — transmits the password in cleartext, and is refused by hardened Windows Server 2022/2025 DCs (LDAP signing).\n\n• Global Catalog: forest-wide bind over LDAPS (port 3269). Base DN may be left empty. Same certificate requirement as LDAPS. Only universal groups replicate fully to the GC, so memberships are flagged potentially incomplete.\n\n• Signed LDAP: port 389 with Kerberos sign & seal — no certificate needed. The cert-free way to query a hardened DC that enforces LDAP signing. Uses the current Windows logon (no bind DN / password); Server must be the DC's FQDN. Run Stars as the domain account whose context you want.";
                                         }
                                     }
 
@@ -1108,12 +1109,13 @@ slint::slint! {
                                                 "LDAPS — encrypted, port 636",
                                                 "Plain LDAP — port 389 (test only)",
                                                 "Global Catalog — forest-wide, port 3269 (LDAPS)",
+                                                "Signed LDAP — Kerberos sign & seal, port 389",
                                             ];
                                             current-index <=> root.s-ldap-mode;
                                             horizontal-stretch: 1;
                                         }
                                         HelpTip {
-                                            tip: "How should identity and groups be resolved?\n\n• Off (recommended): uses the local Windows LSA/SAM. On a domain controller this returns complete data (users, global groups, local groups). No configuration, no certificate needed.\n\n• LDAPS: encrypted LDAP connection on port 636. Requires the DC to have a valid LDAPS certificate that this machine trusts (AD CS enterprise CA); a self-signed certificate is rejected. Connect by FQDN, not IP.\n\n• Plain LDAP: port 389, no TLS. For test environments only — transmits the password in cleartext, and is refused by hardened Windows Server 2022/2025 DCs (LDAP signing).\n\n• Global Catalog: forest-wide bind over LDAPS (port 3269). Base DN may be left empty. Same certificate requirement as LDAPS. Only universal groups replicate fully to the GC, so memberships are flagged potentially incomplete.";
+                                            tip: "How should identity and groups be resolved?\n\n• Off (recommended): uses the local Windows LSA/SAM. On a domain controller this returns complete data (users, global groups, local groups). No configuration, no certificate needed.\n\n• LDAPS: encrypted LDAP connection on port 636. Requires the DC to have a valid LDAPS certificate that this machine trusts (AD CS enterprise CA); a self-signed certificate is rejected. Connect by FQDN, not IP.\n\n• Plain LDAP: port 389, no TLS. For test environments only — transmits the password in cleartext, and is refused by hardened Windows Server 2022/2025 DCs (LDAP signing).\n\n• Global Catalog: forest-wide bind over LDAPS (port 3269). Base DN may be left empty. Same certificate requirement as LDAPS. Only universal groups replicate fully to the GC, so memberships are flagged potentially incomplete.\n\n• Signed LDAP: port 389 with Kerberos sign & seal — no certificate needed. The cert-free way to query a hardened DC that enforces LDAP signing. Uses the current Windows logon (no bind DN / password); Server must be the DC's FQDN. Run Stars as the domain account whose context you want.";
                                         }
                                     }
 

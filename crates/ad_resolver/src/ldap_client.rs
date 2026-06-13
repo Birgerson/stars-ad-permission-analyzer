@@ -27,7 +27,7 @@ pub const LDAP_MATCHING_RULE_IN_CHAIN: &str = "1.2.840.113556.1.4.1941";
 
 use adpa_core::error::CoreError;
 
-use crate::config::LdapConfig;
+use crate::config::{LdapConfig, TlsMode};
 
 ///
 /// Wraps an LDAP operation in `tokio::time::timeout`. Closes review finding 5:
@@ -118,6 +118,9 @@ impl RawEntry {
 /// TLS mode:
 ///   `Ldaps` (default): ldaps://server:636 — TLS from the first byte, recommended.
 ///   `Insecure`: ldap://server:389 — password in plaintext, test environments only.
+///   `GssapiSign`: ldap://server:389 with a SASL GSSAPI/Kerberos sign+seal
+///     layer; cert-free path for hardened DCs (ADR 0051). Uses the current
+///     Windows logon (SSPI SSO); `server` must be the DC's FQDN for the SPN.
 pub async fn connect(config: &LdapConfig) -> Result<Ldap, CoreError> {
     let url = config.url();
     debug!(url, tls_mode = ?config.tls_mode, "LDAP connecting");
@@ -142,16 +145,38 @@ pub async fn connect(config: &LdapConfig) -> Result<Ldap, CoreError> {
     // Wrap the bind as well — wrong credentials usually don't hang, but a
     // server with a slow LSA reply can.
     with_timeout("bind", ldap_timeout(config), async {
-        ldap.simple_bind(&config.bind_dn, &config.bind_password)
-            .await
-            .map_err(|e| CoreError::AdConnection(format!("LDAP bind failed: {e}")))?
-            .success()
-            .map_err(|e| CoreError::AdConnection(format!("LDAP bind rejected: {e}")))?;
+        match config.tls_mode {
+            TlsMode::GssapiSign => {
+                // SASL GSSAPI/Kerberos bind using the current Windows logon
+                // (SSPI single sign-on). On this clear connection it also
+                // installs the Kerberos confidentiality (sign+seal) layer,
+                // satisfying a hardened DC's LDAP-signing requirement without
+                // a certificate (ADR 0051). `server` must be the DC's FQDN —
+                // it is used to build the `ldap/<fqdn>` service principal name.
+                ldap.sasl_gssapi_bind(&config.server)
+                    .await
+                    .map_err(|e| CoreError::AdConnection(format!("LDAP GSSAPI bind failed: {e}")))?
+                    .success()
+                    .map_err(|e| {
+                        CoreError::AdConnection(format!("LDAP GSSAPI bind rejected: {e}"))
+                    })?;
+            }
+            TlsMode::Ldaps | TlsMode::Insecure => {
+                ldap.simple_bind(&config.bind_dn, &config.bind_password)
+                    .await
+                    .map_err(|e| CoreError::AdConnection(format!("LDAP bind failed: {e}")))?
+                    .success()
+                    .map_err(|e| CoreError::AdConnection(format!("LDAP bind rejected: {e}")))?;
+            }
+        }
         Ok(())
     })
     .await?;
 
-    debug!("LDAP connected as: {}", config.bind_dn);
+    match config.tls_mode {
+        TlsMode::GssapiSign => debug!("LDAP connected via GSSAPI sign+seal (current logon)"),
+        _ => debug!("LDAP connected as: {}", config.bind_dn),
+    }
     Ok(ldap)
 }
 

@@ -321,6 +321,14 @@ In the **"Identity resolution"** section (inside the `Analyze` and
   group lookups; the base DN may be left empty. Same certificate
   requirements as LDAPS (see below). Memberships are flagged potentially
   incomplete because only universal groups replicate fully to the GC.
+- **4 — Signed LDAP (Kerberos sign & seal, port 389)** — the **cert-free**
+  way to query a hardened DC that enforces LDAP signing. The bind is
+  encrypted and integrity-protected by Kerberos, so **no LDAPS certificate
+  is needed**. It uses the **current Windows logon** (single sign-on): no
+  bind DN or password. **Server** must be the DC's FQDN, and the process
+  needs a real Kerberos ticket — run Stars from an interactive or service
+  (scheduled-task) logon as the domain account whose context you want; a
+  bare remote-shell session without delegation will not have a ticket.
 
 Fields (all auto-trimmed before use):
 
@@ -356,7 +364,17 @@ not help against a hardened DC: **Windows Server 2022 and 2025 enforce LDAP
 signing by default** and refuse the unencrypted bind with
 `strongerAuthRequired`. In both cases the bind **fails with a clear error
 and the analysis aborts** — Stars does *not* hand back a result that looks
-complete. To analyze without any LDAP, leave **LDAP mode Off** and rely on
+complete.
+
+**No certificate? Use Signed LDAP (Mode 4 / CLI `--ldap-signing`).** It
+binds on port 389 with Kerberos sign & seal — encrypted and accepted by a
+hardened DC, **without any certificate**. It uses your current Windows
+logon (no password), so run Stars as a domain account from an interactive
+or service logon (a bare remote shell without a Kerberos ticket will not
+work). This is the recommended way to get full LDAP group resolution
+against a stock-hardened DC.
+
+If you cannot use LDAP at all, leave **LDAP mode Off** and rely on
 the SAM/LSA fallback; nested domain groups are then flagged
 `DomainGroupRecursionIncomplete` (see
 [Reading findings — diagnostic markers](#reading-findings--diagnostic-markers)).

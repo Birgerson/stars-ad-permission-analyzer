@@ -48,7 +48,11 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 # LDAP / Active Directory
-ldap3 = "0.11"
+# `gssapi` enables SASL GSSAPI/Kerberos binds; on Windows it uses the
+# system SSPI, which lets Stars do a signed+sealed bind on port 389
+# (satisfying a hardened DC's LDAP-signing requirement without a
+# certificate). See ADR 0051.
+ldap3 = { version = "0.11", features = ["gssapi"] }
 
 # SQLite
 rusqlite = { version = "0.32", features = ["bundled"] }

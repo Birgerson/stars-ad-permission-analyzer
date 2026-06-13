@@ -16,6 +16,16 @@ pub enum TlsMode {
     /// No TLS (ldap://server:389) — bind password is transmitted in plaintext.
     /// Only use with explicit --insecure-ldap / GUI warning.
     Insecure,
+
+    /// Clear TCP transport (ldap://server:389) on which a SASL
+    /// GSSAPI/Kerberos **sign+seal** security layer is installed at bind
+    /// time. This is *not* plaintext: after the bind the traffic is
+    /// integrity-protected and encrypted by Kerberos, which is exactly
+    /// what a hardened Windows Server (LDAP signing enforced) requires —
+    /// **without needing an LDAPS certificate**. On Windows the bind uses
+    /// the system SSPI with the current logon's Kerberos credentials
+    /// (single sign-on); no bind DN or password is used. See ADR 0051.
+    GssapiSign,
 }
 
 /// Connection parameters for an LDAP/Active Directory server.
@@ -145,11 +155,37 @@ impl LdapConfig {
         }
     }
 
+    /// Creates a signed-bind configuration: clear LDAP transport on port
+    /// 389 with a SASL GSSAPI/Kerberos sign+seal layer installed at bind.
+    ///
+    /// This is the cert-free way to talk to a hardened DC that enforces
+    /// LDAP signing (rejecting plain binds with `strongerAuthRequired`).
+    /// On Windows the bind uses the current logon's Kerberos credentials
+    /// via SSPI (single sign-on), so no bind DN / password is supplied —
+    /// run Stars as the domain account whose context you want to use.
+    /// See ADR 0051.
+    pub fn new_signed(server: impl Into<String>, base_dn: impl Into<String>) -> Self {
+        Self {
+            server: server.into(),
+            port: 389,
+            base_dn: base_dn.into(),
+            bind_dn: String::new(),
+            bind_password: String::new(),
+            timeout_secs: 10,
+            tls_mode: TlsMode::GssapiSign,
+            global_catalog: false,
+        }
+    }
+
     /// Returns the LDAP URL.
     pub fn url(&self) -> String {
         match self.tls_mode {
             TlsMode::Ldaps => format!("ldaps://{}:{}", self.server, self.port),
-            TlsMode::Insecure => format!("ldap://{}:{}", self.server, self.port),
+            // GSSAPI sign+seal runs over a clear TCP transport; the security
+            // layer is established by the SASL bind, not the URL scheme.
+            TlsMode::Insecure | TlsMode::GssapiSign => {
+                format!("ldap://{}:{}", self.server, self.port)
+            }
         }
     }
 }
@@ -210,6 +246,19 @@ mod tests {
         assert_eq!(cfg.tls_mode, TlsMode::Insecure);
         assert!(cfg.global_catalog);
         assert_eq!(cfg.url(), "ldap://dc.test.local:3268");
+    }
+
+    #[test]
+    fn signed_uses_port_389_clear_transport_and_no_credentials() {
+        let cfg = LdapConfig::new_signed("dc.corp.local", "DC=corp,DC=local");
+        assert_eq!(cfg.port, 389);
+        assert_eq!(cfg.tls_mode, TlsMode::GssapiSign);
+        assert!(!cfg.global_catalog);
+        // GSSAPI uses the current Windows logon (SSO) — no bind creds.
+        assert!(cfg.bind_dn.is_empty());
+        assert!(cfg.bind_password.is_empty());
+        // Clear TCP transport; the seal is established by the SASL bind.
+        assert_eq!(cfg.url(), "ldap://dc.corp.local:389");
     }
 
     #[test]
