@@ -3,6 +3,10 @@
 [![Latest Release](https://img.shields.io/github/v/release/Birgerson/stars-ad-permission-analyzer?include_prereleases&label=Release&color=c2410c)](https://github.com/Birgerson/stars-ad-permission-analyzer/releases)
 [![CI](https://github.com/Birgerson/stars-ad-permission-analyzer/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Birgerson/stars-ad-permission-analyzer/actions/workflows/ci.yml)
 
+[![Download](https://img.shields.io/badge/Download-c2410c?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Birgerson/stars-ad-permission-analyzer/releases)
+[![Documentation](https://img.shields.io/badge/Documentation-c2410c?style=for-the-badge&logo=readthedocs&logoColor=white)](docs/user-guide.md)
+[![Verify SHA256](https://img.shields.io/badge/Verify_SHA256-c2410c?style=for-the-badge&logo=gnuprivacyguard&logoColor=white)](#verify-integrity-sha256)
+
 ---
 
 **Stars** is a Windows analysis tool for Active Directory permissions, NTFS access rights, and SMB shares.
