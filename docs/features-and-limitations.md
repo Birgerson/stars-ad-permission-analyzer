@@ -79,9 +79,10 @@ that applies.
 - **Large-environment efficient:** a whole scan run is persisted in a
   single transaction (no per-path commit), and identical security
   descriptors — the common case on a tree that inherits one DACL — are
-  parsed once and deduplicated by a content hash. The dedup is validated
-  by a full byte comparison before reuse, so it can never change a
-  computed result, only the speed and storage of a large scan.
+  parsed once per scan via a content-hash cache (scan-local, not yet
+  storage-level). The dedup is validated by a full byte comparison before
+  reuse, so it can never change a computed result, only the parsing speed
+  of a large scan.
 - **Scan history** in SQLite (local, `persistence` crate) — see
   ADR 0026.
 - **Delta comparison** between two scans (what changed per path in

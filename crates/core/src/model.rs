@@ -334,11 +334,19 @@ pub struct FileSystemObject {
     /// Stable hash of the raw security descriptor bytes, when known.
     /// Identical security descriptors (the common case for a directory
     /// tree that inherits one DACL from a shared parent) produce the same
-    /// hash, so the scanner can parse/evaluate each distinct descriptor
-    /// once and storage can deduplicate (engine review 2026-06-12
-    /// finding 2). `None` when the object was constructed without a
-    /// descriptor read. `#[serde(default)]` keeps older cache entries
-    /// readable.
+    /// hash, which lets the **scanner** parse and evaluate each distinct
+    /// descriptor only once per scan (engine review 2026-06-12 finding 2).
+    ///
+    /// Scope, stated honestly (engine review 2026-06-13 finding 2): this
+    /// is currently a **scan-local** optimization only. The hash is *not*
+    /// persisted — the database has no `sd_hash` column or descriptor
+    /// table — so storage-level deduplication of identical explanation /
+    /// ACE / diagnostic payloads across rows is **not yet implemented**.
+    /// A future descriptor table keyed by this hash could add it; see
+    /// `docs/known-limitations.md`.
+    ///
+    /// `None` when the object was constructed without a descriptor read.
+    /// `#[serde(default)]` keeps older cache entries readable.
     #[serde(default)]
     pub sd_hash: Option<u64>,
 }

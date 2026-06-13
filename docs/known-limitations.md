@@ -435,6 +435,44 @@ here and in the diagnostic tooltip texts.
 
 ---
 
+## L10 — Security-descriptor deduplication is scan-local, not storage-level
+
+**Priority:** Low
+**Tracking:** possible future optimization
+
+### Problem
+
+Within a single scan the scanner parses each distinct security
+descriptor only once (a per-run cache keyed by an FNV-1a hash of the raw
+descriptor bytes, validated by a full byte comparison before reuse). The
+hash is kept on the in-memory `FileSystemObject` as `sd_hash`, but it is
+**not persisted**: the SQLite schema has no `sd_hash` column and no
+descriptor table.
+
+### Effect
+
+Performance during a scan benefits (no repeated parsing of identical
+inherited DACLs), but **storage does not deduplicate**: on a tree where
+thousands of objects share one inherited descriptor, the database still
+stores the explanation, matched-ACE and diagnostic JSON once per row.
+For very large histories this is extra disk usage, not a correctness
+problem.
+
+### Solution sketch
+
+Add a descriptor table keyed by the validated raw-descriptor hash (plus
+collision-safe bytes/metadata) and reference it from permission or object
+rows, behind a schema migration. The hash is already computed and carried
+on the scanned object, so the scanner side is ready; only the persistence
+schema and read/write paths would need the addition.
+
+### Test plan
+
+A persistence test asserting that two objects with an identical
+descriptor reference one stored descriptor row, once the table exists.
+
+---
+
 ## Status overview
 
 | Limit | Priority | Marker present? | Resolvable? |
@@ -448,6 +486,7 @@ here and in the diagnostic tooltip texts.
 | L7 — Token privileges | Low | no | deliberately out of scope |
 | L8 — DAC | Low | yes (incomplete) | deliberately out of scope |
 | L9 — Canonical-order false positives | Low | yes (informational) | no (missing ancestry data) |
+| L10 — SD dedup scan-local only | Low | n/a | yes, with a descriptor table + migration |
 
 ## Contribution policy
 
