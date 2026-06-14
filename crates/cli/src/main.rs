@@ -1197,9 +1197,6 @@ fn resolve_scan_share_status(
                 local_group_sids,
                 access_context,
             );
-            // NULL share DACL: effective_share_mask returns None — handled as its own
-            // Status `Unrestricted` weitergeben, statt eine kuenstliche Maske
-            // Special-Access-Maske wirken wuerde).
             // NULL share DACL: effective_share_mask returns None — surface as
             // dedicated `Unrestricted` status instead of fabricating a fake
             // 0xFFFFFFFF mask (which would look like a real special-access
@@ -1526,8 +1523,7 @@ mod tests {
     }
 
     /// Review 2026-06-04 round 3 finding 2: `validate_connection_inputs`
-    /// Whitespace-Trimming an allen fuenf Eingabefeldern ab.
-    /// Review round 3 finding 2: connection-input validation must
+    /// trims whitespace on all five connection input fields.
     #[test]
     fn validate_connection_inputs_returns_trimmed_normalized_values() {
         let result = super::validate_connection_inputs(

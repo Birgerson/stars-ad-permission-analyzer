@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Low-Level-LDAP-Operationen gegen Active Directory.
 //! Low-level LDAP operations against Active Directory.
-//!
 //!
 //! Encapsulates all ldap3 calls. No domain logic — only connection,
 //! authentication, and raw search results.

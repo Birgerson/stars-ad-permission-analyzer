@@ -1118,15 +1118,13 @@ mod tests {
         assert_eq!(mask, 0, "Deny first must block all bits");
     }
 
-    /// Disjunkte Bits: Deny SYNCHRONIZE (0x100000), dann Allow Read
-    /// = 0x0002_0089 (Read MINUS SYNCHRONIZE).
     /// Disjoint bits: Deny SYNCHRONIZE then Allow Read. Stored order
     /// allows the read bits except SYNCHRONIZE which is already denied.
     #[test]
     fn partial_overlap_first_decision_per_bit() {
         let perms = vec![
             make_perm("share", SID_EVERYONE, 0x0010_0000, AceKind::Deny), // SYNCHRONIZE deny
-            make_perm("share", SID_EVERYONE, 0x0012_0089, AceKind::Allow), // Read (inkl. SYNCHRONIZE)
+            make_perm("share", SID_EVERYONE, 0x0012_0089, AceKind::Allow), // Read (incl. SYNCHRONIZE)
         ];
         let token = sids(&[SID_USER, SID_EVERYONE]);
         let mask = effective_share_mask(&ShareDacl::Acl(perms), &token)

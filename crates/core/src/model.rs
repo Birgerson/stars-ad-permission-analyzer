@@ -488,8 +488,6 @@ pub struct EffectivePermission {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum PermissionDiagnostic {
-    /// (explizit-Deny → explizit-Allow → inherited-Deny → inherited-Allow).
-    ///
     /// The path's DACL is not in Windows-canonical order
     /// (explicit-deny → explicit-allow → inherited-deny → inherited-allow).
     /// The engine evaluates it in stored order — matches Windows

@@ -24,7 +24,6 @@ impl<'a> ScanStore<'a> {
         Self { conn }
     }
 
-    /// Speichert einen neuen Scan-Lauf.
     /// Stores a new scan run.
     pub fn insert_scan_run(&self, run: &ScanRun) -> Result<(), CoreError> {
         self.conn

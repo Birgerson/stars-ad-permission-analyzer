@@ -112,7 +112,7 @@ pub fn print_report(
     println!("  Owner       : {owner}");
     println!("  Inheritance : {inherit}");
 
-    // Alle ACEs anzeigen / show all ACEs
+    // Show all ACEs
     //
     // Important: NULL DACL ≠ empty DACL. NULL DACL means "no access control"
     // (full access for everyone), an empty DACL means "no access for anyone".

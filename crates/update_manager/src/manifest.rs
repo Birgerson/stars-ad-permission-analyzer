@@ -218,7 +218,6 @@ impl UpdateManifest {
             // letters, UNC/long-path prefixes, `.`/`..`, empty segments,
             // `:` (drive/ADS), reserved device names and forbidden chars.
             validate_manifest_relative_path(&f.path)?;
-            // SHA-256 als Hex: exakt 64 Zeichen, alle hex.
             // SHA-256 as hex: exactly 64 chars, all hex digits.
             if f.sha256.len() != 64 || !f.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
                 return Err(CoreError::Validation(format!(
@@ -477,7 +476,6 @@ mod tests {
         let m = UpdateManifest::from_json(&valid_manifest_json()).unwrap();
         let bytes = m.signable_bytes().unwrap();
         let as_str = String::from_utf8(bytes).unwrap();
-        // sonst signiert man sich selbst.
         // The `signature` field must be empty in the signable body —
         // otherwise the signature would cover itself.
         assert!(as_str.contains("\"signature\":\"\""));

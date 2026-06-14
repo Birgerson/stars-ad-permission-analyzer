@@ -262,7 +262,7 @@ slint::slint! {
             padding-bottom: Theme.spacing-sm;
             spacing: Theme.spacing-md;
 
-            // Brand-Block: Stern + Titel (inkl. Versionsnummer) + Subtitel
+            // Brand block: star + title (incl. version number) + subtitle
             // Brand block: star + title (incl. version) + subtitle
             HorizontalLayout {
                 spacing: Theme.spacing-sm;
@@ -435,7 +435,6 @@ slint::slint! {
         // Arial is guaranteed and renders consistently across editions.
         default-font-family: "Arial";
 
-        // Slint-Standard-Widgets (GroupBox-Titel, LineEdit-Text,
         // Pin Slint widget palette to our explicit toggle so the
         // host theme cannot override readability. Reactive binding via
         // a tracking property + `changed` callback (Slint 1.6+).

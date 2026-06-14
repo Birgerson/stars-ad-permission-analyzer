@@ -153,7 +153,6 @@ pub enum DeltaKind {
     Added,
     /// Path removed — no longer present in the new scan.
     Removed,
-    /// 2026-06-07-Patch alle erkannten Aenderungsursachen.
     /// Permission changed. `old_mask`/`new_mask` are kept for backwards
     /// compatibility; `reasons` lists every detected change cause as of
     /// the 2026-06-07 patch.
@@ -415,8 +414,6 @@ mod tests {
         assert!(reasons.contains(&DeltaReason::DiagnosticsChanged));
     }
 
-    /// Code review 2026-06-07 finding 3: `local_group_status` flips
-    /// es eine Vollstaendigkeits-Aussage betrifft.
     /// Code review 2026-06-07 finding 3: `local_group_status` flips
     /// from `Applied` to `NotAvailable` — relevant for audit because it
     /// concerns a completeness claim.

@@ -1,13 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//! Input forms (`DOMAIN\user`, UPN, plain `sAMAccountName`, direct
-//! SID, GUI Name → SID-Workflow).
-//!
-//! `lookup_via_*`-Helfern in [`crate::resolver::LdapResolver`] plus
-//! [`IdentityKind::Orphaned`]. Review 2026-06-04 round 3
-//! gemeinsam nutzen.
-//!
 //! Unified principal resolution — the single pipeline for all input
 //! forms (`DOMAIN\user`, UPN, plain `sAMAccountName`, direct SID, GUI
 //! name → SID workflow).
@@ -32,8 +25,6 @@ use tracing::{debug, warn};
 use adpa_core::error::CoreError;
 use adpa_core::model::{GroupMembership, Identity, IdentityKind, PermissionDiagnostic, Sid};
 
-/// `@` → Upn, `S-1-…` → Sid, sonst → SamAccount).
-///
 /// User-supplied input. `Auto` is classified at run time by syntax.
 #[derive(Debug, Clone)]
 pub enum PrincipalInput {
@@ -41,13 +32,10 @@ pub enum PrincipalInput {
     Auto(String),
     /// Explicit `DOMAIN\user` — LSA-first path.
     DomainQualified(String),
-    /// Explizit `user@domain.tld`.
     /// Explicit `user@domain.tld`.
     Upn(String),
-    /// Explizit nur `sAMAccountName`.
     /// Explicit `sAMAccountName` only.
     SamAccount(String),
-    /// Explizit eine SID (`S-1-…`).
     /// Explicit SID (`S-1-…`).
     Sid(Sid),
     /// GUI name search.
@@ -55,7 +43,6 @@ pub enum PrincipalInput {
 }
 
 impl PrincipalInput {
-    /// Identity-Dispatch).
     /// Classifies `Auto` by syntax; trims whitespace first.
     pub fn classify(self) -> Result<Self, CoreError> {
         match self {

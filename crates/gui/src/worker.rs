@@ -264,7 +264,6 @@ pub struct ScanRow {
 /// Result from the worker thread to the GUI.
 pub enum WorkerEvent {
     AnalyzeDone {
-        /// uebrigen Varianten — sonst zieht clippy::large_enum_variant.
         /// Actual evaluation result (or engine error). Boxed because
         /// `EffectivePermission` is significantly larger than the other
         /// variants — otherwise clippy::large_enum_variant fires.
