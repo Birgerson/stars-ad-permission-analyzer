@@ -262,7 +262,6 @@ slint::slint! {
             padding-bottom: Theme.spacing-sm;
             spacing: Theme.spacing-md;
 
-            // Brand block: star + title (incl. version number) + subtitle
             // Brand block: star + title (incl. version) + subtitle
             HorizontalLayout {
                 spacing: Theme.spacing-sm;
