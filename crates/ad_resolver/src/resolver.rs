@@ -643,8 +643,6 @@ async fn resolve_primary_group(
     }
 }
 
-// --- Integrationstests ---
-//
 // --- Integration tests ---
 // These tests require a running TESTDOMAIN environment and are marked #[ignore]
 // by default. Run with: cargo test -- --ignored
@@ -672,7 +670,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Erfordert laufende TESTDOMAIN-Umgebung / Requires running TESTDOMAIN environment"]
+    #[ignore = "Requires a running TESTDOMAIN environment (set DEVMS_TEST_LDAP_*) — run with `cargo test -- --ignored`"]
     async fn resolve_administrator_identity() {
         let Some(cfg) = test_config() else { return };
         let base_dn = cfg.base_dn.clone();
@@ -696,7 +694,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Erfordert laufende TESTDOMAIN-Umgebung / Requires running TESTDOMAIN environment"]
+    #[ignore = "Requires a running TESTDOMAIN environment (set DEVMS_TEST_LDAP_*) — run with `cargo test -- --ignored`"]
     async fn resolve_group_memberships_max_mustermann() {
         let Some(cfg) = test_config() else { return };
         let base_dn = cfg.base_dn.clone();
@@ -804,7 +802,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Erfordert laufende TESTDOMAIN-Umgebung / Requires running TESTDOMAIN environment"]
+    #[ignore = "Requires a running TESTDOMAIN environment (set DEVMS_TEST_LDAP_*) — run with `cargo test -- --ignored`"]
     async fn orphaned_sid_returns_unknown() {
         let Some(cfg) = test_config() else { return };
         let resolver = LdapResolver::new(cfg);
@@ -815,7 +813,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Erfordert laufende TESTDOMAIN-Umgebung / Requires running TESTDOMAIN environment"]
+    #[ignore = "Requires a running TESTDOMAIN environment (set DEVMS_TEST_LDAP_*) — run with `cargo test -- --ignored`"]
     async fn identity_is_cached_after_first_lookup() {
         let Some(cfg) = test_config() else { return };
         let base_dn = cfg.base_dn.clone();
