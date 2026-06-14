@@ -1641,6 +1641,10 @@ async fn resolve_identity_sids(
     sid: &str,
     ldap: Option<&LdapParams>,
 ) -> Result<PrincipalResolution, String> {
+    // Validate the SID at this GUI boundary so a malformed value never
+    // reaches the resolver/LSA as a typed `Sid` (review 2026-06-14
+    // finding 3). Covers both the LDAP and the SAM/LSA branch below.
+    let sid = Sid::try_new(sid).map_err(|e| format!("Invalid SID: {e}"))?;
     if let Some(params) = ldap {
         let config = params.to_config();
         let resolver = std::sync::Arc::new(LdapResolver::new(config));
@@ -1651,7 +1655,7 @@ async fn resolve_identity_sids(
         #[cfg(not(windows))]
         let principal: PrincipalResolver<_, NoLsaBackend> = PrincipalResolver::new(backend, None);
         return principal
-            .resolve(PrincipalInput::Sid(Sid(sid.to_string())))
+            .resolve(PrincipalInput::Sid(sid.clone()))
             .await
             .map_err(|e| format!("LDAP identity resolution failed: {e}"));
     }
@@ -1667,7 +1671,7 @@ async fn resolve_identity_sids(
     // domain groups are not fully resolved, so `used_sam_fallback = true`.
     // Closes review 2026-06-04 round 2 finding 5: `sam_resolve_fallback`
     // passenden Diagnose-Marker. Closes review round 2 finding 5.
-    let (identity, memberships, disabled_known) = sam_resolve_fallback(sid)?;
+    let (identity, memberships, disabled_known) = sam_resolve_fallback(&sid.0)?;
     let disabled_status = if disabled_known {
         ad_resolver::DisabledStatus::Known(identity.disabled)
     } else {

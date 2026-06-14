@@ -68,7 +68,15 @@ impl PrincipalInput {
                     ));
                 }
                 if trimmed.starts_with("S-1-") {
-                    Ok(Self::Sid(Sid(trimmed.to_owned())))
+                    // The `S-1-` prefix only dispatches SID-vs-name; the
+                    // actual syntax is validated here via the canonical
+                    // `Sid::try_new` so a malformed SID-like string (e.g.
+                    // `S-1-5`, `S-1-5-abc`) cannot enter the resolver as a
+                    // typed `Sid` at this public boundary. The CLI already
+                    // pre-validates `--user`, but `PrincipalResolver` is a
+                    // shared component used beyond that one path (review
+                    // 2026-06-14 finding 3).
+                    Ok(Self::Sid(Sid::try_new(trimmed)?))
                 } else if trimmed.contains('\\') {
                     Ok(Self::DomainQualified(trimmed.to_owned()))
                 } else if trimmed.contains('@') {
@@ -1288,6 +1296,32 @@ mod tests {
             other => panic!("expected SamAccount, got {other:?}"),
         }
         assert!(PrincipalInput::Auto("   ".to_owned()).classify().is_err());
+    }
+
+    /// Review 2026-06-14 finding 3: a malformed SID-like string must not be
+    /// accepted as a typed `Sid` at this public boundary — `classify` runs
+    /// it through `Sid::try_new` and returns an error instead.
+    #[test]
+    fn auto_rejects_malformed_sid_like_input() {
+        for bad in ["S-1-5", "S-1-5-abc", "S-1-", "S-1-5-21-x"] {
+            assert!(
+                PrincipalInput::Auto(bad.to_owned()).classify().is_err(),
+                "malformed SID-like input must be rejected: {bad}"
+            );
+        }
+        // Real well-known and domain SIDs must still classify as Sid.
+        for good in [
+            "S-1-1-0",
+            "S-1-3-4",
+            "S-1-5-18",
+            "S-1-5-32-544",
+            "S-1-5-21-1-2-3-1001",
+        ] {
+            match PrincipalInput::Auto(good.to_owned()).classify().unwrap() {
+                PrincipalInput::Sid(s) => assert_eq!(s.0, good),
+                other => panic!("expected Sid for {good}, got {other:?}"),
+            }
+        }
     }
 
     // -----------------------------------------------------------------
