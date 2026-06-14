@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stars - AD Permission Analyzer for Active Directory, NTFS and SMB</title>
+<meta name="description" content="Stars is an AGPL-3.0 Windows permission analysis tool for Active Directory, NTFS and SMB effective permissions with explainable permission paths. Read-only, open source, free.">
+<link rel="canonical" href="https://birgerson.github.io/stars-ad-permission-analyzer/">
+<style>
+  :root{
+    --bg:#f4f5f8; --card:#ffffff; --ink:#1f2937; --muted:#5b6573;
+    --accent:#c2410c; --accent-hover:#9a3412; --border:#e2e6ee;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.6}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{color:var(--accent-hover);text-decoration:underline}
+  .wrap{max-width:920px;margin:0 auto;padding:0 20px}
+  header{background:#fff;border-bottom:3px solid var(--accent)}
+  header .wrap{padding:26px 20px}
+  h1{margin:0;font-size:30px;letter-spacing:.2px}
+  h1 .dot{color:var(--accent)}
+  .tagline{margin:6px 0 0;color:var(--muted);font-size:16px}
+  .btns{margin:22px 0 4px;display:flex;gap:10px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:10px 18px;border-radius:6px;font-weight:600;font-size:14px}
+  .btn-primary{background:var(--accent);color:#fff}
+  .btn-primary:hover{background:var(--accent-hover);color:#fff;text-decoration:none}
+  .btn-ghost{border:1px solid var(--accent);color:var(--accent)}
+  .btn-ghost:hover{background:#fff;text-decoration:none}
+  section{padding:34px 0}
+  h2{font-size:20px;margin:0 0 14px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+  .shot{width:100%;border:1px solid var(--border);border-radius:8px;display:block;margin:8px 0 0}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px}
+  .card h3{margin:0 0 6px;font-size:15px;color:var(--accent)}
+  .card p{margin:0;color:var(--muted);font-size:14px}
+  .facts{list-style:none;padding:0;margin:0;columns:2;font-size:14px}
+  .facts li{margin:0 0 8px;break-inside:avoid}
+  .facts b{color:var(--ink)}
+  blockquote{margin:0;padding:12px 16px;background:#fff;border-left:3px solid var(--accent);border-radius:0 6px 6px 0;color:var(--muted)}
+  footer{border-top:1px solid var(--border);color:var(--muted);font-size:13px}
+  footer .wrap{padding:20px}
+  code{background:#eceef3;padding:1px 5px;border-radius:4px;font-size:.92em}
+  @media(max-width:560px){.facts{columns:1}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>Stars <span class="dot">&mdash;</span> AD Permission Analyzer</h1>
+    <p class="tagline">Read-only analysis of Active Directory, NTFS and SMB permissions for Windows &mdash; with explainable effective-permission paths. <em>Also known as: Stars - AD Permission Analyser.</em></p>
+    <div class="btns">
+      <a class="btn btn-primary" href="https://github.com/Birgerson/stars-ad-permission-analyzer/releases">Download</a>
+      <a class="btn btn-ghost" href="https://github.com/Birgerson/stars-ad-permission-analyzer">Source on GitHub</a>
+      <a class="btn btn-ghost" href="https://github.com/Birgerson/stars-ad-permission-analyzer/blob/main/docs/user-guide.md">User Guide</a>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section>
+    <p>Stars is an <b>AGPL-3.0</b> Windows tool for auditing Active Directory, NTFS and SMB permissions. For any user it shows the <b>effective</b> access rights that actually apply to a folder or share &mdash; and, above all, <b>why</b>: through which groups, which ACL entries, which inheritance. For 1 path or 5000 paths alike.</p>
+    <img class="shot" src="screenshots/stars-analyze-tab.png" alt="Stars AD Permission Analyzer - Analyze tab showing target path, identity, resolution mode and SMB share fields">
+  </section>
+
+  <section>
+    <h2>Why Stars is different</h2>
+    <div class="grid">
+      <div class="card"><h3>Explainable permission paths</h3><p>Every result comes with the full chain: identity &rarr; group &rarr; ACE &rarr; normalized right &rarr; effective right. No black box.</p></div>
+      <div class="card"><h3>Correct, not approximate</h3><p>Windows AccessCheck semantics: stored-order DACL evaluation, Deny precedence, inheritance breaks, generic-rights expansion, NTFS &cap; Share combination.</p></div>
+      <div class="card"><h3>OWNER RIGHTS (S-1-3-4)</h3><p>Handles the implicit owner grant and OWNER RIGHTS ACEs exactly &mdash; where many tools over-report the owner's access. <a href="https://github.com/Birgerson/stars-ad-permission-analyzer/blob/main/docs/owner-rights-sid-s-1-3-4.md">Read more</a>.</p></div>
+      <div class="card"><h3>Honest about uncertainty</h3><p>When something cannot be fully resolved, Stars flags it with a diagnostic marker instead of pretending the result is complete.</p></div>
+      <div class="card"><h3>Hardened DCs, no certificate</h3><p>Signed LDAP (SASL GSSAPI/Kerberos sign &amp; seal) lets Stars query a hardened Windows Server 2022/2025 DC that enforces LDAP signing &mdash; without an LDAPS certificate.</p></div>
+      <div class="card"><h3>Strictly read-only</h3><p>No release will ever write to NTFS, SMB or AD. No agent on target systems. No telemetry, no phone-home.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What Stars analyzes</h2>
+    <ul class="facts">
+      <li><b>NTFS</b> DACLs &mdash; allow/deny, explicit/inherited, special rights</li>
+      <li><b>SMB shares</b> &mdash; share permissions and the NTFS &cap; Share result</li>
+      <li><b>Active Directory</b> &mdash; nested groups, primary group, FSPs, disabled accounts</li>
+      <li><b>Effective rights</b> per user, with risk findings</li>
+      <li><b>Reports</b> &mdash; CSV, JSON, HTML; SQLite scan history and delta comparison</li>
+      <li><b>Identity resolution</b> &mdash; SAM/LSA, LDAPS, Global Catalog, signed LDAP</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Get started</h2>
+    <p>Download the Windows installer from the <a href="https://github.com/Birgerson/stars-ad-permission-analyzer/releases">releases page</a> (no administrator rights required). The installer is not yet code-signed, so verify the published <code>.sha256</code> to confirm the file is the exact build GitHub Actions produced &mdash; see the <a href="https://github.com/Birgerson/stars-ad-permission-analyzer#verify-integrity-sha256">integrity-check steps</a>.</p>
+    <blockquote>Stars is exclusively a read-and-analyze tool. It does not modify any permissions, groups, or AD objects.</blockquote>
+  </section>
+
+  <section>
+    <h2>Documentation</h2>
+    <p>
+      <a href="https://github.com/Birgerson/stars-ad-permission-analyzer/blob/main/docs/user-guide.md">User Guide</a> &middot;
+      <a href="https://github.com/Birgerson/stars-ad-permission-analyzer/blob/main/docs/audit-criteria.md">Audit Criteria</a> &middot;
+      <a href="https://github.com/Birgerson/stars-ad-permission-analyzer/blob/main/docs/owner-rights-sid-s-1-3-4.md">OWNER RIGHTS (S-1-3-4)</a> &middot;
+      <a href="https://github.com/Birgerson/stars-ad-permission-analyzer/blob/main/docs/technical-documentation.md">Technical Documentation</a> &middot;
+      <a href="https://github.com/Birgerson/stars-ad-permission-analyzer/blob/main/docs/known-limitations.md">Known Limitations</a> &middot;
+      <a href="https://github.com/Birgerson/stars-ad-permission-analyzer/tree/main/docs/adr">Architecture Decision Records</a>
+    </p>
+  </section>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    Stars &mdash; AD Permission Analyzer &middot; Licensed under <a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0-or-later</a> &middot;
+    <a href="https://github.com/Birgerson/stars-ad-permission-analyzer">github.com/Birgerson/stars-ad-permission-analyzer</a>
+  </div>
+</footer>
+
+</body>
+</html>
