@@ -168,7 +168,6 @@ pub enum AccessContext {
 }
 
 impl AccessContext {
-    /// Long-Path-Form `\\?\UNC\server\share\…` — gelten als `RemoteSmb`;
     /// Derives the context from the path shape. UNC paths — including the
     /// long-path form `\\?\UNC\server\share\…` — count as `RemoteSmb`;
     /// local paths (incl. `\\?\C:\…`) count as `LocalInteractive`.
@@ -258,7 +257,6 @@ pub struct MembershipPath {
     pub complete: bool,
 }
 
-/// Herkunftsquelle einer rekonstruierten Mitgliedschafts-Kette.
 /// Source of a reconstructed membership chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MembershipPathSource {
@@ -843,7 +841,6 @@ pub struct PathTrustees {
     pub trustees: Vec<PathTrusteeEntry>,
 }
 
-/// Risikobefund
 /// Risk finding
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskFinding {

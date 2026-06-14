@@ -106,4 +106,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
+      # Detector regression checks first (compound/phrase misses must flag,
+      # clean English must pass), then the repository scan.
+      - run: python scripts/check-language.py --selftest
       - run: python scripts/check-language.py --list

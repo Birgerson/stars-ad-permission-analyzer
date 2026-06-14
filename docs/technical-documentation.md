@@ -514,8 +514,7 @@ the GUI consistently marks the list as *Local*.
 | Plain `sAMAccountName` | Also works as long as an AD server is configured |
 
 **Follow-up consequence for the docs.** The end-user docs
-([`anwender-handbuch.md`](anwender-handbuch.md) /
-[`user-guide.md`](user-guide.md)) explain this effect for end users.
+([`user-guide.md`](user-guide.md)) explain this effect for end users.
 Developers extending the GUI worker should implement any "LDAP search
 on demand" feature as an **explicit button with a spinner**, not as a
 keystroke trigger.
@@ -955,19 +954,18 @@ must be updated **at the same time**:
 - `risk_engine::is_incomplete()` (if it's an incomplete trigger).
 - Renderers in `cli::output`, `exporter::html`, `exporter::json`.
 - Marker table in `docs/features-and-limitations.md`.
-- Marker tables in `docs/anwender-handbuch.md` and
-  `docs/user-guide.md`.
-- `docs/audit-kriterien.md` (DE + EN incomplete sections).
+- Marker table in `docs/user-guide.md`.
+- `docs/audit-criteria.md` (incomplete sections).
 
 This list is the contribution policy recorded in
-`docs/audit-kriterien.md` and in every ADR introducing a new marker.
+`docs/audit-criteria.md` and in every ADR introducing a new marker.
 
 ---
 
 ## 10. Risk engine — from permission to audit finding
 
 **Source:** [`crates/risk_engine/src/rules.rs`](../crates/risk_engine/src/rules.rs).
-**Domain rationale:** [`docs/audit-kriterien.md`](audit-kriterien.md).
+**Domain rationale:** [`docs/audit-criteria.md`](audit-criteria.md).
 
 The risk engine consumes `Vec<EffectivePermission>` and produces
 `Vec<RiskFinding>`.
@@ -1036,7 +1034,7 @@ hint at the finding.
 
 ### 10.4 Audit criteria
 
-The document [`docs/audit-kriterien.md`](audit-kriterien.md) holds
+The document [`docs/audit-criteria.md`](audit-criteria.md) holds
 the domain logic:
 - Who may have which rights on which path class.
 - Who should *not* have which rights on which path class.
@@ -1393,17 +1391,12 @@ Planned for future versions:
 
 - **[User Guide](user-guide.md)** — GUI / CLI walkthrough.
 - **[Features and limits](features-and-limitations.md)** — full list
-  (German) of what Stars reliably handles.
+  of what Stars reliably handles.
 - **[Known limitations and roadmap](known-limitations.md)** —
   structural gaps Stars flags but does not resolve.
-- **[Audit criteria](audit-kriterien.md)** — domain evaluation rules,
+- **[Audit criteria](audit-criteria.md)** — domain evaluation rules,
   severities, optimal rights per role.
 - **[ADRs](adr/)** — Architecture Decision Records with rationale
   and consequences.
 - **[review.md](../review.md)** (gitignored) — record of ChatGPT
   review rounds 1–5 with status tables.
-
-## Deutsche Version
-
-
-**[technische-dokumentation.md](technische-dokumentation.md)**.

@@ -325,9 +325,9 @@ A finding with `incomplete = true` does **not** mean it is wrong — it means th
 
 > **Doc consistency check (contribution policy):** When `PermissionDiagnostic` is extended with a variant that should count as an incomplete trigger, the following must be updated **at the same time**:
 > - `crates/risk_engine/src/rules.rs::is_incomplete()` (the matching list),
-> - this section (audit-kriterien.md),
+> - this section (audit-criteria.md),
 > - the marker table in `docs/features-and-limitations.md`,
-> - the marker tables in `docs/anwender-handbuch.md` and `docs/user-guide.md`.
+> - the marker table in `docs/user-guide.md`.
 >
 > This consistency check addresses review 2026-06-04 round 5 finding 2.
 

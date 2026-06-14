@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """Language check — verifies the repository stays US-English only.
 
-Two passes:
+Passes:
 
 1. Umlaut/eszett scan (`[äöüÄÖÜß]`). Catches the obvious German.
-2. ASCII word denylist. Catches German words that have no umlauts —
+2. ASCII whole-word denylist. Catches German words that have no umlauts —
    "Hell", "Dunkel", "Berechtigungspfad", "Abbrechen", "fehlgeschlagen",
-   etc. The previous version only ran pass 1, which gave false
-   confidence (review 2026-06-08 finding 6).
+   etc. The first version only ran pass 1, which gave false confidence
+   (review 2026-06-08 finding 6).
+3. German-stem SUBSTRING scan. Catches German hiding inside compounds and
+   filenames that the word-boundary denylist misses — e.g. "Risikobefunde",
+   "Deutsche Version", "anwender-handbuch.md" (review 2026-06-14 finding 2).
+4. Mojibake scan for corrupted UTF-8 sequences.
+
+`--selftest` runs detector regression checks (the known compound/phrase
+misses must flag; clean English must pass).
 
 Both passes use character-level UTF-8 matching, not byte regex, so
 emoji and em-dashes are not false positives.
@@ -180,6 +187,42 @@ DE_WORDS_RE = re.compile(
 )
 
 
+# German stems that hide INSIDE compounds, where the whole-word denylist
+# above cannot see them. The word-boundary match misses e.g.
+# "Risikobefunde" (contains "befund"), "Deutsche Version" (contains
+# "deutsch") and German doc filenames such as "anwender-handbuch.md",
+# "technische-dokumentation.md", "audit-kriterien.md". These are matched
+# case-insensitively as SUBSTRINGS (no word boundary). Every entry must be
+# unambiguously German — it may never be a substring of a real English word
+# used in the repo (e.g. German "dokumentation"/"kriterien" never collide
+# with English "documentation"/"criteria"). Review 2026-06-14.
+DE_SUBSTRINGS = [
+    "befund",        # Befund, Risikobefund(e)
+    "deutsch",       # "Deutsche Version", Deutschland
+    "anwender",      # anwender-handbuch
+    "handbuch",      # *-handbuch
+    "dokumentation", # technische-dokumentation (German "k"; EN: "documentation")
+    "kriterien",     # audit-kriterien (EN: "criteria")
+    "berechtigung",  # Berechtigungspfad and other compounds
+    "risiko",        # Risiko, Risikobefund
+]
+
+DE_SUBSTR_RE = re.compile(
+    "|".join(re.escape(s) for s in DE_SUBSTRINGS),
+    re.IGNORECASE,
+)
+
+
+def line_has_german(line: str) -> bool:
+    """True if a line contains German per any of the detection passes."""
+    return bool(
+        UMLAUT_RE.search(line)
+        or DE_WORDS_RE.search(line)
+        or DE_SUBSTR_RE.search(line)
+        or MOJIBAKE_RE.search(line)
+    )
+
+
 # Paths that legitimately contain umlauts in tracked content. Each entry
 # is a (path-suffix, optional substring) tuple. When a new legitimate
 # need shows up, add it here with a short comment why.
@@ -247,6 +290,44 @@ def tracked_files():
             yield path
 
 
+def selftest() -> int:
+    """Detector regression checks (review 2026-06-14).
+
+    Guards that the compound/phrase misses which slipped past the
+    word-boundary denylist (e.g. ``Risikobefunde``, ``Deutsche Version``,
+    German doc filenames) are now caught, and that clean English is not
+    falsely flagged.
+    """
+    must_flag = [
+        "Risikobefunde",                 # compound — missed before
+        "## Deutsche Version",           # phrase — missed before
+        "anwender-handbuch.md",          # German doc filename
+        "technische-dokumentation.md",   # German doc filename
+        "audit-kriterien.md",            # German doc filename
+        "Berechtigungspfad",             # compound
+        "der Scan",                      # whole-word denylist still works
+        "Schlüssel",                     # umlaut pass still works
+    ]
+    must_pass = [
+        "Risk Findings",
+        "effective permissions",
+        "documentation",
+        "audit criteria",
+        "the scan result",
+        "OWNER RIGHTS (S-1-3-4)",
+    ]
+    failures = []
+    failures += [f"MISS (should flag): {s!r}" for s in must_flag if not line_has_german(s)]
+    failures += [f"FALSE POSITIVE (should pass): {s!r}" for s in must_pass if line_has_german(s)]
+    if failures:
+        print("Language self-test FAILED:", file=sys.stderr)
+        for line in failures:
+            print("  " + line, file=sys.stderr)
+        return 1
+    print(f"Language self-test passed: {len(must_flag)} flagged, {len(must_pass)} clean.")
+    return 0
+
+
 def check():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -254,18 +335,21 @@ def check():
         action="store_true",
         help="print every offending line as path:line:text",
     )
+    parser.add_argument(
+        "--selftest",
+        action="store_true",
+        help="run detector regression checks and exit",
+    )
     args = parser.parse_args()
+    if args.selftest:
+        return selftest()
 
     hits = []
     for path in tracked_files():
         try:
             with open(path, "r", encoding="utf-8") as f:
                 for line_no, line in enumerate(f, start=1):
-                    if (
-                        UMLAUT_RE.search(line)
-                        or DE_WORDS_RE.search(line)
-                        or MOJIBAKE_RE.search(line)
-                    ):
+                    if line_has_german(line):
                         if not is_allowlisted(path, line):
                             hits.append((path, line_no, line.rstrip("\n")))
         except (UnicodeDecodeError, OSError):

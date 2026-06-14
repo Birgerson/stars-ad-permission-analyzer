@@ -39,7 +39,7 @@ const RESERVED_DEVICE_NAMES: &[&str] = &[
 /// Validates a relative manifest target path against Windows-specific
 /// path-shape attacks.
 ///
-/// Accepts: `bin/stars.exe`, `bin\stars.exe`, `docs/de/handbuch.html`.
+/// Accepts: `bin/stars.exe`, `bin\stars.exe`, `docs/en/handbook.html`.
 ///
 /// Rejects:
 /// - empty paths
@@ -332,8 +332,8 @@ mod tests {
             "stars.exe",
             "bin/stars.exe",
             "bin\\stars.exe",
-            "docs/de/handbuch.html",
-            "docs\\de\\handbuch.html",
+            "docs/en/handbook.html",
+            "docs\\en\\handbook.html",
             "data/x.bin",
             "a/b/c/d/e/file.txt",
         ] {

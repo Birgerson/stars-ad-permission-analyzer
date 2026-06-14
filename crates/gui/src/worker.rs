@@ -292,7 +292,6 @@ pub enum WorkerEvent {
         /// true if the scan was cancelled by the user — results are partial.
         cancelled: bool,
     },
-    /// Risikobefunde nach Abschluss eines Scans.
     /// Risk findings after a scan completes.
     RiskFindings(Vec<RiskFinding>),
     /// Result of an HTML export.

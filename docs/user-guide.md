@@ -72,8 +72,7 @@ also what Stars knew and *did not know* while computing it.
   suspicious names are only **flagged**, never read).
 
 The full list lives in
-[features-and-limitations.md](features-and-limitations.md) (German
-only — content overlaps with this English guide).
+[features-and-limitations.md](features-and-limitations.md).
 
 ---
 
@@ -698,23 +697,16 @@ the configuration for you**. That's your call.
 ## Further reading
 
 - **[features-and-limitations.md](features-and-limitations.md)** —
-  Full list (German) of what Stars reliably handles and what is out
+  Full list of what Stars reliably handles and what is out
   of scope by design.
 - **[known-limitations.md](known-limitations.md)** — Known
   structural gaps (FSP, GC bind, SID history, cross-forest) with
   roadmap tracking.
-- **[audit-kriterien.md](audit-kriterien.md)** — Domain evaluation
-  rules and severity per risk rule (German).
+- **[audit-criteria.md](audit-criteria.md)** — Domain evaluation
+  rules and severity per risk rule.
 - **[adr/](adr/)** — Architecture Decision Records — historical
   justifications for individual model, pipeline, and API decisions.
 - **[../README.md](../README.md)** — Project overview, build
   instructions, license.
 - **[../SECURITY.md](../SECURITY.md)** — Reporting security
   vulnerabilities.
-
----
-
-## Deutsche Version
-
-
-**[anwender-handbuch.md](anwender-handbuch.md)**.

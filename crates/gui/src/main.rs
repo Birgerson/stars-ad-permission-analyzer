@@ -388,7 +388,7 @@ slint::slint! {
         message: string,
     }
 
-    // Ein Risikobefund.
+    // A risk finding.
     // A risk finding.
     export struct RiskItemVm {
         severity_label: string,
@@ -1351,7 +1351,7 @@ slint::slint! {
                             }
 
                             if root.s-risks.length > 0: GroupBox {
-                                title: "Risikobefunde";
+                                title: "Risk Findings";
                                 VerticalBox {
                                     spacing: 4px;
                                     for risk[i] in root.s-risks: VerticalBox {
