@@ -1,6 +1,6 @@
 # Verification of the Lab Setup and the Stars Software
 
-> **Last update:** v1.5.16 (2026-06-07). This file grows by one verification block per release; older blocks stay unchanged as a historical record.
+> **Last update:** v1.7.0 (2026-06-14). This file grows by one verification block per release; older blocks stay unchanged as a historical record.
 > Each verification block notes its own Stars version (e.g. "Block C — v1.5.8"). The lab topology itself comes from the initial setup (see commit timestamps of [`forest-topology.md`](forest-topology.md)).
 
 This file documents *what* was verified, *how* it was checked, and *what* Stars actually produced. Reproduce with the scripts under [`scripts/`](scripts/).
@@ -1159,3 +1159,124 @@ trust user's rights.
   cert was already removed.
 - Test fixtures kept for regression: `T1LAB\xfsp1`, tier0 group
   `FSP-ResourceAccess` + its FSP member, and `C:\ReVerify\FSPGroup`.
+
+---
+
+## Block L — Live hard test against the three-domain forest (2026-06-14)
+
+This block records the manual "hard test" of 2026-06-14 — the first
+end-to-end exercise of Stars against a deliberately deeply nested,
+multi-domain forest with a live SMB share. It is the run that produced the
+v1.6.x review and uncovered findings F1 and F2.
+
+> **Scope note (honest, same convention as Blocks J/K):** the values below
+> are transcribed from the recorded run. The lab has since been powered
+> down, so this block documents the captured results rather than a freshly
+> reproduced run. Reproducing requires rebuilding the lab.
+
+### L.1 — Stars versions under test
+
+| Area | Version | Note |
+|---|---|---|
+| NTFS / SMB / scan (L.3–L.4, L.6) | v1.6.5 | F2 (duplicate explanation steps) was found and fixed during this run |
+| Signed LDAP (L.5) | v1.7.0 | F1 (`--ldap-signing`) |
+
+### L.2 — Lab restructure for deep nesting
+
+- **tier0:** a five-level global-group chain
+  `ST_T0_Inner → ST_T0_L2 → ST_T0_L3 → ST_T0_L4 → ST_T0_L5`, with
+  `T0LAB\mm0002` placed in the innermost group. Plus a deliberate
+  membership cycle `ST_Cyc_A → ST_Cyc_B → ST_Cyc_C → ST_Cyc_A` to exercise
+  cycle detection.
+- **tier2:** SMB share `StarsShare` on `C:\StarsShare` with three folders
+  `Test01 / Test02 / Test03`, each backed by a domain-local resource group
+  `DL_Test01 / DL_Test02 / DL_Test03` (AGDLP). The global role groups
+  `ST_T2_Eng` and `ST_T2_Mgmt` nest into the DL groups; the deny fixture
+  `ST_T2_Deny` carries an explicit Deny. Users `mm0801`..`mm0809`
+  distributed across them.
+
+### L.3 — NTFS ground truth vs Stars
+
+Run on tier2 as a local administrator (ACLs read directly, no LDAP). The
+Test02 ACL (`icacls`):
+
+```text
+C:\StarsShare\Test02  T2LAB\ST_T2_Deny:(OI)(CI)(DENY)(W)
+                      VORDEFINIERT\Administratoren:(F)
+                      T2LAB\DL_Test02:(OI)(CI)(M)
+```
+
+Membership: `ST_T2_Eng` (global) ∋ `mm0802`, `mm0803`; `ST_T2_Eng →
+DL_Test02` (transitive); `mm0803` is additionally a member of
+`ST_T2_Deny`.
+
+| User / path | Windows ground truth | Stars result | Status |
+|---|---|---|---|
+| mm0802 / Test02 | Modify | Modify (`0x1301BF`) via `ST_T2_Eng → DL_Test02` | ✅ |
+| mm0803 / Test02 | Modify minus Deny Write | Special `0x300A9` (Write removed, Delete retained) | ✅ |
+| mm0805 / Test03 | Full Control, inheritance protected | Full Control, "Protected" inheritance detected | ✅ |
+| mm0801 / Test02 | no access | Special (`0x00000000`), Matching ACEs `(none)` | ✅ |
+
+**On mm0803:** the `(DENY)(W)` on `ST_T2_Deny` is correctly subtracted from
+the `DL_Test02` Modify grant — Write is removed while Delete (a separate
+bit) is retained, yielding `0x300A9`. This is exactly the Windows
+stored-order "Deny beats Allow" semantics for the overlapping bits, not a
+blanket removal of the whole Modify set.
+
+### L.4 — SMB share ∩ NTFS (UNC)
+
+Share `StarsShare` permission set to **Read**. Analyze `mm0802` over the
+UNC path `\\…\StarsShare\Test02`:
+
+```text
+NTFS effective:           Modify (0x1301BF)
+Share permission:         Read & Execute (0x1200A9)
+Effective (NTFS ∩ Share): Read & Execute (0x1200A9)
+```
+
+**Verified:** the share Read cap correctly clamps the NTFS Modify down to
+Read & Execute — the more restrictive of the two wins, rendered as its own
+explanation step.
+
+### L.5 — Signed LDAP (F1) against the hardened, certificate-less DC
+
+Run as `T0LAB\Administrator` via a batch logon (scheduled task, so a
+Kerberos TGT exists), analyzing `T0LAB\mm0002` with
+`--ldap-signing -s tier0.tier0.lab -b DC=tier0,DC=lab`:
+
+- **No SAM/LSA-fallback diagnostic** — the signed bind connected over clear
+  port 389 **without a certificate** (the DC rejects plain LDAP with
+  `strongerAuthRequired` and has no LDAPS cert).
+- The **full five-level nested chain** resolved recursively:
+  `mm0002 → ST_T0_Inner → ST_T0_L2 → ST_T0_L3 → ST_T0_L4 → ST_T0_L5`.
+
+The SAM/LSA path on the same hardened DC resolves direct groups only and
+cannot produce this chain — the precise gap F1 closes. Decision record:
+[`docs/adr/0051-signed-ldap-gssapi-bind.md`](../adr/0051-signed-ldap-gssapi-bind.md).
+
+### L.6 — Cross-domain SAM honesty
+
+When a tier0 user is analyzed against a tier2 path in SAM/LSA mode (no
+LDAP), deep cross-domain global-group nesting is not fully resolved — but
+Stars marks the result **incomplete** with a diagnostic marker rather than
+silently presenting it as complete. No silent skip; the under-report is
+visible to the operator.
+
+### L.7 — Findings raised by this run
+
+| Finding | Fixed in | Summary |
+|---|---|---|
+| F2 | v1.6.5 | The explanation path emitted duplicate steps for a group reached by two routes; de-duplicated. |
+| F1 | v1.7.0 | No signed-LDAP bind → on a stock hardened DC Stars fell back to SAM/LSA and could not resolve deep nesting. Closed by ADR 0051 (signed bind), verified live in L.5. |
+
+### L.8 — What this closes / what stays open
+
+- **Closes** the L6 known-limitation gap ("no one has run it against a real
+  multi-domain forest"): Stars has now been exercised end-to-end against a
+  three-domain Server 2025 forest with deep nesting, a membership cycle, a
+  live SMB share, and a hardened DC, and the effective-rights output matched
+  the Windows ground truth in every checked scenario.
+- **Stays open (honest):** this is a *manual* run, not an automated
+  `#[ignore]` integration test in CI; the lab is powered down; the figures
+  here are the recorded session output. Turning this into a repeatable
+  automated lab suite remains future work.

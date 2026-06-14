@@ -349,9 +349,14 @@ with documented prerequisites.
 > results matched it on every evaluable case. Notably the signed-LDAP bind
 > (ADR 0051) resolved a user's **full five-level nested group chain** over
 > LDAP against a hardened, certificate-less DC — previously impossible.
-> **Honest caveat:** this run was manual and the results were not committed
-> as a repository artifact (the L6 "Markdown table in the repo" deliverable
-> is still open), so L6 stays **partially** open.
+> The full ground-truth-vs-Stars results are now committed as a repository
+> artifact — [`docs/lab/verification.md`](lab/verification.md), **Block L**
+> (NTFS ground truth, the deny-precedence `0x300A9` case, the inheritance
+> break, the NTFS ∩ Share UNC case, and the signed-LDAP five-level chain).
+> **Honest caveat:** this run was *manual* — it is not yet an automated
+> `#[ignore]` integration test in CI, and the lab is powered down, so the
+> figures are the recorded session output. Turning it into a repeatable
+> automated lab suite remains future work, so L6 stays **partially** open.
 
 ---
 
@@ -499,7 +504,7 @@ descriptor reference one stored descriptor row, once the table exists.
 | L3 — SID History | Medium | **no** | yes, with implementation |
 | L4 — Cross-forest filter | Medium | no | no (documentation only) |
 | L5 — Empty memberships | Medium | yes (incomplete) | only via L1/L2 |
-| L6 — Live tests | High | n/a | **partially** — live 3-domain run 2026-06-14; results artifact still open |
+| L6 — Live tests | High | n/a | **partially** — live 3-domain run 2026-06-14 committed (verification.md Block L); automated CI suite still open |
 | L7 — Token privileges | Low | no | deliberately out of scope |
 | L8 — DAC | Low | yes (incomplete) | deliberately out of scope |
 | L9 — Canonical-order false positives | Low | yes (informational) | no (missing ancestry data) |
