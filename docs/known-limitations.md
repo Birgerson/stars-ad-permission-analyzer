@@ -1,6 +1,6 @@
 # Stars — Known Limitations and Roadmap (v1.6+)
 
-**Status:** v1.7.0 — 2026-06-14
+**Status:** v1.7.1 — 2026-06-14
 **Purpose:** Honest enumeration of the places where Stars **structurally
 cannot guarantee** to deliver a complete picture.
 
@@ -495,6 +495,53 @@ descriptor reference one stored descriptor row, once the table exists.
 
 ---
 
+## L11 — The permission engine lives in a single large module
+
+**Priority:** Low — code maintainability, not a defect and not a correctness issue.
+
+`permission_engine/src/engine.rs` is large (~3.6k lines), but the bulk of
+that is the in-file test suite. The production logic is a handful of
+cohesive functions (stored-order DACL walk, token-SID assembly, explanation
+builder) behind a small public surface. The engine evaluates correctly and
+is covered by unit tests plus the Windows `AccessCheck` conformance harness
+that runs in CI — so this is a readability concern, **not** a "god module"
+with tangled responsibilities.
+
+### Resolution
+
+Optionally split the file into submodules (e.g. `dacl`, `token`,
+`explanation`) behind the unchanged public API. The change would be purely
+mechanical, with no behavioural change and no effect on results. It is
+deferred because the current structure is correct and well-tested — the
+value is reader ergonomics only.
+
+---
+
+## L12 — Application updates are manual; `update_manager` is an inactive scaffold
+
+**Priority:** Low — by design; not a defect.
+
+Stars is distributed as a versioned installer on the GitHub release page and
+verified via the published SHA256 hash. There is **no in-app auto-update**.
+The `update_manager` crate exists as a *prepared but not activated* scaffold
+for the update/patch architecture outlined in `AGENTS.md` (signature +
+checksum verification, update channels, rollback, schema migration); its
+public APIs are currently **non-functional stubs** and must not be mistaken
+for a working updater.
+
+This is intentional: manual, operator-controlled installation is a valid and
+common model for an audit tool, and many environments disallow
+self-updating software in any case.
+
+### Resolution
+
+If in-app updates are ever required, implement `update_manager` against the
+`AGENTS.md` requirements (signed, checksummed, channel-aware,
+rollback-capable, with an offline update source). Until then the crate stays
+a documented scaffold and updates remain a manual download-and-verify step.
+
+---
+
 ## Status overview
 
 | Limit | Priority | Marker present? | Resolvable? |
@@ -509,6 +556,8 @@ descriptor reference one stored descriptor row, once the table exists.
 | L8 — DAC | Low | yes (incomplete) | deliberately out of scope |
 | L9 — Canonical-order false positives | Low | yes (informational) | no (missing ancestry data) |
 | L10 — SD dedup scan-local only | Low | n/a | yes, with a descriptor table + migration |
+| L11 — Engine module size | Low | n/a | optional refactor (readability only, not a defect) |
+| L12 — Manual updates / `update_manager` scaffold | Low | n/a | by design; implement only if in-app updates are required |
 
 ## Contribution policy
 
