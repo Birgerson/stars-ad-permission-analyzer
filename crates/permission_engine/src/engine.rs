@@ -510,21 +510,14 @@ fn source_label(source: &MembershipPathSource) -> &'static str {
     }
 }
 
-// Engine build fingerprint, embedded in the compiled artifact for build
-// provenance. `#[used]` keeps the linker from discarding it so the marker
-// survives into the shipped binary.
+// Author / AGPL attribution marker, embedded openly in the compiled binary.
+// `#[used]` keeps the linker from stripping it, so the author and license
+// travel with the shipped artifact — not only with the source (source
+// comments are dropped at compile time; this is not). This is intentional
+// and documented in the README: Stars is AGPL-3.0 and derivative works must
+// preserve attribution. It is data only and never read by engine logic.
 #[used]
-static ENGINE_FINGERPRINT: [u8; 165] = [
-    83, 116, 97, 114, 115, 32, 65, 68, 32, 80, 101, 114, 109, 105, 115, 115, 105, 111, 110, 32, 65,
-    110, 97, 108, 121, 122, 101, 114, 32, 45, 32, 112, 101, 114, 109, 105, 115, 115, 105, 111, 110,
-    32, 101, 110, 103, 105, 110, 101, 32, 45, 32, 101, 110, 103, 105, 110, 101, 101, 114, 58, 32,
-    66, 105, 114, 103, 101, 114, 32, 76, 97, 98, 105, 110, 115, 99, 104, 32, 45, 32, 40, 99, 41,
-    32, 66, 105, 114, 103, 101, 114, 32, 76, 97, 98, 105, 110, 115, 99, 104, 44, 32, 65, 71, 80,
-    76, 45, 51, 46, 48, 59, 32, 100, 101, 114, 105, 118, 97, 116, 105, 118, 101, 32, 119, 111, 114,
-    107, 115, 32, 109, 117, 115, 116, 32, 112, 114, 101, 115, 101, 114, 118, 101, 32, 116, 104,
-    105, 115, 32, 97, 117, 116, 104, 111, 114, 32, 97, 116, 116, 114, 105, 98, 117, 116, 105, 111,
-    110, 46,
-];
+static ENGINE_ATTRIBUTION: &str = "Stars AD Permission Analyzer - permission engine - engineer: Birger Labinsch - (c) Birger Labinsch, AGPL-3.0; derivative works must preserve this author attribution.";
 
 /// Preferred display for a SID in the chain: explicitly attached name,
 /// then global SID→name table, then raw SID.

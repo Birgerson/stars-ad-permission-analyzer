@@ -500,6 +500,8 @@ Stars persists its scan history in `%APPDATA%\Stars\stars_data.db` (SQLite, sepa
 
 This attribution is deliberately transparent: Birger Labinsch did **not** write the code himself but, as a prompt engineer, directed the entire development process through the AI model — from architectural decisions to individual code changes to tests, bug fixes, and documentation. Every commit in this repository therefore also carries a `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>` line that makes the AI contribution visible per change.
 
+**Embedded attribution marker (disclosed, not hidden):** the compiled binaries carry a small author / AGPL attribution string embedded in the engine (the `*_ATTRIBUTION` constants in `permission_engine` and `risk_engine`, kept with `#[used]`). Because source comments are stripped at compile time but these constants are not, the author's name and the AGPL-3.0 license travel with the shipped `.exe` and can be recovered from it (e.g. `strings Stars.exe | findstr "Birger Labinsch"`). This is a provenance marker for license enforcement under AGPL-3.0; it is plain data, never read by the permission logic, and changes nothing about how Stars evaluates rights.
+
 <a name="disclaimer"></a>
 
 ## Legal
