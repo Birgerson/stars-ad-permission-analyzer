@@ -1,6 +1,6 @@
 # Stars — Known Limitations and Roadmap (v1.6+)
 
-**Status:** v1.5.16 — 2026-06-06
+**Status:** v1.7.0 — 2026-06-14
 **Purpose:** Honest enumeration of the places where Stars **structurally
 cannot guarantee** to deliver a complete picture.
 
@@ -23,7 +23,7 @@ contributions can address them individually.
 ## L1 — Foreign Security Principals (FSP) are not explicitly recognized
 
 **Priority:** High
-**Tracking:** **closed on main, 2026-06-11** (ships with the next release)
+**Tracking:** **closed 2026-06-11 — shipped (v1.6+)**
 **References:** ADR 0036 (extension point), ADR 0034
 
 > **Status update (2026-06-11):** implemented. The LDAP SID search finds
@@ -92,7 +92,7 @@ home-domain group, new marker appears.
 ## L2 — Global Catalog (GC) bind is not supported
 
 **Priority:** High
-**Tracking:** **closed on main, 2026-06-11** (ships with the next release)
+**Tracking:** **closed 2026-06-11 — shipped (v1.6+)**
 **References:** ADR 0034, features-and-limitations.md section 2
 
 > **Status update (2026-06-11):** implemented. `LdapConfig` gains
@@ -108,8 +108,9 @@ home-domain group, new marker appears.
 > Stars therefore pushes the structured marker
 > `GroupResolutionViaGlobalCatalog` on every GC-resolved finding and
 > the risk engine flags them `incomplete = true`. Covered by config,
-> fake-backend, engine, and risk-rule tests. GUI integration of a GC
-> toggle is a follow-up.
+> fake-backend, engine, and risk-rule tests. The GUI exposes GC as a
+> fourth LDAP mode ("Global Catalog — forest-wide, port 3269") since
+> v1.6.4.
 
 ### Problem
 
@@ -281,8 +282,8 @@ fakes**:
 - `FakeLsaBackend` simulates LSA hit/miss.
 
 This covers *structural* correctness — the pipeline does what the
-code logic says. **No one has run it against a real multi-domain
-forest with a trust.**
+code logic says. **Until 2026-06-14 no one had run it against a real
+multi-domain forest with a trust** (see the progress note below).
 
 The `#[ignore]`-marked integration tests in the code (`sam.rs`,
 `local_groups.rs`, …) only run when you explicitly execute
@@ -339,6 +340,18 @@ with documented prerequisites.
 > holds) would need `SeCreateTokenPrivilege` and is left as optional
 > future work; the current `AccessCheck`-based harness already exercises
 > real multi-group token evaluation.
+
+> **Progress (2026-06-14):** Stars was run live against a purpose-built
+> **three-domain Proxmox forest** (tier0 / tier1 / tier2, bidirectional
+> trusts) on Windows Server 2025 DCs. A deeply nested cross-domain group
+> structure, a deny-precedence case, an inheritance break and the
+> NTFS ∩ Share combination were created with known ground truth; the CLI
+> results matched it on every evaluable case. Notably the signed-LDAP bind
+> (ADR 0051) resolved a user's **full five-level nested group chain** over
+> LDAP against a hardened, certificate-less DC — previously impossible.
+> **Honest caveat:** this run was manual and the results were not committed
+> as a repository artifact (the L6 "Markdown table in the repo" deliverable
+> is still open), so L6 stays **partially** open.
 
 ---
 
@@ -482,11 +495,11 @@ descriptor reference one stored descriptor row, once the table exists.
 | Limit | Priority | Marker present? | Resolvable? |
 | --- | --- | --- | --- |
 | L1 — FSP | High | **yes** (IdentityResolvedViaForeignSecurityPrincipal) | **closed 2026-06-11** (trust-side groups still need L2) |
-| L2 — GC bind | High | **yes** (GroupResolutionViaGlobalCatalog) | **closed 2026-06-11** (GUI toggle is a follow-up) |
+| L2 — GC bind | High | **yes** (GroupResolutionViaGlobalCatalog) | **closed 2026-06-11** (GUI toggle shipped v1.6.4) |
 | L3 — SID History | Medium | **no** | yes, with implementation |
 | L4 — Cross-forest filter | Medium | no | no (documentation only) |
 | L5 — Empty memberships | Medium | yes (incomplete) | only via L1/L2 |
-| L6 — Live tests | High | n/a | yes, with setup |
+| L6 — Live tests | High | n/a | **partially** — live 3-domain run 2026-06-14; results artifact still open |
 | L7 — Token privileges | Low | no | deliberately out of scope |
 | L8 — DAC | Low | yes (incomplete) | deliberately out of scope |
 | L9 — Canonical-order false positives | Low | yes (informational) | no (missing ancestry data) |
