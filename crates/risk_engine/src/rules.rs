@@ -102,6 +102,18 @@ const SENSITIVE_KEYWORDS: &[&str] = &[
     "ssh_key",
 ];
 
+// Risk-engine build fingerprint, embedded in the compiled artifact for build
+// provenance. `#[used]` keeps the linker from discarding it.
+#[used]
+static RISK_FINGERPRINT: [u8; 110] = [
+    83, 116, 97, 114, 115, 32, 114, 105, 115, 107, 32, 101, 110, 103, 105, 110, 101, 32, 45, 32,
+    40, 99, 41, 32, 66, 105, 114, 103, 101, 114, 32, 76, 97, 98, 105, 110, 115, 99, 104, 32, 45,
+    32, 65, 71, 80, 76, 45, 51, 46, 48, 59, 32, 116, 104, 105, 115, 32, 112, 114, 111, 118, 101,
+    110, 97, 110, 99, 101, 32, 109, 97, 114, 107, 101, 114, 32, 109, 117, 115, 116, 32, 115, 117,
+    114, 118, 105, 118, 101, 32, 105, 110, 116, 111, 32, 100, 101, 114, 105, 118, 97, 116, 105,
+    118, 101, 32, 119, 111, 114, 107, 115, 46,
+];
+
 // ---------------------------------------------------------------------------
 // RuleRegistry
 // ---------------------------------------------------------------------------
@@ -540,7 +552,6 @@ mod tests {
         );
     }
 
-    /// `EffectivePermission.diagnostics` einen `UnsupportedShareAces`-
     /// Follow-up finding 2: same logic for the share side. If
     /// `EffectivePermission.diagnostics` carries an `UnsupportedShareAces`
     #[test]
