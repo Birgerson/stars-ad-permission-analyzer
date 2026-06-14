@@ -484,6 +484,7 @@ Stars persists its scan history in `%APPDATA%\Stars\stars_data.db` (SQLite, sepa
 - [![Features and limits](https://img.shields.io/badge/Features_and_limits-c2410c?style=flat-square)](docs/features-and-limitations.md) — what Stars reliably covers, what is deliberately out of scope, and how the diagnostic markers (`DomainGroupRecursionIncomplete`, `IdentityNotInConfiguredLdapBase`, …) should be read. **Start here when a finding is unexpected.**
 - [![Known limitations](https://img.shields.io/badge/Known_limitations-c2410c?style=flat-square)](docs/known-limitations.md) — structural gaps (FSP, GC bind, SID history, cross-forest) that Stars flags but does not resolve. Roadmap tracking for future releases.
 - [![Audit Criteria](https://img.shields.io/badge/Audit_Criteria-c2410c?style=flat-square)](docs/audit-criteria.md) — a complete write-up of which rules Stars uses to evaluate permissions, which risk rules are implemented, what severities they carry, and which permissions are considered optimal for which role.
+- [![OWNER RIGHTS](https://img.shields.io/badge/OWNER_RIGHTS-c2410c?style=flat-square)](docs/owner-rights-sid-s-1-3-4.md) — OWNER RIGHTS (`S-1-3-4`): the implicit owner grant, how an OWNER RIGHTS ACE caps it, and why naive tools state the owner's effective rights wrong. **A real differentiator of Stars.**
 - [![ADRs](https://img.shields.io/badge/ADRs-c2410c?style=flat-square)](docs/adr/) — historical justifications for individual technology and model decisions.
 - **[Security Policy](SECURITY.md)** — how to report security vulnerabilities.
 
