@@ -4,6 +4,7 @@
 [![CI](https://github.com/Birgerson/stars-ad-permission-analyzer/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Birgerson/stars-ad-permission-analyzer/actions/workflows/ci.yml)
 
 [![Download](https://img.shields.io/badge/Download-c2410c?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Birgerson/stars-ad-permission-analyzer/releases)
+[![Website](https://img.shields.io/badge/Website-c2410c?style=for-the-badge&logo=githubpages&logoColor=white)](https://birgerson.github.io/stars-ad-permission-analyzer/)
 [![Documentation](https://img.shields.io/badge/Documentation-c2410c?style=for-the-badge&logo=readthedocs&logoColor=white)](docs/user-guide.md)
 [![Verify SHA256](https://img.shields.io/badge/Verify_SHA256-c2410c?style=for-the-badge&logo=gnuprivacyguard&logoColor=white)](#verify-integrity-sha256)
 
