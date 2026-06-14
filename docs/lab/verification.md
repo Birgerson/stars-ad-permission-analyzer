@@ -5,6 +5,12 @@
 
 This file documents *what* was verified, *how* it was checked, and *what* Stars actually produced. Reproduce with the scripts under [`scripts/`](scripts/).
 
+> **Why this is manual, not CI:** these are live runs against a real domain
+> controller. CI runs on a GitHub-hosted runner that has **no DC**, so the
+> `#[ignore]` AD integration tests are deliberately not part of the
+> pipeline — see [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
+> This file is the record of those manual live runs.
+
 | Block | Stars version | Topic |
 |---|---|---|
 | A — Lab infrastructure | v1.5.5 (initial) | Forest / trust / CF snapshot at the initial lab build |

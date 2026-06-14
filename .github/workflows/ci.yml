@@ -66,9 +66,11 @@ jobs:
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-test-
-      # AD integration tests are marked #[ignore] and require a running DC
-      # with DEVMS_TEST_LDAP_* set. CI only runs the regular tests — they
-      # do not need network or the TESTDOMAIN VM.
+      # AD integration tests are marked #[ignore] and require a live domain
+      # controller (configured via DEVMS_TEST_LDAP_*). CI runs on a
+      # GitHub-hosted runner with no DC, so it only runs the regular tests.
+      # The live DC runs are done manually against the lab and recorded in
+      # docs/lab/verification.md (latest: Block L — the three-domain forest).
       - run: cargo test --workspace
 
   conformance:
@@ -79,8 +81,9 @@ jobs:
     # which the windows-latest runner provides, so it runs on every push —
     # making "conformance-verified for this commit" an honest claim rather
     # than something only ever checked locally (engine review 2026-06-13
-    # finding 5). The AD/LSA/local-group #[ignore] tests still require a DC
-    # and are NOT run here.
+    # finding 5). The AD/LSA/local-group #[ignore] tests still require a live
+    # DC and are NOT run here — they are verified manually against the lab
+    # (see docs/lab/verification.md).
     name: windows authorization conformance
     runs-on: windows-latest
     steps:
