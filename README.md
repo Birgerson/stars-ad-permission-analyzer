@@ -24,7 +24,8 @@ For every user, the tool shows the effective access rights that actually apply t
 - [![Download & install](https://img.shields.io/badge/Download-c2410c?style=flat-square)](#download--install) — installer, integrity check, antivirus note
 - [![What Stars is](https://img.shields.io/badge/What_Stars_is-c2410c?style=flat-square)](#what-stars-is) — background, scope, and what it analyzes
 - [![Using Stars](https://img.shields.io/badge/Using_Stars-c2410c?style=flat-square)](#using-stars) — GUI tabs, identity input, CLI, and limits
-- [![Project & development](https://img.shields.io/badge/Project-c2410c?style=flat-square)](#project--development) — structure, build, data, support, docs
+- [![Documentation](https://img.shields.io/badge/Documentation-c2410c?style=flat-square)](#documentation) — guides, technical docs, limits, audit criteria, ADRs
+- [![Project & development](https://img.shields.io/badge/Project-c2410c?style=flat-square)](#project--development) — structure, build, data, and support
 - [![Legal](https://img.shields.io/badge/Legal-c2410c?style=flat-square)](#legal) — disclaimer and license
 
 ---
@@ -420,6 +421,17 @@ Stars is deliberately limited to analysis. The following is **not** planned and 
 - Create, move, or delete files or folders on target systems
 - Apply automated repair suggestions
 
+## Documentation
+
+- [![User Guide](https://img.shields.io/badge/User_Guide-c2410c?style=flat-square)](docs/user-guide.md) — step-by-step walkthrough of the GUI and CLI, every tab explained, identity input, AD binding, marker reading, FAQ. **Start here when using Stars for the first time.**
+- [![Technical Documentation](https://img.shields.io/badge/Technical_Docs-c2410c?style=flat-square)](docs/technical-documentation.md) — how Stars works internally: architecture, crate layering, Principal pipeline, permission engine algorithm, diagnostic marker system, threading model. **Start here when reading or contributing code.**
+- [![Features and limits](https://img.shields.io/badge/Features_and_limits-c2410c?style=flat-square)](docs/features-and-limitations.md) — what Stars reliably covers, what is deliberately out of scope, and how the diagnostic markers (`DomainGroupRecursionIncomplete`, `IdentityNotInConfiguredLdapBase`, …) should be read. **Start here when a finding is unexpected.**
+- [![Known limitations](https://img.shields.io/badge/Known_limitations-c2410c?style=flat-square)](docs/known-limitations.md) — structural gaps (FSP, GC bind, SID history, cross-forest) that Stars flags but does not resolve. Roadmap tracking for future releases.
+- [![Audit Criteria](https://img.shields.io/badge/Audit_Criteria-c2410c?style=flat-square)](docs/audit-criteria.md) — a complete write-up of which rules Stars uses to evaluate permissions, which risk rules are implemented, what severities they carry, and which permissions are considered optimal for which role.
+- [![OWNER RIGHTS](https://img.shields.io/badge/OWNER_RIGHTS-c2410c?style=flat-square)](docs/owner-rights-sid-s-1-3-4.md) — OWNER RIGHTS (`S-1-3-4`): the implicit owner grant, how an OWNER RIGHTS ACE caps it, and why naive tools state the owner's effective rights wrong. **A real differentiator of Stars.**
+- [![ADRs](https://img.shields.io/badge/ADRs-c2410c?style=flat-square)](docs/adr/) — historical justifications for individual technology and model decisions.
+- **[Security Policy](SECURITY.md)** — how to report security vulnerabilities.
+
 ## Project & development
 
 ### Project structure
@@ -477,17 +489,6 @@ Stars persists its scan history in `%APPDATA%\Stars\stars_data.db` (SQLite, sepa
 1. **Read the last log** — open `%LOCALAPPDATA%\Stars\logs\` and pick the newest file. Most problems explain themselves from the last 20 lines.
 2. **Pay attention to diagnostic markers** — Stars explicitly marks uncertain results as `incomplete` with a reason. See [`docs/features-and-limitations.md`](docs/features-and-limitations.md) for the full marker list.
 3. **File an issue on GitHub** — [Issues](https://github.com/Birgerson/stars-ad-permission-analyzer/issues). Please include Stars version, Windows version, the affected path (anonymized if needed), and a log excerpt. For security issues see [SECURITY.md](SECURITY.md).
-
-### Documentation
-
-- [![User Guide](https://img.shields.io/badge/User_Guide-c2410c?style=flat-square)](docs/user-guide.md) — step-by-step walkthrough of the GUI and CLI, every tab explained, identity input, AD binding, marker reading, FAQ. **Start here when using Stars for the first time.**
-- [![Technical Documentation](https://img.shields.io/badge/Technical_Docs-c2410c?style=flat-square)](docs/technical-documentation.md) — how Stars works internally: architecture, crate layering, Principal pipeline, permission engine algorithm, diagnostic marker system, threading model. **Start here when reading or contributing code.**
-- [![Features and limits](https://img.shields.io/badge/Features_and_limits-c2410c?style=flat-square)](docs/features-and-limitations.md) — what Stars reliably covers, what is deliberately out of scope, and how the diagnostic markers (`DomainGroupRecursionIncomplete`, `IdentityNotInConfiguredLdapBase`, …) should be read. **Start here when a finding is unexpected.**
-- [![Known limitations](https://img.shields.io/badge/Known_limitations-c2410c?style=flat-square)](docs/known-limitations.md) — structural gaps (FSP, GC bind, SID history, cross-forest) that Stars flags but does not resolve. Roadmap tracking for future releases.
-- [![Audit Criteria](https://img.shields.io/badge/Audit_Criteria-c2410c?style=flat-square)](docs/audit-criteria.md) — a complete write-up of which rules Stars uses to evaluate permissions, which risk rules are implemented, what severities they carry, and which permissions are considered optimal for which role.
-- [![OWNER RIGHTS](https://img.shields.io/badge/OWNER_RIGHTS-c2410c?style=flat-square)](docs/owner-rights-sid-s-1-3-4.md) — OWNER RIGHTS (`S-1-3-4`): the implicit owner grant, how an OWNER RIGHTS ACE caps it, and why naive tools state the owner's effective rights wrong. **A real differentiator of Stars.**
-- [![ADRs](https://img.shields.io/badge/ADRs-c2410c?style=flat-square)](docs/adr/) — historical justifications for individual technology and model decisions.
-- **[Security Policy](SECURITY.md)** — how to report security vulnerabilities.
 
 ### About the project
 
