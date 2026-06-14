@@ -430,7 +430,7 @@ Stars is deliberately limited to analysis. The following is **not** planned and 
 - [![Audit Criteria](https://img.shields.io/badge/Audit_Criteria-c2410c?style=flat-square)](docs/audit-criteria.md) — a complete write-up of which rules Stars uses to evaluate permissions, which risk rules are implemented, what severities they carry, and which permissions are considered optimal for which role.
 - [![OWNER RIGHTS](https://img.shields.io/badge/OWNER_RIGHTS-c2410c?style=flat-square)](docs/owner-rights-sid-s-1-3-4.md) — OWNER RIGHTS (`S-1-3-4`): the implicit owner grant, how an OWNER RIGHTS ACE caps it, and why naive tools state the owner's effective rights wrong. **A real differentiator of Stars.**
 - [![ADRs](https://img.shields.io/badge/ADRs-c2410c?style=flat-square)](docs/adr/) — historical justifications for individual technology and model decisions.
-- **[Security Policy](SECURITY.md)** — how to report security vulnerabilities.
+- [![Security Policy](https://img.shields.io/badge/Security_Policy-c2410c?style=flat-square)](SECURITY.md) — how to report security vulnerabilities.
 
 ## Project & development
 
