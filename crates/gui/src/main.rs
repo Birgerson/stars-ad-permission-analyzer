@@ -467,9 +467,6 @@ slint::slint! {
         in property <[IdentitySuggestionVm]> a-suggestions;
         in-out property <string> a-sid;
 
-        // LDAP mode: 0 = off (SAM/LSA, recommended on a DC),
-        //              1 = LDAPS (verschluesselt, Port 636),
-        //              2 = LDAP unverschluesselt (Port 389, nur Test).
         // LDAP mode: 0 = off (SAM/LSA, recommended on DC),
         //            1 = LDAPS (encrypted, port 636),
         //            2 = plain LDAP (port 389, test only).
@@ -516,7 +513,6 @@ slint::slint! {
         in-out property <bool>   s-limit-depth;
         in-out property <int>    s-max-depth: 5;
 
-        // 1 = LDAPS, 2 = LDAP unverschluesselt.
         // LDAP mode analogous to the Analyze tab. 0 = off (SAM/LSA),
         // 1 = LDAPS, 2 = plain LDAP.
         in-out property <int>    s-ldap-mode: 0;

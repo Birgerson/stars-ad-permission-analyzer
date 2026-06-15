@@ -152,7 +152,6 @@ mod tests {
     fn out_ptr_can_be_written_and_read_back() {
         let mut guard: NetApiBuffer<u8> = NetApiBuffer::null();
         let slot = guard.out_ptr();
-        // ungueltiges Free macht.
         // We don't write a real NetApi pointer here because we can't
         // free it without the real allocator. We only verify `slot`
         // is writable — and reset it to null before drop.

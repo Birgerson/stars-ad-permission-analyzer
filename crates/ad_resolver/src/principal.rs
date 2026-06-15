@@ -323,11 +323,9 @@ impl IdentityBackend for LdapIdentityBackend {
 }
 
 // ---------------------------------------------------------------------------
-// LSA-Backend-Implementierungen (Windows / Non-Windows).
 // LSA backend implementations (Windows / non-Windows).
 // ---------------------------------------------------------------------------
 
-/// Produktiv-LSA-Backend (Windows). Delegiert an `crate::sam`.
 /// Production LSA backend (Windows).
 #[cfg(windows)]
 pub struct WindowsLsaBackend;

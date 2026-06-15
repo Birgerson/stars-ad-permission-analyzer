@@ -10,7 +10,6 @@
 //! `ComputeDelta`. `SearchIdentity` is reserved for a later phase (GUI
 //! identity picker) — the definition stays so a future addition does not
 //! cause API breaks.
-#![allow(dead_code)]
 
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -182,6 +181,9 @@ impl LdapParams {
 }
 
 /// Search result for the identity search.
+// Reserved for the future GUI identity picker (see `SearchIdentity` /
+// `SearchResults`); constructed but not consumed yet.
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct IdentitySearchResult {
     pub sid: String,
@@ -208,6 +210,8 @@ pub enum WorkerRequest {
         ldap: Option<LdapParams>,
     },
     /// Searches for users and groups in Active Directory.
+    /// Reserved for the future GUI identity picker; not constructed yet.
+    #[allow(dead_code)]
     SearchIdentity { query: String, ldap: LdapParams },
     /// Exports the last scan as an HTML report.
     ExportHtml { output_path: String },
@@ -296,6 +300,8 @@ pub enum WorkerEvent {
     /// Result of an HTML export.
     ExportDone(Result<(), String>),
     /// Search results for the identity search.
+    /// Reserved for the future GUI identity picker; not consumed yet.
+    #[allow(dead_code)]
     SearchResults(Result<Vec<IdentitySearchResult>, String>),
     /// Persisted scan runs for the Delta tab.
     ScanRunsLoaded(Result<Vec<ScanRunSummary>, String>),
@@ -398,7 +404,13 @@ pub fn spawn_worker(
     let worker_cancel = cancel.clone();
 
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                warn!(error = %e, "Failed to create Tokio runtime — worker thread cannot start");
+                return;
+            }
+        };
         // Keep the DB open error instead of silently dropping it with .ok() —
         // it is reported per scan as a visible persistence error.
         let (db, db_open_error): (Option<Database>, Option<String>) =
@@ -2027,11 +2039,6 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 round 4 finding 2: whitespace-padded SID
-    /// `handle_analyze`/`handle_scan` (classify → validate),
-    /// Review 2026-06-04 round 4 finding 3: `normalize_smb_pair` (which
-    /// NTFS-only-Fallback.
-    /// verwendet.
     /// Code review 2026-06-07 finding 2: `analyze_trustees` must
     /// derive server + share from a bare UNC path without explicit
     /// SMB fields — previously the trustee tab showed NTFS-only while

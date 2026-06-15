@@ -1327,7 +1327,6 @@ fn export_analysis(
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase());
-    // CLI-Vorabpruefung in check_overwrite_policy).
     // Round-8 follow-up finding 1: pick the exporter's explicit
     // overwrite branch only when --force is set. Without --force the
     // trait itself refuses an existing file (defence in depth on top of

@@ -125,7 +125,7 @@ details[open] summary{margin-bottom:4px}
 <body>
 <h1>Stars — AD Permission Analyzer</h1>
 "#);
-    writeln!(s, "<p class=\"subtitle\">Report generated: {timestamp}</p>").unwrap();
+    let _ = writeln!(s, "<p class=\"subtitle\">Report generated: {timestamp}</p>");
 }
 
 fn write_summary(
@@ -161,7 +161,7 @@ fn has_diagnostics(p: &EffectivePermission) -> bool {
 }
 
 fn card(s: &mut String, n: usize, label: &str, class: &str) {
-    writeln!(s, "<div class=\"card {class}\"><div class=\"num\">{n}</div><div class=\"lbl\">{label}</div></div>").unwrap();
+    let _ = writeln!(s, "<div class=\"card {class}\"><div class=\"num\">{n}</div><div class=\"lbl\">{label}</div></div>");
 }
 
 fn write_risk_table(s: &mut String, findings: &[RiskFinding]) -> Result<(), CoreError> {

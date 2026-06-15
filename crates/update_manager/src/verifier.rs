@@ -3,8 +3,6 @@
 
 //! Signature verification as a pluggable trait.
 //!
-//! kryptografischen Verifikation (algorithmus-spezifisch). Ein produktiver
-//!
 //! We separate manifest schema validation (purely structural) from
 //! cryptographic verification (algorithm-specific). A production verifier
 //! (e.g. Ed25519 with a hard-wired public key) will be implemented behind
@@ -20,8 +18,6 @@ use sha2::{Digest, Sha256};
 use crate::manifest::{ManifestFile, TargetPlatform, UpdateManifest};
 use crate::UpdateChannel;
 
-/// Public-Key.
-///
 /// Signature verification backend. Implementations choose the cryptographic
 /// algorithm (Ed25519, RSA-PSS, …) and carry the public key.
 pub trait SignatureVerifier: Send + Sync {
@@ -43,8 +39,6 @@ impl SignatureVerifier for RejectAllVerifier {
     }
 }
 
-/// verwendet.
-///
 /// Computes SHA-256 of a byte slice and returns the result as lowercase
 /// hex. Used both for file hashes and in tests.
 pub fn sha256_hex(bytes: &[u8]) -> String {

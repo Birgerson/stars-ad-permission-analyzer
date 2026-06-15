@@ -631,7 +631,6 @@ unsafe fn wide_ptr_to_string(p: *const u16) -> String {
     String::from_utf16_lossy(std::slice::from_raw_parts(p, len))
 }
 
-/// als kanonischen S-R-I-...-String zurueck.
 /// Looks up an account name on the given system and returns its SID as the
 /// canonical S-R-I-... string.
 fn lookup_account_sid(system: Option<&str>, name: &str) -> Option<String> {
@@ -770,8 +769,6 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 round 5 finding 1: when given a NetBIOS domain name
-    /// produktiv zu stillen NERR_USER_NOT_FOUND.
     /// Round 5 finding 1: NetBIOS domain must NOT produce a `name@domain`
     /// candidate — that exact form was the production bug.
     #[test]
