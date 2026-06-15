@@ -517,28 +517,42 @@ value is reader ergonomics only.
 
 ---
 
-## L12 — Application updates are manual; `update_manager` is an inactive scaffold
+## L12 — Application updates are manual; `update_manager` is a deliberate extension point
 
-**Priority:** Low — by design; not a defect.
+**Priority:** Low — by design; not a defect, and not an unfinished feature.
 
 Stars is distributed as a versioned installer on the GitHub release page and
-verified via the published SHA256 hash. There is **no in-app auto-update**.
-The `update_manager` crate exists as a *prepared but not activated* scaffold
-for the update/patch architecture outlined in `AGENTS.md` (signature +
-checksum verification, update channels, rollback, schema migration); its
-public APIs are currently **non-functional stubs** and must not be mistaken
-for a working updater.
+verified via the published SHA256 hash. There is **no in-app auto-update**,
+and none is promised.
 
-This is intentional: manual, operator-controlled installation is a valid and
-common model for an audit tool, and many environments disallow
-self-updating software in any case.
+The `update_manager` crate is an **intentional architectural seam**, not a
+half-finished feature. `AGENTS.md` requires that update/patch installation be
+*architecturally provided for* — so the crate establishes the shape of that
+capability (the `SignatureVerifier` trait, a validated manifest schema, update
+channels, and the rollback/migration surface) **without** committing to a
+specific implementation now. The default `SignatureVerifier` is the
+**fail-closed `RejectAllVerifier`**: an unconfigured system refuses every
+update rather than trusting one. So the seam is safe by default, and its
+public APIs are honest, reject-by-default stubs that must not be mistaken for
+a working updater.
+
+Why keep it if Stars itself does not auto-update? Because the seam is the kind
+of thing that is **far worse to be missing when someone needs it than to be
+present and unused**. A downstream user, an enterprise rollout, or a future
+phase of the project can implement a real verifier behind the existing trait
+without reshaping the architecture. Manual, operator-controlled installation
+is also a perfectly valid (often mandated) model for an audit tool — so for
+the base product the seam staying dormant is the expected state, not a gap.
 
 ### Resolution
 
-If in-app updates are ever required, implement `update_manager` against the
-`AGENTS.md` requirements (signed, checksummed, channel-aware,
-rollback-capable, with an offline update source). Until then the crate stays
-a documented scaffold and updates remain a manual download-and-verify step.
+Nothing is required for the base product. If in-app updates are ever needed,
+implement a real `SignatureVerifier` (e.g. Ed25519 with a pinned public key)
+and the install/rollback flow behind the existing trait and manifest schema,
+against the `AGENTS.md` requirements (signed, checksummed, channel-aware,
+rollback-capable, offline source supported). Until then the crate stays a
+documented, fail-closed extension point and updates remain a manual
+download-and-verify step.
 
 ---
 
@@ -557,7 +571,7 @@ a documented scaffold and updates remain a manual download-and-verify step.
 | L9 — Canonical-order false positives | Low | yes (informational) | no (missing ancestry data) |
 | L10 — SD dedup scan-local only | Low | n/a | yes, with a descriptor table + migration |
 | L11 — Engine module size | Low | n/a | optional refactor (readability only, not a defect) |
-| L12 — Manual updates / `update_manager` scaffold | Low | n/a | by design; implement only if in-app updates are required |
+| L12 — Manual updates / `update_manager` extension point | Low | n/a | by design; fail-closed seam, implement a real verifier only if in-app updates are required |
 
 ## Contribution policy
 
