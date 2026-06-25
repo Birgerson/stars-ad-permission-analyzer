@@ -4,11 +4,7 @@ This directory contains every architecture decision Stars has made, in chronolog
 
 ## Language
 
-All ADRs from 2026-06-07 onwards are written in US English to match the repository-wide language convention. ADRs 0045–0048 (Round 10) were retroactively retranslated into US English on the same date.
-
-ADRs 0001–0015 were retranslated to US English on 2026-06-08.
-
-ADRs 0016–0044 still carry German prose in their bodies. The technical content in those files (code samples, file paths, struct names, test names) is already English; only the explanatory text is German. The decisions themselves are unchanged. The bilingual section headers (`## Kontext / Context` etc.) were collapsed to the English form across all 0001–0044 in the same commit, so headings are uniform throughout the index. Migrating the remaining German prose is not blocking — the CI language check explicitly excludes 0001–0044 — and is intended to be picked up opportunistically when a future change touches one of these files. New ADRs from 0049 onwards must be English, enforced by the `language` job in `.github/workflows/ci.yml`.
+All ADRs are written in US English, matching the repository-wide language convention. The records were migrated in stages: ADRs 0045–0048 (Round 10) on 2026-06-07, ADRs 0001–0015 on 2026-06-08, and the remaining ADRs 0016–0044 on 2026-06-15. Bilingual section headers were collapsed to the English form throughout, and any bilingual prose was reduced to its English version — the decisions themselves are unchanged. The `language` job in `.github/workflows/ci.yml` now enforces US English across all ADRs, so new and existing records stay consistent.
 
 ## Index
 

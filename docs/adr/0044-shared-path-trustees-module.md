@@ -1,36 +1,65 @@
-# ADR 0044 — Pfadzentrische Trustees als gemeinsames Modul für GUI und CLI
+# ADR 0044 — Path-centric trustees as a shared module for GUI and CLI
 
 **Status:** Accepted
 **Date:** 2026-06-06
 
 ## Context
 
-Stars beantwortet zwei Audit-Fragen pro Pfad:
+Stars answers two audit questions per path:
 
-1. **Identitäts-bezogen:** „Welche effektive Berechtigung hat dieser Benutzer auf diesen Pfad?" — beantwortet durch `EffectivePermission` aus der Permission-Engine.
-2. **Pfad-bezogen:** „Wer steht überhaupt auf der ACL dieses Pfads — und auf der Share-DACL des umgebenden Shares?" — beantwortet durch `PathTrustees` mit `Vec<PathTrustee>`.
+1. **Identity-related:** "What effective permission does this user have on
+   this path?" — answered by `EffectivePermission` from the permission
+   engine.
+2. **Path-related:** "Who is even on the ACL of this path — and on the
+   share DACL of the surrounding share?" — answered by `PathTrustees` with
+   `Vec<PathTrustee>`.
 
-Die zweite Frage ist *identitätsfrei*: sie ist die rohe Aufzählung aller Trustees pro Pfad, nicht die rechnerische Aggregation für eine konkrete Identität. Sie ist genauso wichtig wie die erste, weil ein Audit-Tool sonst die Frage „wer kann hier eigentlich überhaupt was?" nicht beantworten kann — und das ist die Frage, die Auditoren am häufigsten zuerst stellen.
+The second question is *identity-free*: it is the raw enumeration of all
+trustees per path, not the computational aggregation for a specific
+identity. It is just as important as the first, because otherwise an audit
+tool cannot answer the question "who can actually do anything here at all?"
+— and that is the question auditors most often ask first.
 
-Bis v1.5.13 wurde diese Liste **nur in der GUI** gebaut. Die Helfer-Funktionen `read_share_overlay`, `build_path_trustees` und `build_path_trustees_with_share` lagen privat in `crates/gui/src/worker.rs`. Die CLI hatte keinen Zugriff darauf und schickte den Exportern (HTML, JSON) immer ein `AnalysisResult` mit leerem `path_trustees`. Konsequenz für CLI-Audits:
+Until v1.5.13, this list was built **only in the GUI**. The helper functions
+`read_share_overlay`, `build_path_trustees`, and
+`build_path_trustees_with_share` lay private in `crates/gui/src/worker.rs`.
+The CLI had no access to them and always sent the exporters (HTML, JSON) an
+`AnalysisResult` with empty `path_trustees`. Consequence for CLI audits:
 
-- `adpa analyze --output report.json --path X --user alice` → JSON ohne `path_trustees`.
-- `adpa scan --output report.json --path X --user alice` → JSON ohne `path_trustees`.
-- HTML-Reports aus der CLI: technische Render-Logik für die Trustee-Tabelle war im `HtmlExporter` zwar vorhanden, aber wegen leerem Eingangsfeld wurde sie nie ausgelöst.
+- `adpa analyze --output report.json --path X --user alice` → JSON without
+  `path_trustees`.
+- `adpa scan --output report.json --path X --user alice` → JSON without
+  `path_trustees`.
+- HTML reports from the CLI: the technical render logic for the trustee
+  table was present in the `HtmlExporter`, but because of the empty input
+  field it was never triggered.
 
-Die zweite Audit-Frage war für CLI-Audits damit faktisch *nicht beantwortet* — ein still-falscher Zustand, weil der Bericht *aussah* als wäre er vollständig.
+The second audit question was thus effectively *not answered* for CLI
+audits — a silently-wrong state, because the report *looked* as if it were
+complete.
 
-Round-9 Review-Finding 1 hat das als Medium klassifiziert. Die GUI war korrekt, aber die Daten waren in der falschen Schicht. Empfehlung: in eine non-UI-Schicht extrahieren, CLI und GUI teilen das.
+Round-9 review finding 1 classified this as Medium. The GUI was correct, but
+the data was in the wrong layer. Recommendation: extract into a non-UI
+layer, CLI and GUI share it.
 
 ## Decision
 
-Die Trustee-Build-Logik wandert in ein neues Modul **`crates/exporter/src/trustees.rs`**. Die Wahl der Crate folgt drei Kriterien:
+The trustee-build logic moves into a new module
+**`crates/exporter/src/trustees.rs`**. The choice of crate follows three
+criteria:
 
-1. **`exporter` ist die natürliche semantische Heimat.** Trustees sind Reportdaten, keine Engine-Logik. Sie werden in einem Reportformat seriell ausgegeben — und genau das macht `exporter`. Eine eigene Crate `reporting` wäre redundant.
-2. **`exporter` hat keine UI-Abhängigkeit.** Damit sind GUI und CLI gleichberechtigte Konsumenten. Weder die GUI muss CLI-Code laden noch umgekehrt.
-3. **`exporter` hat keine Engine-Abhängigkeit nach oben.** `exporter` darf in `permission_engine` und `share_scanner` hineingreifen, aber nicht in `cli` oder `gui`. Das passt zur Layering-Richtung des Workspace (ADR 0023 — Layering der Crates).
+1. **`exporter` is the natural semantic home.** Trustees are report data,
+   not engine logic. They are serialized into a report format — and that is
+   exactly what `exporter` does. A separate `reporting` crate would be
+   redundant.
+2. **`exporter` has no UI dependency.** Thus GUI and CLI are equal
+   consumers. Neither does the GUI have to load CLI code nor vice versa.
+3. **`exporter` has no upward engine dependency.** `exporter` may reach into
+   `permission_engine` and `share_scanner`, but not into `cli` or `gui`.
+   That fits the layering direction of the workspace (ADR 0023 — crate
+   layering).
 
-### Schnittstelle
+### Interface
 
 ```rust
 pub struct ShareTrusteeOverlay {
@@ -51,11 +80,14 @@ pub fn build_path_trustees_with_share(
 ) -> Vec<PathTrustee>;
 ```
 
-Die beiden Build-Funktionen unterscheiden sich nur darin, ob der Aufrufer den Share-Overlay vorab gelesen hat oder ob die Funktion ihn pro Aufruf neu lesen soll. Der vorab-gelesene Pfad ist die Performance-Variante für Scans (ein DACL-Read pro Share statt pro Pfad).
+The two build functions differ only in whether the caller has read the
+share overlay beforehand or whether the function should read it fresh per
+call. The pre-read path is the performance variant for scans (one DACL read
+per share instead of per path).
 
-### Cargo-Auswirkungen
+### Cargo impact
 
-`crates/exporter/Cargo.toml` bekommt zwei neue Dependencies:
+`crates/exporter/Cargo.toml` gets two new dependencies:
 
 ```toml
 share_scanner = { path = "../share_scanner" }
@@ -64,11 +96,14 @@ share_scanner = { path = "../share_scanner" }
 ad_resolver = { path = "../ad_resolver" }
 ```
 
-`ad_resolver` ist `cfg(windows)`-only, weil LSA nur auf Windows existiert. Auf Nicht-Windows-Plattformen bleibt `display_name` einfach `None` — die Build-Funktion funktioniert trotzdem, nur die Lesbarkeits-Spalte fehlt.
+`ad_resolver` is `cfg(windows)`-only, because LSA exists only on Windows. On
+non-Windows platforms `display_name` simply stays `None` — the build
+function still works, only the readability column is missing.
 
-### GUI-Anpassung
+### GUI adaptation
 
-Die GUI-private Implementierung wird ersatzlos gestrichen. `crates/gui/src/worker.rs` re-exportiert die Symbole:
+The GUI-private implementation is removed without replacement.
+`crates/gui/src/worker.rs` re-exports the symbols:
 
 ```rust
 pub use exporter::{
@@ -79,11 +114,13 @@ pub use exporter::{
 };
 ```
 
-Damit bleiben alle bestehenden GUI-Aufrufstellen und 11 GUI-Tests unverändert lauffähig. Die GUI-spezifische Display-Formatierung (`trustee_row_for_display`) bleibt in der GUI, weil sie Slint-Render-Typen befüllt.
+This keeps all existing GUI call sites and 11 GUI tests runnable unchanged.
+The GUI-specific display formatting (`trustee_row_for_display`) stays in the
+GUI, because it fills Slint render types.
 
-### CLI-Anpassung
+### CLI adaptation
 
-`crates/cli/src/main.rs::run_analyze` ruft die einfache Form:
+`crates/cli/src/main.rs::run_analyze` calls the simple form:
 
 ```rust
 let trustees = exporter::build_path_trustees(
@@ -93,9 +130,9 @@ let trustees = exporter::build_path_trustees(
 );
 ```
 
-und legt den Eintrag in `AnalysisResult.path_trustees` ab.
+and stores the entry in `AnalysisResult.path_trustees`.
 
-`crates/cli/src/main.rs::run_scan` liest **einmal** vor der Pfad-Schleife:
+`crates/cli/src/main.rs::run_scan` reads **once** before the path loop:
 
 ```rust
 #[cfg(windows)]
@@ -106,37 +143,62 @@ let scan_share_overlay = match (smb_server, share_name) {
 };
 ```
 
-und übergibt den Overlay an jeden Pfad-Aufruf. Damit ist die Share-DACL-Read-Last konstant pro Scan statt linear pro Pfad — identisches Verhalten wie der GUI-Scan-Pfad seit ADR 0038.
+and passes the overlay to every path call. This makes the share-DACL read
+load constant per scan instead of linear per path — identical behavior to
+the GUI scan path since ADR 0038.
 
 ## Consequences
 
-### Positiv
+### Positive
 
-- **Format-Symmetrie erreicht:** HTML- und JSON-Reports aus CLI und GUI haben jetzt dieselbe Datenbasis. Der CHANGELOG-Anspruch von v1.5.13 („HTML und JSON haben die gleichen Audit-Informationen") stimmt mit v1.5.14 jetzt auch für die CLI.
-- **Eine Datenquelle, zwei Konsumenten:** ein zukünftiger Bugfix in den Build-Funktionen wirkt automatisch in GUI und CLI. Vorher hätte jeder Fix doppelt erfolgen müssen — und genau das passiert in der Praxis nicht.
-- **Architekturkonsistenz:** die Schichten-Richtung des Workspace bleibt intakt (`exporter` → `share_scanner`, `core`, kein Sprung in `cli`/`gui`).
-- **Tests sind plattform-unabhängig:** die drei neuen Unit-Tests im Modul (`ntfs_only_yields_all_ntfs_trustees`, `null_dacl_yields_explicit_pseudo_row`, `share_overlay_is_appended_to_ntfs_trustees`) laufen auch auf CI-Linux durch, weil sie keine Windows-API berühren.
+- **Format symmetry achieved:** HTML and JSON reports from CLI and GUI now
+  have the same data basis. The CHANGELOG claim of v1.5.13 ("HTML and JSON
+  have the same audit information") now also holds for the CLI as of
+  v1.5.14.
+- **One data source, two consumers:** a future bugfix in the build
+  functions automatically takes effect in GUI and CLI. Previously, every fix
+  would have had to be done twice — and that is exactly what does not happen
+  in practice.
+- **Architecture consistency:** the layering direction of the workspace
+  stays intact (`exporter` → `share_scanner`, `core`, no jump into
+  `cli`/`gui`).
+- **Tests are platform-independent:** the three new unit tests in the module
+  (`ntfs_only_yields_all_ntfs_trustees`, `null_dacl_yields_explicit_pseudo_row`,
+  `share_overlay_is_appended_to_ntfs_trustees`) also pass on CI Linux,
+  because they touch no Windows API.
 
-### Negativ / Trade-offs
+### Negative / trade-offs
 
-- `crates/exporter` hat jetzt eine Dependency auf `share_scanner` — vorher war es eine reine „Daten-→-Format"-Crate. Die Erweiterung ist konzeptuell gerechtfertigt (Trustees sind Teil des Reports), aber sie dehnt die Verantwortung der Crate leicht aus.
-- Aufrufer, die *nur* den Render-Teil von `exporter` wollen, ziehen jetzt `share_scanner` als transitive Abhängigkeit mit. In der Praxis trifft das nur den Workspace selbst — keine externen Konsumenten.
-- `cfg(windows)` an zwei Stellen: einmal für `ad_resolver` in Cargo.toml, einmal in `trustees.rs` für die LSA-Auflösung. Das ist die Norm in diesem Workspace.
+- `crates/exporter` now has a dependency on `share_scanner` — previously it
+  was a pure "data → format" crate. The extension is conceptually justified
+  (trustees are part of the report), but it slightly broadens the crate's
+  responsibility.
+- Callers who want *only* the render part of `exporter` now pull
+  `share_scanner` in as a transitive dependency. In practice this affects
+  only the workspace itself — no external consumers.
+- `cfg(windows)` in two places: once for `ad_resolver` in Cargo.toml, once
+  in `trustees.rs` for LSA resolution. That is the norm in this workspace.
 
-### Beziehung zu anderen ADRs
+### Relationship to other ADRs
 
-- **ADR 0036** (Unified Principal Resolution Pipeline): teilt das Prinzip „eine Datenquelle, von beiden Konsumenten konsumiert".
-- **ADR 0038** (Share-Trustees im Scan-Pfad): hat den Share-Overlay-Mechanismus eingeführt — ADR 0044 setzt ihn jetzt CLI-seitig identisch um.
-- **ADR 0023** (Workspace-Layering): begründet die Wahl von `exporter` als Heimat.
+- **ADR 0036** (unified principal resolution pipeline): shares the principle
+  "one data source, consumed by both consumers".
+- **ADR 0038** (share trustees in the scan path): introduced the
+  share-overlay mechanism — ADR 0044 now implements it identically on the
+  CLI side.
+- **ADR 0023** (workspace layering): justifies the choice of `exporter` as
+  the home.
 
 ### Tests
 
-Drei neue Tests in `crates/exporter/src/trustees.rs`:
+Three new tests in `crates/exporter/src/trustees.rs`:
 
-| Test | Was er garantiert |
+| Test | What it guarantees |
 |---|---|
-| `ntfs_only_yields_all_ntfs_trustees` | Ohne Share-Overlay erscheinen alle NTFS-ACEs in der `Ntfs`-Kategorie, kein `Share`-Eintrag wird konstruiert. |
-| `null_dacl_yields_explicit_pseudo_row` | Eine NULL-DACL liefert eine sichtbare „Everyone (NULL DACL)"-Pseudo-Zeile statt eines stillen Skips. |
-| `share_overlay_is_appended_to_ntfs_trustees` | Mit Share-Overlay erscheinen NTFS- und Share-Einträge getrennt sichtbar, in der Reihenfolge NTFS → Share. |
+| `ntfs_only_yields_all_ntfs_trustees` | Without a share overlay, all NTFS ACEs appear in the `Ntfs` category, no `Share` entry is constructed. |
+| `null_dacl_yields_explicit_pseudo_row` | A NULL DACL yields a visible "Everyone (NULL DACL)" pseudo-row instead of a silent skip. |
+| `share_overlay_is_appended_to_ntfs_trustees` | With a share overlay, NTFS and share entries appear separately visible, in the order NTFS → Share. |
 
-Plus 11 bestehende GUI-Tests laufen unverändert weiter (verifizieren, dass der Re-Export funktioniert), plus die Round-8-Folgereview-Tests für `JsonExporter`, `CsvExporter`, `HtmlExporter` aus v1.5.13.
+Plus 11 existing GUI tests keep running unchanged (verifying that the
+re-export works), plus the Round-8 follow-up review tests for
+`JsonExporter`, `CsvExporter`, `HtmlExporter` from v1.5.13.

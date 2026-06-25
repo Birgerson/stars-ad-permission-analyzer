@@ -1,95 +1,93 @@
-# ADR 0032 — Identitäts-Eingabe-Dispatcher und durchgesetzte LDAP-Timeouts
+# ADR 0032 — Identity-input dispatcher and enforced LDAP timeouts
 
 **Status:** Accepted
 **Date:** 2026-06-04
 
 ## Context
 
-Zwei Findings aus dem ChatGPT-Code-Review 2026-06-04 zeigten Schwächen
-in der LDAP-Auflösung, die direkt fachliche Korrektheit betrafen:
+Two findings from the ChatGPT code review 2026-06-04 showed weaknesses in
+LDAP resolution that directly affected functional correctness:
 
-- **Finding 3 (High):** `LdapResolver::lookup_by_samaccount` akzeptierte
-  `DOMAIN\username`, schnitt den Domainteil aber stillschweigend ab und
-  suchte nur `(sAMAccountName=username)` unter `base_dn`. In
-  Multi-Domain-Forests oder bei doppeltem `sAMAccountName` konnte das die
-  SID des **falschen** Benutzers zurückliefern; selbst in einer einzelnen
-  Domäne war die Eingabe formal qualifiziert, aber semantisch verworfen.
+- **Finding 3 (High):** `LdapResolver::lookup_by_samaccount` accepted
+  `DOMAIN\username`, but silently cut off the domain part and searched only
+  `(sAMAccountName=username)` under `base_dn`. In multi-domain forests or
+  with a duplicate `sAMAccountName` this could return the SID of the
+  **wrong** user; even in a single domain the input was formally qualified
+  but semantically discarded.
 
-- **Finding 5 (Medium):** `LdapConfig::timeout_secs` war konfigurierbar,
-  wurde aber nirgends mit `tokio::time::timeout` durchgesetzt. Ein
-  unerreichbarer DC, ein Firewall-Drop, DNS-Probleme oder ein langsamer
-  Global Catalog konnten die Analyse beliebig lange blockieren.
+- **Finding 5 (Medium):** `LdapConfig::timeout_secs` was configurable, but
+  was not enforced anywhere with `tokio::time::timeout`. An unreachable DC,
+  a firewall drop, DNS problems, or a slow global catalog could block the
+  analysis indefinitely.
 
 ## Decision
 
-### Finding 3 — drei explizite Eingabeformen, drei dedizierte Pfade
+### Finding 3 — three explicit input forms, three dedicated paths
 
-`LdapResolver::lookup_by_samaccount` ist ein Dispatcher mit klarer
-Routing-Tabelle:
+`LdapResolver::lookup_by_samaccount` is a dispatcher with a clear routing
+table:
 
-| Eingabe | Pfad | Begründung |
+| Input | Path | Rationale |
 |---|---|---|
-| `DOMAIN\user` | Windows-LSA (`LookupAccountNameW`) | LSA ist **domain-aware**; gibt eine eindeutige SID zurück. Anschliessend Identity-Details per `resolve_identity_internal` (LDAP-SID-Suche). |
-| `user@domain.tld` (UPN) | LDAP `(userPrincipalName=…)` | UPN ist **forestweit eindeutig**. |
-| `username` (plain) | LDAP `(sAMAccountName=…)` mit Eindeutigkeits-Check | Bei `len() > 1` gibt der Helper `Err(CoreError::Validation("Ambiguous sAMAccountName …"))` zurück statt blind `next()`. |
+| `DOMAIN\user` | Windows LSA (`LookupAccountNameW`) | LSA is **domain-aware**; returns a unique SID. Afterwards identity details via `resolve_identity_internal` (LDAP SID search). |
+| `user@domain.tld` (UPN) | LDAP `(userPrincipalName=…)` | UPN is **forest-wide unique**. |
+| `username` (plain) | LDAP `(sAMAccountName=…)` with a uniqueness check | On `len() > 1` the helper returns `Err(CoreError::Validation("Ambiguous sAMAccountName …"))` instead of blindly `next()`. |
 
-Leere Eingabe → `Err(CoreError::Validation(…))` statt stumm No-Op.
+Empty input → `Err(CoreError::Validation(…))` instead of a silent no-op.
 
-Neue Helfer in `ldap_client`:
+New helpers in `ldap_client`:
 
-- `search_all_by_samaccount` (liefert **alle** Treffer für die
-  Eindeutigkeits-Prüfung — `search_by_samaccount` ist jetzt ein dünner
-  Wrapper, der `Ok(into_iter().next())` zurückgibt).
-- `search_by_upn` für die UPN-Variante.
+- `search_all_by_samaccount` (returns **all** matches for the uniqueness
+  check — `search_by_samaccount` is now a thin wrapper that returns
+  `Ok(into_iter().next())`).
+- `search_by_upn` for the UPN variant.
 
-### Finding 5 — Timeout-Wrapper als zentrale Schicht
+### Finding 5 — timeout wrapper as a central layer
 
-Neuer `pub async fn ldap_client::with_timeout(operation, duration, fut)`
-plus `pub fn ldap_timeout(&config) -> Duration`. Ein Timeout-Hit liefert
+New `pub async fn ldap_client::with_timeout(operation, duration, fut)` plus
+`pub fn ldap_timeout(&config) -> Duration`. A timeout hit returns
 `CoreError::LdapQuery("LDAP operation '<op>' timed out after Ns")`.
 
-`LdapResolver::lookup_by_samaccount`, `resolve_identity_internal` und
-`resolve_memberships_internal` (über einen neuen `inner`-Helper) klammern
-ihre gesamte LDAP-Logik einmal mit dem konfigurierten Timeout. `connect`
-selbst klammert TCP/TLS-Aufbau und Bind zusätzlich separat ein — eine
-hängende Verbindung wird so direkt im Aufbau abgefangen, nicht erst beim
-ersten Search.
+`LdapResolver::lookup_by_samaccount`, `resolve_identity_internal`, and
+`resolve_memberships_internal` (via a new `inner` helper) wrap their entire
+LDAP logic once with the configured timeout. `connect` itself additionally
+wraps TCP/TLS setup and bind separately — a hanging connection is thus
+caught directly during setup, not only on the first search.
 
 ## Rationale
 
-- **Pro Form ein eigener Pfad** ist robuster als Heuristik. Wer
-  `DOMAIN\user` schreibt, soll genau diese Domain treffen — nicht eine
-  per Zufall gewählte gleichnamige Identität.
-- **LSA-Pfad für `DOMAIN\user`** spart einen LDAP-Roundtrip und nutzt
-  die domain-aware Auflösung, die Windows ohnehin betreibt — kein
-  Re-Implementieren der Domain-DN-Logik im Client.
-- **Eindeutigkeits-Check statt `next()`** macht die Verantwortlichkeit
-  klar: wer mehrere Treffer hat, muss bewusst disambiguieren.
-- **Timeout-Wrapper auf Methoden-Ebene** ist die richtige Granularität.
-  Ein logischer Vorgang ist eine Einheit; der Aufrufer setzt
-  `timeout_secs` für die ganze Operation, nicht pro Sub-Call.
+- **A dedicated path per form** is more robust than a heuristic. Whoever
+  writes `DOMAIN\user` should hit exactly that domain — not a randomly
+  chosen identity of the same name.
+- **The LSA path for `DOMAIN\user`** saves an LDAP round-trip and uses the
+  domain-aware resolution that Windows performs anyway — no
+  re-implementing the domain DN logic in the client.
+- **Uniqueness check instead of `next()`** makes responsibility clear:
+  whoever has multiple matches must disambiguate deliberately.
+- **Timeout wrapper at the method level** is the right granularity. A
+  logical operation is a unit; the caller sets `timeout_secs` for the whole
+  operation, not per sub-call.
 
 ## Consequences
 
-- Aufrufer, die `lookup_by_samaccount("admin")` schreiben, bekommen jetzt
-  in Multi-Match-Szenarien einen klaren Fehler statt einer falschen SID.
-  Migration: explizit `DOMAIN\admin` oder `admin@domain.tld` schreiben.
-- `LdapConfig::timeout_secs` wirkt jetzt tatsächlich. Wer ein sehr
-  grosses transitives Gruppen-Ergebnis erwartet, sollte den Wert
-  entsprechend setzen (Default 10s).
-- Der LSA-Pfad ist `#[cfg(windows)]`-spezifisch; auf nicht-Windows
-  liefert die Funktion einen `Validation`-Fehler — Stars zielt ohnehin
-  auf Windows.
+- Callers who write `lookup_by_samaccount("admin")` now get a clear error
+  in multi-match scenarios instead of a wrong SID. Migration: write
+  `DOMAIN\admin` or `admin@domain.tld` explicitly.
+- `LdapConfig::timeout_secs` now actually takes effect. Whoever expects a
+  very large transitive group result should set the value accordingly
+  (default 10s).
+- The LSA path is `#[cfg(windows)]`-specific; on non-Windows the function
+  returns a `Validation` error — Stars targets Windows anyway.
 
 ## Tests
 
-Unit-Tests für den Dispatcher selbst lassen sich nur eingeschränkt
-ohne echte LDAP/LSA-Umgebung schreiben. Build-Verifikation deckt die
-Signatur-Konsistenz; die schon vorhandenen `#[ignore]`-Integrations­tests
-(`resolve_administrator_identity`,
-`resolve_group_memberships_max_mustermann`, …) werden gegen eine echte
-TESTDOMAIN ausgeführt und decken Dispatch und Timeout-Wrapper ab.
+Unit tests for the dispatcher itself can only be written to a limited
+extent without a real LDAP/LSA environment. Build verification covers the
+signature consistency; the already-existing `#[ignore]` integration tests
+(`resolve_administrator_identity`, `resolve_group_memberships_max_mustermann`,
+…) are run against a real TESTDOMAIN and cover dispatch and the timeout
+wrapper.
 
-## Schließt / Closes
+## Closes
 
-ChatGPT-Code-Review 2026-06-04, Findings 3 (High) und 5 (Medium).
+ChatGPT code review 2026-06-04, findings 3 (High) and 5 (Medium).

@@ -1,94 +1,89 @@
-# ADR 0018 — CSV-Export: Vollständigkeits-Diagnose und strukturierte Audit-Daten
+# ADR 0018 — CSV export: completeness diagnostics and structured audit data
 
 **Status:** Accepted  
 **Date:** 2026-05-24
 
 ## Context
 
-Der CSV-Export trug bisher 15 Spalten — alle Top-Level-Felder einer
-`EffectivePermission` plus `share_status` und `unsupported_aces` als
-Diagnose. Drei wichtige Audit-Aspekte fehlten:
+The CSV export previously carried 15 columns — all top-level fields of an
+`EffectivePermission` plus `share_status` and `unsupported_aces` as
+diagnostics. Three important audit aspects were missing:
 
-1. **`local_group_status`** — der `LocalGroupEvalStatus` markiert das
-   Ergebnis als unvollständig, wenn lokale Server-Gruppen nicht
-   aufgelöst werden konnten (Access Denied, RPC-Fehler, …). Der
-   JSON-Export trägt das strukturiert; CSV machte den Audit-Nutzer
-   blind dafür.
-2. **`matched_aces`** — strukturierte Liste der ACEs, deren Trustee
-   im Token war. Vom Risk-Engine genutzt; für externe Audit-
-   Pipelines im CSV nicht zugänglich.
-3. **`contributing_sids`** — pro SID welche Bits effektiv beigetragen
-   haben (für Broad-Group-Risikoanalyse). Ebenfalls nur im JSON
-   verfügbar.
+1. **`local_group_status`** — the `LocalGroupEvalStatus` marks the result
+   as incomplete when local server groups could not be resolved (access
+   denied, RPC error, …). The JSON export carries this in structured form;
+   CSV left the audit user blind to it.
+2. **`matched_aces`** — structured list of the ACEs whose trustee was in
+   the token. Used by the risk engine; not accessible to external audit
+   pipelines in the CSV.
+3. **`contributing_sids`** — per SID, which bits effectively contributed
+   (for broad-group risk analysis). Likewise only available in JSON.
 
-Risk Findings selbst waren bereits dokumentiert nicht im CSV (CLI gibt
-einen `[Note]`-Hinweis aus), für sie ist HTML bzw. JSON das passende
-Format.
+Risk findings themselves were already, by documented decision, not in the
+CSV (the CLI prints a `[Note]` hint); HTML or JSON is the appropriate
+format for them.
 
-Siehe Review-Befund 9.
+See review finding 9.
 
 ## Decision
 
-1. **Vier neue Spalten am Ende der CSV** — Reihenfolge bewusst so,
-   dass bestehende Importer mit fester Spaltenposition für die ersten
-   15 Spalten unverändert weiterlaufen:
+1. **Four new columns at the end of the CSV** — the order is deliberate so
+   that existing importers with fixed column positions for the first 15
+   columns keep running unchanged:
 
-   | # | Spalte | Inhalt |
+   | # | Column | Content |
    |---|---|---|
    | 16 | `local_group_status` | `not_queried` / `applied` / `not_available` |
-   | 17 | `local_group_error` | Fehlertext bei `not_available`, sonst leer |
-   | 18 | `matched_aces_json` | Kompaktes JSON-Array, immer gefüllt (`[]` wenn leer) |
-   | 19 | `contributing_sids_json` | Kompaktes JSON-Array, immer gefüllt (`[]` wenn leer) |
+   | 17 | `local_group_error` | error text on `not_available`, otherwise empty |
+   | 18 | `matched_aces_json` | compact JSON array, always filled (`[]` when empty) |
+   | 19 | `contributing_sids_json` | compact JSON array, always filled (`[]` when empty) |
 
-2. **Status und Begründung in getrennten Spalten** (nicht
-   `not_available:<reason>` als ein Feld) — damit Excel-/grep-Filter
-   weiter auf reine Status-Werte ansprechen können. Das ist eine
-   bewusste Abweichung vom Format der `share_status`-Spalte
-   (`read_failed:<reason>`), wo aus Rückwärtskompatibilität nichts
-   geändert wurde.
+2. **Status and reason in separate columns** (not `not_available:<reason>`
+   as a single field) — so that Excel/grep filters can still match plain
+   status values. This is a deliberate deviation from the format of the
+   `share_status` column (`read_failed:<reason>`), where nothing was
+   changed for backward compatibility.
 
-3. **JSON-in-CSV-Zellen** für `matched_aces` und `contributing_sids`:
-   - Pro `matched_aces`-Eintrag: `{sid, kind, mask: "0xHHHHHHHH", inherited}`
-   - Pro `contributing_sids`-Eintrag: `{sid, mask: "0xHHHHHHHH"}`
+3. **JSON-in-CSV cells** for `matched_aces` and `contributing_sids`:
+   - Per `matched_aces` entry: `{sid, kind, mask: "0xHHHHHHHH", inherited}`
+   - Per `contributing_sids` entry: `{sid, mask: "0xHHHHHHHH"}`
 
-   Leere Listen erscheinen als `"[]"` (nicht als leere Zelle), damit
-   Konsumenten die Spalte garantiert als JSON parsen können.
+   Empty lists appear as `"[]"` (not as an empty cell) so consumers can
+   always parse the column as JSON.
 
-4. **Risk Findings bleiben außerhalb der CSV.** Der CLI-`[Note]`-
-   Hinweis ist präziser geworden: er nennt explizit JSON als
-   strukturiertes Format für Risks, Matched ACEs und Contributing
-   SIDs in ihrer vollen Tiefe. CSV ist die Top-Level-Tabelle, JSON
-   ist die kanonische maschinenlesbare Form für den ganzen Baum.
+4. **Risk findings stay outside the CSV.** The CLI `[Note]` hint has become
+   more precise: it explicitly names JSON as the structured format for
+   risks, matched ACEs, and contributing SIDs in their full depth. CSV is
+   the top-level table; JSON is the canonical machine-readable form for the
+   whole tree.
 
 ## Rationale
 
-- **Diagnostische Lücke schließen, ohne Strukturentscheidungen
-  umzuwerfen:** Audit-Nutzer, die CSV als ihr primäres Format haben
-  (Excel, Power BI, simple Pipelines), sehen jetzt die unvollständige
-  Berechnung anstatt sie zu übersehen.
-- **JSON-Strings in CSV-Zellen sind ein bewusster Trade-off:** Die
-  Detail-Listen sind variabel lang und passen schlecht in ein flaches
-  Tabellen-Schema. Eine zweite Detail-CSV pro Detail-Liste wäre
-  sauber, aber zwingt Konsumenten zu Joins und vervielfacht
-  Dateioperationen. JSON-Zellen sind weit verbreitet (Snowflake,
-  BigQuery, jq) und vermeiden das.
-- **Append-only** der neuen Spalten bewahrt rückwärtskompatible
-  Spaltenpositionen 1–15.
-- **Risk-Findings explizit JSON-only** trennt zwei Ebenen sauber:
-  CSV = pro-(Pfad,Identität)-Zeile; JSON = vollständiger Bericht.
+- **Close the diagnostic gap without overturning structural decisions:**
+  audit users whose primary format is CSV (Excel, Power BI, simple
+  pipelines) now see the incomplete computation instead of overlooking it.
+- **JSON strings in CSV cells are a deliberate trade-off:** the detail
+  lists are variable-length and fit poorly into a flat table schema. A
+  second detail CSV per detail list would be cleaner but forces consumers
+  into joins and multiplies file operations. JSON cells are widely
+  supported (Snowflake, BigQuery, jq) and avoid that.
+- **Append-only** new columns preserve backward-compatible column
+  positions 1–15.
+- **Risk findings explicitly JSON-only** cleanly separates two levels:
+  CSV = per-(path, identity) row; JSON = complete report.
 
 ## Consequences
 
-- 5 neue Tests in `exporter::csv::tests`:
+- 5 new tests in `exporter::csv::tests`:
   - `local_group_status_applied_serialized_correctly`
   - `local_group_status_not_available_records_reason_separately`
   - `matched_aces_serialized_as_compact_json_array`
   - `contributing_sids_serialized_as_compact_json_array`
   - `empty_matched_aces_and_contributing_sids_yield_empty_json_arrays`
-- `headers_match_expected` wurde erweitert (15 → 19 Spalten).
-- CLI-Hinweis bei CSV-Export ergänzt: weist jetzt auf JSON für
-  strukturierte Details und Risks hin.
-- Keine Schema-Änderung in `EffectivePermission` — die Daten sind
-  bereits da; nur der CSV-Exporter zieht sie jetzt mit.
-- `exporter` hatte `serde_json` bereits als Workspace-Dep — keine
-  neue Abhängigkeit.
+- `headers_match_expected` was extended (15 → 19 columns).
+- CLI hint on CSV export extended: now points to JSON for structured
+  details and risks.
+- No schema change in `EffectivePermission` — the data is already there;
+  only the CSV exporter now pulls it in.
+- `exporter` already had `serde_json` as a workspace dependency — no new
+  dependency.

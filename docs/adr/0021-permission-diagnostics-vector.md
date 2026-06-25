@@ -1,93 +1,88 @@
-# ADR 0021 — Strukturierte Diagnose-Marker pro Berechtigung
+# ADR 0021 — Structured diagnostic markers per permission
 
 **Status:** Accepted  
 **Date:** 2026-05-24
 
 ## Context
 
-ADR 0012 (Stored-Order DACL-Auswertung) entscheidet bewusst, nicht-
-kanonisch sortierte DACLs nach Windows-AccessCheck-Semantik in
-gespeicherter Reihenfolge auszuwerten. Die Engine erkannte den Fall
-über `first_non_canonical_position` und emittierte ein `tracing::warn!`.
+ADR 0012 (stored-order DACL evaluation) deliberately decides to evaluate
+non-canonically sorted DACLs in stored order following Windows
+AccessCheck semantics. The engine detected the case via
+`first_non_canonical_position` and emitted a `tracing::warn!`.
 
-ADR 0012 selbst notierte den Trade-off explizit: *„Eine spätere
-strukturierte Diagnose (etwa ein `non_canonical_dacl: bool`-Feld) ist
-möglich, sobald ein konkreter Audit-Use-Case sie verlangt."*
+ADR 0012 itself noted the trade-off explicitly: *"A later structured
+diagnostic (e.g. a `non_canonical_dacl: bool` field) is possible once a
+concrete audit use case demands it."*
 
-Der Folge-Review (2026-05-24) macht den Use-Case konkret: ein
-log-only-Marker überlebt weder CLI-Lauf, GUI-Lauf, DB-Historie noch
-Export. Ein Auditor, der ein überraschendes Effective-Rights-Ergebnis
-sieht, hat keine Spur, **warum** es von der kanonisierten Erwartung
-abweicht.
+The follow-up review (2026-05-24) makes the use case concrete: a log-only
+marker survives neither the CLI run, the GUI run, the DB history, nor the
+export. An auditor who sees a surprising effective-rights result has no
+trace of **why** it deviates from the canonicalized expectation.
 
-Folge-Befund 3.
+Follow-up finding 3.
 
 ## Decision
 
-1. **Neuer Variant-tagged Enum `PermissionDiagnostic`** in
-   `adpa_core::model`. Erster Marker:
+1. **New variant-tagged enum `PermissionDiagnostic`** in
+   `adpa_core::model`. First marker:
    `NonCanonicalDaclOrder { at_index: usize }`.
 
-   Tag-Format (`#[serde(tag = "kind")]`) lässt zukünftige Marker —
-   z. B. „inheritance disabled", „SACL nicht lesbar" — ergänzen, ohne
-   bestehende JSON-/DB-Daten zu brechen.
+   The tag format (`#[serde(tag = "kind")]`) lets future markers — e.g.
+   "inheritance disabled", "SACL not readable" — be added without breaking
+   existing JSON/DB data.
 
-2. **`EffectivePermission.diagnostics: Vec<PermissionDiagnostic>`**
-   als neues Pflichtfeld mit `#[serde(default)]`. Per Default leer;
-   die Engine populiert es über den neuen Helfer
-   `collect_diagnostics(dacl, path)`, der gleichzeitig das bisherige
-   `warn!`-Log emittiert.
+2. **`EffectivePermission.diagnostics: Vec<PermissionDiagnostic>`** as a
+   new mandatory field with `#[serde(default)]`. Empty by default; the
+   engine populates it via the new helper `collect_diagnostics(dacl, path)`,
+   which at the same time emits the existing `warn!` log.
 
-3. **Persistenz: neue TEXT-Spalte `diagnostics`** auf
-   `effective_permissions` (Migration v6) mit `DEFAULT '[]'`. Alte
-   Zeilen lesen sich als „keine Marker"; neue Zeilen tragen das
-   JSON-Array. INSERT/SELECT erweitert; Round-Trip-Test deckt das ab.
+3. **Persistence: new TEXT column `diagnostics`** on
+   `effective_permissions` (migration v6) with `DEFAULT '[]'`. Old rows
+   read as "no markers"; new rows carry the JSON array. INSERT/SELECT
+   extended; a round-trip test covers it.
 
-4. **Exports und GUI:**
-   - **JSON-Export:** automatisch via `Serialize` — ohne Extra-Arbeit.
-   - **CSV-Export:** neue Spalte `diagnostics_json` (immer befüllt,
-     leere Liste als `"[]"` — konsistent zu `matched_aces_json`).
-   - **GUI Scan-View:** pro Zeile zeigt der Warn-Badge jetzt
-     gemeinsam `N unsupported ACE(s), M diagnostic(s)`; eine
-     aggregierte Meldung am Tabellenende fasst die Pfade mit
-     Diagnose-Markern zusammen.
+4. **Exports and GUI:**
+   - **JSON export:** automatic via `Serialize` — no extra work.
+   - **CSV export:** new column `diagnostics_json` (always filled, empty
+     list as `"[]"` — consistent with `matched_aces_json`).
+   - **GUI scan view:** per row, the warn badge now shows jointly
+     `N unsupported ACE(s), M diagnostic(s)`; an aggregated message at the
+     bottom of the table summarizes the paths with diagnostic markers.
 
-5. **`evaluate_dacl_ordered` warnt nicht mehr selbst.** Die Diagnose-
-   Detektion ist zentral in `collect_diagnostics` — Single Source of
-   Truth zwischen Log und strukturiertem Marker.
+5. **`evaluate_dacl_ordered` no longer warns itself.** The diagnostic
+   detection is centralized in `collect_diagnostics` — a single source of
+   truth between log and structured marker.
 
 ## Rationale
 
-- **Audit-Wirksamkeit:** Ein Marker, der nicht ins persistente
-  Artefakt eingeht, ist für einen Auditor wertlos.
-- **Vorwärtskompatibilität:** Tagged Enum + JSON-Spalte + `serde(default)`
-  erlauben neue Marker ohne Schema-Sprünge.
-- **GUI-Symmetrie:** Die existierende `unsupported_aces`-Badge-Logik
-  wird einfach um die zweite Diagnose-Spalte erweitert — gleiche
-  Sicht, gleiche Farbe, eine Quelle weniger Überraschung.
-- **HTML-Export bleibt vorerst unverändert:** JSON ist der
-  kanonische Audit-Pfad, CSV trägt die Marker, GUI macht sie sichtbar.
-  HTML kann später dieselben Daten visualisieren — bewusst nicht in
-  diese Iteration gepackt, um die Änderung fokussiert zu halten.
+- **Audit effectiveness:** a marker that does not enter the persistent
+  artifact is worthless to an auditor.
+- **Forward compatibility:** tagged enum + JSON column + `serde(default)`
+  allow new markers without schema jumps.
+- **GUI symmetry:** the existing `unsupported_aces` badge logic is simply
+  extended by the second diagnostic column — same view, same color, one
+  less source of surprise.
+- **HTML export stays unchanged for now:** JSON is the canonical audit
+  path, CSV carries the markers, the GUI makes them visible. HTML can
+  visualize the same data later — deliberately not packed into this
+  iteration, to keep the change focused.
 
 ## Consequences
 
-- 4 neue Tests in `permission_engine::engine::tests`:
+- 4 new tests in `permission_engine::engine::tests`:
   - `non_canonical_dacl_yields_diagnostic_marker`
   - `canonical_dacl_yields_no_diagnostic_marker`
   - `null_dacl_yields_no_diagnostic_marker`
-  - (bestehende ACE-Order-Tests bleiben gültig)
-- 1 neuer Test in `persistence::scan_store::tests`:
-  `diagnostics_round_trip`
-- 2 neue Tests in `exporter::csv::tests`:
+  - (existing ACE-order tests stay valid)
+- 1 new test in `persistence::scan_store::tests`: `diagnostics_round_trip`
+- 2 new tests in `exporter::csv::tests`:
   `diagnostics_serialized_as_tagged_json`,
   `empty_diagnostics_yield_empty_json_array`
-- CSV-Header-Test erweitert (19 → 20 Spalten).
-- Migration v6 ergänzt — `fresh_database_gets_latest_version` zieht
-  auf 6 hoch.
-- ScanRow trägt `diagnostic_count`; GUI-Scan-View aggregiert das.
-- Kein Bruch für bestehende Aufrufer von `EffectivePermission` —
-  `diagnostics` ist `#[serde(default)]` und alte Konstruktionssites
-  wurden um `diagnostics: vec![]` ergänzt.
-- Spätere HTML-Erweiterung um eine „Diagnostics"-Sektion ist eine
-  natürliche Folgearbeit.
+- CSV header test extended (19 → 20 columns).
+- Migration v6 added — `fresh_database_gets_latest_version` bumps to 6.
+- ScanRow carries `diagnostic_count`; the GUI scan view aggregates it.
+- No breakage for existing callers of `EffectivePermission` —
+  `diagnostics` is `#[serde(default)]` and old construction sites were
+  extended with `diagnostics: vec![]`.
+- A later HTML extension with a "Diagnostics" section is a natural
+  follow-up.

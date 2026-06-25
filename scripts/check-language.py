@@ -19,8 +19,8 @@ misses must flag; clean English must pass).
 Both passes use character-level UTF-8 matching, not byte regex, so
 emoji and em-dashes are not false positives.
 
-Historical ADRs 0001–0044 are excluded because they predate the
-English-only convention; their migration is tracked separately.
+All ADRs are US English (the 0016–0044 migration completed 2026-06-15);
+the language check covers them like any other tracked file.
 
 Usage:
     python scripts/check-language.py          # check; exit 1 on hit
@@ -233,8 +233,6 @@ ALLOWLIST = [
     # Audit criteria spell out the keyword list and reference the rule.
     ("docs/audit-criteria.md", "passwort"),
     ("docs/features-and-limitations.md", "passwort"),
-    # ADR-README explains the language status for historical ADRs.
-    ("docs/adr/README.md", None),
     # CHANGELOG entries from the time before the English-only switch
     # explicitly describe what was done; the historical entries stay.
     ("CHANGELOG.md", None),
@@ -254,16 +252,9 @@ ALLOWLIST = [
 ]
 
 
-# Historical ADRs are kept in their original prose for now — tracked
-# in docs/adr/README.md.
-HISTORICAL_ADR = re.compile(r"^docs/adr/00(1[6-9]|[2-3][0-9]|4[0-4])-.+\.md$")
-
-
 def is_allowlisted(path: str, line_text: str) -> bool:
     """Return True if the hit should be ignored per ALLOWLIST."""
     norm = path.replace("\\", "/")
-    if HISTORICAL_ADR.match(norm):
-        return True
     for suffix, needle in ALLOWLIST:
         if norm.endswith(suffix) or norm == suffix:
             if needle is None:

@@ -1,77 +1,74 @@
-# ADR 0016 — GUI-Scans persistieren Walk-/Eval-Fehler in `scan_errors`
+# ADR 0016 — GUI scans persist walk/eval errors in `scan_errors`
 
 **Status:** Accepted  
 **Date:** 2026-05-24
 
 ## Context
 
-Der GUI-Worker sendete Walk-, Permission-Eval- und Setup-Fehler an die
-UI (`WorkerEvent::ScanError`), aber `persist_scan` schrieb nur die
-erfolgreichen `EffectivePermission`-Einträge und (bei `cancelled`)
-einen einzelnen Abbruch-Marker in die SQLite-Historie. Access-Denied-,
-Path-Not-Found-, Security-Descriptor- oder Eval-Fehler verschwanden
-nach Schließen des Scan-Fensters.
+The GUI worker sent walk, permission-eval, and setup errors to the
+UI (`WorkerEvent::ScanError`), but `persist_scan` wrote only the
+successful `EffectivePermission` entries and (on `cancelled`) a single
+cancellation marker into the SQLite history. Access-denied,
+path-not-found, security-descriptor, and eval errors disappeared once
+the scan window was closed.
 
-Folgen:
+Consequences:
 
-- Historische GUI-Scans wirkten vollständiger als sie waren.
-- Delta-Vergleiche und spätere Audits konnten nicht erkennen, welche
-  Pfade gar nicht gelesen wurden.
-- Der CLI-Pfad speicherte solche Fehler bereits korrekt — GUI und CLI
-  hatten damit divergierende Audit-Pfade.
+- Historical GUI scans appeared more complete than they were.
+- Delta comparisons and later audits could not tell which paths were
+  not read at all.
+- The CLI path already stored such errors correctly — GUI and CLI thus
+  had diverging audit paths.
 
-Siehe Review-Befund 6.
+See review finding 6.
 
 ## Decision
 
-1. **`ScanSummary` trägt jetzt eine strukturierte Fehlerliste.**
-   `errors: usize` → `errors: Vec<ScanError>`. Die UI-Anzeige nutzt
-   weiterhin `errors.len()` (im `ScanDone`-Event).
+1. **`ScanSummary` now carries a structured error list.**
+   `errors: usize` → `errors: Vec<ScanError>`. The UI display still uses
+   `errors.len()` (in the `ScanDone` event).
 
-2. **Alle Fehlerquellen sammeln, nicht nur Walk-Fehler.** Der Worker
-   füllt `summary_errors` aus drei Quellen:
+2. **Collect all error sources, not just walk errors.** The worker
+   fills `summary_errors` from three sources:
 
-   - Frühe Setup-Fehler (Pfad-/SID-Validierung, Connection-Inputs,
-     Identity-Resolution) — gesammelt über einen Closure
-     `make_early_summary`, der den Eintrag sowohl an die UI sendet als
-     auch in die Summary aufnimmt.
-   - Lokale-Gruppen-Auflösung mit `NotAvailable`-Status — bisher nur
-     UI-Event, jetzt zusätzlich in der Summary.
-   - Walk-Fehler aus `walk.errors` (Access-Denied, Path-Not-Found etc.).
-   - Permission-Eval-Fehler aus dem Engine-Aufruf.
+   - Early setup errors (path/SID validation, connection inputs,
+     identity resolution) — collected via a `make_early_summary` closure
+     that both sends the entry to the UI and adds it to the summary.
+   - Local-group resolution with `NotAvailable` status — previously only
+     a UI event, now additionally in the summary.
+   - Walk errors from `walk.errors` (access-denied, path-not-found, etc.).
+   - Permission-eval errors from the engine call.
 
-3. **`persist_scan` schreibt jeden Eintrag.** Signatur erweitert um
-   `errors: &[ScanError]`; pro Eintrag ein `store.insert_error(&run_id, …)`.
-   Der bestehende Abbruch-Marker (`path: None`,
-   `"Scan cancelled by user — results are partial"`) wird wie zuvor
-   nach den strukturierten Fehlern eingefügt.
+3. **`persist_scan` writes every entry.** Signature extended with
+   `errors: &[ScanError]`; one `store.insert_error(&run_id, …)` per entry.
+   The existing cancellation marker (`path: None`,
+   `"Scan cancelled by user — results are partial"`) is inserted after
+   the structured errors as before.
 
-4. **Neue `ScanStore::list_errors_for`** liest persistierte Fehler in
-   Einfüge-Reihenfolge (per rowid) zurück. Wird vom GUI-Worker-Test
-   genutzt und ist sinnvolle Diagnose-API für zukünftige Historien-
-   Ansichten.
+4. **New `ScanStore::list_errors_for`** reads persisted errors back in
+   insertion order (by rowid). Used by the GUI worker test and is a
+   useful diagnostic API for future history views.
 
 ## Rationale
 
-- **Parität CLI ↔ GUI:** Die Audit-Erwartung an „der Scan-Lauf in der
-  Historie ist vollständig" muss in beiden Pfaden gleich sein.
-- **Closure statt vierfacher Duplizierung:** Die früheren vier
-  Early-Return-Sites bauten jeweils ein identisches
-  `ScanSummary { ..., errors: 1, ... }`. `make_early_summary` ersetzt
-  alle vier und garantiert, dass kein Pfad das UI-Event und die
-  Persistenz aus der Synchronität laufen lässt.
-- **`Vec<ScanError>` statt `usize`** als Single-Source-of-Truth: aus
-  einer Liste kann man den Count ableiten, umgekehrt nicht.
+- **CLI ↔ GUI parity:** the audit expectation that "the scan run in the
+  history is complete" must hold equally in both paths.
+- **Closure instead of fourfold duplication:** the previous four
+  early-return sites each built an identical
+  `ScanSummary { ..., errors: 1, ... }`. `make_early_summary` replaces
+  all four and guarantees that no path lets the UI event and the
+  persistence drift out of sync.
+- **`Vec<ScanError>` instead of `usize`** as the single source of truth:
+  a count can be derived from a list, but not the other way around.
 
 ## Consequences
 
-- 3 neue Tests in `gui::worker::tests` (persistiert Walk-Fehler,
-  ergänzt Abbruch-Marker, leerer Lauf bleibt leer).
-- 2 neue Tests in `persistence::scan_store::tests` für die neue
-  `list_errors_for`-API (Reihenfolge + Lauf-Isolation).
-- Kein Schema-Migrationsbedarf — `scan_errors` existiert bereits und
-  unterstützt `path` als nullable Spalte. Bestehende GUI-Scan-Historien
-  sind weiterhin lesbar; nur neue Läufe profitieren von der vollen
-  Fehler-Persistenz.
-- Die Anzahl-Anzeige im `ScanDone`-Event und in der UI bleibt
-  unverändert (semantisch und visuell).
+- 3 new tests in `gui::worker::tests` (persists walk errors, appends the
+  cancellation marker, empty run stays empty).
+- 2 new tests in `persistence::scan_store::tests` for the new
+  `list_errors_for` API (order + run isolation).
+- No schema migration needed — `scan_errors` already exists and supports
+  `path` as a nullable column. Existing GUI scan histories remain
+  readable; only new runs benefit from the full error persistence.
+- The count display in the `ScanDone` event and in the UI stays
+  unchanged (semantically and visually).

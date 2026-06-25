@@ -1,117 +1,106 @@
-# ADR 0035 — SAM-Pfad bestätigt `disabled` per `NetUserGetInfo`
+# ADR 0035 — The SAM path confirms `disabled` via `NetUserGetInfo`
 
 **Status:** Accepted
 **Date:** 2026-06-04
 
 ## Context
 
-Beim zweiten ChatGPT-Code-Review-Durchgang am 2026-06-04 trat ein
-stilles Korrektheitsproblem im SAM-Fallback-Pfad hervor
+In the second ChatGPT code review pass on 2026-06-04, a silent correctness
+problem surfaced in the SAM fallback path
 (`ad_resolver::sam::resolve_identity_via_sam`):
 
-- Der SAM-Pfad baute `Identity` bisher aus `LookupAccountSidW` und
-  `NetUserGetGroups`. Beide APIs liefern den Anzeigenamen, die Domäne
-  und die direkten Gruppen — aber **nicht** das
-  `userAccountControl`-Bit `UF_ACCOUNTDISABLE`.
-- Folge: `Identity.disabled` war im SAM-Pfad pauschal `false`. Ein
-  in Wahrheit deaktiviertes Konto erschien im Report als aktiv und
-  bekam keine entsprechende UI-Diagnose. Im LDAP-Pfad lief das richtig,
-  weil dort `userAccountControl` direkt aus AD kam.
-- Der Marker `IdentityDisabled` (ADR 0033) lief deshalb stumm, sobald
-  der Scan über die SAM-Resolution lief — typischerweise auf einem
-  Domain Controller ohne explizite LDAP-Konfiguration.
+- The SAM path previously built `Identity` from `LookupAccountSidW` and
+  `NetUserGetGroups`. Both APIs return the display name, the domain, and
+  the direct groups — but **not** the `userAccountControl` bit
+  `UF_ACCOUNTDISABLE`.
+- Consequence: `Identity.disabled` was uniformly `false` in the SAM path.
+  An account that was in truth disabled appeared as active in the report
+  and got no corresponding UI diagnostic. In the LDAP path this worked
+  correctly, because there `userAccountControl` came directly from AD.
+- The `IdentityDisabled` marker (ADR 0033) therefore ran silently as soon
+  as the scan went through SAM resolution — typically on a domain
+  controller without explicit LDAP configuration.
 
-Ohne Fix konnte ein Audit-Konsument nicht erkennen, dass der
-`disabled`-Status für eine SAM-aufgelöste Identity überhaupt fraglich
-ist. Das verletzt die „keine Silent Skips"-Regel.
+Without a fix, an audit consumer could not tell that the `disabled` status
+for a SAM-resolved identity is even questionable. This violates the
+"no silent skips" rule.
 
 ## Decision
 
-1. **Neue Helper-Funktion `user_account_disabled`** in
-   `ad_resolver::sam`:
-   - Ruft `NetUserGetInfo(server, user, level=1, &mut buf)` auf, liest
-     `USER_INFO_1::usri1_flags` und prüft, ob
-     `UF_ACCOUNTDISABLE (= 0x2)` gesetzt ist.
-   - Rückgabe `Result<Option<bool>, CoreError>`:
-     - `Ok(Some(true))`  → Konto deaktiviert.
-     - `Ok(Some(false))` → Konto aktiv.
-     - `Ok(None)`        → Status nicht zuverlässig bestimmbar
-       (`NERR_USER_NOT_FOUND`, `ERROR_ACCESS_DENIED`, andere NetAPI-
-       Fehler). Aufrufer markieren dann den Diagnose-Status als
-       unbekannt.
-     - `Err(_)`         → unerwarteter Bibliotheksfehler.
+1. **New helper function `user_account_disabled`** in `ad_resolver::sam`:
+   - Calls `NetUserGetInfo(server, user, level=1, &mut buf)`, reads
+     `USER_INFO_1::usri1_flags`, and checks whether
+     `UF_ACCOUNTDISABLE (= 0x2)` is set.
+   - Return `Result<Option<bool>, CoreError>`:
+     - `Ok(Some(true))`  → account disabled.
+     - `Ok(Some(false))` → account active.
+     - `Ok(None)`        → status not reliably determinable
+       (`NERR_USER_NOT_FOUND`, `ERROR_ACCESS_DENIED`, other NetAPI errors).
+       Callers then mark the diagnostic status as unknown.
+     - `Err(_)`         → unexpected library error.
 
-2. **`resolve_identity_via_sam` liefert jetzt ein `SamResolution`-Struct**
-   statt eines Tupels. Das Struct trägt `identity`, `memberships` und
-   zusätzlich `disabled_known: bool`. Der Worker entscheidet anhand
-   dieses Flags, ob er
-   `PermissionEvaluationInput::identity_disabled_status_unknown`
-   setzen muss.
+2. **`resolve_identity_via_sam` now returns a `SamResolution` struct**
+   instead of a tuple. The struct carries `identity`, `memberships`, and
+   additionally `disabled_known: bool`. The worker decides, based on this
+   flag, whether it must set
+   `PermissionEvaluationInput::identity_disabled_status_unknown`.
 
-3. **`Identity.disabled` ist im SAM-Pfad jetzt verlässlich:**
-   - Für `IdentityKind::User` wird der Wert über
-     `user_account_disabled` gesetzt; bei Misserfolg bleibt
-     `disabled = false`, aber `disabled_known = false` informiert den
-     Aufrufer.
-   - Für Gruppen, Computer und Well-Known SIDs gibt es keinen
-     `disabled`-Status — `disabled_known = true` mit
-     `disabled = false` ist definitiv korrekt.
+3. **`Identity.disabled` is now reliable in the SAM path:**
+   - For `IdentityKind::User` the value is set via `user_account_disabled`;
+     on failure `disabled = false` remains, but `disabled_known = false`
+     informs the caller.
+   - For groups, computers, and well-known SIDs there is no `disabled`
+     status — `disabled_known = true` with `disabled = false` is
+     definitively correct.
 
-4. **Engine-Integration:**
-   - `PermissionEvaluationInput::identity_disabled_status_unknown`
-     pusht den Diagnose-Marker
-     `PermissionDiagnostic::IdentityDisabledStatusUnknown`.
-   - `risk_engine::is_incomplete()` matched diesen Marker **nicht** —
-     er ist informationell, kein Vollständigkeitsmangel des
-     ACL-Modells.
-   - CLI und HTML rendern den Marker mit eigener Beschreibung
-     (`[i]`-Hinweis bzw. `badge-info`).
+4. **Engine integration:**
+   - `PermissionEvaluationInput::identity_disabled_status_unknown` pushes
+     the diagnostic marker `PermissionDiagnostic::IdentityDisabledStatusUnknown`.
+   - `risk_engine::is_incomplete()` does **not** match this marker — it is
+     informational, not a completeness deficiency of the ACL model.
+   - CLI and HTML render the marker with their own description (`[i]` hint
+     and `badge-info` respectively).
 
 ## Consequences
 
-**Positiv / Positive:**
+**Positive:**
 
-- Der SAM-Pfad liefert jetzt denselben Korrektheitsgrad in Bezug auf
-  `disabled` wie der LDAP-Pfad.
-- Auditoren sehen explizit, wenn der `disabled`-Status nicht ermittelt
-  werden konnte (z. B. wegen Access Denied beim NetAPI-Aufruf) —
-  vorher war das ein Default-`false`.
-- Bricht keine bestehende API: `SamResolution`-Struct ist additiv;
-  einziger interner Caller (`gui::worker::sam_resolve_fallback`)
-  wurde angepasst.
+- The SAM path now delivers the same degree of correctness regarding
+  `disabled` as the LDAP path.
+- Auditors see explicitly when the `disabled` status could not be
+  determined (e.g. because of access denied on the NetAPI call) —
+  previously that was a default `false`.
+- Breaks no existing API: the `SamResolution` struct is additive; the only
+  internal caller (`gui::worker::sam_resolve_fallback`) was adapted.
 
-**Negativ / Negative:**
+**Negative:**
 
-- Zusätzlicher NetAPI-Aufruf pro Identity in der SAM-Auflösung.
-  `NetUserGetInfo` ist auf einem DC günstig — auf einer Workstation,
-  die einen Remote-User nicht kennt, schlägt es mit
-  `NERR_USER_NOT_FOUND` fehl; das wird in `Ok(None)` übersetzt und der
-  Marker erscheint.
+- An additional NetAPI call per identity in the SAM resolution.
+  `NetUserGetInfo` is cheap on a DC — on a workstation that does not know a
+  remote user, it fails with `NERR_USER_NOT_FOUND`; that is translated into
+  `Ok(None)` and the marker appears.
 
-**Test-Anforderungen:**
+**Test requirements:**
 
-- DC-Integrationstest (`resolve_local_administrator_yields_memberships`,
-  `#[ignore]`) prüft jetzt zusätzlich, dass `disabled_known = true`
-  ist, weil `NetUserGetInfo` für den eingebauten Administrator
-  antwortbar sein muss.
-- Engine-Tests setzen `identity_disabled_status_unknown` und sehen den
-  Marker im `result.diagnostics`.
-- Risk-Engine-Test: ein Finding über eine Permission mit nur
-  `IdentityDisabledStatusUnknown` darf **nicht** `incomplete = true`
-  tragen (negative Assertion, um die Trennung von
-  `IdentityNotInConfiguredLdapBase` zu sichern).
+- The DC integration test (`resolve_local_administrator_yields_memberships`,
+  `#[ignore]`) now additionally checks that `disabled_known = true`, because
+  `NetUserGetInfo` must be answerable for the built-in administrator.
+- Engine tests set `identity_disabled_status_unknown` and see the marker in
+  `result.diagnostics`.
+- Risk-engine test: a finding over a permission with only
+  `IdentityDisabledStatusUnknown` must **not** carry `incomplete = true`
+  (a negative assertion to secure the separation from
+  `IdentityNotInConfiguredLdapBase`).
 
-## Schließt / Closes
+## Closes
 
-Review 2026-06-04 Runde 2, Finding 5 (SAM disabled-Status).
+Review 2026-06-04 round 2, finding 5 (SAM disabled status).
 
-## Verweise / References
+## References
 
-- ADR 0021 — Permission Diagnostics als variant-tagged Enum.
-- ADR 0033 — `IdentityDisabled` für den LDAP-Pfad und die ursprüngliche
-  Marker-Idee.
-- ADR 0034 — Multi-Domain-LSA-Fallback (führt
-  `IdentityDisabledStatusUnknown` ein; dieser ADR nutzt denselben
-  Marker).
-- Windows-API-Doku zu `USER_INFO_1::usri1_flags` und
-  `UF_ACCOUNTDISABLE`.
+- ADR 0021 — permission diagnostics as a variant-tagged enum.
+- ADR 0033 — `IdentityDisabled` for the LDAP path and the original marker
+  idea.
+- ADR 0034 — multi-domain LSA fallback (introduces
+  `IdentityDisabledStatusUnknown`; this ADR uses the same marker).
+- Windows API docs on `USER_INFO_1::usri1_flags` and `UF_ACCOUNTDISABLE`.

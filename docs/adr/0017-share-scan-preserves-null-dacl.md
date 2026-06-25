@@ -1,30 +1,30 @@
-# ADR 0017 — Share-Scan erhält die NULL-DACL-Semantik
+# ADR 0017 — Share scan preserves the NULL-DACL semantics
 
 **Status:** Accepted  
 **Date:** 2026-05-24
 
 ## Context
 
-`get_share_dacl` unterscheidet seit ADR 0010 korrekt zwischen
-`ShareDacl::NullDacl` (keine Zugriffseinschränkung — Vollzugriff für
-alle) und `ShareDacl::Acl(vec![])` (vorhandene leere DACL — kein
-Zugriff). Die Unterscheidung ist für Audits wesentlich:
+Since ADR 0010, `get_share_dacl` correctly distinguishes between
+`ShareDacl::NullDacl` (no access restriction — full access for everyone)
+and `ShareDacl::Acl(vec![])` (an existing empty DACL — no access). The
+distinction is essential for audits:
 
-- NULL DACL ist häufig ein Konfigurationsfehler (Vollzugriff für alle
-  über SMB) — muss in der Reportierung sichtbar sein.
-- Eine leere DACL ist hingegen ein bewusstes „kein Zugriff".
+- A NULL DACL is often a misconfiguration (full access for everyone over
+  SMB) — it must be visible in reporting.
+- An empty DACL, by contrast, is a deliberate "no access".
 
-Der kombinierte Einstiegspunkt `scan_shares` rief jedoch
-`get_share_permissions`, der `ShareDacl::NullDacl` zu einer leeren
-`Vec<SharePermission>` glättet — danach war im flachen
-`ShareScanResult.permissions`-Feld nicht mehr unterscheidbar, ob eine
-Freigabe keine Einschränkung hat oder effektiv keinen Zugriff zulässt.
+The combined entry point `scan_shares`, however, called
+`get_share_permissions`, which flattens `ShareDacl::NullDacl` into an
+empty `Vec<SharePermission>` — after which the flat
+`ShareScanResult.permissions` field could no longer distinguish whether a
+share has no restriction or effectively allows no access.
 
-Siehe Review-Befund 7.
+See review finding 7.
 
 ## Decision
 
-1. **`ShareScanResult` trägt zusätzlich ein strukturiertes Feld**
+1. **`ShareScanResult` additionally carries a structured field**
 
    ```rust
    pub struct ShareScanResult {
@@ -35,55 +35,52 @@ Siehe Review-Befund 7.
    }
    ```
 
-   `share_dacls` enthält für jede erfolgreich gelesene Freigabe ihren
-   `ShareDacl`-Status. Für Audits ist `share_dacls` die maßgebliche
-   Quelle; `permissions` bleibt als flach aggregierte Konvenienz für
-   Aufrufer erhalten, die keine pro-Share-Auflösung brauchen.
+   `share_dacls` contains, for every successfully read share, its
+   `ShareDacl` status. For audits, `share_dacls` is the authoritative
+   source; `permissions` remains as a flat-aggregated convenience for
+   callers that do not need per-share resolution.
 
-2. **`scan_shares` ruft direkt `get_share_dacl`** statt
-   `get_share_permissions`. Für jeden Share:
+2. **`scan_shares` calls `get_share_dacl` directly** instead of
+   `get_share_permissions`. For each share:
 
-   - `Ok(dacl)` → `(name, dacl)` wandert in `share_dacls`; bei
-     `Acl(perms)` wird `perms` zusätzlich in `permissions` flach
-     aggregiert.
-   - `Err(e)` → wie bisher in `errors`.
+   - `Ok(dacl)` → `(name, dacl)` goes into `share_dacls`; for
+     `Acl(perms)`, `perms` is additionally flat-aggregated into
+     `permissions`.
+   - `Err(e)` → into `errors` as before.
 
-   `null_dacl_shares` wird im Abschluss-Log mitgezählt — Operatoren
-   sehen so direkt, wie viele Freigaben unrestricted sind.
+   `null_dacl_shares` is counted in the completion log — operators thus
+   see directly how many shares are unrestricted.
 
-3. **`ShareDacl` derived `Clone`**, damit der Wert sowohl in
-   `share_dacls` gespeichert als auch zum flachen Aggregieren genutzt
-   werden kann.
+3. **`ShareDacl` derives `Clone`** so the value can be both stored in
+   `share_dacls` and used for flat aggregation.
 
-4. **`get_share_permissions` bleibt unverändert** als bequemer Pfad
-   für Aufrufer, denen die NULL/empty-Unterscheidung egal ist. Sein
-   Docstring weist seit ADR 0010 schon auf `get_share_dacl` für den
-   strikten Fall hin.
+4. **`get_share_permissions` stays unchanged** as a convenient path for
+   callers that do not care about the NULL/empty distinction. Since
+   ADR 0010 its docstring already points to `get_share_dacl` for the
+   strict case.
 
 ## Rationale
 
-- **Minimal invasiv:** Bestehende Aufrufer von `ShareScanResult`
-  (intern: Tests; extern: keine produktiven) sehen das neue Feld
-  zusätzlich — kein Bruch.
-- **Audit-Korrektheit hat Vorrang** (AGENTS.md Grundregel 1) — eine
-  Freigabe mit Vollzugriff für alle darf nicht in der gleichen Form
-  wie „kein Zugriff" persistiert/exportiert werden.
-- **Konsistenz mit dem FSO-Pfad:** Auf NTFS-Seite trägt
-  `FileSystemObject.null_dacl` bereits die Unterscheidung; die
-  Share-Seite zieht jetzt nach.
+- **Minimally invasive:** existing callers of `ShareScanResult`
+  (internal: tests; external: none in production) see the new field as an
+  addition — no breakage.
+- **Audit correctness takes precedence** (AGENTS.md base rule 1) — a
+  share with full access for everyone must not be persisted/exported in
+  the same form as "no access".
+- **Consistency with the FSO path:** on the NTFS side,
+  `FileSystemObject.null_dacl` already carries the distinction; the share
+  side now follows.
 
 ## Consequences
 
-- 3 neue Tests in `share_scanner::scanner::tests`:
+- 3 new tests in `share_scanner::scanner::tests`:
   - `scan_shares_records_dacl_status_for_every_successful_share`
   - `permissions_equals_flattened_acl_entries_from_share_dacls`
   - `null_dacl_distinguishable_from_empty_acl_in_share_dacls`
-    (synthetischer Konstruktions-Test, der die strukturelle
-    Unterscheidung beweist und beide Fälle durch
-    `effective_share_mask` schickt: `NullDacl → None`,
-    `Acl([]) → Some(0)`).
-- Kein Schemawechsel — `share_dacls` lebt nur im In-Memory-Result.
-  Wenn später Persistenz pro-Share gewünscht ist, kann darauf
-  aufgesetzt werden.
-- ADR 0010 bleibt gültig; ADR 0017 erweitert die NULL/empty-
-  Unterscheidung auf den kombinierten Scan-Pfad.
+    (synthetic construction test that proves the structural distinction
+    and sends both cases through `effective_share_mask`:
+    `NullDacl → None`, `Acl([]) → Some(0)`).
+- No schema change — `share_dacls` lives only in the in-memory result.
+  If per-share persistence is wanted later, it can build on this.
+- ADR 0010 remains valid; ADR 0017 extends the NULL/empty distinction to
+  the combined scan path.

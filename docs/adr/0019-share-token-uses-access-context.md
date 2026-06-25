@@ -1,81 +1,77 @@
-# ADR 0019 — Share-Token nutzt denselben AccessContext wie der NTFS-Token
+# ADR 0019 — Share token uses the same AccessContext as the NTFS token
 
 **Status:** Accepted  
 **Date:** 2026-05-24
 
 ## Context
 
-ADR 0013 hat den `AccessContext` eingeführt: für UNC-Pfade fügt die
-Engine `NETWORK` (S-1-5-2) implizit in den Access-Token auf, für lokale
-Pfade `INTERACTIVE` + `LOCAL`. Dieses Bit floss korrekt in den
-NTFS-Auswertungspfad ein.
+ADR 0013 introduced the `AccessContext`: for UNC paths the engine
+implicitly adds `NETWORK` (S-1-5-2) to the access token, and for local
+paths `INTERACTIVE` + `LOCAL`. This bit flowed correctly into the NTFS
+evaluation path.
 
-Die Share-Maske wird jedoch **nicht** vom NTFS-Evaluator berechnet,
-sondern vorab durch zwei eigene Helfer:
+The share mask, however, is **not** computed by the NTFS evaluator but
+beforehand by two dedicated helpers:
 
 - `crates/cli/src/main.rs`: `resolve_scan_share_status`
 - `crates/gui/src/worker.rs`: `resolve_share_status`
 
-Beide bauten den Token über `build_token_sids_with_local`, welcher
-intern auf `build_token_sids_with_context(_, _, _, Unspecified)`
-delegiert. **Konsequenz**: Während der NTFS-Pfad bei einem UNC-Scan
-`NETWORK` im Token hatte, fehlte derselbe SID im Share-Pfad —
-Share-ACEs auf `NETWORK` (z. B. ein `Deny NETWORK Read`) wurden
-ignoriert. Da das finale Ergebnis `NTFS ∩ Share` ist, vergiftete der
-schwächere Share-Token jede effektive SMB-Berechnung.
+Both built the token via `build_token_sids_with_local`, which internally
+delegates to `build_token_sids_with_context(_, _, _, Unspecified)`.
+**Consequence:** while the NTFS path had `NETWORK` in the token on a UNC
+scan, the same SID was missing in the share path — share ACEs on
+`NETWORK` (e.g. a `Deny NETWORK Read`) were ignored. Because the final
+result is `NTFS ∩ Share`, the weaker share token poisoned every effective
+SMB computation.
 
-Der Folge-Review (2026-05-24) hat das als High-Priority-Befund 1
-korrekt identifiziert.
+The follow-up review (2026-05-24) correctly identified this as
+high-priority finding 1.
 
 ## Decision
 
-1. **`resolve_scan_share_status` (CLI) und `resolve_share_status` (GUI)
-   nehmen einen neuen Pflicht-Parameter `access_context: AccessContext`.**
+1. **`resolve_scan_share_status` (CLI) and `resolve_share_status` (GUI)
+   take a new mandatory parameter `access_context: AccessContext`.**
 
-2. **Beide bauen den Token jetzt über
-   `build_token_sids_with_context(..., access_context)`** statt
-   `build_token_sids_with_local`. Damit landet bei `RemoteSmb`
-   automatisch `NETWORK` im Token (und bei `LocalInteractive`
-   `INTERACTIVE` + `LOCAL`).
+2. **Both now build the token via
+   `build_token_sids_with_context(..., access_context)`** instead of
+   `build_token_sids_with_local`. Thus `RemoteSmb` automatically puts
+   `NETWORK` in the token (and `LocalInteractive` puts `INTERACTIVE` +
+   `LOCAL`).
 
-3. **Beide Aufrufer (CLI scan + analyze, GUI scan + analyze)
-   berechnen `AccessContext::for_path(path)` und reichen genau
-   denselben Wert sowohl an `resolve_*share_status` als auch an
-   `PermissionEvaluationInput.access_context` weiter.** Damit ist
-   ausgeschlossen, dass NTFS- und Share-Pfad mit unterschiedlichen
-   Token-Kontexten auswerten.
+3. **Both callers (CLI scan + analyze, GUI scan + analyze) compute
+   `AccessContext::for_path(path)` and pass exactly the same value both to
+   `resolve_*share_status` and to `PermissionEvaluationInput.access_context`.**
+   This rules out NTFS and share paths evaluating with different token
+   contexts.
 
-4. **`build_token_sids_with_context` wird aus `permission_engine`
-   re-exportiert.** `build_token_sids_with_local` bleibt aus
-   Rückwärts-Kompatibilität bestehen, ist aber für CLI/GUI nicht mehr
-   die richtige Wahl.
+4. **`build_token_sids_with_context` is re-exported from
+   `permission_engine`.** `build_token_sids_with_local` stays for
+   backward compatibility but is no longer the right choice for CLI/GUI.
 
 ## Rationale
 
-- **Korrektheit hat Vorrang vor Geschwindigkeit** (AGENTS.md,
-  Grundregel 1). Eine in zwei Schritten falsch berechnete Maske ist
-  ein direkter Audit-Schaden.
-- **Symmetrie NTFS ↔ Share** — wenn die Engine kontextsensitiv ist,
-  muss es der Share-Pfad auch sein, sonst poisoned der schwächere
-  Token das `NTFS ∩ Share`-Ergebnis.
-- **`AccessContext` einmal pro Aufruf ableiten und durchreichen** ist
-  weniger fehlerträchtig als zweimal `for_path(path)` aufzurufen —
-  letzteres wäre korrekt, aber durchgereicht zu sehen macht die
-  Symmetrie offensichtlich.
+- **Correctness before speed** (AGENTS.md, base rule 1). A mask computed
+  wrong in two steps is a direct audit harm.
+- **Symmetry NTFS ↔ Share** — if the engine is context-sensitive, the
+  share path must be too, otherwise the weaker token poisons the
+  `NTFS ∩ Share` result.
+- **Derive `AccessContext` once per call and pass it through** is less
+  error-prone than calling `for_path(path)` twice — the latter would be
+  correct, but passing it through makes the symmetry obvious.
 
 ## Consequences
 
-- 3 neue Tests in `share_scanner::scanner::tests`:
+- 3 new tests in `share_scanner::scanner::tests`:
   - `deny_network_share_ace_does_nothing_without_network_in_token`
-    (Regressions-Baseline für das alte Verhalten — dient als
-    expliziter „so war es vorher kaputt"-Marker)
+    (regression baseline for the old behavior — serves as an explicit
+    "this is how it was broken before" marker)
   - `deny_network_share_ace_blocks_read_when_network_in_token`
-    (das neue Sollverhalten)
+    (the new intended behavior)
   - `allow_network_share_ace_grants_when_network_in_token`
-    (spiegelbildlich für Allow-NETWORK-Only-ACEs)
-- Keine Schemaänderung, kein DB-Migration nötig.
-- ADR 0013 bleibt gültig — dieser ADR ergänzt die fehlende
-  Anwendung im Share-Pfad.
-- Der bestehende `build_token_sids_with_local` ist nach diesem ADR
-  formal noch öffentlich, in Produktivpfaden aber nicht mehr in
-  Verwendung. Eine spätere Deprecation ist denkbar.
+    (mirror image for allow-NETWORK-only ACEs)
+- No schema change, no DB migration needed.
+- ADR 0013 remains valid — this ADR adds the missing application in the
+  share path.
+- After this ADR the existing `build_token_sids_with_local` is still
+  formally public, but no longer in use on production paths. A later
+  deprecation is conceivable.

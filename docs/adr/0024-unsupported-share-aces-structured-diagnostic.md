@@ -1,117 +1,111 @@
-# ADR 0024 — Unsupported Share-ACEs als strukturierte Diagnose
+# ADR 0024 — Unsupported share ACEs as a structured diagnostic
 
 **Status:** Accepted  
 **Date:** 2026-05-25
 
 ## Context
 
-`FileSystemObject.unsupported_aces` und
-`EffectivePermission.unsupported_ace_count` zeichnen seit ADR 0004
-auf, wenn der NTFS-DACL-Parser ACE-Typen übersprungen hat (Object-,
-Callback-, Conditional- oder vendor-spezifische ACEs). Die
-Risk-Engine nutzt das zur `incomplete = true`-Markierung.
+`FileSystemObject.unsupported_aces` and
+`EffectivePermission.unsupported_ace_count` have recorded, since ADR 0004,
+when the NTFS DACL parser skipped ACE types (object, callback, conditional,
+or vendor-specific ACEs). The risk engine uses this for the
+`incomplete = true` marking.
 
-Auf der Share-Seite gab es kein Pendant: `parse_share_dacl`
-protokollierte unsupported Share-ACE-Typen nur auf `debug!`-Level
-und ließ den Parsevorgang stillschweigend weiterlaufen. Der Aufrufer
-bekam ein `ShareDacl::Acl(perms)` zurück, das den Fehlerteil nicht
-mehr enthielt. Konsequenz: die Share-Maske konnte unvollständig sein
-(z. B. wenn ein versteckter Deny-Object-ACE in der DACL stand),
-Risk-Findings wurden als `confirmed` ausgewiesen, CSV-/JSON-/HTML-
-Reports zeigten keine Warnung.
+On the share side there was no counterpart: `parse_share_dacl` logged
+unsupported share ACE types only at `debug!` level and let the parse
+continue silently. The caller got back a `ShareDacl::Acl(perms)` that no
+longer contained the error part. Consequence: the share mask could be
+incomplete (e.g. if a hidden Deny-object ACE was in the DACL), risk
+findings were reported as `confirmed`, and CSV/JSON/HTML reports showed no
+warning.
 
-Folge-Review (2026-05-25), Finding 2 (Medium).
+Follow-up review (2026-05-25), finding 2 (Medium).
 
 ## Decision
 
-1. **Neue Variant `PermissionDiagnostic::UnsupportedShareAces { count }`**
-   in `adpa_core::model`. Nutzt das in ADR 0021 etablierte
-   tagged-Enum-Format (`#[serde(tag = "kind")]`) — **keine Schema-
-   Migration nötig**: die Variante fließt automatisch durch
-   Persistenz (JSON-Spalte `diagnostics`), JSON-Export, CSV
-   (`diagnostics_json`) und HTML (neuer Badge).
+1. **New variant `PermissionDiagnostic::UnsupportedShareAces { count }`**
+   in `adpa_core::model`. Uses the tagged-enum format established in
+   ADR 0021 (`#[serde(tag = "kind")]`) — **no schema migration needed**:
+   the variant flows automatically through persistence (JSON column
+   `diagnostics`), JSON export, CSV (`diagnostics_json`), and HTML (new
+   badge).
 
-2. **Neuer Wrapper-Typ `ShareDaclScan { dacl, unsupported_count }`**
-   als Return von `get_share_dacl`. Trägt die unverändert
-   strukturierte `ShareDacl` plus den Audit-Count. Damit bleiben die
-   30+ existierenden Pattern-Matches auf `ShareDacl::Acl(...)`
-   unverändert; nur die `get_share_dacl`-Aufrufer entpacken den Wrapper.
+2. **New wrapper type `ShareDaclScan { dacl, unsupported_count }`** as the
+   return of `get_share_dacl`. Carries the unchanged structured `ShareDacl`
+   plus the audit count. This keeps the 30+ existing pattern matches on
+   `ShareDacl::Acl(...)` unchanged; only the `get_share_dacl` callers
+   unpack the wrapper.
 
-3. **`parse_share_dacl`** zählt unsupported ACE-Typen und gibt das
-   Tupel `(perms, unsupported_count)` zurück. Loglevel wechselt von
-   `debug!` auf `warn!`, weil das jetzt eine echte Audit-Diagnose ist
-   (analog zum NTFS-Parser).
+3. **`parse_share_dacl`** counts unsupported ACE types and returns the
+   tuple `(perms, unsupported_count)`. The log level switches from `debug!`
+   to `warn!`, because this is now a real audit diagnostic (analogous to
+   the NTFS parser).
 
-4. **Neues Pflichtfeld
-   `PermissionEvaluationInput.unsupported_share_ace_count: usize`**.
-   CLI (`resolve_scan_share_status`) und GUI (`resolve_share_status`)
-   liefern ab jetzt `(ShareMaskStatus, usize)`-Tupel zurück; die
-   Aufrufer reichen den Wert an `evaluate()` durch.
+4. **New mandatory field
+   `PermissionEvaluationInput.unsupported_share_ace_count: usize`.**
+   CLI (`resolve_scan_share_status`) and GUI (`resolve_share_status`) now
+   return `(ShareMaskStatus, usize)` tuples; the callers pass the value
+   through to `evaluate()`.
 
-5. **Engine** pusht bei `unsupported_share_ace_count > 0` einen
-   `PermissionDiagnostic::UnsupportedShareAces { count }` in
-   `EffectivePermission.diagnostics`. Die Logik liegt zentral im
-   `evaluate`-Pfad — kein Aufrufer muss das Diagnostic-Push manuell
-   machen.
+5. **The engine** pushes, when `unsupported_share_ace_count > 0`, a
+   `PermissionDiagnostic::UnsupportedShareAces { count }` into
+   `EffectivePermission.diagnostics`. The logic is centralized in the
+   `evaluate` path — no caller has to do the diagnostic push manually.
 
-6. **Risk-Engine `is_incomplete`** erkennt den neuen Marker und
-   flaggt jedes Risk-Finding der betroffenen Berechtigung als
-   `incomplete = true`. Damit ist die Share-Seite symmetrisch zur
-   `unsupported_ace_count`-Logik der NTFS-Seite.
+6. **Risk engine `is_incomplete`** recognizes the new marker and flags
+   every risk finding of the affected permission as `incomplete = true`.
+   This makes the share side symmetric to the `unsupported_ace_count` logic
+   of the NTFS side.
 
-7. **HTML-Exporter** rendert einen eigenen Badge
-   `⚠ {count} unsupported share ACE(s)` mit Tooltip-Erklärung in der
-   Diagnostics-Spalte. CSV (`diagnostics_json`) und JSON tragen die
-   Variant automatisch über Serialize.
+7. **HTML exporter** renders a dedicated badge
+   `⚠ {count} unsupported share ACE(s)` with a tooltip explanation in the
+   diagnostics column. CSV (`diagnostics_json`) and JSON carry the variant
+   automatically via Serialize.
 
-8. **Bewusster Trade-off:** `NonCanonicalDaclOrder` (ADR 0021)
-   markiert NICHT als incomplete — es ist Audit-Info, kein
-   Korrektheitsproblem. `UnsupportedShareAces` markiert sehr wohl
-   als incomplete, weil ein verstecktes Deny im unsupported-Teil
-   die Maske direkt verändert hätte. Der Risk-Engine-Test
+8. **Deliberate trade-off:** `NonCanonicalDaclOrder` (ADR 0021) does NOT
+   mark as incomplete — it is audit info, not a correctness problem.
+   `UnsupportedShareAces` does mark as incomplete, because a hidden Deny in
+   the unsupported part would have changed the mask directly. The
+   risk-engine test
    `non_canonical_dacl_diagnostic_alone_does_not_mark_incomplete`
-   dokumentiert die Unterscheidung explizit.
+   documents the distinction explicitly.
 
 ## Rationale
 
-- **Symmetrie zur NTFS-Seite:** beide DACL-Welten haben jetzt das
-  gleiche „ich konnte einen ACE nicht auswerten"-Signal in Modell,
-  Persistenz, Export und Risiko-Bewertung.
-- **Keine Schema-Migration:** das tagged-Enum-Format aus ADR 0021
-  zahlt sich aus — Schema v6 reicht weiter.
-- **Wrapper-Typ statt Enum-Erweiterung:** ein neues
-  `ShareDaclScan`-Struct über `ShareDacl` zu legen ist invasiver
-  als nötig, aber spart 30+ Test-Anpassungen für den minimal-
-  invasiven Pfad.
-- **Engine als Single-Source-of-Truth für das Push:** Aufrufer
-  müssen sich nicht merken, das Diagnostic selbst zu setzen — sie
-  liefern nur den Count, die Engine entscheidet.
-- **CLI gibt Warnung aus** wenn `unsupported_share_ace_count > 0` —
-  damit ist die Diagnose bereits im Konsolen-Output sichtbar, nicht
-  nur in den Exporten. GUI-Worker propagiert es in `scan_errors`
-  (persistiert).
+- **Symmetry with the NTFS side:** both DACL worlds now have the same
+  "I could not evaluate an ACE" signal in model, persistence, export, and
+  risk assessment.
+- **No schema migration:** the tagged-enum format from ADR 0021 pays off —
+  schema v6 carries on.
+- **Wrapper type instead of enum extension:** laying a new `ShareDaclScan`
+  struct over `ShareDacl` is more invasive than necessary, but saves 30+
+  test adjustments for the minimally invasive path.
+- **Engine as single source of truth for the push:** callers do not have
+  to remember to set the diagnostic themselves — they only supply the
+  count, the engine decides.
+- **The CLI prints a warning** when `unsupported_share_ace_count > 0` — so
+  the diagnostic is already visible in the console output, not just in the
+  exports. The GUI worker propagates it into `scan_errors` (persisted).
 
 ## Consequences
 
-- 1 neuer Test in `share_scanner::scanner::tests`
+- 1 new test in `share_scanner::scanner::tests`
   (`share_dacl_scan_carries_dacl_and_unsupported_count`).
-- 2 neue Tests in `permission_engine::engine::tests`
+- 2 new tests in `permission_engine::engine::tests`
   (`unsupported_share_aces_count_emits_diagnostic`,
   `zero_unsupported_share_aces_no_diagnostic`).
-- 2 neue Tests in `risk_engine::rules::tests`
+- 2 new tests in `risk_engine::rules::tests`
   (`unsupported_share_aces_diagnostic_marks_finding_incomplete`,
-  `non_canonical_dacl_diagnostic_alone_does_not_mark_incomplete` —
-  letzterer dokumentiert den bewussten Trade-off).
-- 1 neuer Test in `exporter::html::tests`
+  `non_canonical_dacl_diagnostic_alone_does_not_mark_incomplete` — the
+  latter documents the deliberate trade-off).
+- 1 new test in `exporter::html::tests`
   (`permissions_table_renders_unsupported_share_aces_badge`);
-  `permissions_table_renders_combined_diagnostics` um den neuen
-  Badge erweitert.
-- CLI/GUI-Tests bleiben grün — keine Anpassungen nötig, da die
-  Tests `PermissionEvaluationInput` nicht selbst konstruieren.
-- `PermissionEvaluationInput`-Konstruktionen in Engine-Tests
-  bekamen `unsupported_share_ace_count: 0` ergänzt (8 Stellen via
-  `replace_all`).
-- Keine Schema-Migration, kein DB-Bruch.
-- Symmetrie NTFS/Share ist damit auch auf der Diagnose-Ebene
-  geschlossen — die letzte erkennbare Asymmetrie aus der
-  Audit-Pipeline.
+  `permissions_table_renders_combined_diagnostics` extended by the new
+  badge.
+- CLI/GUI tests stay green — no adjustments needed, since the tests do not
+  construct `PermissionEvaluationInput` themselves.
+- `PermissionEvaluationInput` constructions in engine tests got
+  `unsupported_share_ace_count: 0` added (8 sites via `replace_all`).
+- No schema migration, no DB break.
+- The NTFS/share symmetry is thereby closed on the diagnostic level too —
+  the last recognizable asymmetry in the audit pipeline.

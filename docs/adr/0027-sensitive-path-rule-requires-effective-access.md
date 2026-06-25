@@ -1,67 +1,67 @@
-# ADR 0027 — `SensitivePathRule` setzt tatsächlichen Zugriff voraus
+# ADR 0027 — `SensitivePathRule` requires actual access
 
 **Status:** Accepted  
 **Date:** 2026-05-25
 
 ## Context
 
-`SensitivePathRule` flaggt Pfade, deren Name auf sensible Daten
-hindeutet (`password`, `secret`, `token`, …). Die Finding-Beschreibung
-lautet wörtlich:
+`SensitivePathRule` flags paths whose name hints at sensitive data
+(`password`, `secret`, `token`, …). The finding description reads
+literally:
 
 > Path contains keyword '<kw>' — may contain credentials or secrets;
 > '<name>' has access
 
-Bisher prüfte die Regel ausschließlich den Pfadnamen. Eine
-Berechtigung mit `effective_mask == 0` (z. B. weil NTFS denyt oder
-`NTFS ∩ Share = 0`) wurde trotzdem als „has access" gemeldet. Das ist
-eine Falschmeldung: der Auditor liest ein Risiko, das real nicht
-besteht. Bei Audit-Berichten als Beweis-Artefakt (vgl. AGENTS.md
-„Exporte müssen als sensibel betrachtet werden") besonders kritisch.
+Previously the rule checked only the path name. A permission with
+`effective_mask == 0` (e.g. because NTFS denies or `NTFS ∩ Share = 0`) was
+still reported as "has access". That is a false positive: the auditor reads
+a risk that does not actually exist. Especially critical with audit reports
+as an evidentiary artifact (cf. AGENTS.md "exports must be treated as
+sensitive").
 
-Review 2026-05-25, Finding 3 (Medium).
+Review 2026-05-25, finding 3 (Medium).
 
 ## Decision
 
-**`SensitivePathRule.evaluate` filtert `p.effective_mask.0 > 0` vor**
-der Keyword-Prüfung. Pfade, auf die der Benutzer **kein** Zugriffs-
-recht hat, erzeugen kein Finding mehr.
+**`SensitivePathRule.evaluate` pre-filters `p.effective_mask.0 > 0`**
+before the keyword check. Paths to which the user has **no** access right
+no longer produce a finding.
 
-Begründungstext im Code:
+Rationale text in the code:
 
-> the rule claims "has access" — so only emit a finding when the
-> identity actually has access. Otherwise a deny-all result would be
-> misreported as a positive risk.
+> the rule claims "has access" — so only emit a finding when the identity
+> actually has access. Otherwise a deny-all result would be misreported as
+> a positive risk.
 
 ## Rationale
 
-- **Findung muss zur Aussage passen.** „Has access" ohne effektiven
-  Zugriff ist semantisch inkorrekt.
-- **Falsch-Positive sind im Audit-Kontext teuer.** Sie untergraben
-  Vertrauen in den Bericht und kosten Operator-Zeit zur Verifikation.
-- **Effektive Maske, nicht NTFS-Maske, ist maßgeblich.** Wenn die
-  Share-Seite blockt (`NTFS Full Control ∩ Share Read = Read &
-  Execute` als Beispiel aus den Live-Scans), aber Share `0` macht,
-  muss das Ergebnis konsistent sein — der Regression-Test
-  `sensitive_path_uses_effective_not_ntfs_mask` schreibt das fest.
-- **Bewusst keine Aufteilung in zwei Regeln** (z. B. „sensitive path
-  observed" vs. „access to sensitive path"). Der Reviewer hat das
-  optional vorgeschlagen, aber: die existierende Regel heißt
-  `SENSITIVE_PATH`, beschreibt textuell „has access" und ist als ein
-  Konzept etabliert. Falls später ein dedizierter „pure-naming"-
-  Befund gewünscht ist, wird das eine separate Regel mit eigener ID.
+- **The finding must match the statement.** "Has access" without effective
+  access is semantically incorrect.
+- **False positives are expensive in the audit context.** They undermine
+  trust in the report and cost operator time for verification.
+- **The effective mask, not the NTFS mask, is authoritative.** When the
+  share side blocks (`NTFS Full Control ∩ Share Read = Read & Execute` as
+  an example from the live scans), but the share yields `0`, the result
+  must be consistent — the regression test
+  `sensitive_path_uses_effective_not_ntfs_mask` pins this down.
+- **Deliberately no split into two rules** (e.g. "sensitive path observed"
+  vs. "access to sensitive path"). The reviewer suggested this optionally,
+  but: the existing rule is named `SENSITIVE_PATH`, describes "has access"
+  textually, and is established as one concept. If a dedicated
+  "pure-naming" finding is wanted later, it will be a separate rule with
+  its own ID.
 
 ## Consequences
 
-- 2 neue Tests in `risk_engine::rules::tests`:
+- 2 new tests in `risk_engine::rules::tests`:
   - `sensitive_path_with_zero_effective_mask_not_flagged`
-    (Kern-Regression aus dem Reviewer-Beispiel)
+    (core regression from the reviewer example)
   - `sensitive_path_uses_effective_not_ntfs_mask`
-    (Edge-Case: NTFS Full, aber effective_mask = 0)
-- `sensitive_path_flagged` bleibt unverändert grün — Standardfall
-  mit `MASK_READ` als effective_mask.
-- Keine API-Änderung, keine Schemamigration.
-- Risk-Engine-Output für Berichte ist stiller bei Pfaden ohne
-  tatsächlichen Zugriff — die übrigen Regeln (`WRITE_ACCESS`,
-  `DELETE_RIGHT`, etc.) prüfen bereits explizit auf die effektive
-  Maske oder konkrete Bits, sind also unverändert korrekt.
+    (edge case: NTFS Full, but effective_mask = 0)
+- `sensitive_path_flagged` stays green unchanged — the standard case with
+  `MASK_READ` as effective_mask.
+- No API change, no schema migration.
+- The risk-engine output for reports is quieter on paths without actual
+  access — the other rules (`WRITE_ACCESS`, `DELETE_RIGHT`, etc.) already
+  check explicitly against the effective mask or concrete bits, so they are
+  unchanged and correct.

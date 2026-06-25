@@ -1,113 +1,102 @@
-# ADR 0033 — Sichtbare Diagnostik für SAM-Fallback und deaktivierte Identitäten
+# ADR 0033 — Visible diagnostics for SAM fallback and disabled identities
 
 **Status:** Accepted
 **Date:** 2026-06-04
 
 ## Context
 
-Zwei Findings aus dem ChatGPT-Code-Review 2026-06-04 trafen denselben
-Mechanismus — strukturierte Diagnose-Marker an der
-`EffectivePermission`:
+Two findings from the ChatGPT code review 2026-06-04 hit the same
+mechanism — structured diagnostic markers on the `EffectivePermission`:
 
-- **Finding 6 (Medium):** Der SAM/LSA-Fallback ohne LDAP nutzt
-  `NetUserGetGroups`, das nur direkte globale Gruppen liefert.
-  Verschachtelte Domain-Gruppen werden nicht rekursiv aufgelöst; auf
-  einem Domain Controller ist das Ergebnis besser als ein nackter
-  SID-Fallback, aber nicht vollständig für tief verschachtelte
-  AD-Gruppen. Diese Einschränkung war bisher nur im Code-Kommentar
-  erwähnt — ein Audit-Leser konnte nicht erkennen, dass die Berechnung
-  lückenhaft sein könnte.
+- **Finding 6 (Medium):** the SAM/LSA fallback without LDAP uses
+  `NetUserGetGroups`, which yields only direct global groups. Nested domain
+  groups are not resolved recursively; on a domain controller the result is
+  better than a bare SID fallback, but not complete for deeply nested AD
+  groups. This limitation was previously mentioned only in a code comment —
+  an audit reader could not tell that the computation might be incomplete.
 
-- **Finding 7 (Low):** Der LDAP-Resolver erkennt deaktivierte Benutzer
-  korrekt über `userAccountControl`. Die Permission Engine berechnet
-  dennoch die theoretischen Rechte aus SID und Gruppen unverändert. Das
-  ist für „ACL-derived rights" sinnvoll, aber für tatsächlichen
-  Remote-SMB-Zugriff eines deaktivierten Accounts nicht dasselbe wie ein
-  authentifizierbarer Zugriff. CLI/HTML/JSON trennten beide Sichten
-  bisher nicht klar.
+- **Finding 7 (Low):** the LDAP resolver correctly detects disabled users
+  via `userAccountControl`. The permission engine nevertheless computes the
+  theoretical rights from SID and groups unchanged. That is sensible for
+  "ACL-derived rights", but for the actual remote SMB access of a disabled
+  account it is not the same as an authenticatable access. CLI/HTML/JSON
+  did not clearly separate the two views.
 
 ## Decision
 
-Beide Lücken werden über die schon vorhandene
-`PermissionDiagnostic`-Vector-Infrastruktur geschlossen (ADR 0021), die
-ohnehin per Variante-tagged JSON serialisiert wird und damit
-zukunftssicher um weitere Marker erweitert werden kann.
+Both gaps are closed via the already-existing `PermissionDiagnostic` vector
+infrastructure (ADR 0021), which is serialized as variant-tagged JSON
+anyway and can thus be extended with further markers in a future-proof way.
 
-1. **Zwei neue Varianten in `adpa_core::model::PermissionDiagnostic`:**
+1. **Two new variants in `adpa_core::model::PermissionDiagnostic`:**
 
-   - `DomainGroupRecursionIncomplete` — gesetzt, sobald die
-     Gruppen­auflösung über den SAM/LSA-Fallback statt LDAP läuft.
-     Risk-Findings für diese Berechtigung müssen `incomplete = true`
-     tragen.
-   - `IdentityDisabled` — gesetzt, sobald die analysierte Identität im
-     AD als deaktiviert markiert ist (`userAccountControl`
-     `ACCOUNTDISABLE`, Bit `0x0002`).
+   - `DomainGroupRecursionIncomplete` — set as soon as group resolution
+     runs via the SAM/LSA fallback instead of LDAP. Risk findings for this
+     permission must carry `incomplete = true`.
+   - `IdentityDisabled` — set as soon as the analyzed identity is marked
+     disabled in AD (`userAccountControl` `ACCOUNTDISABLE`, bit `0x0002`).
 
-2. **Neues Eingabe-Feld
+2. **New input field
    `PermissionEvaluationInput.group_resolution_via_sam_fallback: bool`**
-   (Default `false`). Der Aufrufer setzt das Flag, wenn er den SAM-Pfad
-   nutzt. Die Engine pusht dann automatisch
-   `DomainGroupRecursionIncomplete` ins Ergebnis.
+   (default `false`). The caller sets the flag when it uses the SAM path.
+   The engine then automatically pushes `DomainGroupRecursionIncomplete`
+   into the result.
 
-3. **Engine-Logik für `IdentityDisabled`**: pusht den Marker
-   automatisch, wenn `input.identity.disabled == true`. Kein zusätzliches
-   Eingabe-Feld notwendig — die `Identity` trägt das Bit ohnehin.
+3. **Engine logic for `IdentityDisabled`**: pushes the marker automatically
+   when `input.identity.disabled == true`. No additional input field
+   needed — the `Identity` carries the bit anyway.
 
-4. **Caller-Plumbing:**
+4. **Caller plumbing:**
 
-   - **GUI**: `resolve_identity_sids` liefert jetzt ein
-     `used_sam_fallback`-Flag (3-Tupel `(Identity, Memberships, bool)`).
-     Der Worker leitet es in `PermissionEvaluationInput`.
-   - **CLI**: nutzt das schon vorhandene `ResolvedIdentity::ad_connected`
-     mit Negation (`group_resolution_via_sam_fallback = !ad_connected`).
+   - **GUI**: `resolve_identity_sids` now returns a `used_sam_fallback`
+     flag (3-tuple `(Identity, Memberships, bool)`). The worker passes it
+     into `PermissionEvaluationInput`.
+   - **CLI**: uses the already-existing `ResolvedIdentity::ad_connected`
+     with negation (`group_resolution_via_sam_fallback = !ad_connected`).
 
-5. **Sichtbare Darstellung:**
+5. **Visible presentation:**
 
-   - **HTML-Bericht** (`exporter::html`) zeigt für
-     `DomainGroupRecursionIncomplete` eine gelbe
-     `⚠ SAM fallback — nested groups not resolved`-Badge mit
-     Tooltip-Erklärung; für `IdentityDisabled` einen blauen
-     `ℹ disabled account`-Hinweis.
-   - **CLI-Output** (`output::print_report`) gibt zwei zusätzliche
-     Diagnose-Blöcke aus: `[!] Group resolution ran through the SAM/LSA
-     fallback…` und `[i] Identity is flagged as disabled in AD…`.
+   - **HTML report** (`exporter::html`) shows, for
+     `DomainGroupRecursionIncomplete`, a yellow
+     `⚠ SAM fallback — nested groups not resolved` badge with a tooltip
+     explanation; for `IdentityDisabled` a blue `ℹ disabled account` hint.
+   - **CLI output** (`output::print_report`) prints two additional
+     diagnostic blocks: `[!] Group resolution ran through the SAM/LSA
+     fallback…` and `[i] Identity is flagged as disabled in AD…`.
 
 ## Rationale
 
-- **Wieder­verwendung der vorhandenen Diagnose-Schicht.** ADR 0021 hat
-  den `PermissionDiagnostic`-Vector genau für diesen Anwendungsfall
-  etabliert: strukturiert, variant-tagged-serialisiert, von
-  CLI/HTML/JSON konsistent gerendert. Neue Audit-Marker einzuhängen ist
-  ein Einzeiler in `model.rs` plus jeweiligen Renderer-Pfad.
-- **Nicht-Block-Stil — Audit-Leser darf weiter lesen.** Ein deaktiviertes
-  Konto erzeugt keinen Engine-Fehler; es ist ein Hinweis, kein Blocker.
-  Genau dafür gibt es die Diagnose-Schicht.
-- **Risk-Findings konsistent halten.** Mehrere Risk-Rules nutzen
-  `is_incomplete(p)`. Beide neuen Marker passen in dieses Schema —
-  Risk-Findings für betroffene Berechtigungen werden automatisch als
-  `incomplete = true` gerendert, ohne dass die Rules angepasst werden
-  müssen.
+- **Reuse of the existing diagnostic layer.** ADR 0021 established the
+  `PermissionDiagnostic` vector for exactly this use case: structured,
+  variant-tagged serialized, consistently rendered by CLI/HTML/JSON.
+  Hooking in new audit markers is a one-liner in `model.rs` plus the
+  respective renderer path.
+- **Non-blocking style — the audit reader may keep reading.** A disabled
+  account produces no engine error; it is a hint, not a blocker. That is
+  exactly what the diagnostic layer is for.
+- **Keep risk findings consistent.** Several risk rules use
+  `is_incomplete(p)`. Both new markers fit this scheme — risk findings for
+  affected permissions are automatically rendered as `incomplete = true`,
+  without the rules needing adjustment.
 
 ## Consequences
 
-- Bestehende Konstruktions­sites von `PermissionEvaluationInput` müssen
-  das neue Feld `group_resolution_via_sam_fallback` setzen — Default
-  `false` wäre möglich, ist aber bewusst weggelassen, damit Aufrufer den
-  Wert explizit setzen.
-- Die zwei neuen Varianten brauchen Match-Arme in CLI / HTML; das ist
-  durch den Compiler erzwungen — kein stilles Vergessen möglich.
-- Künftige weitere Diagnose-Marker (z. B. „Kerberos-Ticket abgelaufen",
-  „Account gesperrt", „Passwort abgelaufen") können dem gleichen Muster
-  folgen.
+- Existing construction sites of `PermissionEvaluationInput` must set the
+  new field `group_resolution_via_sam_fallback` — a default of `false`
+  would be possible, but is deliberately omitted so callers set the value
+  explicitly.
+- The two new variants need match arms in CLI / HTML; this is enforced by
+  the compiler — no silent forgetting possible.
+- Future further diagnostic markers (e.g. "Kerberos ticket expired",
+  "account locked", "password expired") can follow the same pattern.
 
 ## Tests
 
-Workspace-Tests bleiben grün. Die zwei neuen Marker werden über die
-schon vorhandene Diagnose-Anzeige-Pipeline gerendert, die durch die
-existierenden Engine- und Exporter-Tests abgedeckt ist. Real-AD-
-Verifikation läuft über die `#[ignore]`-Integrations­tests gegen die
-Test­domain.
+Workspace tests stay green. The two new markers are rendered via the
+already-existing diagnostic-display pipeline, which is covered by the
+existing engine and exporter tests. Real-AD verification runs via the
+`#[ignore]` integration tests against the test domain.
 
-## Schließt / Closes
+## Closes
 
-ChatGPT-Code-Review 2026-06-04, Findings 6 (Medium) und 7 (Low).
+ChatGPT code review 2026-06-04, findings 6 (Medium) and 7 (Low).

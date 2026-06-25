@@ -1,62 +1,57 @@
-# ADR 0026 — `ShareScanResult.share_dacls` trägt `ShareDaclScan`
+# ADR 0026 — `ShareScanResult.share_dacls` carries `ShareDaclScan`
 
 **Status:** Accepted  
 **Date:** 2026-05-25
 
 ## Context
 
-ADR 0024 hatte `ShareDaclScan { dacl, unsupported_count }` als
-Return-Typ von `get_share_dacl` eingeführt, sodass der CLI/GUI-pro-Pfad-
-Flow die Audit-Diagnose pro Share an die Engine durchreichen kann.
+ADR 0024 introduced `ShareDaclScan { dacl, unsupported_count }` as the
+return type of `get_share_dacl`, so that the CLI/GUI per-path flow can pass
+the per-share audit diagnostic through to the engine.
 
-`scan_shares` (Aggregat-Funktion über alle Freigaben eines Servers)
-bekam diese Information auch, aber das Feld
-`ShareScanResult.share_dacls` blieb `Vec<(String, ShareDacl)>`. Der
-`unsupported_count` floss damit nur in das Abschluss-Log (als
-`unsupported_share_aces_total`) und wurde danach pro-Share verworfen.
+`scan_shares` (the aggregate function over all shares of a server) also
+received this information, but the field `ShareScanResult.share_dacls`
+remained `Vec<(String, ShareDacl)>`. The `unsupported_count` thus flowed
+only into the completion log (as `unsupported_share_aces_total`) and was
+then discarded per share.
 
-Konsequenz für Konsumenten, die das volle `scan_shares`-Ergebnis statt
-des pro-Pfad-Pfades nutzen: sie konnten zwar das Aggregat sehen, aber
-nicht entscheiden, **welche** Freigabe wegen nicht ausgewerteter ACE-
-Typen als `incomplete` gilt.
+Consequence for consumers that use the full `scan_shares` result instead of
+the per-path path: they could see the aggregate, but not decide **which**
+share counts as `incomplete` because of unevaluated ACE types.
 
-Review 2026-05-25, Finding 2 (Medium).
+Review 2026-05-25, finding 2 (Medium).
 
 ## Decision
 
-**`ShareScanResult.share_dacls` ist jetzt `Vec<(String, ShareDaclScan)>`.**
-Pro Share wandert der komplette `ShareDaclScan` (DACL + unsupported
-count) ins Ergebnis — keine Daten gehen am Aggregations-Boundary mehr
-verloren.
+**`ShareScanResult.share_dacls` is now `Vec<(String, ShareDaclScan)>`.**
+Per share, the complete `ShareDaclScan` (DACL + unsupported count) goes into
+the result — no data is lost at the aggregation boundary anymore.
 
-Die Aufrufstelle in `scan_shares` pusht nicht mehr `(share.name,
-scan.dacl)`, sondern `(share.name, scan)`. Das aggregierende
-`unsupported_share_aces_total`-Log bleibt als operativer Schnellüberblick.
+The call site in `scan_shares` no longer pushes `(share.name, scan.dacl)`
+but `(share.name, scan)`. The aggregating `unsupported_share_aces_total`
+log remains as an operational quick overview.
 
 ## Rationale
 
-- **Single source of truth**: pro Share gibt es jetzt genau einen Ort,
-  an dem alle relevanten Audit-Daten liegen — die Aufrufer-Sicht ist
-  einheitlich, egal ob sie `get_share_dacl` (eine Share) oder
-  `scan_shares` (alle Shares) nutzen.
-- **Datenverlust verhindern**: Audit-Diagnosen, die der Parser sammelt,
-  dürfen am Aggregations-Boundary nicht abhanden kommen.
-- **Geringer Bruch**: das Feld wurde laut Grep nur in den eigenen
-  Tests des `share_scanner`-Crates konsumiert. Externe Konsumenten
-  gibt es nicht.
+- **Single source of truth**: per share there is now exactly one place
+  where all relevant audit data lives — the caller's view is uniform,
+  whether they use `get_share_dacl` (one share) or `scan_shares` (all
+  shares).
+- **Prevent data loss**: audit diagnostics that the parser collects must
+  not get lost at the aggregation boundary.
+- **Small breakage**: per grep, the field was consumed only in the
+  `share_scanner` crate's own tests. There are no external consumers.
 
 ## Consequences
 
-- 1 neuer Test in `share_scanner::scanner::tests`:
-  `share_dacls_field_preserves_per_share_unsupported_count` —
-  konstruiert ein `ShareScanResult` mit `unsupported_count: 7` und
-  prüft, dass der Wert über die Speicherung in `share_dacls`
-  zugreifbar bleibt.
-- Zwei bestehende Tests umgeschrieben, damit sie das neue
-  `ShareDaclScan`-Tuple konstruieren bzw. `&scan.dacl` statt `dacl`
-  matchen:
+- 1 new test in `share_scanner::scanner::tests`:
+  `share_dacls_field_preserves_per_share_unsupported_count` — constructs a
+  `ShareScanResult` with `unsupported_count: 7` and checks that the value
+  stays accessible through storage in `share_dacls`.
+- Two existing tests rewritten so they construct the new `ShareDaclScan`
+  tuple or match `&scan.dacl` instead of `dacl`:
   - `permissions_equals_flattened_acl_entries_from_share_dacls`
   - `null_dacl_distinguishable_from_empty_acl_in_share_dacls`
-- Keine API-Brüche außerhalb des Crates (kein externer Konsument).
-- Keine Schema- oder Persistenz-Auswirkungen — `share_dacls` lebt nur
-  in-Memory in `ShareScanResult`.
+- No API breaks outside the crate (no external consumer).
+- No schema or persistence impact — `share_dacls` lives only in-memory in
+  `ShareScanResult`.

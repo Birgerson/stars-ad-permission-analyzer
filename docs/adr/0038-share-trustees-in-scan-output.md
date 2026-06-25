@@ -1,57 +1,55 @@
-# ADR 0038 — Share-DACL-Trustees im Scan-Output
+# ADR 0038 — Share-DACL trustees in the scan output
 
 **Status:** Accepted
 **Date:** 2026-06-04
 
 ## Context
 
-Review 2026-06-04 Runde 3 Finding 3 (Medium): Der Scan-Pfad rief
-`build_path_trustees(&fso, None, None)` auf — das **NTFS-only**-
-Argument liess die Share-DACL ausserhalb der gesammelten
-`path_trustees` und damit der pfadzentrischen Trustee-Tabelle.
+Review 2026-06-04 round 3 finding 3 (Medium): the scan path called
+`build_path_trustees(&fso, None, None)` — the **NTFS-only** argument left
+the share DACL outside the collected `path_trustees` and thus outside the
+path-centric trustee table.
 
-Die HTML-Tabelle ist allerdings als **„who can access this path at
-all"** beschriftet und besitzt sogar eine dedizierte
-`TrusteeCategory::Share`-Spalte. Bei SMB-Analysen entstand dadurch
-eine systematische Diskrepanz:
+The HTML table, however, is labeled **"who can access this path at all"**
+and even has a dedicated `TrusteeCategory::Share` column. For SMB analyses
+this created a systematic discrepancy:
 
-- **Risiko-Ansicht**: berücksichtigt korrekt Share ∩ NTFS, der
-  effektive Befund kann "nur Read" sein, obwohl NTFS Modify gewährt.
-- **Trustee-Ansicht** (gleicher Bericht): zeigt nur die NTFS-Allow-
-  Einträge — Share-Deny, Share-Allow für breite Gruppen oder eine
-  read-only Share-Maske bleiben unsichtbar.
+- **Risk view**: correctly accounts for Share ∩ NTFS; the effective finding
+  can be "only Read" even though NTFS grants Modify.
+- **Trustee view** (same report): shows only the NTFS Allow entries —
+  Share-Deny, Share-Allow for broad groups, or a read-only share mask stay
+  invisible.
 
-Das verletzt die Memory-Regel „keine Silent Skips" (Stars-Berichte
-müssen erklären, was sie zeigen und was sie verschweigen) sowie das
-Audit-Versprechen „read-only Analyse erklärt vollständig".
+This violates the memory rule "no silent skips" (Stars reports must explain
+what they show and what they omit) as well as the audit promise "read-only
+analysis explains completely".
 
 ## Decision
 
-**Share-DACL einmal pro Share lesen** und als Overlay an jeden Pfad
-unter diesem Share anhängen:
+**Read the share DACL once per share** and attach it as an overlay to every
+path under that share:
 
-1. **Neuer Typ `ShareTrusteeOverlay`** im GUI-Worker:
+1. **New type `ShareTrusteeOverlay`** in the GUI worker:
 
    ```rust
    pub struct ShareTrusteeOverlay {
-       pub trustees: Vec<PathTrustee>,  // alle TrusteeCategory::Share
+       pub trustees: Vec<PathTrustee>,  // all TrusteeCategory::Share
    }
    ```
 
-2. **Neue Funktion `read_share_overlay(server, share)`** liest die
-   Share-DACL via `get_share_dacl` einmal und produziert die
-   `ShareTrusteeOverlay`. Lesefehler werden als sichtbare
-   Pseudo-Zeile gerendert ("Share-DACL nicht lesbar: …") — keine
-   stillen Skips.
+2. **New function `read_share_overlay(server, share)`** reads the share
+   DACL via `get_share_dacl` once and produces the `ShareTrusteeOverlay`.
+   Read errors are rendered as a visible pseudo-row ("Share DACL not
+   readable: …") — no silent skips.
 
-3. **Neuer Helper `build_path_trustees_with_share(fso, overlay)`**
-   nimmt eine schon gelesene Overlay-Referenz und vermeidet so den
-   Re-Read pro Pfad. Die bestehende `build_path_trustees`-Signatur
-   bleibt erhalten (für den Analyze-Einzelpfad-Use-Case).
+3. **New helper `build_path_trustees_with_share(fso, overlay)`** takes an
+   already-read overlay reference and thus avoids the re-read per path. The
+   existing `build_path_trustees` signature stays (for the Analyze
+   single-path use case).
 
-4. **Scan-Pfad** (`handle_scan_path`) liest die Share-DACL **einmal**
-   vor der Pfad-Schleife und übergibt die Overlay-Referenz an jeden
-   `build_path_trustees_with_share`-Aufruf:
+4. **Scan path** (`handle_scan_path`) reads the share DACL **once** before
+   the path loop and passes the overlay reference to every
+   `build_path_trustees_with_share` call:
 
    ```rust
    let share_overlay = match (effective_smb_target(root, smb_server),
@@ -65,46 +63,42 @@ unter diesem Share anhängen:
    }
    ```
 
-Die Share-DACL ist eine Eigenschaft des Shares, nicht des Unterpfads
-— ein einmaliger Read pro Scan ist sowohl semantisch korrekt als auch
-performance-freundlich.
+The share DACL is a property of the share, not of the subpath — a single
+read per scan is both semantically correct and performance-friendly.
 
 ## Consequences
 
-**Positiv / Positive:**
+**Positive:**
 
-- Die pfadzentrische Trustee-Tabelle hält jetzt das Versprechen
-  „who can access this path at all" konsistent mit der Risiko-
-  und Erklärungstabelle.
-- Share-DACL-Lese-Fehler erscheinen als sichtbare Markierung, nicht
-  als unsichtbare Lücke.
-- Performance: ein Read pro Share, nicht pro Pfad — bei großen Trees
-  ein deutlicher Gewinn.
-- API additiv: `build_path_trustees` bleibt; neue
-  `build_path_trustees_with_share` und `read_share_overlay`
-  ergänzen.
+- The path-centric trustee table now keeps the promise "who can access this
+  path at all" consistently with the risk and explanation table.
+- Share-DACL read errors appear as a visible marker, not as an invisible
+  gap.
+- Performance: one read per share, not per path — a clear win on large
+  trees.
+- API additive: `build_path_trustees` stays; the new
+  `build_path_trustees_with_share` and `read_share_overlay` are additions.
 
-**Negativ / Negative:**
+**Negative:**
 
-- Die Trustee-Liste pro Pfad ist potenziell länger (NTFS-ACEs +
-  Share-ACEs). Das ist gewollt — die Trennung über
-  `TrusteeCategory::{Ntfs, Share}` macht die Quelle erkennbar.
+- The trustee list per path is potentially longer (NTFS ACEs + share ACEs).
+  That is intended — the separation via `TrusteeCategory::{Ntfs, Share}`
+  makes the source recognizable.
 
-**Test-Anforderungen:**
+**Test requirements:**
 
-- Es gibt aktuell keinen automatisierten Test für den Scan-Pfad mit
-  vorhandener Share-DACL, weil der GUI-Worker eine SMB-Live-Probe
-  benötigt. Manueller Smoke-Test über die GUI ist Teil des
-  v1.5.0-Release-Checks.
+- There is currently no automated test for the scan path with an existing
+  share DACL, because the GUI worker needs an SMB live probe. A manual
+  smoke test via the GUI is part of the v1.5.0 release check.
 
-## Schließt / Closes
+## Closes
 
-Review 2026-06-04 Runde 3, Finding 3 (Scan-/HTML-Trustee-Ansicht
-liess Share-DACL-Trustees weg).
+Review 2026-06-04 round 3, finding 3 (the scan/HTML trustee view omitted
+share-DACL trustees).
 
-## Verweise / References
+## References
 
-- ADR 0026 — Persistente Scan-Historie (`PathTrustees` als Modell).
-- ADR 0031 — `effective_smb_target` für die Server-Wahl im Scan-Pfad.
-- ADR 0036 — Einheitliche Principal-Resolution-Pipeline (parallel).
-- ADR 0037 — Validierte Wrapper konsequent (parallel).
+- ADR 0026 — persistent scan history (`PathTrustees` as a model).
+- ADR 0031 — `effective_smb_target` for the server choice in the scan path.
+- ADR 0036 — unified principal-resolution pipeline (parallel).
+- ADR 0037 — validated wrappers consistently (parallel).

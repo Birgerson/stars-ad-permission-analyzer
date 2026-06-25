@@ -1,23 +1,23 @@
-# ADR 0042 — Deny-Aggregation als eigener Erklärungspfad-Schritt
+# ADR 0042 — Deny aggregation as a dedicated explanation-path step
 
 **Status:** Accepted
 **Date:** 2026-06-05
 
 ## Context
 
-Die Stars-Engine aggregiert NTFS-Allow- und Deny-ACEs in einer einzigen
-finalen `ntfs_raw`-Maske (Funktion `evaluate_dacl_ordered`). Diese Maske
-fließt in den Erklärungspfad als ein einziger Schritt:
+The Stars engine aggregates NTFS Allow and Deny ACEs into a single final
+`ntfs_raw` mask (function `evaluate_dacl_ordered`). This mask flows into the
+explanation path as a single step:
 
 ```text
 NTFS effective: Special (0x00100000)
 ```
 
-Solange nur Allow-ACEs beteiligt sind, ist das selbsterklärend — die ACE-Steps
-darüber zeigen, woher die Bits kommen. Sobald aber eine Deny-ACE im Spiel
-ist und Bits einer Allow-ACE blockiert, **fehlt im Pfad ein Hinweis darauf,
-was passiert ist**. Block A der 2026-06-05-Lab-Verifikation zeigte das
-Symptom konkret (Szenario E1, `C:\TestShare\DenyZone`):
+As long as only Allow ACEs are involved, this is self-explanatory — the ACE
+steps above show where the bits come from. But as soon as a Deny ACE is in
+play and blocks bits of an Allow ACE, **the path lacks a hint about what
+happened**. Block A of the 2026-06-05 lab verification showed the symptom
+concretely (scenario E1, `C:\TestShare\DenyZone`):
 
 ```text
 DACL:
@@ -29,27 +29,26 @@ Effective Rights:
   NTFS    : Special (0x00100000)
   Result  : Special (0x00100000)
 
-Explanation Path (Auszug):
+Explanation Path (excerpt):
   6. Deny ACE [explicit] for T0LAB\alice → Special (0x000301BF)
   7. Allow ACE [inherited] for GroupB → Modify (0x001301BF)
   …
   11. NTFS effective: Special (0x00100000)
 ```
 
-Ein versierter Admin liest das richtig (Deny hat die Modify-Bits entfernt,
-übrig blieb das SYNCHRONIZE-Bit). Aber `Special (0x00100000)` ist für die
-Hauptzielgruppe — den Wald-und-Wiesen-Admin — eine kryptische Antwort.
-Die Engine kennt zu diesem Zeitpunkt aber sehr wohl, welche Bits durch Deny
-weggefallen sind: in `evaluate_dacl_ordered` läuft eine zweite Maske
-`denied` mit, die alle "first decision = Deny"-Bits aufsammelt. Diese
-Information wurde bisher nicht aus der Funktion herausgereicht.
+A skilled admin reads this correctly (Deny removed the Modify bits, leaving
+the SYNCHRONIZE bit). But `Special (0x00100000)` is a cryptic answer for the
+main target group — the everyday admin. At this point, however, the engine
+very much knows which bits were removed by Deny: in `evaluate_dacl_ordered`
+a second mask `denied` runs along, collecting all "first decision = Deny"
+bits. This information was previously not surfaced out of the function.
 
 ## Decision
 
-`evaluate_dacl_ordered` gibt jetzt `(granted, denied)` zurück. Die Engine
-reicht `denied_raw` an `build_explanation` durch, und `build_explanation`
-fügt — sofern `denied_raw != 0` — einen expliziten Schritt direkt vor dem
-„NTFS effective"-Step ein:
+`evaluate_dacl_ordered` now returns `(granted, denied)`. The engine passes
+`denied_raw` through to `build_explanation`, and `build_explanation` —
+provided `denied_raw != 0` — inserts an explicit step directly before the
+"NTFS effective" step:
 
 ```text
 Deny aggregation: Special (0x000301BF) blocked by Deny ACEs — those bits
@@ -57,58 +56,57 @@ were removed from the effective NTFS mask
 NTFS effective: Special (0x00100000)
 ```
 
-Damit ist die Brücke zwischen "ich sehe einen Deny-ACE" und "ich sehe ein
-unerwartet kleines Effective" sichtbar im Pfad selbst, statt nur in der
-Differenz der Hex-Werte.
+This makes the bridge between "I see a Deny ACE" and "I see an unexpectedly
+small effective" visible in the path itself, instead of only in the
+difference of the hex values.
 
-Wenn keine Deny-ACE im DACL der relevanten SIDs ist, bleibt der Pfad
-unverändert — der neue Schritt erscheint nicht, damit ganz normale Berichte
-(die in der überwiegenden Mehrheit aller Audits) sauber lesbar bleiben.
+If there is no Deny ACE in the DACL of the relevant SIDs, the path stays
+unchanged — the new step does not appear, so that perfectly normal reports
+(the overwhelming majority of all audits) stay cleanly readable.
 
 ## Consequences
 
-### Positiv
+### Positive
 
-- **Wald-und-Wiesen-Admin liest direkt**, dass Deny die Allow-Bits
-  zermalmt hat. Kein Hex-Differenz-Detektivspiel.
-- **Konsistent mit dem Share-Step**: Stars rendert seit jeher
-  `NTFS ∩ Share`-Aggregation als eigenen Schritt; jetzt auch
-  `Allow ⊖ Deny`.
-- **Honest-by-default**: Wer einen Audit-Bericht liest, sieht alle drei
-  Aggregations-Stufen explizit, ohne zwischen den Zeilen rechnen zu müssen.
-- **Keine API-Brüche**: `evaluate_dacl_ordered` ist Engine-intern; einziger
-  Aufruf-Pfad wurde mit aktualisiert. Öffentliche Modelle bleiben gleich.
+- **The everyday admin reads directly** that Deny crushed the Allow bits.
+  No hex-difference detective game.
+- **Consistent with the share step**: Stars has always rendered
+  `NTFS ∩ Share` aggregation as a dedicated step; now also `Allow ⊖ Deny`.
+- **Honest by default**: whoever reads an audit report sees all three
+  aggregation stages explicitly, without having to compute between the
+  lines.
+- **No API breaks**: `evaluate_dacl_ordered` is engine-internal; the only
+  call path was updated with it. Public models stay the same.
 
-### Negativ / Trade-offs
+### Negative / trade-offs
 
-- Pfad bekommt einen Schritt mehr, wenn Deny im Spiel ist. Da Deny in
-  Produktion eher Ausnahme als Regel ist, ist die Lärmlast gering.
-- `NormalizedRights::display_name()` zeigt für eine Deny-Maske wie
-  `0x000301BF` weiterhin "Special" (kein "Modify"), weil das Sync-Bit
-  fehlt. Das ist konsistent mit der bisherigen Darstellung, könnte aber
-  ein zukünftiges Folge-Refactoring auslösen, wenn die Lesbarkeit der
-  Bit-Namen noch weiter verbessert werden soll.
+- The path gets one more step when Deny is in play. Since Deny is more the
+  exception than the rule in production, the noise load is low.
+- `NormalizedRights::display_name()` still shows "Special" for a Deny mask
+  like `0x000301BF` (not "Modify"), because the sync bit is missing. This
+  is consistent with the previous presentation, but could trigger a future
+  follow-up refactor if the readability of the bit names is to be improved
+  further.
 
 ### Tests
 
-Zwei neue Engine-Tests in `crates/permission_engine/src/engine.rs::tests`:
+Two new engine tests in `crates/permission_engine/src/engine.rs::tests`:
 
-- `deny_aggregation_step_surfaces_blocked_bits` — verifiziert, dass der
-  neue Step erscheint, wenn Deny Modify das Allow Modify überschreibt,
-  und dass er die korrekte blockierte Maske benennt.
-- `deny_aggregation_step_absent_when_no_deny` — verifiziert, dass der Step
-  **nicht** erscheint, wenn keine Deny-ACE im Spiel ist.
+- `deny_aggregation_step_surfaces_blocked_bits` — verifies that the new
+  step appears when Deny Modify overrides Allow Modify, and that it names
+  the correct blocked mask.
+- `deny_aggregation_step_absent_when_no_deny` — verifies that the step does
+  **not** appear when no Deny ACE is in play.
 
-Live-Verifikation gegen das 3-Forest-Lab in
-[`docs/lab/verification.md`](../lab/verification.md), Block A Szenario E1:
-der Step erscheint als Schritt 11 im Pfad mit dem genauen Hex-Wert
+Live verification against the 3-forest lab in
+[`docs/lab/verification.md`](../lab/verification.md), Block A scenario E1:
+the step appears as step 11 in the path with the exact hex value
 `0x000301BF`.
 
-## Beziehung zu anderen ADRs
+## Relationship to other ADRs
 
-- **ADR 0039** (Diagnose-Marker): denselben Ansatz — eine bisher implizit
-  bekannte Information explizit machen, damit Auditoren nicht selbst
-  rätseln müssen.
-- **ADR 0041** (LocalGroup-Mitgliedschaften im Erklärungspfad): hat den
-  gleichen Mechanismus für die Gruppen-Quelle eingeführt, jetzt für die
-  ACE-Aggregation.
+- **ADR 0039** (diagnostic markers): the same approach — make previously
+  implicit information explicit so auditors do not have to guess
+  themselves.
+- **ADR 0041** (LocalGroup memberships in the explanation path): introduced
+  the same mechanism for the group source, now for the ACE aggregation.

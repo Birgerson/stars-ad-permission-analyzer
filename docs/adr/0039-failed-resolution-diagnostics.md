@@ -1,43 +1,42 @@
-# ADR 0039 — Diagnostik für gescheiterte Identity- und Group-Auflösung
+# ADR 0039 — Diagnostics for failed identity and group resolution
 
 **Status:** Accepted
 **Date:** 2026-06-04
 
 ## Context
 
-Review 2026-06-04 Runde 4 Finding 1 (High) hat einen Folgemangel der
-in ADR 0036 eingeführten zentralen Principal-Pipeline aufgedeckt: die
-neuen Status-Werte `IdentityScopeStatus::LookupFailed { reason }`,
-`GroupResolutionStatus::Failed { reason }` und in bestimmten
-Konstellationen auch `GroupResolutionStatus::NotAttempted` haben
-**keine sichtbaren Diagnose-Marker** erzeugt.
+Review 2026-06-04 round 4 finding 1 (High) revealed a follow-up deficiency
+of the central principal pipeline introduced in ADR 0036: the new status
+values `IdentityScopeStatus::LookupFailed { reason }`,
+`GroupResolutionStatus::Failed { reason }`, and in certain constellations
+also `GroupResolutionStatus::NotAttempted` produced **no visible diagnostic
+markers**.
 
-Konkrete Folge:
+Concrete consequence:
 
-- LDAP-Bind-Fehler, Timeout oder Query-Crash in `resolve_by_sid` wurde
-  in `LookupFailed { reason }` umgewandelt — die Analyse lief mit
-  Platzhalter-Identity und leeren Memberships weiter.
-- `resolve_groups` wandelte Fehler in `Failed { reason }` um und gab
-  leere Memberships zurück; die Engine sah das als „kein
-  Multi-Domain"-Standardfall.
-- `engine_flags()` setzte nur drei Booleans (`Outside`, `Unknown`,
-  `SamFlat`); `LookupFailed` und `Failed` flossen nirgendwohin.
-- Permission-Engine pushte keinen entsprechenden Marker; Risk-Engine
-  konnte nicht `incomplete = true` setzen.
+- An LDAP bind error, timeout, or query crash in `resolve_by_sid` was
+  converted into `LookupFailed { reason }` — the analysis continued with a
+  placeholder identity and empty memberships.
+- `resolve_groups` converted errors into `Failed { reason }` and returned
+  empty memberships; the engine saw this as a "no multi-domain" standard
+  case.
+- `engine_flags()` set only three booleans (`Outside`, `Unknown`,
+  `SamFlat`); `LookupFailed` and `Failed` flowed nowhere.
+- The permission engine pushed no corresponding marker; the risk engine
+  could not set `incomplete = true`.
 
-In der Praxis konnte damit ein Befund **„sauber" aussehen**, obwohl er
-mit leerem Token gerechnet wurde. Genau das Anti-Pattern, das die
-ganze Marker-Architektur seit ADR 0021 vermeiden soll.
+In practice, a finding could thereby **look "clean"** even though it was
+computed with an empty token. Exactly the anti-pattern that the entire
+marker architecture has been meant to avoid since ADR 0021.
 
-(Selbstkritik: dieses Problem hatte ich in der ehrlichen Status-
-Antwort am Ende der v1.4.1-Diskussion bereits selbst identifiziert,
-in v1.5.0 aber als „LookupFailed ist Edge-Case" offen gelassen. Das
-war ein Fehler — Edge-Cases sind genau das, wo Marker sichtbar sein
-müssen.)
+(Self-criticism: I had already identified this problem myself in the honest
+status answer at the end of the v1.4.1 discussion, but left it open in
+v1.5.0 as "LookupFailed is an edge case". That was a mistake — edge cases
+are exactly where markers must be visible.)
 
 ## Decision
 
-Zwei neue strukturierte Diagnose-Marker in
+Two new structured diagnostic markers in
 `adpa_core::model::PermissionDiagnostic`:
 
 ```rust
@@ -45,12 +44,12 @@ PermissionDiagnostic::IdentityLookupFailed { reason: String }
 PermissionDiagnostic::GroupResolutionFailed { reason: String }
 ```
 
-Beide tragen den ursprünglichen Fehlertext mit, damit Auditoren das
-wirkliche Problem (Bind-Fehler, Timeout, DC-Adresse falsch …) im
-Bericht sehen. Beide sind **Incompleteness-Trigger** — die Risk-Engine
-matched sie in `is_incomplete()`.
+Both carry the original error text along, so auditors see the real problem
+(bind error, timeout, wrong DC address …) in the report. Both are
+**incompleteness triggers** — the risk engine matches them in
+`is_incomplete()`.
 
-Datenfluss:
+Data flow:
 
 ```text
 PrincipalResolution.scope_status / group_resolution_status
@@ -60,23 +59,23 @@ EngineFlags {
    identity_lookup_failure_reason: Option<String>,
    group_resolution_failure_reason: Option<String>,
 }
-   ↓ in PermissionEvaluationInput
+   ↓ into PermissionEvaluationInput
 PermissionEvaluationInput {
    …,
    identity_lookup_failure_reason: Option<String>,
    group_resolution_failure_reason: Option<String>,
 }
-   ↓ Engine pusht je Some-Wert den passenden Marker
+   ↓ the engine pushes the matching marker per Some value
 EffectivePermission.diagnostics +=
    IdentityLookupFailed { reason }
    GroupResolutionFailed { reason }
-   ↓ Risk-Engine is_incomplete() matched beide
+   ↓ the risk engine is_incomplete() matches both
 RiskFinding.incomplete = true
-   ↓ CLI- und HTML-Renderer beschreiben beide Marker
-   ↓ JSON-Export trägt sie variant-tagged
+   ↓ CLI and HTML renderers describe both markers
+   ↓ JSON export carries them variant-tagged
 ```
 
-**Drei Ableitungsregeln** in `engine_flags()`:
+**Three derivation rules** in `engine_flags()`:
 
 1. `IdentityScopeStatus::LookupFailed { reason }` →
    `identity_lookup_failure_reason = Some(reason)`.
@@ -85,62 +84,61 @@ RiskFinding.incomplete = true
 3. `IdentityScopeStatus::OutsideConfiguredLdapBase` +
    `GroupResolutionStatus::NotAttempted` →
    `group_resolution_failure_reason = Some("group resolution skipped:
-   identity is outside the configured LDAP base")`. Vorher konnte der
-   Outside-Pfad still ohne Gruppen rechnen.
+   identity is outside the configured LDAP base")`. Previously the outside
+   path could silently compute without groups.
 
-**Renderer:**
+**Renderers:**
 
-- CLI (`output::print_report`) druckt `[!]`-Hinweis für beide Marker
-  mit Reason-Text.
-- HTML-Exporter (`exporter::html`) rendert beide als `badge-high`
-  mit Reason im `title`-Attribut (HTML-escaped).
+- CLI (`output::print_report`) prints a `[!]` hint for both markers with
+  reason text.
+- HTML exporter (`exporter::html`) renders both as `badge-high` with the
+  reason in the `title` attribute (HTML-escaped).
 
 ## Consequences
 
-**Positiv / Positive:**
+**Positive:**
 
-- Technische LDAP-/NetAPI-Fehler tauchen jetzt explizit in CLI, HTML
-  und JSON auf — Auditoren wissen, warum ein Befund unvollständig
-  ist.
-- Risk-Findings werden automatisch als `incomplete = true` markiert
-  — symmetrisch zu allen anderen Incompleteness-Quellen.
-- Der `OutsideConfiguredLdapBase + NotAttempted`-Pfad ist nicht
-  länger ein stiller Skip; die Lücke wird beim Auditor sichtbar.
+- Technical LDAP/NetAPI errors now appear explicitly in CLI, HTML, and
+  JSON — auditors know why a finding is incomplete.
+- Risk findings are automatically marked as `incomplete = true` —
+  symmetric to all other incompleteness sources.
+- The `OutsideConfiguredLdapBase + NotAttempted` path is no longer a silent
+  skip; the gap becomes visible to the auditor.
 
-**Negativ / Negative:**
+**Negative:**
 
-- `EngineFlags` ist nicht mehr `Copy` (enthält jetzt `Option<String>`).
-  Aufrufer müssen `.clone()` verwenden, wenn sie sie mehrfach
-  konsumieren. Aktuelle Aufrufer wurden entsprechend angepasst.
-- `PermissionEvaluationInput` wächst um zwei optionale Felder;
-  Migration ist additiv.
+- `EngineFlags` is no longer `Copy` (now contains `Option<String>`).
+  Callers must use `.clone()` if they consume it multiple times. Current
+  callers were adapted accordingly.
+- `PermissionEvaluationInput` grows by two optional fields; the migration
+  is additive.
 
-**Test-Anforderungen:**
+**Test requirements:**
 
-- 3 Principal-Tests:
-  - `ldap_error_yields_lookup_failed_not_orphaned` (erweitert um
-    `engine_flags()`-Assertion)
+- 3 principal tests:
+  - `ldap_error_yields_lookup_failed_not_orphaned` (extended with an
+    `engine_flags()` assertion)
   - `group_resolution_error_after_identity_hit_carries_reason`
   - `outside_base_with_skipped_groups_yields_group_failure_reason`
-- 2 Engine-Tests:
+- 2 engine tests:
   - `engine_pushes_identity_lookup_failed_diagnostic_with_reason`
   - `engine_pushes_group_resolution_failed_diagnostic_with_reason`
-- 2 Risk-Engine-Tests (positive `incomplete = true`-Assertion):
+- 2 risk-engine tests (positive `incomplete = true` assertion):
   - `full_control_marks_finding_incomplete_on_identity_lookup_failed`
   - `full_control_marks_finding_incomplete_on_group_resolution_failed`
 
-## Schließt / Closes
+## Closes
 
-Review 2026-06-04 Runde 4, Finding 1.
+Review 2026-06-04 round 4, finding 1.
 
-## Verweise / References
+## References
 
-- ADR 0021 — Permission Diagnostics als variant-tagged Enum.
-- ADR 0033 — Sichtbare Diagnostik für SAM-Fallback und deaktivierte
-  Identitäten (Marker-Schema-Vorbild).
-- ADR 0034 — Multi-Domain-LSA-Fallback.
-- ADR 0035 — SAM-Pfad `disabled` per `NetUserGetInfo`.
-- ADR 0036 — Einheitliche Principal-Resolution-Pipeline (führt die
-  Status-Enums ein, deren Reasons hier durchgereicht werden).
-- ADR 0037 — Validierte Wrapper konsequent propagieren.
-- ADR 0038 — Share-Trustees im Scan-Output.
+- ADR 0021 — permission diagnostics as a variant-tagged enum.
+- ADR 0033 — visible diagnostics for SAM fallback and disabled identities
+  (marker-schema template).
+- ADR 0034 — multi-domain LSA fallback.
+- ADR 0035 — the SAM path `disabled` via `NetUserGetInfo`.
+- ADR 0036 — unified principal-resolution pipeline (introduces the status
+  enums whose reasons are passed through here).
+- ADR 0037 — propagate validated wrappers consistently.
+- ADR 0038 — share trustees in the scan output.
