@@ -10,7 +10,17 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.7.0 below for the latest release.)
+### Added
+
+- **`--ldap-timeout <SECONDS>` CLI flag** (analyze and scan) overrides the
+  default 10-second LDAP operation timeout, validated to the range 1–600s
+  via the new `validation::numbers::LdapTimeout` wrapper. Large or densely
+  cross-linked forests can make the transitive membership query
+  (`LDAP_MATCHING_RULE_IN_CHAIN`) exceed 10s, after which Stars marks the
+  result incomplete (no silent under-report); raising the cap lets the
+  resolution finish. Passing it without `--server` prints a warning rather
+  than ignoring it silently. Surfaced by the lab stress test on a
+  3500-group, deeply nested domain. See ADR 0032.
 
 ---
 

@@ -79,6 +79,19 @@ caught directly during setup, not only on the first search.
 - The LSA path is `#[cfg(windows)]`-specific; on non-Windows the function
   returns a `Validation` error — Stars targets Windows anyway.
 
+## Update (2026-06-27): timeout is now CLI-configurable
+
+This ADR made `LdapConfig::timeout_secs` take effect but left it at the
+hardcoded 10s default with no way to change it from outside. A lab stress
+test on a 3500-group, deeply cross-linked domain showed the transitive
+`LDAP_MATCHING_RULE_IN_CHAIN` query taking ~5.5s on the DC alone, which —
+with the BFS path reconstruction on top — pushed real resolution past 10s,
+so Stars (correctly) marked the result incomplete instead of silently
+under-reporting. The CLI now exposes `--ldap-timeout <SECONDS>` (analyze
+and scan), validated to 1–600s through the new
+`validation::numbers::LdapTimeout` wrapper. `None` keeps the 10s default;
+passing it without `--server` warns instead of silently ignoring it.
+
 ## Tests
 
 Unit tests for the dispatcher itself can only be written to a limited

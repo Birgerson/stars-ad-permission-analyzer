@@ -397,6 +397,23 @@ For **full** forest coverage:
   replicate fully to the Global Catalog. The same LDAPS certificate-trust
   rules as above apply (port 3269 is TLS).
 
+### Large or deeply nested domains — `--ldap-timeout`
+
+Stars caps each LDAP operation at **10 seconds** by default. In large
+forests with deep or densely cross-linked group nesting, the transitive
+membership query (`LDAP_MATCHING_RULE_IN_CHAIN`) can take longer; Stars
+then aborts that step and **marks the result incomplete** rather than
+hanging or silently under-reporting. Raise the cap with the CLI flag
+`--ldap-timeout <SECONDS>` (range 1–600 seconds; it only takes effect
+together with `--server`):
+
+```powershell
+adpa analyze --path "C:\data" --user "CORP\alice" `
+    --server "dc01.corp.local" --base-dn "DC=corp,DC=local" `
+    --bind-dn "CN=stars-svc,CN=Users,DC=corp,DC=local" `
+    --ldap-timeout 60
+```
+
 ---
 
 ## Local paths vs. SMB shares

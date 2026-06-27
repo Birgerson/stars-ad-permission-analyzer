@@ -39,7 +39,7 @@ use validation::{
         validate_dn, validate_identity_query, validate_ldap_endpoint, validate_share_name,
         validate_smb_server,
     },
-    numbers::validate_optional_scan_depth,
+    numbers::{validate_optional_ldap_timeout, validate_optional_scan_depth},
     path::validate_path,
     sid::validate_sid,
 };
@@ -92,6 +92,12 @@ enum Commands {
         /// the DC's FQDN. Mutually exclusive with --insecure-ldap.
         #[arg(long)]
         ldap_signing: bool,
+        /// LDAP operation timeout in seconds (default 10). Raise it for large
+        /// or deeply nested domains where transitive group resolution would
+        /// otherwise time out (the result is then marked incomplete). Range
+        /// 1–600. Only takes effect together with --server.
+        #[arg(long)]
+        ldap_timeout: Option<u64>,
         /// Optional CSV export path
         #[arg(short = 'o', long)]
         output: Option<String>,
@@ -141,6 +147,12 @@ enum Commands {
         /// the DC's FQDN. Mutually exclusive with --insecure-ldap.
         #[arg(long)]
         ldap_signing: bool,
+        /// LDAP operation timeout in seconds (default 10). Raise it for large
+        /// or deeply nested domains where transitive group resolution would
+        /// otherwise time out (the result is then marked incomplete). Range
+        /// 1–600. Only takes effect together with --server.
+        #[arg(long)]
+        ldap_timeout: Option<u64>,
         /// SQLite database file for results (created if absent)
         #[arg(long)]
         db: Option<String>,
@@ -180,6 +192,7 @@ async fn main() -> anyhow::Result<()> {
             insecure_ldap,
             global_catalog,
             ldap_signing,
+            ldap_timeout,
             output,
             smb_server,
             share_name,
@@ -199,6 +212,7 @@ async fn main() -> anyhow::Result<()> {
                     insecure_ldap,
                     global_catalog,
                     ldap_signing,
+                    ldap_timeout,
                     force,
                 },
             )
@@ -214,6 +228,7 @@ async fn main() -> anyhow::Result<()> {
             insecure_ldap,
             global_catalog,
             ldap_signing,
+            ldap_timeout,
             db,
             max_depth,
             output,
@@ -237,6 +252,7 @@ async fn main() -> anyhow::Result<()> {
                     insecure_ldap,
                     global_catalog,
                     ldap_signing,
+                    ldap_timeout,
                     force,
                 },
             )
@@ -380,9 +396,17 @@ async fn resolve_identity(
     insecure_ldap: bool,
     global_catalog: bool,
     ldap_signing: bool,
+    ldap_timeout: Option<u64>,
 ) -> anyhow::Result<ResolvedIdentity> {
+    // No silent skip: an --ldap-timeout without --server has no LDAP to apply to.
+    if ldap_timeout.is_some() && server.is_none() {
+        eprintln!(
+            "[WARNING] --ldap-timeout has no effect without --server; the SAM/LSA \
+             fallback path performs no LDAP query and ignores it."
+        );
+    }
     if let Some(server) = server {
-        let config = if ldap_signing {
+        let mut config = if ldap_signing {
             // GSSAPI/Kerberos sign+seal bind (ADR 0051): cert-free path for a
             // hardened DC that enforces LDAP signing. Uses the current Windows
             // logon (SSPI single sign-on), so no --bind-dn / password is read.
@@ -440,6 +464,11 @@ async fn resolve_identity(
                 (false, false) => LdapConfig::new(&server, &base, &bind, &password),
             }
         };
+        // An explicit --ldap-timeout overrides the 10s default baked into the
+        // LdapConfig constructors. Already validated at the CLI boundary (1–600s).
+        if let Some(secs) = ldap_timeout {
+            config.timeout_secs = secs;
+        }
         let ldap_resolver = std::sync::Arc::new(LdapResolver::new(config));
         let backend = LdapIdentityBackend::new(ldap_resolver);
 
@@ -560,6 +589,7 @@ struct AnalyzeOptions {
     insecure_ldap: bool,
     global_catalog: bool,
     ldap_signing: bool,
+    ldap_timeout: Option<u64>,
     force: bool,
 }
 
@@ -579,6 +609,7 @@ async fn run_analyze(
         insecure_ldap,
         global_catalog,
         ldap_signing,
+        ldap_timeout,
         force,
     } = opts;
 
@@ -615,6 +646,12 @@ async fn run_analyze(
 
     let fso = read_fso(&path).map_err(|e| anyhow::anyhow!("Cannot read path '{}': {}", path, e))?;
 
+    // AGENTS.md DoD 11: validate the explicit LDAP timeout (1–600s) before it
+    // reaches LdapConfig; None keeps the 10s default.
+    let ldap_timeout = validate_optional_ldap_timeout(ldap_timeout)
+        .map_err(|e| anyhow::anyhow!("Invalid --ldap-timeout: {e}"))?
+        .map(|t| t.0);
+
     let resolved = resolve_identity(
         &user,
         server,
@@ -624,6 +661,7 @@ async fn run_analyze(
         insecure_ldap,
         global_catalog,
         ldap_signing,
+        ldap_timeout,
     )
     .await?;
 
@@ -773,6 +811,7 @@ struct ScanOptions {
     insecure_ldap: bool,
     global_catalog: bool,
     ldap_signing: bool,
+    ldap_timeout: Option<u64>,
     force: bool,
 }
 
@@ -794,6 +833,7 @@ async fn run_scan(
         insecure_ldap,
         global_catalog,
         ldap_signing,
+        ldap_timeout,
         force,
     } = opts;
 
@@ -834,6 +874,12 @@ async fn run_scan(
         validate_db_path(db).map_err(|e| anyhow::anyhow!("Invalid database path: {e}"))?;
     }
 
+    // AGENTS.md DoD 11: validate the explicit LDAP timeout (1–600s) before it
+    // reaches LdapConfig; None keeps the 10s default.
+    let ldap_timeout = validate_optional_ldap_timeout(ldap_timeout)
+        .map_err(|e| anyhow::anyhow!("Invalid --ldap-timeout: {e}"))?
+        .map(|t| t.0);
+
     let resolved = resolve_identity(
         &user,
         server,
@@ -843,6 +889,7 @@ async fn run_scan(
         insecure_ldap,
         global_catalog,
         ldap_signing,
+        ldap_timeout,
     )
     .await?;
 
