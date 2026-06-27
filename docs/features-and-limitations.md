@@ -312,6 +312,38 @@ permanently not part of the product:
   answer "is the user even allowed to use SMB?", you also need the
   SMB server configuration.
 
+### 13. SID history and cross-forest trust filtering — the silent gaps
+
+- **What we do not model:**
+  - **SID history:** a migrated account carries earlier SIDs
+    (`sIDHistory`). A DACL that still references the old SID grants
+    access at runtime, but Stars only matches the current SID.
+    → effective rights **understated**.
+  - **SID filtering / quarantine:** across a trust, the DC drops
+    certain SIDs from the token. Stars credits an ACE on such a SID
+    even though the trust filters it out. → effective rights
+    **overstated**.
+  - **Selective authentication:** a trust may require an explicit
+    "Allowed to authenticate" on the resource computer. Without it the
+    user cannot log on at all, regardless of the DACL. Stars does not
+    model this. → effective rights **overstated**.
+- **Effect:** Stars shows the **theoretical DACL view**, not the
+  filtered runtime result. In migrated or multi-forest environments a
+  finding can be wrong in **both** directions.
+- **How visible:** **Not visible — these cases produce no runtime
+  marker**, unlike the SAM-fallback / cross-domain / FSP / GC cases
+  above, which are all flagged. This is the one place where Stars can
+  be *silently* wrong, so treat results for migrated or trust accounts
+  with extra caution.
+- **Solution:** Real detection of trust filtering / selective
+  authentication would require a synthetic logon attempt, which
+  violates the read-only principle and is deliberately not
+  implemented. Adding **runtime markers** for these cases (SID history
+  present; cross-forest principal) is a tracked roadmap item — see
+  known-limitations L3 and L4. Until then, cross-check migrated or
+  trust accounts manually against the trust configuration
+  (`trustAttributes`, `trustDirection`) and the `sIDHistory` attribute.
+
 ---
 
 ## How to read a finding — step by step

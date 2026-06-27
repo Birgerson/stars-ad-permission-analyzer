@@ -211,7 +211,10 @@ What the real DC actually filters at runtime is invisible to Stars.
 ### Effect
 
 Stars findings for trust users can be **too high** — the DACL would
-grant, but Selective Auth or SID Filtering block at runtime.
+grant, but Selective Auth or SID Filtering block at runtime. Like L3,
+this case produces **no runtime marker**: Stars presents the
+theoretical DACL view as if it were the effective result, with no
+warning that a trust filter may reduce it.
 
 ### Solution sketch
 
