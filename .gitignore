@@ -40,4 +40,5 @@ scan-output.csv
 
 # Lokale Stand-Dokumente (nicht im Repo)
 aktuell.md
+TestStructure.md
 __pycache__/
