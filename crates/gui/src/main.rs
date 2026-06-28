@@ -85,11 +85,16 @@ slint::slint! {
         out property <color> accent-soft:    dark ? #7C3A12 : #FFEDD5;
         out property <color> accent-text:    #ffffff;
 
-        // --- Semantic ---
-        out property <color> error:    #dc2626;
-        out property <color> warning:  #d97706;
-        out property <color> success:  #16a34a;
-        out property <color> info:     #0891b2;
+        // --- Semantic ramp (diagnostic & severity), light + dark ---
+        // correct = Microsoft blue (calm "all good"); info = teal; warning =
+        // amber; danger = orange-red (under-report); error = red; ok = green.
+        // Hex values avoid "digit directly followed by e/E" (Rust tokenizer).
+        out property <color> correct:  dark ? #4DA3FF : #0067C0;
+        out property <color> info:     dark ? #45C2D6 : #0891B2;
+        out property <color> warning:  dark ? #F5A623 : #D97706;
+        out property <color> danger:   dark ? #FB7335 : #EA580C;
+        out property <color> error:    dark ? #F05252 : #DC2626;
+        out property <color> success:  dark ? #34C759 : #16A34A;
 
         // --- Spacing (6er-Skala) ---
         out property <length> spacing-xs: 4px;
@@ -369,7 +374,8 @@ slint::slint! {
     // ScanRowVm because that struct carries the model as a field.
     export struct DiagnosticVm {
         text: string,
-        warning: bool,
+        // 0 = info, 1 = warning, 2 = high (PermissionDiagnostic::severity).
+        level: int,
     }
 
     // A row in the scan result.
@@ -383,9 +389,9 @@ slint::slint! {
         trustees: [TrusteeRowVm],
         expanded: bool,
         has_diagnostic: bool,
-        // True when the evaluation is incomplete (a real warning), as opposed
-        // to a row that only carries informational markers.
-        has_warning: bool,
+        // Row presentation level: 0 = correct/complete, 1 = info-only,
+        // 2 = warning (incomplete), 3 = high (under-report marker present).
+        row_severity: int,
         // Per-diagnostic reasons for this row (engine review 2026-06-13
         // finding 2), each with its severity. Shown in the expanded detail so
         // the GUI surfaces *why* a row is flagged, warnings apart from info.
@@ -1249,15 +1255,23 @@ slint::slint! {
                                                 }
                                                 Text {
                                                     text: row.path;
-                                                    // Warning (incomplete) → error; info-only markers
-                                                    // → info colour; clean → primary.
-                                                    color: row.has_warning ? Theme.error : (row.has_diagnostic ? Theme.info : Theme.text-primary);
+                                                    // Severity ramp: high (under-report) → danger,
+                                                    // warning → amber, info-only → teal, correct →
+                                                    // neutral text (kept calm; problems stand out).
+                                                    color: row.row-severity == 3 ? Theme.danger
+                                                         : row.row-severity == 2 ? Theme.warning
+                                                         : row.row-severity == 1 ? Theme.info
+                                                         : Theme.text-primary;
                                                     overflow: elide;
                                                     horizontal-stretch: 1;
                                                 }
                                                 Text {
                                                     text: row.rights_label;
-                                                    color: Theme.text-primary;
+                                                    // Correct/complete rows show the rights value in
+                                                    // Microsoft blue (a calm "trustworthy result");
+                                                    // flagged rows stay neutral — the path carries the
+                                                    // severity colour.
+                                                    color: row.row-severity == 0 ? Theme.correct : Theme.text-primary;
                                                     width: 200px;
                                                 }
                                                 Text {
@@ -1294,11 +1308,12 @@ slint::slint! {
                                                     color: Theme.text-secondary;
                                                     font-weight: 700;
                                                 }
-                                                // Warning markers (⚠, error colour) are set apart from
-                                                // purely informational ones (ℹ, info colour).
+                                                // info (ℹ, teal) · warning (⚠, amber) · high (⚠, orange-red).
                                                 for diag[d] in row.diagnostics: Text {
-                                                    text: (diag.warning ? "⚠ " : "ℹ ") + diag.text;
-                                                    color: diag.warning ? Theme.error : Theme.info;
+                                                    text: (diag.level == 0 ? "ℹ " : "⚠ ") + diag.text;
+                                                    color: diag.level == 2 ? Theme.danger
+                                                         : diag.level == 1 ? Theme.warning
+                                                         : Theme.info;
                                                     wrap: word-wrap;
                                                 }
                                             }
@@ -2516,13 +2531,13 @@ fn handle_scan_item(ui: &MainWindow, row: ScanRow) {
         trustees: slint::ModelRc::new(slint::VecModel::from(trustee_vms)),
         expanded: false,
         has_diagnostic: row.diagnostic_count > 0 || row.unsupported_ace_count > 0,
-        has_warning: row.has_warning,
+        row_severity: row.row_severity,
         diagnostics: slint::ModelRc::new(slint::VecModel::from(
             row.diagnostics
                 .iter()
                 .map(|d| DiagnosticVm {
                     text: slint::SharedString::from(d.text.as_str()),
-                    warning: d.warning,
+                    level: d.level,
                 })
                 .collect::<Vec<_>>(),
         )),
@@ -2612,10 +2627,11 @@ fn handle_export_done(ui: &MainWindow, result: Result<(), String>) {
 fn severity_visual(severity: &RiskSeverity) -> (&'static str, slint::Color) {
     match severity {
         RiskSeverity::Info => ("Info", slint::Color::from_rgb_u8(0x55, 0x77, 0x99)),
-        RiskSeverity::Low => ("Low", slint::Color::from_rgb_u8(0x27, 0x8d, 0x4f)),
-        RiskSeverity::Medium => ("Medium", slint::Color::from_rgb_u8(0xc6, 0x89, 0x10)),
-        RiskSeverity::High => ("High", slint::Color::from_rgb_u8(0xd3, 0x55, 0x1c)),
-        RiskSeverity::Critical => ("Critical", slint::Color::from_rgb_u8(0xc0, 0x39, 0x2b)),
+        // Same saturated ramp as the diagnostics: green · amber · orange-red · red.
+        RiskSeverity::Low => ("Low", slint::Color::from_rgb_u8(0x16, 0xA3, 0x4A)),
+        RiskSeverity::Medium => ("Medium", slint::Color::from_rgb_u8(0xD9, 0x77, 0x06)),
+        RiskSeverity::High => ("High", slint::Color::from_rgb_u8(0xEA, 0x58, 0x0C)),
+        RiskSeverity::Critical => ("Critical", slint::Color::from_rgb_u8(0xDC, 0x26, 0x26)),
     }
 }
 

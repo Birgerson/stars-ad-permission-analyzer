@@ -239,13 +239,42 @@ pub enum WorkerRequest {
     },
 }
 
-/// One diagnostic marker for GUI display: its one-line reason plus whether
-/// it is a warning (the evaluation may be incomplete) or only informational.
-/// `warning` comes from `PermissionDiagnostic::is_incompleteness_trigger`.
+/// One diagnostic marker for GUI display: its one-line reason plus a
+/// presentation level — `0` = info, `1` = warning, `2` = high — from
+/// `PermissionDiagnostic::severity`.
 #[derive(Clone)]
 pub struct DiagnosticRow {
     pub text: String,
-    pub warning: bool,
+    pub level: i32,
+}
+
+/// Maps a marker severity to the GUI level: `0` = info, `1` = warning,
+/// `2` = high.
+fn diag_level(sev: adpa_core::model::DiagnosticSeverity) -> i32 {
+    use adpa_core::model::DiagnosticSeverity::{High, Info, Warning};
+    match sev {
+        Info => 0,
+        Warning => 1,
+        High => 2,
+    }
+}
+
+/// Row presentation level: `3` = a high (under-report) marker is present,
+/// `2` = otherwise incomplete, `1` = info-only markers, `0` = correct.
+fn row_severity(perm: &adpa_core::model::EffectivePermission) -> i32 {
+    if perm
+        .diagnostics
+        .iter()
+        .any(|d| d.severity() == adpa_core::model::DiagnosticSeverity::High)
+    {
+        3
+    } else if perm.is_incomplete() {
+        2
+    } else if !perm.diagnostics.is_empty() {
+        1
+    } else {
+        0
+    }
 }
 
 /// Row in the scan result (for GUI table).
@@ -268,10 +297,11 @@ pub struct ScanRow {
     /// path carries no diagnostics. Each entry carries its severity so the GUI
     /// can show a warning marker differently from a purely informational one.
     pub diagnostics: Vec<DiagnosticRow>,
-    /// `true` when the underlying evaluation is incomplete (so the row is a
-    /// real warning, not merely carrying informational markers).
-    /// `EffectivePermission::is_incomplete` — the single source of truth.
-    pub has_warning: bool,
+    /// Row presentation level: `0` = correct/complete, `1` = info-only, `2` =
+    /// warning (incomplete), `3` = high (an under-report marker is present).
+    /// Derived from `EffectivePermission::is_incomplete` + the marker
+    /// severities — the single source of truth.
+    pub row_severity: i32,
     /// Path-centric trustee view — every ACE in the DACL resolved, with
     /// "Applies to" labels and Allow/Deny. Empty when the scan runs
     /// without trustee collection. Complement to the identity-based
@@ -1122,10 +1152,10 @@ async fn handle_scan(
                         .iter()
                         .map(|d| DiagnosticRow {
                             text: d.summary(),
-                            warning: d.is_incompleteness_trigger(),
+                            level: diag_level(d.severity()),
                         })
                         .collect(),
-                    has_warning: perm.is_incomplete(),
+                    row_severity: row_severity(&perm),
                     trustees: trustees_for_row,
                 }));
                 permissions.push(perm);

@@ -174,9 +174,9 @@ pub fn print_report(
         for d in &result.diagnostics {
             match d {
                 PermissionDiagnostic::NonCanonicalDaclOrder { at_index } => {
-                    println!("  [!] Non-canonical DACL ordering at ACE index {at_index}.");
-                    println!("      Windows AccessCheck walks in stored order — the result");
-                    println!("      may differ from canonicalized expectations.");
+                    println!("  [i] Non-canonical DACL ordering at ACE index {at_index}.");
+                    println!("      Windows AccessCheck walks in stored order — the result is");
+                    println!("      exact but may differ from canonicalized expectations.");
                 }
                 PermissionDiagnostic::UnsupportedShareAces { count } => {
                     println!("  [!] {count} share ACE(s) of unsupported type were skipped.");

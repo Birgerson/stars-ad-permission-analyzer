@@ -18,6 +18,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   — the separate "Resolve SID" step is now an optional preview, and the SID
   field is relabelled "Resolved SID" (auto-filled). Removes the mandatory
   "type a name → resolve → analyze" three-step.
+- **Unified, saturated severity colours across the GUI and HTML report.** One
+  source of truth in the core (`PermissionDiagnostic::severity` →
+  `Info`/`Warning`/`High`) drives the colour everywhere: **correct/complete =
+  Microsoft blue** (`#0067C0`), info = teal, warning = amber, high
+  (under-report) = orange-red, error/critical = red, OK = green — each with a
+  light- and dark-mode tone in the GUI. The GUI scan list now keeps correct
+  rows calm and makes problems stand out by severity; the HTML badges use the
+  same palette. `NonCanonicalDaclOrder` is reclassified Info (the result is
+  exact). Report font set to Arial to match the GUI.
 
 ### Fixed
 

@@ -85,7 +85,7 @@ fn write_html_head(s: &mut String, timestamp: &str) {
 <title>Stars — AD Permission Analyzer Report</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Segoe UI',Arial,sans-serif;font-size:14px;background:#1a1a2e;color:#e0e0e0;padding:20px}
+body{font-family:Arial,Helvetica,sans-serif;font-size:14px;background:#1a1a2e;color:#e0e0e0;padding:20px}
 h1{font-size:22px;font-weight:600;color:#ffa726;margin-bottom:4px}
 h2{font-size:16px;font-weight:600;color:#ffcc80;margin:20px 0 8px}
 .subtitle{color:#888;font-size:12px;margin-bottom:20px}
@@ -93,27 +93,28 @@ h2{font-size:16px;font-weight:600;color:#ffcc80;margin:20px 0 8px}
 .card{background:#0d1b2a;border:1px solid #263248;border-radius:6px;padding:12px 18px;min-width:120px;text-align:center}
 .card .num{font-size:28px;font-weight:700;line-height:1}
 .card .lbl{font-size:11px;color:#888;margin-top:4px}
-.critical .num{color:#ef5350}
-.high .num{color:#ff7043}
-.medium .num{color:#ffa726}
-.low .num{color:#66bb6a}
-.info-card .num{color:#ffa726}
+.critical .num{color:#F05252}
+.high .num{color:#FB7335}
+.medium .num{color:#F5A623}
+.low .num{color:#34C759}
+.info-card .num{color:#4DA3FF}
 table{width:100%;border-collapse:collapse;background:#0d1b2a;border-radius:6px;overflow:hidden;margin-bottom:20px}
 th{background:#263248;padding:8px 10px;text-align:left;font-size:12px;color:#ffcc80;font-weight:600}
 td{padding:7px 10px;border-bottom:1px solid #1a2840;font-size:12px;vertical-align:top;word-break:break-word}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:#111d2e}
 .badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:600}
-.badge-critical{background:#b71c1c;color:#fff}
-.badge-high{background:#bf360c;color:#fff}
-.badge-medium{background:#e65100;color:#fff}
-.badge-low{background:#1b5e20;color:#fff}
-.badge-info{background:#0d47a1;color:#fff}
-.badge-fc{background:#b71c1c;color:#fff}
-.badge-modify{background:#bf360c;color:#fff}
-.badge-read{background:#1b5e20;color:#fff}
-.badge-write{background:#e65100;color:#fff}
-.badge-special{background:#37474f;color:#fff}
+.badge-critical{background:#DC2626;color:#fff}
+.badge-high{background:#EA580C;color:#fff}
+.badge-medium{background:#D97706;color:#fff}
+.badge-low{background:#16A34A;color:#fff}
+.badge-info{background:#0891B2;color:#fff}
+.badge-correct{background:#0067C0;color:#fff}
+.badge-fc{background:#DC2626;color:#fff}
+.badge-modify{background:#EA580C;color:#fff}
+.badge-read{background:#16A34A;color:#fff}
+.badge-write{background:#D97706;color:#fff}
+.badge-special{background:#37474F;color:#fff}
 .badge-none{background:#212121;color:#888}
 .path{font-family:'Cascadia Code','Consolas',monospace;font-size:11px;color:#80cbc4}
 .sid{font-family:monospace;font-size:11px;color:#b0bec5}
@@ -183,7 +184,7 @@ fn write_risk_table(s: &mut String, findings: &[RiskFinding]) -> Result<(), Core
         let confidence = if f.incomplete {
             "<span class=\"badge badge-medium\" title=\"Underlying evaluation was incomplete — interpret cautiously\">⚠ incomplete</span>"
         } else {
-            "<span class=\"badge\" style=\"background:#e0e0e0;color:#222\">confirmed</span>"
+            "<span class=\"badge badge-correct\">confirmed</span>"
         };
         writeln!(s,
             "<tr><td>{badge}</td><td><code>{}</code></td><td>{}</td><td class=\"path\">{}</td><td>{confidence}</td></tr>",
@@ -244,11 +245,11 @@ fn write_permissions_table(
             match d {
                 PermissionDiagnostic::NonCanonicalDaclOrder { at_index } => {
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-medium\" \
+                        "<span class=\"badge badge-info\" \
                          title=\"DACL is not in Windows-canonical order (first \
                          violating ACE at index {at_index}). Windows AccessCheck \
-                         walks in stored order — the result may differ from \
-                         canonicalized expectations.\">⚠ non-canonical DACL</span>"
+                         walks in stored order — the result is exact but may \
+                         differ from canonicalized expectations.\">ℹ non-canonical DACL</span>"
                     ));
                 }
                 PermissionDiagnostic::UnsupportedShareAces { count } => {
