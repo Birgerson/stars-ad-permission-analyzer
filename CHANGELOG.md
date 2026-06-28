@@ -10,7 +10,16 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.7.2 below for the latest release.)
+### Fixed
+
+- **Purged leftover German UI/code strings** that the umlaut-only CI language
+  gate did not catch: GUI labels (`Wurzelpfad:`→`Root path:`,
+  `HTML-Bericht exportieren`→`Export HTML report`, Delta `Alt`/`Neu`→
+  `Old`/`New`) and a duplicated German module-doc line in
+  `exporter/json.rs`. The project is English-only since v1.7.1.
+- **ADR index** (`docs/adr/README.md`) was missing entries 0049–0052 — added.
+  Refreshed `known-limitations` status and the `user-guide` installer
+  reference to v1.7.2.
 
 ---
 
