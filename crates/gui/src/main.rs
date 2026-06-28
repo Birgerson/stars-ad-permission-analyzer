@@ -964,7 +964,7 @@ slint::slint! {
                                     GridBox {
                                         spacing: Theme.spacing-sm;
                                         Row {
-                                            Text { text: "Wurzelpfad:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: "Root path:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "C:\\Data  or  \\\\server\\share\\Data";
                                                 text <=> root.s-root;
@@ -1397,7 +1397,7 @@ slint::slint! {
                             }
 
                             if root.s-done: GroupBox {
-                                title: "HTML-Bericht exportieren";
+                                title: "Export HTML report";
                                 VerticalBox {
                                     spacing: Theme.spacing-sm;
                                     HorizontalBox {
@@ -1465,12 +1465,12 @@ slint::slint! {
                                     HorizontalBox {
                                         spacing: Theme.spacing-sm;
                                         Text {
-                                            text: "Alt";
+                                            text: "Old";
                                             width: 60px;
                                             font-weight: 700;
                                         }
                                         Text {
-                                            text: "Neu";
+                                            text: "New";
                                             width: 60px;
                                             font-weight: 700;
                                         }
@@ -1593,12 +1593,12 @@ slint::slint! {
                                             width: 110px;
                                         }
                                         Text {
-                                            text: "Alt";
+                                            text: "Old";
                                             font-weight: 700;
                                             width: 180px;
                                         }
                                         Text {
-                                            text: "Neu";
+                                            text: "New";
                                             font-weight: 700;
                                             width: 180px;
                                         }

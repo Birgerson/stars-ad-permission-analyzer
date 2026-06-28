@@ -58,3 +58,7 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0046 | `PathTrusteeEntry` enum |
 | 0047 | `SmbAuditContext` typed wrapper |
 | 0048 | SID→name map caller owned |
+| 0049 | Streaming tree-walk callback |
+| 0050 | Streaming CLI scan with lazy SID→name cache |
+| 0051 | Signed LDAP bind (GSSAPI/Kerberos sign+seal) |
+| 0052 | SID history (L3) & cross-forest trust (L4) visibility markers |

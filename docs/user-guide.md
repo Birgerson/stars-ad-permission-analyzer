@@ -92,7 +92,7 @@ The full list lives in
 
 Get the installer from the GitHub release page:
 [releases](https://github.com/Birgerson/stars-ad-permission-analyzer/releases).
-Currently recommended: `Stars-v1.7.1-Setup.exe`.
+Currently recommended: `Stars-v1.7.2-Setup.exe`.
 
 ### Installation
 
