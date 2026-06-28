@@ -98,24 +98,53 @@ that applies.
 ### Structured diagnostic markers per finding
 
 Every `EffectivePermission` carries a `diagnostics` vector with
-variant-tagged JSON. CLI, HTML, and JSON render every marker with
-its own description — a list of markers and their meaning:
+variant-tagged JSON. The CLI (`[i]`/`[!]`), HTML report (a coloured badge)
+and JSON render every marker with its own description.
 
-| Marker | Severity | Risk `incomplete`? | Meaning |
+**Two independent axes** (one source of truth in the core, ADR 0052 follow-up):
+
+- **Attention** — the **colour**, "do I need to look?". From
+  `PermissionDiagnostic::severity`, shared identically by the GUI and HTML:
+  - **Neutral** — grey, `ℹ` (CLI `[i]`): correct, or an *expected* caveat you
+    already know about. No action implied.
+  - **Notice** — amber, `⚠` (CLI `[!]`): worth a look — a hidden Deny among
+    skipped ACEs could change the result.
+  - **Concern** — orange-red, `⚠` (CLI `[!]`): likely a real gap — an
+    under-report or a hard resolution failure.
+- **Correctness** — the **`Risk incomplete?`** flag, "may the result be
+  wrong?". From `PermissionDiagnostic::is_incompleteness_trigger`; drives
+  `risk_engine::is_incomplete`. It is **decoupled** from attention: the
+  SAM/LSA fallback is *Neutral* (a calm, expected caveat) yet still
+  **incomplete = yes**.
+
+**Colour legend (GUI + HTML, light and dark mode):** Neutral = slate grey ·
+Notice = amber · Concern = orange-red. Risk findings use a matching ramp —
+green → amber → orange-red → red (Low → Medium → High → Critical) — and a
+**Microsoft-blue `confirmed` badge** marks risk findings whose evaluation was
+complete. Correct/complete scan rows stay neutral so genuine problems stand
+out; the report font is Arial.
+
+| Marker | Attention | Risk `incomplete`? | Meaning |
 | --- | --- | --- | --- |
-| `NonCanonicalDaclOrder { at_index }` | medium | no | DACL is not in Windows canonical order. AccessCheck still runs in stored order — the result may diverge from a canonical expectation. |
-| `UnsupportedShareAces { count }` | medium | **yes** | The share DACL contained ACE types the parser could not evaluate (object / callback / conditional / vendor-specific). The share mask is potentially incomplete. |
-| `DomainGroupRecursionIncomplete` | medium | **yes** | Group resolution ran via SAM/LSA instead of LDAP. `NetUserGetGroups` only returns direct global groups — nested domain groups are not recursive. |
-| `IdentityDisabled` | info | no | The account is disabled in AD via `userAccountControl/UF_ACCOUNTDISABLE`. ACL-theoretical rights are correct, but the account cannot normally authenticate. |
-| `IdentityNotInConfiguredLdapBase` | medium | **yes** | LSA resolved the SID, but the configured LDAP `base_dn` does not index it. Typical in multi-domain forests / trusts — cross-domain memberships may be missing. |
-| `IdentityDisabledStatusUnknown` | info | no | The `disabled` flag could not be determined (e.g. SAM path without successful `NetUserGetInfo`, or LDAP without a user object). |
-| `IdentityLookupFailed { reason }` | high | **yes** | LDAP identity lookup failed with a technical error (bind, timeout, DC unreachable, query error). Analysis continues with a placeholder identity and empty token — ACEs targeting domain groups may be missing. The `reason` text carries the original error message. |
-| `GroupResolutionFailed { reason }` | high | **yes** | Recursive group resolution failed or was skipped (e.g. cross-domain path without GC crawl). ACEs targeting domain groups may be missing. The `reason` text carries the original error message. |
+| `NonCanonicalDaclOrder { at_index }` | Neutral | no | DACL not in Windows-canonical order; AccessCheck runs in stored order — the result is exact but may diverge from a canonical expectation. |
+| `IdentityDisabled` | Neutral | no | Account disabled in AD (`UF_ACCOUNTDISABLE`). ACL-theoretical rights are correct, but it normally cannot authenticate. |
+| `IdentityDisabledStatusUnknown` | Neutral | no | The `disabled` flag could not be determined (SAM path / no LDAP user object). |
+| `OwnerRightsAceApplied` | Neutral | no | An OWNER RIGHTS (`S-1-3-4`) ACE governs the owner's rights; the implicit owner grant was suppressed. Exact — informational. |
+| `TrustBoundaryEffectsNotModeled` | Neutral | no | The identity crosses a domain/trust boundary (FSP / outside base); SID filtering and Selective Authentication are not modelled. Fires beside the FSP/outside markers — no second flag. |
+| `DomainGroupRecursionIncomplete` | Neutral | **yes** | Group resolution used the SAM/LSA fallback (no LDAP); nested domain groups are not resolved recursively. Expected when you run without `--server`. |
+| `IdentityNotInConfiguredLdapBase` | Neutral | **yes** | LSA resolved the SID but the configured base DN does not index it (multi-domain forest / trust); cross-domain memberships may be missing. |
+| `IdentityResolvedViaForeignSecurityPrincipal` | Neutral | **yes** | A trust-forest principal resolved via an FSP object; its memberships in its own forest are unknown. |
+| `GroupResolutionViaGlobalCatalog` | Neutral | **yes** | Memberships came from a Global Catalog bind; only universal groups replicate fully to the GC. |
+| `UnsupportedShareAces { count }` | Notice | **yes** | The share DACL contained ACE types the parser could not evaluate; the share mask is potentially incomplete. |
+| `UnsupportedNtfsAces { count }` | Notice | **yes** | The NTFS DACL contained ACE types the parser could not evaluate; a hidden Deny among them could change the result. |
+| `SidHistoryPresent { count }` | Concern | **yes** | The account carries `sIDHistory`; ACEs on a historical SID are not evaluated — the effective right may be **understated** (ADR 0052). |
+| `IdentityLookupFailed { reason }` | Concern | **yes** | LDAP identity lookup failed (bind / timeout / DC / query); analysis ran with a placeholder identity — domain-group ACEs may be missing. `reason` carries the original error. |
+| `GroupResolutionFailed { reason }` | Concern | **yes** | Recursive group resolution failed or was skipped; domain-group ACEs may be missing. `reason` carries the original error. |
+| `PersistedEvidenceDecodeFailed { detail }` | Concern | **yes** | A persisted (historical) row could not be fully decoded; the reconstructed result may be less complete than originally stored. |
 
-The "Risk `incomplete`?" column shows whether
-`risk_engine::is_incomplete()` matches this marker —
-`incomplete = true` means: the risk finding is structurally
-incomplete and should be presented as such in the audit.
+The "Risk `incomplete`?" column reflects `risk_engine::is_incomplete()`:
+`incomplete = true` means the risk finding is structurally incomplete and is
+presented as such (its `confirmed` badge is then dropped).
 
 ---
 
@@ -158,8 +187,10 @@ permanently not part of the product:
   not in the token. ACEs targeting such deeply nested groups are
   not recognized in the finding.
 - **How visible:** Marker `DomainGroupRecursionIncomplete` on every
-  finding; risk findings are `incomplete = true`. The CLI prints the
-  hint in the diagnostics block; HTML shows a `badge-medium`.
+  finding; risk findings are `incomplete = true`. Shown **calmly** as an
+  expected caveat — CLI `[i]`, a neutral grey `ℹ` badge in the GUI / HTML
+  (the result is incomplete, but running SAM-only is a known limitation,
+  not a per-finding alarm — see the colour legend above).
 - **Solution:** Set `--server`, `--base-dn`, `--bind-dn` and a
   password — then recursive resolution runs server-side via
   `LDAP_MATCHING_RULE_IN_CHAIN`. See ADR 0033.

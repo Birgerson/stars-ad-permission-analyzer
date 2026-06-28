@@ -509,10 +509,14 @@ Via the **Export** menu (or `--output` flag in the CLI):
 - **JSON** — variant-tagged diagnostic markers (`{ "kind":
   "IdentityNotInConfiguredLdapBase" }`), including `reason` texts for
   the Failed markers. Suitable for scripts and SIEM ingest.
-- **HTML** — fully formatted audit report with:
-  - risk findings sorted by severity,
+- **HTML** — fully formatted audit report (Arial, dark theme) with:
+  - risk findings sorted by severity, a Microsoft-blue `confirmed` badge
+    for the ones whose evaluation was complete,
   - trustee table per path (NTFS + share separated),
-  - diagnostic markers as colored badges,
+  - diagnostic markers as colour-coded badges by **attention** — neutral
+    grey (`ℹ`, expected/context), amber (`⚠`, worth a look), orange-red
+    (`⚠`, likely a real gap). See the colour legend in
+    [features-and-limitations.md](features-and-limitations.md).
   - scan errors in their own section.
 
 Existing export files are **not overwritten** without `--force` (CLI)

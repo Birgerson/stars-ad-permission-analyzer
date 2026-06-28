@@ -10,6 +10,17 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+(No unreleased changes — see v1.7.3 below for the latest release.)
+
+---
+
+## [1.7.3] — 2026-06-28
+
+**UI polish & consistency release.** One identity field with auto-resolve on
+the Analyze and Scan tabs, a unified *attention-based* severity colour scheme
+shared by the GUI and the HTML report (light + dark), and a clean-up of
+leftover German UI/code strings. No engine-behaviour changes.
+
 ### Changed
 
 - **GUI: one identity field, auto-resolved on run.** The Analyze and Scan
