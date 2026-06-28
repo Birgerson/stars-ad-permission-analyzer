@@ -4,12 +4,13 @@
 //! Risk rules for NTFS and share permission analysis.
 
 use adpa_core::{
-    model::{
-        EffectivePermission, LocalGroupEvalStatus, PermissionDiagnostic, RiskFinding, RiskSeverity,
-        ShareEvalStatus,
-    },
+    model::{EffectivePermission, RiskFinding, RiskSeverity},
     traits::{RiskContext, RiskRule},
 };
+// Only the tests name diagnostic variants now that is_incomplete delegates to
+// EffectivePermission::is_incomplete.
+#[cfg(test)]
+use adpa_core::model::PermissionDiagnostic;
 
 /// Marks a finding as incomplete when the underlying evaluation has gaps —
 /// any of:
@@ -22,54 +23,12 @@ use adpa_core::{
 ///   groups (e.g. local Administrators) are then invisible and the effective
 ///   rights may be too low.
 fn is_incomplete(p: &EffectivePermission) -> bool {
-    matches!(p.share_status, ShareEvalStatus::ReadFailed(_))
-        || p.unsupported_ace_count > 0
-        || matches!(p.local_group_status, LocalGroupEvalStatus::NotAvailable(_))
-        // Follow-up finding 2: unsupported share ACEs surface as a
-        // structured marker in diagnostics — risk findings for this
-        // Review 2026-06-04 round 2, finding 4: SAM fallback without LDAP
-        // means no recursive domain group resolution. ADR 0033 requires
-        // risk findings for those permissions to carry
-        // `incomplete = true` — same logic as for the other incomplete-
-        // evaluation sources.
-        //
-        // Review 2026-06-04 round 2 finding 1: identity from a foreign
-        // domain — LDAP base does not index it, domain group recursion is
-        // incomplete (semantically same as SAM fallback).
-        //
-        // Review 2026-06-04 round 4 finding 1: technical LDAP / group
-        // failures in the principal pipeline are incompleteness too.
-        || p.diagnostics.iter().any(|d| {
-            matches!(
-                d,
-                PermissionDiagnostic::UnsupportedShareAces { .. }
-                    // Engine review 2026-06-12 finding 3: unsupported NTFS
-                    // ACEs make the effective mask an approximation. (Also
-                    // covered by unsupported_ace_count above; listed here
-                    // so the two paths cannot drift.)
-                    | PermissionDiagnostic::UnsupportedNtfsAces { .. }
-                    | PermissionDiagnostic::DomainGroupRecursionIncomplete
-                    | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
-                    | PermissionDiagnostic::IdentityLookupFailed { .. }
-                    | PermissionDiagnostic::GroupResolutionFailed { .. }
-                    // Known-limitations L1: trust-forest memberships
-                    // unknown when resolved through an FSP object.
-                    | PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
-                    // Known-limitations L2: GC bind — only universal
-                    // group memberships replicate fully.
-                    | PermissionDiagnostic::GroupResolutionViaGlobalCatalog
-                    // Engine review 2026-06-13 finding 3: a historical row
-                    // that could not be fully decoded must not look clean.
-                    | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
-                    // ADR 0052 (L3): sIDHistory present — ACEs on historical
-                    // SIDs are not evaluated, the effective right may be
-                    // understated. (TrustBoundaryEffectsNotModeled is
-                    // informational and deliberately NOT an incompleteness
-                    // trigger — it fires beside the FSP / outside-base markers
-                    // which already set incomplete.)
-                    | PermissionDiagnostic::SidHistoryPresent { .. }
-            )
-        })
+    // Single source of truth lives on the model: an EffectivePermission knows
+    // whether its own evaluation was complete (share-read failure, unevaluable
+    // ACE types, missing local groups, or any incompleteness-trigger
+    // diagnostic such as SAM fallback / FSP / GC / sIDHistory). The per-marker
+    // warning-vs-info split is `PermissionDiagnostic::is_incompleteness_trigger`.
+    p.is_incomplete()
 }
 use permission_engine::mask::{
     FILE_DELETE, FILE_DELETE_CHILD, FILE_WRITE_DAC, FILE_WRITE_OWNER, MASK_FULL_CONTROL,

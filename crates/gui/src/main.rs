@@ -364,6 +364,14 @@ slint::slint! {
         category: string,
     }
 
+    // One diagnostic marker — its reason plus whether it is a warning
+    // (evaluation may be incomplete) or only informational. Declared ahead of
+    // ScanRowVm because that struct carries the model as a field.
+    export struct DiagnosticVm {
+        text: string,
+        warning: bool,
+    }
+
     // A row in the scan result.
     export struct ScanRowVm {
         path: string,
@@ -375,10 +383,13 @@ slint::slint! {
         trustees: [TrusteeRowVm],
         expanded: bool,
         has_diagnostic: bool,
-        // Per-diagnostic human-readable reasons for this row (engine review
-        // 2026-06-13 finding 2). Shown in the expanded detail so the GUI
-        // surfaces *why* a row is flagged, not just the colored flag.
-        diagnostics: [string],
+        // True when the evaluation is incomplete (a real warning), as opposed
+        // to a row that only carries informational markers.
+        has_warning: bool,
+        // Per-diagnostic reasons for this row (engine review 2026-06-13
+        // finding 2), each with its severity. Shown in the expanded detail so
+        // the GUI surfaces *why* a row is flagged, warnings apart from info.
+        diagnostics: [DiagnosticVm],
     }
 
     // A scan error (a path could not be evaluated).
@@ -1238,7 +1249,9 @@ slint::slint! {
                                                 }
                                                 Text {
                                                     text: row.path;
-                                                    color: row.has_diagnostic ? Theme.error : Theme.text-primary;
+                                                    // Warning (incomplete) → error; info-only markers
+                                                    // → info colour; clean → primary.
+                                                    color: row.has_warning ? Theme.error : (row.has_diagnostic ? Theme.info : Theme.text-primary);
                                                     overflow: elide;
                                                     horizontal-stretch: 1;
                                                 }
@@ -1278,12 +1291,14 @@ slint::slint! {
                                                 spacing: 1px;
                                                 Text {
                                                     text: "Diagnostics (" + row.diagnostics.length + "):";
-                                                    color: Theme.error;
+                                                    color: Theme.text-secondary;
                                                     font-weight: 700;
                                                 }
+                                                // Warning markers (⚠, error colour) are set apart from
+                                                // purely informational ones (ℹ, info colour).
                                                 for diag[d] in row.diagnostics: Text {
-                                                    text: "⚠ " + diag;
-                                                    color: Theme.error;
+                                                    text: (diag.warning ? "⚠ " : "ℹ ") + diag.text;
+                                                    color: diag.warning ? Theme.error : Theme.info;
                                                     wrap: word-wrap;
                                                 }
                                             }
@@ -2434,10 +2449,14 @@ fn handle_scan_item(ui: &MainWindow, row: ScanRow) {
         trustees: slint::ModelRc::new(slint::VecModel::from(trustee_vms)),
         expanded: false,
         has_diagnostic: row.diagnostic_count > 0 || row.unsupported_ace_count > 0,
+        has_warning: row.has_warning,
         diagnostics: slint::ModelRc::new(slint::VecModel::from(
             row.diagnostics
                 .iter()
-                .map(|d| slint::SharedString::from(d.as_str()))
+                .map(|d| DiagnosticVm {
+                    text: slint::SharedString::from(d.text.as_str()),
+                    warning: d.warning,
+                })
                 .collect::<Vec<_>>(),
         )),
     };

@@ -491,6 +491,29 @@ pub struct EffectivePermission {
     pub diagnostics: Vec<PermissionDiagnostic>,
 }
 
+impl EffectivePermission {
+    /// Whether the underlying evaluation has gaps, so the computed rights may
+    /// be wrong — the share DACL could not be read, the DACL contained ACE
+    /// types the parser could not evaluate, local server groups could not be
+    /// resolved, or any attached diagnostic is an incompleteness trigger.
+    ///
+    /// Single source of truth: the risk engine flags derived findings
+    /// `incomplete` through this, and the GUI uses it to decide whether a row
+    /// is a warning (vs. only informational markers).
+    pub fn is_incomplete(&self) -> bool {
+        matches!(self.share_status, ShareEvalStatus::ReadFailed(_))
+            || self.unsupported_ace_count > 0
+            || matches!(
+                self.local_group_status,
+                LocalGroupEvalStatus::NotAvailable(_)
+            )
+            || self
+                .diagnostics
+                .iter()
+                .any(PermissionDiagnostic::is_incompleteness_trigger)
+    }
+}
+
 ///
 /// Structured diagnostic marker attached to an effective permission.
 /// Variant-tagged JSON serialization so future markers can be added without
@@ -784,6 +807,33 @@ impl PermissionDiagnostic {
                     .to_owned()
             }
         }
+    }
+
+    /// Whether this diagnostic means the computed rights may be **wrong /
+    /// incomplete** (a warning) as opposed to purely informational context.
+    ///
+    /// Single source of truth for the warning-vs-info split, consumed by
+    /// `EffectivePermission::is_incomplete` (and through it the risk engine)
+    /// and by the GUI to colour a marker as a warning or as info. The CLI
+    /// (`[!]`/`[i]`) and HTML (badge colour) keep their own per-variant
+    /// presentation but classify the same way. Informational markers
+    /// (`NonCanonicalDaclOrder`, `IdentityDisabled`,
+    /// `IdentityDisabledStatusUnknown`, `OwnerRightsAceApplied`,
+    /// `TrustBoundaryEffectsNotModeled`) return `false`.
+    pub fn is_incompleteness_trigger(&self) -> bool {
+        matches!(
+            self,
+            PermissionDiagnostic::UnsupportedShareAces { .. }
+                | PermissionDiagnostic::UnsupportedNtfsAces { .. }
+                | PermissionDiagnostic::DomainGroupRecursionIncomplete
+                | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
+                | PermissionDiagnostic::IdentityLookupFailed { .. }
+                | PermissionDiagnostic::GroupResolutionFailed { .. }
+                | PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
+                | PermissionDiagnostic::GroupResolutionViaGlobalCatalog
+                | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
+                | PermissionDiagnostic::SidHistoryPresent { .. }
+        )
     }
 }
 

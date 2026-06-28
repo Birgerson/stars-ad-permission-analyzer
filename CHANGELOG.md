@@ -37,6 +37,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   than ignoring it silently. Surfaced by the lab stress test on a
   3500-group, deeply nested domain. See ADR 0032.
 
+### Changed
+
+- **GUI diagnostics are now severity-aware.** Previously any diagnostic
+  turned a scan row red and every marker rendered identically. The GUI now
+  distinguishes a **warning** (the evaluation may be incomplete — red, ⚠)
+  from purely **informational** markers (info colour, ℹ); a row that carries
+  only info markers is no longer shown as an error. The warning/info split
+  comes from a single source of truth in the core
+  (`PermissionDiagnostic::is_incompleteness_trigger` and
+  `EffectivePermission::is_incomplete`), to which `risk_engine::is_incomplete`
+  now delegates — removing the previously duplicated marker list.
+
 ---
 
 ## [1.7.0] — 2026-06-13

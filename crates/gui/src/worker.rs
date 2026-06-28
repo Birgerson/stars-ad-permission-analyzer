@@ -239,6 +239,15 @@ pub enum WorkerRequest {
     },
 }
 
+/// One diagnostic marker for GUI display: its one-line reason plus whether
+/// it is a warning (the evaluation may be incomplete) or only informational.
+/// `warning` comes from `PermissionDiagnostic::is_incompleteness_trigger`.
+#[derive(Clone)]
+pub struct DiagnosticRow {
+    pub text: String,
+    pub warning: bool,
+}
+
 /// Row in the scan result (for GUI table).
 #[derive(Clone)]
 pub struct ScanRow {
@@ -256,8 +265,13 @@ pub struct ScanRow {
     /// expanded scan-row detail so the GUI shows *why* a row is flagged, not
     /// just *that* it is — closing the "show uncertainty in the GUI"
     /// consistency gap (engine review 2026-06-13 finding 2). Empty when the
-    /// path carries no diagnostics.
-    pub diagnostics: Vec<String>,
+    /// path carries no diagnostics. Each entry carries its severity so the GUI
+    /// can show a warning marker differently from a purely informational one.
+    pub diagnostics: Vec<DiagnosticRow>,
+    /// `true` when the underlying evaluation is incomplete (so the row is a
+    /// real warning, not merely carrying informational markers).
+    /// `EffectivePermission::is_incomplete` — the single source of truth.
+    pub has_warning: bool,
     /// Path-centric trustee view — every ACE in the DACL resolved, with
     /// "Applies to" labels and Allow/Deny. Empty when the scan runs
     /// without trustee collection. Complement to the identity-based
@@ -1103,7 +1117,15 @@ async fn handle_scan(
                     steps: perm.path_explanation.steps.clone(),
                     unsupported_ace_count: perm.unsupported_ace_count,
                     diagnostic_count: perm.diagnostics.len(),
-                    diagnostics: perm.diagnostics.iter().map(|d| d.summary()).collect(),
+                    diagnostics: perm
+                        .diagnostics
+                        .iter()
+                        .map(|d| DiagnosticRow {
+                            text: d.summary(),
+                            warning: d.is_incompleteness_trigger(),
+                        })
+                        .collect(),
+                    has_warning: perm.is_incomplete(),
                     trustees: trustees_for_row,
                 }));
                 permissions.push(perm);
