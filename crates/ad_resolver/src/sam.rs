@@ -402,6 +402,7 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
         kind: account.kind,
         disabled,
         user_principal_name: None,
+        sid_history_count: 0,
     };
 
     // Global groups only meaningful for user accounts.

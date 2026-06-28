@@ -230,6 +230,24 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if input.group_resolution_via_global_catalog {
             diagnostics.push(PermissionDiagnostic::GroupResolutionViaGlobalCatalog);
         }
+        // ADR 0052 (L3): the identity carries historical SIDs (sIDHistory).
+        // The real Windows token includes them, but Stars does not add them
+        // to the evaluated token — ACEs on a historical SID are not matched,
+        // so effective rights may be understated. Incompleteness trigger.
+        if input.identity.sid_history_count > 0 {
+            diagnostics.push(PermissionDiagnostic::SidHistoryPresent {
+                count: input.identity.sid_history_count,
+            });
+        }
+        // ADR 0052 (L4): the identity crosses a forest trust — resolved via a
+        // Foreign Security Principal or found outside the configured LDAP
+        // base. SID filtering / quarantine and Selective Authentication are
+        // not modeled, so actual access may be lower than shown.
+        // Informational only: the FSP / outside-base markers above already
+        // set incompleteness, so this deliberately adds no second trigger.
+        if input.identity_resolved_via_fsp || input.identity_not_in_configured_ldap_base {
+            diagnostics.push(PermissionDiagnostic::CrossForestTrustEffectsNotModeled);
+        }
 
         let result = EffectivePermission {
             identity: input.identity,
@@ -864,6 +882,7 @@ mod tests {
             kind: IdentityKind::User,
             disabled: false,
             user_principal_name: None,
+            sid_history_count: 0,
         }
     }
 
@@ -3157,6 +3176,130 @@ mod tests {
                 .diagnostics
                 .contains(&PermissionDiagnostic::IdentityDisabledStatusUnknown),
             "engine must push IdentityDisabledStatusUnknown when the caller flag is set; got {:?}",
+            result.diagnostics
+        );
+    }
+
+    /// Test helper: a `PermissionEvaluationInput` with every incompleteness
+    /// flag off. Tests flip only the field under test, which keeps them
+    /// readable and shields them from unrelated field additions.
+    fn base_input(
+        identity: Identity,
+        file_system_object: FileSystemObject,
+    ) -> PermissionEvaluationInput {
+        PermissionEvaluationInput {
+            identity,
+            group_memberships: vec![],
+            file_system_object,
+            share_status: ShareMaskStatus::NotApplicable,
+            local_group_sids: vec![],
+            local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+            access_context: AccessContext::Unspecified,
+            unsupported_share_ace_count: 0,
+            sid_names: std::collections::BTreeMap::new(),
+            group_resolution_via_sam_fallback: false,
+            identity_not_in_configured_ldap_base: false,
+            identity_disabled_status_unknown: false,
+            identity_lookup_failure_reason: None,
+            group_resolution_failure_reason: None,
+            identity_resolved_via_fsp: false,
+            group_resolution_via_global_catalog: false,
+        }
+    }
+
+    /// ADR 0052 (L3): an identity carrying historical SIDs (sIDHistory)
+    /// surfaces as `SidHistoryPresent { count }` so the under-report risk is
+    /// visible. The engine reads `identity.sid_history_count`.
+    #[test]
+    fn engine_pushes_sid_history_present_diagnostic() {
+        let mut identity = user(USER);
+        identity.sid_history_count = 3;
+        let result = DefaultPermissionEngine
+            .evaluate(base_input(
+                identity,
+                fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            ))
+            .unwrap();
+        assert!(
+            result
+                .diagnostics
+                .contains(&PermissionDiagnostic::SidHistoryPresent { count: 3 }),
+            "engine must push SidHistoryPresent {{ count }} when sid_history_count > 0; got {:?}",
+            result.diagnostics
+        );
+    }
+
+    /// No sIDHistory → no marker (no false positive).
+    #[test]
+    fn engine_no_sid_history_diagnostic_when_zero() {
+        let result = DefaultPermissionEngine
+            .evaluate(base_input(
+                user(USER),
+                fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            ))
+            .unwrap();
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d, PermissionDiagnostic::SidHistoryPresent { .. })),
+            "no SidHistoryPresent when count is 0; got {:?}",
+            result.diagnostics
+        );
+    }
+
+    /// ADR 0052 (L4): a cross-forest identity resolved via an FSP surfaces
+    /// the informational CrossForestTrustEffectsNotModeled marker.
+    #[test]
+    fn engine_pushes_cross_forest_trust_effects_when_fsp() {
+        let mut input = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+        );
+        input.identity_resolved_via_fsp = true;
+        let result = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert!(
+            result
+                .diagnostics
+                .contains(&PermissionDiagnostic::CrossForestTrustEffectsNotModeled),
+            "cross-forest marker must fire when resolved via FSP; got {:?}",
+            result.diagnostics
+        );
+    }
+
+    /// The cross-forest marker also fires when the identity is outside the
+    /// configured LDAP base (the other forest-trust signal).
+    #[test]
+    fn engine_pushes_cross_forest_trust_effects_when_outside_base() {
+        let mut input = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+        );
+        input.identity_not_in_configured_ldap_base = true;
+        let result = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert!(
+            result
+                .diagnostics
+                .contains(&PermissionDiagnostic::CrossForestTrustEffectsNotModeled),
+            "cross-forest marker must fire when outside the configured LDAP base; got {:?}",
+            result.diagnostics
+        );
+    }
+
+    /// A plain in-domain identity gets neither forest-trust marker.
+    #[test]
+    fn engine_no_cross_forest_marker_for_plain_identity() {
+        let result = DefaultPermissionEngine
+            .evaluate(base_input(
+                user(USER),
+                fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            ))
+            .unwrap();
+        assert!(
+            !result
+                .diagnostics
+                .contains(&PermissionDiagnostic::CrossForestTrustEffectsNotModeled),
+            "no cross-forest marker for a plain in-domain identity; got {:?}",
             result.diagnostics
         );
     }

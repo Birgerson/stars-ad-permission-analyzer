@@ -558,6 +558,7 @@ async fn resolve_identity(
                 kind: IdentityKind::Unknown,
                 disabled: false,
                 user_principal_name: None,
+                sid_history_count: 0,
             };
             let resolution = PrincipalResolution {
                 sid,

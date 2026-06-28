@@ -1752,6 +1752,7 @@ fn bare_sid_identity(sid: &str) -> (Identity, Vec<GroupMembership>) {
         kind: IdentityKind::Unknown,
         disabled: false,
         user_principal_name: None,
+        sid_history_count: 0,
     };
     (identity, vec![])
 }
@@ -1831,6 +1832,7 @@ mod tests {
             kind: adpa_core::model::IdentityKind::User,
             disabled: false,
             user_principal_name: None,
+            sid_history_count: 0,
         };
         let (status, _unsupported) = resolve_share_status(
             r"C:\Windows\SYSVOL",
@@ -2178,6 +2180,7 @@ mod tests {
                 kind: IdentityKind::User,
                 disabled: false,
                 user_principal_name: None,
+                sid_history_count: 0,
             },
             path: NormalizedPath(r"C:\Root\Sub".to_owned()),
             ntfs_mask: AccessMask(0x001F01FF),

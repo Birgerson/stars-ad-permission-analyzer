@@ -81,6 +81,7 @@ mod tests {
                 kind: IdentityKind::User,
                 disabled: false,
                 user_principal_name: Some("max.mustermann@testdomain.local".to_owned()),
+                sid_history_count: 0,
             },
             path: NormalizedPath("C:\\Data".to_owned()),
             ntfs_mask: AccessMask(0x0012_0089),

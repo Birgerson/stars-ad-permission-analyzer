@@ -61,6 +61,13 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
                     // Engine review 2026-06-13 finding 3: a historical row
                     // that could not be fully decoded must not look clean.
                     | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
+                    // ADR 0052 (L3): sIDHistory present — ACEs on historical
+                    // SIDs are not evaluated, the effective right may be
+                    // understated. (CrossForestTrustEffectsNotModeled is
+                    // informational and deliberately NOT an incompleteness
+                    // trigger — it fires beside the FSP / outside-base markers
+                    // which already set incomplete.)
+                    | PermissionDiagnostic::SidHistoryPresent { .. }
             )
         })
 }
@@ -501,6 +508,7 @@ mod tests {
                 kind: IdentityKind::User,
                 disabled: false,
                 user_principal_name: None,
+                sid_history_count: 0,
             },
             path: NormalizedPath(path.to_string()),
             ntfs_mask: AccessMask(mask),
@@ -572,6 +580,35 @@ mod tests {
         assert!(
             !r[0].incomplete,
             "NonCanonicalDaclOrder alone must NOT flag incomplete"
+        );
+    }
+
+    /// ADR 0052 (L3): a sIDHistory marker means the effective right may be
+    /// understated — risk findings on that path must be incomplete.
+    #[test]
+    fn sid_history_present_diagnostic_marks_finding_incomplete() {
+        let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
+        p.diagnostics = vec![PermissionDiagnostic::SidHistoryPresent { count: 1 }];
+        let r = FullControlRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(
+            r[0].incomplete,
+            "SidHistoryPresent diagnostic -> finding must be incomplete"
+        );
+    }
+
+    /// ADR 0052 (L4): CrossForestTrustEffectsNotModeled is informational —
+    /// it fires beside the FSP / outside-base markers, which already flag
+    /// incompleteness, so alone it must NOT mark a finding incomplete.
+    #[test]
+    fn cross_forest_trust_effects_diagnostic_alone_does_not_mark_incomplete() {
+        let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
+        p.diagnostics = vec![PermissionDiagnostic::CrossForestTrustEffectsNotModeled];
+        let r = FullControlRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(
+            !r[0].incomplete,
+            "CrossForestTrustEffectsNotModeled alone must NOT flag incomplete"
         );
     }
 

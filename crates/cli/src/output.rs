@@ -255,6 +255,19 @@ pub fn print_report(
                     println!("      The reconstructed result may be less complete than it was");
                     println!("      originally stored. Treat as incomplete.");
                 }
+                PermissionDiagnostic::SidHistoryPresent { count } => {
+                    println!("  [!] This identity carries {count} historical SID(s) (sIDHistory).");
+                    println!("      ACEs that reference a historical SID are not evaluated, but");
+                    println!("      the real logon token still includes it — effective rights");
+                    println!("      may be understated. Treat as incomplete.");
+                }
+                PermissionDiagnostic::CrossForestTrustEffectsNotModeled => {
+                    println!("  [i] Cross-forest trust effects are not modeled. Computed rights");
+                    println!("      assume the trust passes all SIDs and that authentication is");
+                    println!("      allowed. SID filtering / quarantine and Selective");
+                    println!("      Authentication may reduce actual access — the real effective");
+                    println!("      access can be lower than shown.");
+                }
             }
         }
     }

@@ -144,6 +144,7 @@ fn row_to_identity(row: &rusqlite::Row<'_>) -> rusqlite::Result<Identity> {
         disabled: row.get::<_, i32>(4)? != 0,
         // UPN is not persisted in the identity cache (see scan_store).
         user_principal_name: None,
+        sid_history_count: 0,
     })
 }
 
@@ -169,6 +170,7 @@ mod tests {
             kind,
             disabled: false,
             user_principal_name: None,
+            sid_history_count: 0,
         }
     }
 
@@ -235,6 +237,7 @@ mod tests {
                 kind: kind.clone(),
                 disabled: false,
                 user_principal_name: None,
+                sid_history_count: 0,
             };
             cache.upsert(&id).unwrap();
             let found = cache.lookup(&id.sid).unwrap().unwrap();

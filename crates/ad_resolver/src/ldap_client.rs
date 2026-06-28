@@ -67,6 +67,12 @@ const IDENTITY_ATTRS: &[&str] = &[
     "distinguishedName",
     "primaryGroupID",
     "memberOf",
+    // Binary, multi-valued: historical SIDs from a domain/forest migration.
+    // Only the COUNT is used (PermissionDiagnostic::SidHistoryPresent) — Stars
+    // does not evaluate the values into the token. May be unreadable for a
+    // least-privilege bind, in which case the count is 0 (marker just stays
+    // silent — no false positive).
+    "sIDHistory",
 ];
 
 /// Attributes read during group searches.
@@ -108,6 +114,15 @@ impl RawEntry {
     /// Returns all values of a string attribute (e.g. memberOf).
     pub fn all_attr(&self, name: &str) -> &[String] {
         self.attrs.get(name).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Total number of values for an attribute, regardless of whether the
+    /// LDAP layer classified them as string or binary. Used for multi-valued
+    /// binary attributes such as `sIDHistory`, where the count matters but
+    /// the raw SID bytes do not.
+    pub fn value_count(&self, name: &str) -> usize {
+        self.attrs.get(name).map(Vec::len).unwrap_or(0)
+            + self.bin_attrs.get(name).map(Vec::len).unwrap_or(0)
     }
 }
 

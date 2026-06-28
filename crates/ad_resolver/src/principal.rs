@@ -598,6 +598,7 @@ where
                     kind: account.kind,
                     disabled: false,
                     user_principal_name: None,
+                    sid_history_count: 0,
                 };
                 let scope = IdentityScopeStatus::OutsideConfiguredLdapBase;
                 // Memberships unknown from LDAP; flagged NotAttempted.
@@ -669,6 +670,7 @@ where
                     kind: account.kind,
                     disabled: false,
                     user_principal_name: None,
+                    sid_history_count: 0,
                 },
                 Err(e) => {
                     debug!(sid = %sid.0, error = %e, "FSP hit: LSA enrichment failed — keeping FSP identity");
@@ -728,6 +730,7 @@ where
             kind: IdentityKind::Orphaned,
             disabled: false,
             user_principal_name: None,
+            sid_history_count: 0,
         };
         PrincipalResolution {
             sid,
@@ -750,6 +753,7 @@ where
             kind: IdentityKind::Unknown,
             disabled: false,
             user_principal_name: None,
+            sid_history_count: 0,
         };
         PrincipalResolution {
             sid,
@@ -881,6 +885,7 @@ mod tests {
             kind,
             disabled: false,
             user_principal_name: None,
+            sid_history_count: 0,
         }
     }
 

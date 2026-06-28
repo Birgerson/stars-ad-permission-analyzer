@@ -382,6 +382,28 @@ fn write_permissions_table(
                         escape_html(detail)
                     ));
                 }
+                PermissionDiagnostic::SidHistoryPresent { count } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-medium\" \
+                         title=\"This identity carries {count} historical SID(s) \
+                         (sIDHistory). ACEs referencing a historical SID are not \
+                         evaluated, but the real logon token includes it — \
+                         effective rights may be understated. Treat as \
+                         incomplete.\">⚠ {count} historical SID(s) not evaluated</span>"
+                    ));
+                }
+                PermissionDiagnostic::CrossForestTrustEffectsNotModeled => {
+                    diag_parts.push(
+                        "<span class=\"badge badge-info\" \
+                         title=\"Cross-forest trust effects are not modeled. \
+                         Computed rights assume the trust passes all SIDs and \
+                         that authentication is allowed. SID filtering / \
+                         quarantine and Selective Authentication may reduce \
+                         actual access — the real effective access can be lower \
+                         than shown.\">ℹ cross-forest trust effects not modeled</span>"
+                            .to_string(),
+                    );
+                }
             }
         }
         let diagnostics = if diag_parts.is_empty() {
@@ -577,6 +599,7 @@ mod tests {
                 kind: IdentityKind::User,
                 disabled: false,
                 user_principal_name: None,
+                sid_history_count: 0,
             },
             path: NormalizedPath("C:\\Test".to_owned()),
             ntfs_mask: AccessMask(0x0012_0089),

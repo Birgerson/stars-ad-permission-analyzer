@@ -12,6 +12,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Added
 
+- **L3/L4 silent-gap markers (visibility step, ADR 0052).** Two new
+  `PermissionDiagnostic` variants make the most dangerous "looks safe,
+  isn't safe" cases visible instead of silently wrong:
+  `SidHistoryPresent { count }` (an incompleteness trigger) fires when a
+  migrated account carries `sIDHistory` — the real token includes SIDs
+  Stars does not evaluate, so effective rights may be **understated**;
+  `CrossForestTrustEffectsNotModeled` (informational) fires for forest-trust
+  identities (FSP / outside the LDAP base), warning that SID filtering and
+  Selective Authentication may make access **lower** than shown. `sIDHistory`
+  is now fetched (`IDENTITY_ATTRS`) and counted on `Identity`. This step
+  makes the gaps **visible**; it does not yet evaluate the historical SIDs
+  or read trust attributes (the deeper follow-up). Rendered in the CLI and
+  HTML report; surfaced live by the lab L3/L4 fixtures.
 - **`--ldap-timeout <SECONDS>` CLI flag** (analyze and scan) overrides the
   default 10-second LDAP operation timeout, validated to the range 1–600s
   via the new `validation::numbers::LdapTimeout` wrapper. Large or densely

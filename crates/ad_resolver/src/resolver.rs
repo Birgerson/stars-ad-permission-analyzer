@@ -157,6 +157,7 @@ impl LdapResolver {
                             kind: IdentityKind::Orphaned,
                             disabled: false,
                             user_principal_name: None,
+                            sid_history_count: 0,
                         }
                     }
                 })
@@ -544,6 +545,10 @@ fn parse_identity_from_entry(entry: &RawEntry, sid: &Sid) -> Identity {
         .map(|uac| uac & UAC_ACCOUNT_DISABLE != 0)
         .unwrap_or(false);
 
+    // sIDHistory: only the count matters — Stars surfaces it as a marker and
+    // does not evaluate the historical SIDs into the token (ADR 0052).
+    let sid_history_count = entry.value_count("sIDHistory");
+
     Identity {
         sid: sid.clone(),
         name,
@@ -551,6 +556,7 @@ fn parse_identity_from_entry(entry: &RawEntry, sid: &Sid) -> Identity {
         kind,
         disabled,
         user_principal_name,
+        sid_history_count,
     }
 }
 

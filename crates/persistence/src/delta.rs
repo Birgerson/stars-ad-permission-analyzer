@@ -263,6 +263,7 @@ mod tests {
                 kind: IdentityKind::User,
                 disabled: false,
                 user_principal_name: None,
+                sid_history_count: 0,
             },
             path: NormalizedPath(path.to_string()),
             ntfs_mask: AccessMask(mask),

@@ -167,8 +167,15 @@ SID-history SID, no match against the user can occur.
 ### Effect
 
 Findings understate the rights of migrated users on non-migrated
-filesystem structures. Unlike L1, this case produces **no marker** —
-Stars simply sees the old SID as "another user" and finds no match.
+filesystem structures: Stars sees the old SID as "another user" and finds
+no match.
+
+**Status (ADR 0052 — visibility step):** the gap is now **visible**. When
+an identity carries `sIDHistory`, Stars fetches the count (LDAP) and emits
+the `SidHistoryPresent` marker — an incompleteness trigger — so the finding
+is flagged "may be understated" instead of silently looking safe. The
+historical SIDs are **not yet evaluated** into the token; that remains the
+deeper follow-up (see the solution sketch).
 
 ### Solution sketch
 
@@ -211,10 +218,15 @@ What the real DC actually filters at runtime is invisible to Stars.
 ### Effect
 
 Stars findings for trust users can be **too high** — the DACL would
-grant, but Selective Auth or SID Filtering block at runtime. Like L3,
-this case produces **no runtime marker**: Stars presents the
-theoretical DACL view as if it were the effective result, with no
-warning that a trust filter may reduce it.
+grant, but Selective Auth or SID Filtering block at runtime.
+
+**Status (ADR 0052 — visibility step):** the gap is now **visible**. When
+the identity crosses a forest trust (resolved via an FSP, or found outside
+the configured LDAP base), Stars emits the informational
+`CrossForestTrustEffectsNotModeled` marker, warning that SID filtering /
+quarantine and Selective Authentication may reduce the shown access. Stars
+still does **not** read `trustAttributes` to model the actual filter effect
+— that is deliberately left as the deeper follow-up.
 
 ### Solution sketch
 

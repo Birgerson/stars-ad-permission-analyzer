@@ -330,18 +330,23 @@ permanently not part of the product:
 - **Effect:** Stars shows the **theoretical DACL view**, not the
   filtered runtime result. In migrated or multi-forest environments a
   finding can be wrong in **both** directions.
-- **How visible:** **Not visible — these cases produce no runtime
-  marker**, unlike the SAM-fallback / cross-domain / FSP / GC cases
-  above, which are all flagged. This is the one place where Stars can
-  be *silently* wrong, so treat results for migrated or trust accounts
-  with extra caution.
-- **Solution:** Real detection of trust filtering / selective
-  authentication would require a synthetic logon attempt, which
-  violates the read-only principle and is deliberately not
-  implemented. Adding **runtime markers** for these cases (SID history
-  present; cross-forest principal) is a tracked roadmap item — see
-  known-limitations L3 and L4. Until then, cross-check migrated or
-  trust accounts manually against the trust configuration
+- **How visible (since ADR 0052):** the gaps are now **flagged**.
+  `SidHistoryPresent { count }` (medium, `incomplete = true`) fires when a
+  migrated account carries `sIDHistory` — the under-report case.
+  `CrossForestTrustEffectsNotModeled` (info) fires for forest-trust
+  identities (resolved via an FSP or found outside the configured LDAP
+  base) and warns that SID filtering and Selective Authentication may make
+  access lower than shown — the over-report cases. Both render in the CLI
+  and the HTML report. (Before ADR 0052 these produced no marker — the one
+  place Stars could be *silently* wrong.)
+- **Solution:** the **visibility step shipped** (ADR 0052) — the markers
+  above make the gaps honest instead of silent. The deeper work
+  (evaluating `sIDHistory` into the token; reading `trustAttributes` to
+  model the actual filter) remains a tracked roadmap item
+  (known-limitations L3/L4); real detection of the runtime filter would
+  require a synthetic logon, which violates the read-only principle and is
+  deliberately not implemented. Until the deeper step lands, still
+  cross-check migrated or trust accounts against the trust configuration
   (`trustAttributes`, `trustDirection`) and the `sIDHistory` attribute.
 
 ---

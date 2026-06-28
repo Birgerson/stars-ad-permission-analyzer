@@ -735,6 +735,7 @@ mod tests {
             kind: IdentityKind::User,
             disabled: false,
             user_principal_name: upn.map(String::from),
+            sid_history_count: 0,
         }
     }
 

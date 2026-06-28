@@ -550,6 +550,7 @@ impl RawPermRow {
                 // UPN is not persisted today; it's only relevant for live AD/NetAPI
                 // calls, not for historical reports.
                 user_principal_name: None,
+                sid_history_count: 0,
             },
             path: NormalizedPath(path),
             ntfs_mask: AccessMask(ntfs as u32),
@@ -662,6 +663,7 @@ mod tests {
                 kind: IdentityKind::User,
                 disabled: false,
                 user_principal_name: None,
+                sid_history_count: 0,
             },
             path: NormalizedPath(path.to_owned()),
             ntfs_mask: AccessMask(ntfs),

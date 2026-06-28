@@ -143,6 +143,16 @@ pub struct Identity {
     /// name which we cannot reliably derive from the DN.
     #[serde(default)]
     pub user_principal_name: Option<String>,
+    /// Number of historical SIDs (`sIDHistory`) the account carries — set
+    /// when resolved via LDAP, `0` otherwise (e.g. the SAM/LSA path, which
+    /// cannot read it). A non-zero count means the real Windows logon token
+    /// includes additional SIDs that Stars does **not** add to the evaluated
+    /// token: ACEs referencing a historical SID are therefore not matched,
+    /// so effective rights may be understated. The engine surfaces this as
+    /// `PermissionDiagnostic::SidHistoryPresent`. `#[serde(default)]` keeps
+    /// older persisted rows readable.
+    #[serde(default)]
+    pub sid_history_count: usize,
 }
 
 /// Access context for permission evaluation.
@@ -654,6 +664,39 @@ pub enum PermissionDiagnostic {
     /// decode failure there is a hard database error. Engine review
     /// 2026-06-13 (Codex) finding 3.
     PersistedEvidenceDecodeFailed { detail: String },
+
+    /// The analyzed identity carries one or more historical SIDs in its
+    /// `sIDHistory` attribute (typical after a domain or forest
+    /// migration). The real Windows logon token includes those SIDs, but
+    /// Stars does **not** add them to the evaluated token — so an ACE that
+    /// grants access to a historical SID is not matched and the effective
+    /// right can be **understated** ("looks safe, isn't safe"). This
+    /// marker is an incompleteness trigger; derived risk findings carry
+    /// `incomplete = true`. `count` is the number of historical SIDs
+    /// found. Note: whether a historical SID is actually honored also
+    /// depends on the trust's SID-filtering / quarantine state, which
+    /// Stars does not model — see [`CrossForestTrustEffectsNotModeled`].
+    ///
+    /// Scope: this marker makes the gap **visible**; it does not yet
+    /// evaluate the historical SIDs into the token (see ADR 0052).
+    ///
+    /// [`CrossForestTrustEffectsNotModeled`]:
+    /// PermissionDiagnostic::CrossForestTrustEffectsNotModeled
+    SidHistoryPresent { count: usize },
+
+    /// The analyzed identity crosses a forest trust — it was resolved via
+    /// a Foreign Security Principal object or found outside the configured
+    /// LDAP base. Stars computes effective rights assuming the trust
+    /// passes every SID and that authentication is allowed. A real forest
+    /// trust may however apply **SID filtering / quarantine** (dropping
+    /// SIDs, which lowers access) and **Selective Authentication**
+    /// (blocking the logon before the ACL is evaluated at all). Stars does
+    /// not read trust attributes, so the actual effective access can be
+    /// **lower** than shown ("over-report"). This marker is informational:
+    /// it fires alongside the FSP / outside-base markers, which already
+    /// set `incomplete = true`, so it deliberately does **not** raise a
+    /// second incompleteness trigger (no double-flagging). See ADR 0052.
+    CrossForestTrustEffectsNotModeled,
 }
 
 impl PermissionDiagnostic {
@@ -727,6 +770,15 @@ impl PermissionDiagnostic {
                 "A persisted (historical) row could not be fully decoded ({detail}); the \
                  reconstructed result may be less complete than the original."
             ),
+            PermissionDiagnostic::SidHistoryPresent { count } => format!(
+                "Identity carries {count} historical SID(s) (sIDHistory); ACEs referencing them \
+                 are not evaluated — effective rights may be understated."
+            ),
+            PermissionDiagnostic::CrossForestTrustEffectsNotModeled => {
+                "Cross-forest trust effects (SID filtering / quarantine, Selective \
+                 Authentication) are not modeled; actual access may be lower than shown."
+                    .to_owned()
+            }
         }
     }
 }
