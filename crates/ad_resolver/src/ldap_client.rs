@@ -424,3 +424,47 @@ fn escape_dn_for_filter(dn: &str) -> String {
     // In a filter, commas and equals don't need escaping, but parentheses do
     escape_filter_value(dn)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn value_count_counts_binary_values() {
+        // sIDHistory is returned as binary SID values, landing in bin_attrs.
+        let mut bin = HashMap::new();
+        bin.insert("sIDHistory".to_string(), vec![vec![1u8], vec![2u8]]);
+        let e = RawEntry {
+            dn: String::new(),
+            attrs: HashMap::new(),
+            bin_attrs: bin,
+        };
+        assert_eq!(e.value_count("sIDHistory"), 2);
+    }
+
+    #[test]
+    fn value_count_is_zero_when_attribute_absent() {
+        let e = RawEntry {
+            dn: String::new(),
+            attrs: HashMap::new(),
+            bin_attrs: HashMap::new(),
+        };
+        assert_eq!(e.value_count("sIDHistory"), 0);
+    }
+
+    #[test]
+    fn value_count_sums_string_and_binary_maps() {
+        // Defensive: a value lands in exactly one map; the count is their sum.
+        let mut attrs = HashMap::new();
+        attrs.insert("attr".to_string(), vec!["a".to_string(), "b".to_string()]);
+        let mut bin = HashMap::new();
+        bin.insert("attr".to_string(), vec![vec![0u8]]);
+        let e = RawEntry {
+            dn: String::new(),
+            attrs,
+            bin_attrs: bin,
+        };
+        assert_eq!(e.value_count("attr"), 3);
+    }
+}

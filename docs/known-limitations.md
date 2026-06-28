@@ -170,12 +170,15 @@ Findings understate the rights of migrated users on non-migrated
 filesystem structures: Stars sees the old SID as "another user" and finds
 no match.
 
-**Status (ADR 0052 — visibility step):** the gap is now **visible**. When
-an identity carries `sIDHistory`, Stars fetches the count (LDAP) and emits
-the `SidHistoryPresent` marker — an incompleteness trigger — so the finding
-is flagged "may be understated" instead of silently looking safe. The
-historical SIDs are **not yet evaluated** into the token; that remains the
-deeper follow-up (see the solution sketch).
+**Status (ADR 0052 — visibility step):** the gap is now **visible**. When an
+LDAP-resolved in-base identity carries `sIDHistory`, Stars fetches the count
+and emits the `SidHistoryPresent` marker — an incompleteness trigger — so
+the finding is flagged "may be understated" instead of silently looking
+safe. Coverage note: the count is read only on the **direct in-base LDAP
+path** (`parse_identity_from_entry`); identities resolved via SAM/LSA or as
+a Foreign Security Principal report count `0`, so the marker does not fire
+there. The historical SIDs are **not yet evaluated** into the token; that
+remains the deeper follow-up (see the solution sketch).
 
 ### Solution sketch
 
@@ -221,12 +224,15 @@ Stars findings for trust users can be **too high** — the DACL would
 grant, but Selective Auth or SID Filtering block at runtime.
 
 **Status (ADR 0052 — visibility step):** the gap is now **visible**. When
-the identity crosses a forest trust (resolved via an FSP, or found outside
-the configured LDAP base), Stars emits the informational
-`CrossForestTrustEffectsNotModeled` marker, warning that SID filtering /
-quarantine and Selective Authentication may reduce the shown access. Stars
-still does **not** read `trustAttributes` to model the actual filter effect
-— that is deliberately left as the deeper follow-up.
+the identity is resolved across a domain/trust boundary (via an FSP, or
+found outside the configured LDAP base), Stars emits the informational
+`TrustBoundaryEffectsNotModeled` marker, warning that *if* the boundary is a
+forest trust, SID filtering / quarantine and Selective Authentication may
+reduce the shown access. (For a purely intra-forest cross-domain identity
+those filters usually do not apply, so the marker is then only a
+precautionary note.) Stars still does **not** read `trustAttributes` to
+model the actual filter effect — that is deliberately left as the deeper
+follow-up.
 
 ### Solution sketch
 

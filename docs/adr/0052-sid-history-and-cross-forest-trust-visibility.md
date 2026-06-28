@@ -40,13 +40,19 @@ Two new variants in `adpa_core::model::PermissionDiagnostic`:
    `risk_engine::is_incomplete`, so derived risk findings carry
    `incomplete = true`. Message: the account carries N historical SID(s);
    ACEs referencing them are not evaluated, so rights may be understated.
-2. `CrossForestTrustEffectsNotModeled` — **informational.** Emitted when the
-   identity crosses a forest trust (resolved via a Foreign Security
-   Principal **or** found outside the configured LDAP base — both signals
-   already computed). It deliberately does **not** raise a second
+2. `TrustBoundaryEffectsNotModeled` — **informational.** Emitted when the
+   identity is resolved **across a domain/trust boundary**: via a Foreign
+   Security Principal **or** found outside the configured LDAP base (both
+   signals already computed). It deliberately does **not** raise a second
    incompleteness trigger, because the FSP / outside-base markers beside it
-   already set `incomplete`. Message: SID filtering / quarantine and
-   Selective Authentication may reduce the shown access.
+   already set `incomplete`. Message: *if* the boundary is a forest trust,
+   SID filtering / quarantine and Selective Authentication may reduce the
+   shown access. Naming note: the trigger includes the intra-forest
+   cross-domain case (`OutsideConfiguredLdapBase`), where those forest-trust
+   filters usually do **not** apply — hence the boundary-neutral name and the
+   conditional ("if a forest trust") wording, rather than asserting a
+   cross-forest effect that may not exist. Distinguishing intra-forest from
+   cross-forest would require reading trust topology (the option-B follow-up).
 
 Data flow (mirrors the existing `disabled` attribute):
 
@@ -57,9 +63,14 @@ Data flow (mirrors the existing `disabled` attribute):
   (`#[serde(default)]` for persisted back-compat). The SAM/LSA path cannot
   read it → count `0` → marker stays silent (no false positive).
 - The engine reads `input.identity.sid_history_count` (exactly as it reads
-  `input.identity.disabled`) and derives the cross-forest marker from the
+  `input.identity.disabled`) and derives the trust-boundary marker from the
   existing `identity_resolved_via_fsp` / `identity_not_in_configured_ldap_base`
   inputs. Rendered by `cli::output` and the HTML exporter.
+
+Coverage of the L3 marker: the count is set only on the direct in-base LDAP
+path (`parse_identity_from_entry`). SAM/LSA- and FSP-resolved identities keep
+count `0`, so a cross-forest principal's `sIDHistory` in its own forest is
+not flagged by L3 — consistent with the scope boundary below.
 
 ## Why on `Identity` (not a new `PermissionEvaluationInput` flag)
 
@@ -107,7 +118,7 @@ step is the correct first building block and is valuable on its own.
 ## Tests
 
 - Engine: `SidHistoryPresent` fires when `sid_history_count > 0` and not when
-  `0`; `CrossForestTrustEffectsNotModeled` fires for FSP and for
+  `0`; `TrustBoundaryEffectsNotModeled` fires for FSP and for
   outside-base, and not for a plain in-domain identity.
 - Risk engine: `SidHistoryPresent` marks a finding incomplete;
   `CrossForestTrustEffectsNotModeled` alone does not.

@@ -670,7 +670,10 @@ where
                     kind: account.kind,
                     disabled: false,
                     user_principal_name: None,
-                    sid_history_count: 0,
+                    // Consistent with the name/domain fallback above: carry the
+                    // FSP entry's count. (FSP objects do not expose the foreign
+                    // sIDHistory, so this is 0 in practice — see ADR 0052.)
+                    sid_history_count: fsp_identity.sid_history_count,
                 },
                 Err(e) => {
                     debug!(sid = %sid.0, error = %e, "FSP hit: LSA enrichment failed — keeping FSP identity");

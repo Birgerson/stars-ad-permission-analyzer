@@ -331,14 +331,16 @@ permanently not part of the product:
   filtered runtime result. In migrated or multi-forest environments a
   finding can be wrong in **both** directions.
 - **How visible (since ADR 0052):** the gaps are now **flagged**.
-  `SidHistoryPresent { count }` (medium, `incomplete = true`) fires when a
-  migrated account carries `sIDHistory` — the under-report case.
-  `CrossForestTrustEffectsNotModeled` (info) fires for forest-trust
-  identities (resolved via an FSP or found outside the configured LDAP
-  base) and warns that SID filtering and Selective Authentication may make
-  access lower than shown — the over-report cases. Both render in the CLI
-  and the HTML report. (Before ADR 0052 these produced no marker — the one
-  place Stars could be *silently* wrong.)
+  `SidHistoryPresent { count }` (high, `incomplete = true`) fires when an
+  LDAP-resolved in-base account carries `sIDHistory` — the under-report case
+  (the SAM/LSA/FSP path cannot read `sIDHistory`, so it does not fire there).
+  `TrustBoundaryEffectsNotModeled` (info) fires for identities resolved
+  across a domain/trust boundary (via an FSP or outside the configured LDAP
+  base) and warns that *if* the boundary is a forest trust, SID filtering
+  and Selective Authentication may make access lower than shown — the
+  over-report case. Both render in the CLI and the HTML report. (Before ADR
+  0052 these produced no marker — the one place Stars could be *silently*
+  wrong.)
 - **Solution:** the **visibility step shipped** (ADR 0052) — the markers
   above make the gaps honest instead of silent. The deeper work
   (evaluating `sIDHistory` into the token; reading `trustAttributes` to

@@ -675,28 +675,32 @@ pub enum PermissionDiagnostic {
     /// `incomplete = true`. `count` is the number of historical SIDs
     /// found. Note: whether a historical SID is actually honored also
     /// depends on the trust's SID-filtering / quarantine state, which
-    /// Stars does not model — see [`CrossForestTrustEffectsNotModeled`].
+    /// Stars does not model — see [`TrustBoundaryEffectsNotModeled`].
     ///
     /// Scope: this marker makes the gap **visible**; it does not yet
     /// evaluate the historical SIDs into the token (see ADR 0052).
     ///
-    /// [`CrossForestTrustEffectsNotModeled`]:
-    /// PermissionDiagnostic::CrossForestTrustEffectsNotModeled
+    /// [`TrustBoundaryEffectsNotModeled`]:
+    /// PermissionDiagnostic::TrustBoundaryEffectsNotModeled
     SidHistoryPresent { count: usize },
 
-    /// The analyzed identity crosses a forest trust — it was resolved via
-    /// a Foreign Security Principal object or found outside the configured
-    /// LDAP base. Stars computes effective rights assuming the trust
-    /// passes every SID and that authentication is allowed. A real forest
-    /// trust may however apply **SID filtering / quarantine** (dropping
-    /// SIDs, which lowers access) and **Selective Authentication**
+    /// The analyzed identity was resolved **across a domain or trust
+    /// boundary** — either via a Foreign Security Principal object (a
+    /// principal from a trusted external/forest domain) or via LSA because
+    /// it lies outside the configured LDAP base (another domain, possibly in
+    /// another forest). Stars computes effective rights assuming every SID
+    /// passes and that authentication is allowed. **If that boundary is a
+    /// forest trust**, the DC may apply **SID filtering / quarantine**
+    /// (dropping SIDs, which lowers access) and **Selective Authentication**
     /// (blocking the logon before the ACL is evaluated at all). Stars does
-    /// not read trust attributes, so the actual effective access can be
-    /// **lower** than shown ("over-report"). This marker is informational:
-    /// it fires alongside the FSP / outside-base markers, which already
-    /// set `incomplete = true`, so it deliberately does **not** raise a
-    /// second incompleteness trigger (no double-flagging). See ADR 0052.
-    CrossForestTrustEffectsNotModeled,
+    /// not read trust attributes, so for a cross-forest identity the shown
+    /// access can be **higher** than the runtime result ("over-report").
+    /// (For a purely intra-forest cross-domain identity those filters usually
+    /// do not apply, so the marker is then only a precautionary note.) This
+    /// marker is informational: it fires alongside the FSP / outside-base
+    /// markers, which already set `incomplete = true`, so it deliberately
+    /// does **not** raise a second incompleteness trigger. See ADR 0052.
+    TrustBoundaryEffectsNotModeled,
 }
 
 impl PermissionDiagnostic {
@@ -774,9 +778,9 @@ impl PermissionDiagnostic {
                 "Identity carries {count} historical SID(s) (sIDHistory); ACEs referencing them \
                  are not evaluated — effective rights may be understated."
             ),
-            PermissionDiagnostic::CrossForestTrustEffectsNotModeled => {
-                "Cross-forest trust effects (SID filtering / quarantine, Selective \
-                 Authentication) are not modeled; actual access may be lower than shown."
+            PermissionDiagnostic::TrustBoundaryEffectsNotModeled => {
+                "Identity resolved across a domain/trust boundary; if it is a forest trust, \
+                 SID filtering and Selective Authentication may reduce actual access (not modeled)."
                     .to_owned()
             }
         }

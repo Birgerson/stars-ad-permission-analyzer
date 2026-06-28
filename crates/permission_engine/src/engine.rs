@@ -246,7 +246,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         // Informational only: the FSP / outside-base markers above already
         // set incompleteness, so this deliberately adds no second trigger.
         if input.identity_resolved_via_fsp || input.identity_not_in_configured_ldap_base {
-            diagnostics.push(PermissionDiagnostic::CrossForestTrustEffectsNotModeled);
+            diagnostics.push(PermissionDiagnostic::TrustBoundaryEffectsNotModeled);
         }
 
         let result = EffectivePermission {
@@ -3248,10 +3248,10 @@ mod tests {
         );
     }
 
-    /// ADR 0052 (L4): a cross-forest identity resolved via an FSP surfaces
-    /// the informational CrossForestTrustEffectsNotModeled marker.
+    /// ADR 0052 (L4): an identity resolved via an FSP (a trust boundary)
+    /// surfaces the informational TrustBoundaryEffectsNotModeled marker.
     #[test]
-    fn engine_pushes_cross_forest_trust_effects_when_fsp() {
+    fn engine_pushes_trust_boundary_marker_when_fsp() {
         let mut input = base_input(
             user(USER),
             fso(None, vec![allow_ace(USER, MASK_READ, false)]),
@@ -3261,16 +3261,16 @@ mod tests {
         assert!(
             result
                 .diagnostics
-                .contains(&PermissionDiagnostic::CrossForestTrustEffectsNotModeled),
-            "cross-forest marker must fire when resolved via FSP; got {:?}",
+                .contains(&PermissionDiagnostic::TrustBoundaryEffectsNotModeled),
+            "trust-boundary marker must fire when resolved via FSP; got {:?}",
             result.diagnostics
         );
     }
 
-    /// The cross-forest marker also fires when the identity is outside the
-    /// configured LDAP base (the other forest-trust signal).
+    /// The trust-boundary marker also fires when the identity is outside the
+    /// configured LDAP base (the other boundary signal).
     #[test]
-    fn engine_pushes_cross_forest_trust_effects_when_outside_base() {
+    fn engine_pushes_trust_boundary_marker_when_outside_base() {
         let mut input = base_input(
             user(USER),
             fso(None, vec![allow_ace(USER, MASK_READ, false)]),
@@ -3280,15 +3280,15 @@ mod tests {
         assert!(
             result
                 .diagnostics
-                .contains(&PermissionDiagnostic::CrossForestTrustEffectsNotModeled),
-            "cross-forest marker must fire when outside the configured LDAP base; got {:?}",
+                .contains(&PermissionDiagnostic::TrustBoundaryEffectsNotModeled),
+            "trust-boundary marker must fire when outside the configured LDAP base; got {:?}",
             result.diagnostics
         );
     }
 
-    /// A plain in-domain identity gets neither forest-trust marker.
+    /// A plain in-domain identity gets no trust-boundary marker.
     #[test]
-    fn engine_no_cross_forest_marker_for_plain_identity() {
+    fn engine_no_trust_boundary_marker_for_plain_identity() {
         let result = DefaultPermissionEngine
             .evaluate(base_input(
                 user(USER),
@@ -3298,8 +3298,8 @@ mod tests {
         assert!(
             !result
                 .diagnostics
-                .contains(&PermissionDiagnostic::CrossForestTrustEffectsNotModeled),
-            "no cross-forest marker for a plain in-domain identity; got {:?}",
+                .contains(&PermissionDiagnostic::TrustBoundaryEffectsNotModeled),
+            "no trust-boundary marker for a plain in-domain identity; got {:?}",
             result.diagnostics
         );
     }

@@ -63,7 +63,7 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
                     | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
                     // ADR 0052 (L3): sIDHistory present — ACEs on historical
                     // SIDs are not evaluated, the effective right may be
-                    // understated. (CrossForestTrustEffectsNotModeled is
+                    // understated. (TrustBoundaryEffectsNotModeled is
                     // informational and deliberately NOT an incompleteness
                     // trigger — it fires beside the FSP / outside-base markers
                     // which already set incomplete.)
@@ -597,18 +597,18 @@ mod tests {
         );
     }
 
-    /// ADR 0052 (L4): CrossForestTrustEffectsNotModeled is informational —
+    /// ADR 0052 (L4): TrustBoundaryEffectsNotModeled is informational —
     /// it fires beside the FSP / outside-base markers, which already flag
     /// incompleteness, so alone it must NOT mark a finding incomplete.
     #[test]
-    fn cross_forest_trust_effects_diagnostic_alone_does_not_mark_incomplete() {
+    fn trust_boundary_effects_diagnostic_alone_does_not_mark_incomplete() {
         let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
-        p.diagnostics = vec![PermissionDiagnostic::CrossForestTrustEffectsNotModeled];
+        p.diagnostics = vec![PermissionDiagnostic::TrustBoundaryEffectsNotModeled];
         let r = FullControlRule.evaluate(&ctx(vec![p]));
         assert_eq!(r.len(), 1);
         assert!(
             !r[0].incomplete,
-            "CrossForestTrustEffectsNotModeled alone must NOT flag incomplete"
+            "TrustBoundaryEffectsNotModeled alone must NOT flag incomplete"
         );
     }
 

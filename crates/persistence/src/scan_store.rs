@@ -550,6 +550,10 @@ impl RawPermRow {
                 // UPN is not persisted today; it's only relevant for live AD/NetAPI
                 // calls, not for historical reports.
                 user_principal_name: None,
+                // sid_history_count is an evaluation-time input, not persisted:
+                // the derived SidHistoryPresent marker is already stored in the
+                // `diagnostics` column, so the reloaded report stays correct
+                // with the field at 0 (ADR 0052).
                 sid_history_count: 0,
             },
             path: NormalizedPath(path),

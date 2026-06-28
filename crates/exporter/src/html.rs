@@ -383,8 +383,10 @@ fn write_permissions_table(
                     ));
                 }
                 PermissionDiagnostic::SidHistoryPresent { count } => {
+                    // High: an understated right is the "looks safe, isn't safe"
+                    // case — the most dangerous to miss.
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-medium\" \
+                        "<span class=\"badge badge-high\" \
                          title=\"This identity carries {count} historical SID(s) \
                          (sIDHistory). ACEs referencing a historical SID are not \
                          evaluated, but the real logon token includes it — \
@@ -392,15 +394,16 @@ fn write_permissions_table(
                          incomplete.\">⚠ {count} historical SID(s) not evaluated</span>"
                     ));
                 }
-                PermissionDiagnostic::CrossForestTrustEffectsNotModeled => {
+                PermissionDiagnostic::TrustBoundaryEffectsNotModeled => {
                     diag_parts.push(
                         "<span class=\"badge badge-info\" \
-                         title=\"Cross-forest trust effects are not modeled. \
-                         Computed rights assume the trust passes all SIDs and \
-                         that authentication is allowed. SID filtering / \
-                         quarantine and Selective Authentication may reduce \
-                         actual access — the real effective access can be lower \
-                         than shown.\">ℹ cross-forest trust effects not modeled</span>"
+                         title=\"The identity was resolved across a domain / trust \
+                         boundary (foreign security principal, or outside the \
+                         configured LDAP base). If that boundary is a forest trust, \
+                         SID filtering / quarantine and Selective Authentication may \
+                         reduce actual access — these runtime trust effects are not \
+                         modeled, so the shown access can be too high for a \
+                         cross-forest identity.\">ℹ trust-boundary effects not modeled</span>"
                             .to_string(),
                     );
                 }

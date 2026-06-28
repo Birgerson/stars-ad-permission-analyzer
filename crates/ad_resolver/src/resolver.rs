@@ -657,6 +657,37 @@ mod tests {
     use super::*;
     use crate::config::LdapConfig;
 
+    // --- Unit tests (no LDAP needed): sIDHistory count from the entry ---
+
+    #[test]
+    fn parse_identity_reads_sid_history_count() {
+        // Two binary sIDHistory values → count 2 (ADR 0052).
+        let mut bin = HashMap::new();
+        bin.insert("sIDHistory".to_string(), vec![vec![1u8], vec![2u8]]);
+        let mut attrs = HashMap::new();
+        attrs.insert("sAMAccountName".to_string(), vec!["mig01".to_string()]);
+        let entry = RawEntry {
+            dn: "CN=mig01,DC=res,DC=lab".to_string(),
+            attrs,
+            bin_attrs: bin,
+        };
+        let id = parse_identity_from_entry(&entry, &Sid("S-1-5-21-1-2-3-1000".into()));
+        assert_eq!(id.sid_history_count, 2);
+    }
+
+    #[test]
+    fn parse_identity_without_sid_history_is_zero() {
+        let mut attrs = HashMap::new();
+        attrs.insert("sAMAccountName".to_string(), vec!["normal".to_string()]);
+        let entry = RawEntry {
+            dn: "CN=normal,DC=res,DC=lab".to_string(),
+            attrs,
+            bin_attrs: HashMap::new(),
+        };
+        let id = parse_identity_from_entry(&entry, &Sid("S-1-5-21-1-2-3-1001".into()));
+        assert_eq!(id.sid_history_count, 0);
+    }
+
     fn test_config() -> Option<LdapConfig> {
         let server = std::env::var("DEVMS_TEST_LDAP_SERVER").ok()?;
         let base_dn = std::env::var("DEVMS_TEST_LDAP_BASE_DN").ok()?;

@@ -261,12 +261,12 @@ pub fn print_report(
                     println!("      the real logon token still includes it — effective rights");
                     println!("      may be understated. Treat as incomplete.");
                 }
-                PermissionDiagnostic::CrossForestTrustEffectsNotModeled => {
-                    println!("  [i] Cross-forest trust effects are not modeled. Computed rights");
-                    println!("      assume the trust passes all SIDs and that authentication is");
-                    println!("      allowed. SID filtering / quarantine and Selective");
-                    println!("      Authentication may reduce actual access — the real effective");
-                    println!("      access can be lower than shown.");
+                PermissionDiagnostic::TrustBoundaryEffectsNotModeled => {
+                    println!("  [i] Identity resolved across a domain / trust boundary (foreign");
+                    println!("      security principal, or outside the configured LDAP base).");
+                    println!("      If that boundary is a forest trust, SID filtering /");
+                    println!("      quarantine and Selective Authentication may reduce actual");
+                    println!("      access — these runtime trust effects are not modeled.");
                 }
             }
         }
