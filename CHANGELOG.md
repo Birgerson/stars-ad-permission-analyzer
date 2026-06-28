@@ -10,6 +10,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+(No unreleased changes — see v1.7.2 below for the latest release.)
+
+---
+
+## [1.7.2] — 2026-06-28
+
+**Visibility & diagnostics release.** Stars now flags its two most dangerous
+silent-evaluation gaps instead of being quietly wrong — migrated-account
+`sIDHistory` (under-report) and cross-forest trust filtering / Selective
+Authentication (over-report) — adds a configurable LDAP timeout for large
+domains, and makes the GUI distinguish warnings from informational markers.
+All demonstrated live against a multi-forest test lab.
+
 ### Added
 
 - **L3/L4 silent-gap markers (visibility step, ADR 0052).** Two new
