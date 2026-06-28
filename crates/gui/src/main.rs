@@ -635,9 +635,9 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "User/group:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: "Identity:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "DOMAIN\\user  or  user@domain.lab  or  S-1-5-21-...  (type the full domain user)";
+                                                placeholder-text: "local name · DOMAIN\\user · user@domain.lab · S-1-5-21-…";
                                                 text <=> root.a-name;
                                                 edited(s) => { root.analyze-name-edited(s); }
                                                 accepted(s) => { root.resolve-name-clicked(); }
@@ -646,7 +646,7 @@ slint::slint! {
                                         Row {
                                             Text { text: ""; }
                                             Text {
-                                                text: "Suggestion list shows local accounts only. For domain users: type DOMAIN\\user or UPN, then click 'Resolve SID'.";
+                                                text: "One field for any identity — a local name, DOMAIN\\user, UPN, or a raw SID. Stars resolves it when you run; the suggestion list covers local accounts, and 'Resolve SID' is an optional preview.";
                                                 color: Theme.text-muted;
                                                 font-size: 11px;
                                                 wrap: word-wrap;
@@ -712,9 +712,9 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "User SID:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: "Resolved SID:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "S-1-5-21-...   (type directly or resolve above)";
+                                                placeholder-text: "auto-filled when you run · or paste a SID directly";
                                                 text <=> root.a-sid;
                                             }
                                         }
@@ -971,9 +971,9 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "User/group:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: "Identity:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "DOMAIN\\user  or  user@domain.lab  or  S-1-5-21-...  (type the full domain user)";
+                                                placeholder-text: "local name · DOMAIN\\user · user@domain.lab · S-1-5-21-…";
                                                 text <=> root.s-name;
                                                 edited(s) => { root.scan-name-edited(s); }
                                                 accepted(s) => { root.resolve-scan-name-clicked(); }
@@ -982,7 +982,7 @@ slint::slint! {
                                         Row {
                                             Text { text: ""; }
                                             Text {
-                                                text: "Suggestion list shows local accounts only. For domain users: type DOMAIN\\user or UPN, then click 'Resolve SID'.";
+                                                text: "One field for any identity — a local name, DOMAIN\\user, UPN, or a raw SID. Stars resolves it when you run; the suggestion list covers local accounts, and 'Resolve SID' is an optional preview.";
                                                 color: Theme.text-muted;
                                                 font-size: 11px;
                                                 wrap: word-wrap;
@@ -1048,9 +1048,9 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "User SID:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: "Resolved SID:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "S-1-5-21-...   (type directly or resolve above)";
+                                                placeholder-text: "auto-filled when you run · or paste a SID directly";
                                                 text <=> root.s-sid;
                                             }
                                         }
@@ -1996,12 +1996,46 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         let req_tx = &analyze_tx;
         let Some(ui) = weak.upgrade() else { return };
         let path = ui.get_a_path().to_string();
-        let sid = ui.get_a_sid().to_string();
-
-        if path.trim().is_empty() || sid.trim().is_empty() {
-            ui.set_a_status("Path and SID are required.".into());
+        if path.trim().is_empty() {
+            ui.set_a_status("Path is required.".into());
             ui.set_a_status_is_error(true);
             return;
+        }
+
+        // Identity: use the SID field if set, otherwise take what was typed in
+        // the identity field — a raw SID is used directly, a name / UPN is
+        // resolved to a SID via LSA. This lets the user just type an identity
+        // and click Analyze; the separate "Resolve SID" step is now optional.
+        let mut sid = ui.get_a_sid().to_string();
+        if sid.trim().is_empty() {
+            let identity = ui.get_a_name().to_string();
+            let identity = identity.trim();
+            if identity.is_empty() {
+                ui.set_a_status("Path and identity are required.".into());
+                ui.set_a_status_is_error(true);
+                return;
+            }
+            if identity.starts_with("S-1-") {
+                sid = identity.to_string();
+            } else {
+                let mut resolved = String::new();
+                let mut resolve_err = String::new();
+                resolve_name_to_sid(identity, |s| resolved = s, |e| resolve_err = e);
+                if resolved.trim().is_empty() {
+                    let msg = if resolve_err.is_empty() {
+                        "Identity could not be resolved to a SID.".to_string()
+                    } else {
+                        resolve_err
+                    };
+                    ui.set_a_name_error(msg.clone().into());
+                    ui.set_a_status(msg.into());
+                    ui.set_a_status_is_error(true);
+                    return;
+                }
+                ui.set_a_name_error("".into());
+                sid = resolved;
+            }
+            ui.set_a_sid(sid.clone().into());
         }
 
         // LDAP mode: 0 = off (SAM/LSA), 1 = LDAPS, 2 = plain LDAP,
@@ -2045,7 +2079,7 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         }
     });
 
-    // "Wer hat Zugriff?" — path-centric trustee view. Needs no SID.
+    // "Who has access?" — path-centric trustee view. Needs no SID.
     {
         let weak = ui.as_weak();
         let req_tx = req_tx.clone();
@@ -2245,12 +2279,45 @@ fn wire_scan_tab(
         ui.on_scan_clicked(move || {
             let Some(ui) = weak.upgrade() else { return };
             let root = ui.get_s_root().to_string();
-            let sid = ui.get_s_sid().to_string();
-
-            if root.trim().is_empty() || sid.trim().is_empty() {
-                ui.set_s_status("Root path and SID are required.".into());
+            if root.trim().is_empty() {
+                ui.set_s_status("Root path is required.".into());
                 ui.set_s_status_is_error(true);
                 return;
+            }
+
+            // Identity: SID field if set, else resolve the typed identity (a raw
+            // SID is used directly, a name / UPN is resolved via LSA) — same as
+            // the Analyze tab, so the user can just type an identity and Scan.
+            let mut sid = ui.get_s_sid().to_string();
+            if sid.trim().is_empty() {
+                let identity = ui.get_s_name().to_string();
+                let identity = identity.trim();
+                if identity.is_empty() {
+                    ui.set_s_status("Root path and identity are required.".into());
+                    ui.set_s_status_is_error(true);
+                    return;
+                }
+                if identity.starts_with("S-1-") {
+                    sid = identity.to_string();
+                } else {
+                    let mut resolved = String::new();
+                    let mut resolve_err = String::new();
+                    resolve_name_to_sid(identity, |s| resolved = s, |e| resolve_err = e);
+                    if resolved.trim().is_empty() {
+                        let msg = if resolve_err.is_empty() {
+                            "Identity could not be resolved to a SID.".to_string()
+                        } else {
+                            resolve_err
+                        };
+                        ui.set_s_name_error(msg.clone().into());
+                        ui.set_s_status(msg.into());
+                        ui.set_s_status_is_error(true);
+                        return;
+                    }
+                    ui.set_s_name_error("".into());
+                    sid = resolved;
+                }
+                ui.set_s_sid(sid.clone().into());
             }
 
             let max_depth = if ui.get_s_limit_depth() {

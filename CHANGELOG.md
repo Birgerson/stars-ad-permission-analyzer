@@ -10,6 +10,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Changed
+
+- **GUI: one identity field, auto-resolved on run.** The Analyze and Scan
+  tabs now take the identity (local name, `DOMAIN\user`, UPN, or a raw SID) in
+  a **single** field and resolve it automatically when you click Analyze/Scan
+  — the separate "Resolve SID" step is now an optional preview, and the SID
+  field is relabelled "Resolved SID" (auto-filled). Removes the mandatory
+  "type a name → resolve → analyze" three-step.
+
 ### Fixed
 
 - **Purged leftover German UI/code strings** that the umlaut-only CI language
