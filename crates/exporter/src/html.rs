@@ -108,7 +108,7 @@ tr:hover td{background:#111d2e}
 .badge-high{background:#EA580C;color:#fff}
 .badge-medium{background:#D97706;color:#fff}
 .badge-low{background:#16A34A;color:#fff}
-.badge-info{background:#0891B2;color:#fff}
+.badge-neutral{background:#475569;color:#fff}
 .badge-correct{background:#0067C0;color:#fff}
 .badge-fc{background:#DC2626;color:#fff}
 .badge-modify{background:#EA580C;color:#fff}
@@ -237,7 +237,7 @@ fn write_permissions_table(
         }
         if let LocalGroupEvalStatus::NotAvailable(reason) = &p.local_group_status {
             diag_parts.push(format!(
-                "<span class=\"badge badge-high\" title=\"{}\">⚠ local groups unavailable</span>",
+                "<span class=\"badge badge-neutral\" title=\"{}\">ℹ local groups unavailable</span>",
                 escape_html(reason)
             ));
         }
@@ -245,7 +245,7 @@ fn write_permissions_table(
             match d {
                 PermissionDiagnostic::NonCanonicalDaclOrder { at_index } => {
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-info\" \
+                        "<span class=\"badge badge-neutral\" \
                          title=\"DACL is not in Windows-canonical order (first \
                          violating ACE at index {at_index}). Windows AccessCheck \
                          walks in stored order — the result is exact but may \
@@ -274,19 +274,19 @@ fn write_permissions_table(
                 }
                 PermissionDiagnostic::DomainGroupRecursionIncomplete => {
                     diag_parts.push(
-                        "<span class=\"badge badge-medium\" \
+                        "<span class=\"badge badge-neutral\" \
                          title=\"Group resolution ran through the SAM/LSA \
                          fallback (no LDAP). NetUserGetGroups returns only \
                          direct global groups — nested domain groups are not \
                          recursively resolved. ACEs targeting deeply nested \
                          groups may be missed; treat the finding as \
-                         incomplete.\">⚠ SAM fallback — nested groups not resolved</span>"
+                         incomplete.\">ℹ SAM fallback — nested groups not resolved</span>"
                             .to_string(),
                     );
                 }
                 PermissionDiagnostic::IdentityDisabled => {
                     diag_parts.push(
-                        "<span class=\"badge badge-info\" \
+                        "<span class=\"badge badge-neutral\" \
                          title=\"The identity is flagged as disabled in AD \
                          (userAccountControl ACCOUNTDISABLE). Computed \
                          rights are ACL-theoretically correct, but the \
@@ -297,20 +297,20 @@ fn write_permissions_table(
                 }
                 PermissionDiagnostic::IdentityNotInConfiguredLdapBase => {
                     diag_parts.push(
-                        "<span class=\"badge badge-medium\" \
+                        "<span class=\"badge badge-neutral\" \
                          title=\"The user was resolved via Windows LSA but \
                          the configured LDAP base DN does not index that \
                          SID (typical for multi-domain forests or trusted \
                          domains). Domain group recursion ran only through \
                          the user's home domain — nested cross-domain \
                          memberships may be missing. Treat the finding as \
-                         incomplete.\">⚠ identity outside configured LDAP base</span>"
+                         incomplete.\">ℹ identity outside configured LDAP base</span>"
                             .to_string(),
                     );
                 }
                 PermissionDiagnostic::IdentityDisabledStatusUnknown => {
                     diag_parts.push(
-                        "<span class=\"badge badge-info\" \
+                        "<span class=\"badge badge-neutral\" \
                          title=\"The 'disabled' flag for this identity \
                          could not be determined (e.g. SAM/LSA fallback \
                          without NetUserGetInfo, or LDAP did not return \
@@ -343,7 +343,7 @@ fn write_permissions_table(
                 }
                 PermissionDiagnostic::OwnerRightsAceApplied => {
                     diag_parts.push(
-                        "<span class=\"badge badge-info\" \
+                        "<span class=\"badge badge-neutral\" \
                          title=\"The DACL contains an OWNER RIGHTS \
                          (S-1-3-4) entry and the analyzed identity is \
                          the object's owner. Per Windows semantics that \
@@ -356,20 +356,20 @@ fn write_permissions_table(
                 }
                 PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal => {
                     diag_parts.push(
-                        "<span class=\"badge badge-medium\" \
+                        "<span class=\"badge badge-neutral\" \
                          title=\"The identity is a principal from a \
                          trusted forest, found as a Foreign Security \
                          Principal object in the home domain. \
                          Home-domain group memberships were resolved \
                          through the FSP — but the principal's \
                          memberships in its own forest are unknown. \
-                         Treat the finding as incomplete.\">⚠ resolved via FSP — trust-side groups unknown</span>"
+                         Treat the finding as incomplete.\">ℹ resolved via FSP — trust-side groups unknown</span>"
                             .to_string(),
                     );
                 }
                 PermissionDiagnostic::GroupResolutionViaGlobalCatalog => {
                     diag_parts.push(
-                        "<span class=\"badge badge-medium\"                          title=\"Group memberships were resolved through                          a Global Catalog bind. Only universal group                          memberships replicate fully to the GC — global                          and domain-local memberships of foreign domains                          can be missing. Treat the finding as                          incomplete.\">⚠ groups via Global Catalog — may be partial</span>"
+                        "<span class=\"badge badge-neutral\"                          title=\"Group memberships were resolved through                          a Global Catalog bind. Only universal group                          memberships replicate fully to the GC — global                          and domain-local memberships of foreign domains                          can be missing. Treat the finding as                          incomplete.\">ℹ groups via Global Catalog — may be partial</span>"
                             .to_string(),
                     );
                 }
@@ -397,7 +397,7 @@ fn write_permissions_table(
                 }
                 PermissionDiagnostic::TrustBoundaryEffectsNotModeled => {
                     diag_parts.push(
-                        "<span class=\"badge badge-info\" \
+                        "<span class=\"badge badge-neutral\" \
                          title=\"The identity was resolved across a domain / trust \
                          boundary (foreign security principal, or outside the \
                          configured LDAP base). If that boundary is a forest trust, \
@@ -543,7 +543,7 @@ fn severity_badge(sev: &RiskSeverity) -> String {
         RiskSeverity::High => ("badge-high", "HIGH"),
         RiskSeverity::Medium => ("badge-medium", "MEDIUM"),
         RiskSeverity::Low => ("badge-low", "LOW"),
-        RiskSeverity::Info => ("badge-info", "INFO"),
+        RiskSeverity::Info => ("badge-neutral", "INFO"),
     };
     format!("<span class=\"badge {cls}\">{label}</span>")
 }

@@ -726,16 +726,21 @@ pub enum PermissionDiagnostic {
     TrustBoundaryEffectsNotModeled,
 }
 
-/// Presentation severity of a [`PermissionDiagnostic`] — how strongly it
-/// should be surfaced. `Info` = the result is exact, context only; `Warning`
-/// = the evaluation may be incomplete; `High` = an under-report or hard gap
-/// ("looks safe, isn't safe"). Single source of truth for the marker colour
-/// in the GUI and HTML report and for the CLI `[i]`/`[!]` prefix.
+/// **Visual attention** of a [`PermissionDiagnostic`] — "do I need to look?".
+/// Deliberately decoupled from [`PermissionDiagnostic::is_incompleteness_trigger`]
+/// (the *correctness* flag): an expected caveat such as the SAM/LSA fallback is
+/// still an incompleteness trigger, but should not raise visual alarm.
+///
+/// - `Neutral` — correct, or expected context; no action implied (grey).
+/// - `Notice` — worth a look (amber).
+/// - `Concern` — likely a real gap / under-report (orange-red).
+///
+/// Single source of truth for the marker colour in the GUI and HTML report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSeverity {
-    Info,
-    Warning,
-    High,
+    Neutral,
+    Notice,
+    Concern,
 }
 
 impl PermissionDiagnostic {
@@ -822,38 +827,52 @@ impl PermissionDiagnostic {
     }
 
     /// Whether this diagnostic means the computed rights may be **wrong /
-    /// incomplete** (a warning) as opposed to purely informational context.
-    /// Exactly "severity is not `Info`". Consumed by
-    /// `EffectivePermission::is_incomplete` (and through it the risk engine).
+    /// incomplete** (the *correctness* flag), consumed by
+    /// `EffectivePermission::is_incomplete` and the risk engine. Deliberately
+    /// **independent** of [`Self::severity`]: an expected caveat (e.g. the
+    /// SAM/LSA fallback) is an incompleteness trigger yet visually `Neutral`.
     pub fn is_incompleteness_trigger(&self) -> bool {
-        self.severity() != DiagnosticSeverity::Info
+        matches!(
+            self,
+            PermissionDiagnostic::UnsupportedShareAces { .. }
+                | PermissionDiagnostic::UnsupportedNtfsAces { .. }
+                | PermissionDiagnostic::DomainGroupRecursionIncomplete
+                | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
+                | PermissionDiagnostic::IdentityLookupFailed { .. }
+                | PermissionDiagnostic::GroupResolutionFailed { .. }
+                | PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
+                | PermissionDiagnostic::GroupResolutionViaGlobalCatalog
+                | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
+                | PermissionDiagnostic::SidHistoryPresent { .. }
+        )
     }
 
-    /// Presentation severity — the single source of truth for how a marker is
-    /// coloured (GUI / HTML) and prefixed (CLI `[i]`/`[!]`). Exhaustive so a
-    /// new variant must be classified deliberately.
+    /// Visual attention — the single source of truth for marker colour (GUI /
+    /// HTML). "Do I need to look?" rather than "is it incomplete?". Exhaustive
+    /// so a new variant must be classified deliberately.
     pub fn severity(&self) -> DiagnosticSeverity {
         match self {
-            // Exact evaluation — informational context only.
+            // Correct or expected context — no action, grey.
             PermissionDiagnostic::NonCanonicalDaclOrder { .. }
             | PermissionDiagnostic::IdentityDisabled
             | PermissionDiagnostic::IdentityDisabledStatusUnknown
             | PermissionDiagnostic::OwnerRightsAceApplied
-            | PermissionDiagnostic::TrustBoundaryEffectsNotModeled => DiagnosticSeverity::Info,
-            // Under-report / hard gap — the most dangerous to miss.
+            | PermissionDiagnostic::TrustBoundaryEffectsNotModeled
+            | PermissionDiagnostic::DomainGroupRecursionIncomplete
+            | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
+            | PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
+            | PermissionDiagnostic::GroupResolutionViaGlobalCatalog => DiagnosticSeverity::Neutral,
+            // Worth a look — a hidden Deny among skipped ACEs could change the
+            // result.
+            PermissionDiagnostic::UnsupportedShareAces { .. }
+            | PermissionDiagnostic::UnsupportedNtfsAces { .. } => DiagnosticSeverity::Notice,
+            // Likely a real gap — under-report or a hard resolution failure.
             PermissionDiagnostic::SidHistoryPresent { .. }
             | PermissionDiagnostic::IdentityLookupFailed { .. }
             | PermissionDiagnostic::GroupResolutionFailed { .. }
             | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. } => {
-                DiagnosticSeverity::High
+                DiagnosticSeverity::Concern
             }
-            // Remaining incompleteness sources.
-            PermissionDiagnostic::UnsupportedShareAces { .. }
-            | PermissionDiagnostic::UnsupportedNtfsAces { .. }
-            | PermissionDiagnostic::DomainGroupRecursionIncomplete
-            | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
-            | PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
-            | PermissionDiagnostic::GroupResolutionViaGlobalCatalog => DiagnosticSeverity::Warning,
         }
     }
 }

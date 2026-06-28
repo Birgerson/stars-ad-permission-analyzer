@@ -248,29 +248,26 @@ pub struct DiagnosticRow {
     pub level: i32,
 }
 
-/// Maps a marker severity to the GUI level: `0` = info, `1` = warning,
-/// `2` = high.
+/// Maps a marker's visual attention to the GUI level: `0` = neutral,
+/// `1` = notice (amber), `2` = concern (orange-red).
 fn diag_level(sev: adpa_core::model::DiagnosticSeverity) -> i32 {
-    use adpa_core::model::DiagnosticSeverity::{High, Info, Warning};
+    use adpa_core::model::DiagnosticSeverity::{Concern, Neutral, Notice};
     match sev {
-        Info => 0,
-        Warning => 1,
-        High => 2,
+        Neutral => 0,
+        Notice => 1,
+        Concern => 2,
     }
 }
 
-/// Row presentation level: `3` = a high (under-report) marker is present,
-/// `2` = otherwise incomplete, `1` = info-only markers, `0` = correct.
+/// Row attention level: `2` = a concern marker is present, `1` = a notice
+/// marker, `0` = neutral (correct, or only expected-context caveats). Mirrors
+/// "do I need to look?" rather than the correctness flag — a SAM-fallback row
+/// stays neutral even though it is technically incomplete.
 fn row_severity(perm: &adpa_core::model::EffectivePermission) -> i32 {
-    if perm
-        .diagnostics
-        .iter()
-        .any(|d| d.severity() == adpa_core::model::DiagnosticSeverity::High)
-    {
-        3
-    } else if perm.is_incomplete() {
+    use adpa_core::model::DiagnosticSeverity::{Concern, Notice};
+    if perm.diagnostics.iter().any(|d| d.severity() == Concern) {
         2
-    } else if !perm.diagnostics.is_empty() {
+    } else if perm.diagnostics.iter().any(|d| d.severity() == Notice) {
         1
     } else {
         0

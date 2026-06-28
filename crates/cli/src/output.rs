@@ -195,7 +195,7 @@ pub fn print_report(
                     println!("      'incomplete' for this path.");
                 }
                 PermissionDiagnostic::DomainGroupRecursionIncomplete => {
-                    println!("  [!] Group resolution ran through the SAM/LSA fallback (no LDAP).");
+                    println!("  [i] Group resolution ran through the SAM/LSA fallback (no LDAP).");
                     println!("      NetUserGetGroups returns only direct global groups — nested");
                     println!("      domain groups are not recursively resolved. ACEs targeting");
                     println!("      deeply nested groups may be missed.");
@@ -206,7 +206,7 @@ pub fn print_report(
                     println!("      account normally cannot authenticate / access SMB.");
                 }
                 PermissionDiagnostic::IdentityNotInConfiguredLdapBase => {
-                    println!("  [!] Identity was resolved via Windows LSA but the configured");
+                    println!("  [i] Identity was resolved via Windows LSA but the configured");
                     println!("      LDAP base DN does not index that SID (typical for multi-");
                     println!("      domain forests or trusted domains). Domain group recursion");
                     println!("      ran only through the user's home domain — nested cross-");
@@ -237,14 +237,14 @@ pub fn print_report(
                     println!("      suppressed. The evaluation is exact — informational only.");
                 }
                 PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal => {
-                    println!("  [!] Identity is a trust-forest principal found as a Foreign");
+                    println!("  [i] Identity is a trust-forest principal found as a Foreign");
                     println!("      Security Principal object in the home domain. Home-domain");
                     println!("      groups were resolved through the FSP — but the principal's");
                     println!("      memberships in its own forest are unknown. Treat as");
                     println!("      incomplete.");
                 }
                 PermissionDiagnostic::GroupResolutionViaGlobalCatalog => {
-                    println!("  [!] Group memberships were resolved through a Global Catalog");
+                    println!("  [i] Group memberships were resolved through a Global Catalog");
                     println!("      bind. Only universal group memberships replicate fully to");
                     println!("      the GC — global and domain-local memberships of foreign");
                     println!("      domains can be missing. Treat as incomplete.");

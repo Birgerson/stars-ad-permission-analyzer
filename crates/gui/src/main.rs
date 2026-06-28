@@ -1255,23 +1255,18 @@ slint::slint! {
                                                 }
                                                 Text {
                                                     text: row.path;
-                                                    // Severity ramp: high (under-report) → danger,
-                                                    // warning → amber, info-only → teal, correct →
-                                                    // neutral text (kept calm; problems stand out).
-                                                    color: row.row-severity == 3 ? Theme.danger
-                                                         : row.row-severity == 2 ? Theme.warning
-                                                         : row.row-severity == 1 ? Theme.info
+                                                    // Attention ramp: concern → orange-red,
+                                                    // notice → amber, neutral (correct or expected
+                                                    // caveat) → plain text. Only real problems pop.
+                                                    color: row.row-severity == 2 ? Theme.danger
+                                                         : row.row-severity == 1 ? Theme.warning
                                                          : Theme.text-primary;
                                                     overflow: elide;
                                                     horizontal-stretch: 1;
                                                 }
                                                 Text {
                                                     text: row.rights_label;
-                                                    // Correct/complete rows show the rights value in
-                                                    // Microsoft blue (a calm "trustworthy result");
-                                                    // flagged rows stay neutral — the path carries the
-                                                    // severity colour.
-                                                    color: row.row-severity == 0 ? Theme.correct : Theme.text-primary;
+                                                    color: Theme.text-primary;
                                                     width: 200px;
                                                 }
                                                 Text {
@@ -1308,12 +1303,12 @@ slint::slint! {
                                                     color: Theme.text-secondary;
                                                     font-weight: 700;
                                                 }
-                                                // info (ℹ, teal) · warning (⚠, amber) · high (⚠, orange-red).
+                                                // neutral (ℹ, grey) · notice (⚠, amber) · concern (⚠, orange-red).
                                                 for diag[d] in row.diagnostics: Text {
                                                     text: (diag.level == 0 ? "ℹ " : "⚠ ") + diag.text;
                                                     color: diag.level == 2 ? Theme.danger
                                                          : diag.level == 1 ? Theme.warning
-                                                         : Theme.info;
+                                                         : Theme.text-secondary;
                                                     wrap: word-wrap;
                                                 }
                                             }

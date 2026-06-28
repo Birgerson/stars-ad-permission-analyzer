@@ -19,14 +19,20 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   field is relabelled "Resolved SID" (auto-filled). Removes the mandatory
   "type a name → resolve → analyze" three-step.
 - **Unified, saturated severity colours across the GUI and HTML report.** One
-  source of truth in the core (`PermissionDiagnostic::severity` →
-  `Info`/`Warning`/`High`) drives the colour everywhere: **correct/complete =
-  Microsoft blue** (`#0067C0`), info = teal, warning = amber, high
-  (under-report) = orange-red, error/critical = red, OK = green — each with a
-  light- and dark-mode tone in the GUI. The GUI scan list now keeps correct
-  rows calm and makes problems stand out by severity; the HTML badges use the
-  same palette. `NonCanonicalDaclOrder` is reclassified Info (the result is
-  exact). Report font set to Arial to match the GUI.
+  source of truth in the core drives the colour everywhere, and **visual
+  attention is decoupled from the correctness flag** — "do I need to look?"
+  rather than "is it incomplete?". `PermissionDiagnostic::severity` →
+  `Neutral` (grey, ℹ) for correct **and expected caveats** (e.g. the SAM/LSA
+  fallback, cross-domain/FSP/GC, disabled account, OWNER RIGHTS), `Notice`
+  (amber, ⚠) for "worth a look" (unsupported ACEs — a hidden Deny could
+  change the result), `Concern` (orange-red, ⚠) for likely real gaps
+  (sIDHistory under-report, resolution failures). Risk severities use the same
+  saturated ramp (green · amber · orange-red · red), each with a light- and
+  dark-mode tone in the GUI. A SAM-mode scan is now calm grey instead of a
+  wall of amber; only genuine problems stand out. `is_incompleteness_trigger`
+  (the correctness flag for the risk engine) is unchanged. Report font set to
+  Arial to match the GUI; a Microsoft-blue (`#0067C0`) `confirmed` badge marks
+  complete risk findings.
 
 ### Fixed
 
