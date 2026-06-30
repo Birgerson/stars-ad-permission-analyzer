@@ -10,14 +10,16 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.7.5-rc2 below for the latest pre-release.)
+(No unreleased changes — see v1.7.6-rc1 below for the latest pre-release.)
 
 ---
 
-## [1.7.5-rc2] — 2026-06-30
+## [1.7.6-rc1] — 2026-06-30
 
-**Pre-release / release candidate** (sorts below the stable `1.7.5` by SemVer).
-Adds logon-name LDAP binding for live lab testing before a final release.
+**Pre-release / release candidate for the upcoming 1.7.6.** Sorts *above* the
+stable `1.7.5` by SemVer, so it shows at the top of the releases list while
+`1.7.5` keeps the "Latest" (stable) badge. Adds logon-name LDAP binding for
+live lab testing ahead of the final 1.7.6.
 
 ### Added
 
