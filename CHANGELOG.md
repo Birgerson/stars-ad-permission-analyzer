@@ -10,6 +10,16 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+(No unreleased changes — see v1.7.5 below for the latest release.)
+
+---
+
+## [1.7.5] — 2026-06-30
+
+**Groups-tab polish & GUI/CLI timeout parity.** Live identity suggestions and
+an LDAP `Timeout (s)` control in the GUI, plus the Groups-tab layout fix. No
+engine-behaviour changes.
+
 ### Added
 
 - **Groups tab: live identity suggestions.** Typing in the Groups identity

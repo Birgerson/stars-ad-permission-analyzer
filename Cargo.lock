@@ -20,7 +20,7 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 
 [[package]]
 name = "ad_resolver"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "adpa_core",
  "async-trait",
@@ -41,7 +41,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "adpa_core"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -677,7 +677,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cli"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "ad_resolver",
  "adpa_core",
@@ -1196,7 +1196,7 @@ dependencies = [
 
 [[package]]
 name = "exporter"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "ad_resolver",
  "adpa_core",
@@ -1387,7 +1387,7 @@ dependencies = [
 
 [[package]]
 name = "fs_scanner"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "adpa_core",
  "serde",
@@ -1667,7 +1667,7 @@ checksum = "b40ca9252762c466af32d0b1002e91e4e1bc5398f77455e55474deb466355ff5"
 
 [[package]]
 name = "gui"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "ad_resolver",
  "adpa_core",
@@ -3392,7 +3392,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "permission_engine"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "adpa_core",
  "serde",
@@ -3403,7 +3403,7 @@ dependencies = [
 
 [[package]]
 name = "persistence"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "adpa_core",
  "chrono",
@@ -3760,7 +3760,7 @@ dependencies = [
 
 [[package]]
 name = "risk_engine"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "adpa_core",
  "permission_engine",
@@ -4044,7 +4044,7 @@ dependencies = [
 
 [[package]]
 name = "share_scanner"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "adpa_core",
  "permission_engine",
@@ -4972,7 +4972,7 @@ checksum = "6d49784317cd0d1ee7ec5c716dd598ec5b4483ea832a2dced265471cc0f690ae"
 
 [[package]]
 name = "update_manager"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "adpa_core",
  "chrono",
@@ -5051,7 +5051,7 @@ dependencies = [
 
 [[package]]
 name = "validation"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "adpa_core",
  "serde",
@@ -5402,7 +5402,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
 name = "win_safe"
-version = "1.7.4"
+version = "1.7.5"
 dependencies = [
  "windows-sys 0.59.0",
 ]
