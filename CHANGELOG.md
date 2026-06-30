@@ -10,7 +10,28 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.7.4 below for the latest release.)
+### Added
+
+- **Groups tab: live identity suggestions.** Typing in the Groups identity
+  field now shows the same suggestion list as the Analyze tab (local users,
+  groups, and well-known identities with `[U]`/`[G]`/`[L]`/`[W]` type markers
+  and descriptions) — so you can tell apart similarly named accounts before
+  running.
+- **GUI: an LDAP `Timeout (s)` control on all three LDAP-capable tabs**
+  (Analyze, Scan, Groups), range 1–600 s, default 10. The GUI was previously
+  stuck at a fixed 10 s and ran into a timeout on large or deeply nested
+  domains; the `--ldap-timeout` flag had existed only in the CLI. Values are
+  clamped to 1–600 before they reach the LDAP layer.
+
+### Fixed
+
+- **Groups tab layout.** The sparse tab inflated the identity field and the
+  mode selector to fill the empty vertical space ("an elephant could write in
+  it"). They now keep their natural height and the tab matches the Analyze
+  tab's look (`alignment: start`).
+- The LDAP password label read **"Passwort"** (German) on the Analyze and Scan
+  tabs; it now reads **"Password"**, consistent with the Groups tab and the
+  US-English-only convention.
 
 ---
 

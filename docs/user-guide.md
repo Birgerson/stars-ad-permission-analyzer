@@ -173,10 +173,17 @@ panel; this tab answers the question directly.
 
 - **Identity** — one field for any form (local name, `DOMAIN\user`, UPN,
   or a raw SID), resolved automatically when you click **Show groups**.
+  As you type, the same **live suggestion list** as the Analyze tab
+  appears (local users, groups, well-known identities with `[U]`/`[G]`/
+  `[L]`/`[W]` markers), so similarly named accounts are easy to tell
+  apart.
 - **Identity resolution** — the same modes as `Analyze` (Off = SAM/LSA,
   LDAPS, plaintext LDAP, Global Catalog, Signed LDAP). On a DC, Off is
   enough — but note it returns only **direct** global groups, so a
   marker tells you when nested groups were not recursively resolved.
+  When a mode other than Off is selected, a **`Timeout (s)`** field
+  (1–600, default 10) appears — raise it on large or deeply nested
+  domains where the recursive query needs longer than 10 s.
 
 **Result:**
 
@@ -446,6 +453,10 @@ adpa analyze --path "C:\data" --user "CORP\alice" `
     --bind-dn "CN=stars-svc,CN=Users,DC=corp,DC=local" `
     --ldap-timeout 60
 ```
+
+In the **GUI**, the same control is the **`Timeout (s)`** field that appears
+in the `Identity resolution` section of the Analyze, Groups, and Scan Tree
+tabs once a mode other than Off is selected (range 1–600, default 10).
 
 ---
 

@@ -504,6 +504,7 @@ slint::slint! {
         in-out property <string> a-ldap-base-dn;
         in-out property <string> a-ldap-bind-dn;
         in-out property <string> a-ldap-password;
+        in-out property <int>    a-ldap-timeout: 10;
 
         in-out property <bool>   a-smb-enabled;
         in-out property <string> a-smb-server;
@@ -549,6 +550,7 @@ slint::slint! {
         in-out property <string> s-ldap-base-dn;
         in-out property <string> s-ldap-bind-dn;
         in-out property <string> s-ldap-password;
+        in-out property <int>    s-ldap-timeout: 10;
 
         in-out property <bool>   s-smb-enabled;
         in-out property <string> s-smb-server;
@@ -614,12 +616,16 @@ slint::slint! {
         // resolved like the Analyze/Scan tabs. No path — this tab answers
         // "which groups is this identity in?", not "what can it access?".
         in-out property <string> g-identity;
+        // Live suggestion list while typing the identity — same source and
+        // behaviour as the Analyze tab (local NetAPI snapshot, filtered).
+        in property <[IdentitySuggestionVm]> g-suggestions;
         // LDAP mode: 0 = off (SAM/LSA), 1 = LDAPS, 2 = plain LDAP, 3 = GC.
         in-out property <int>    g-ldap-mode: 0;
         in-out property <string> g-ldap-server;
         in-out property <string> g-ldap-base-dn;
         in-out property <string> g-ldap-bind-dn;
         in-out property <string> g-ldap-password;
+        in-out property <int>    g-ldap-timeout: 10;
 
         in property <bool>   g-is-running;
         in property <string> g-status;
@@ -640,6 +646,8 @@ slint::slint! {
         in property <[DiagnosticVm]>  g-diagnostics;
 
         callback groups-resolve-clicked();
+        callback groups-name-edited(string);
+        callback pick-groups-suggestion(string);
 
         VerticalLayout {
             spacing: 0;
@@ -840,13 +848,24 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Passwort:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: "Password:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 input-type: password;
                                                 text <=> root.a-ldap-password;
                                             }
                                             HelpTip {
                                                 tip: "Password for the bind-DN account.\n\nNot persisted, only held in memory for the running session. With 'Plain LDAP' it crosses the wire in cleartext — use only in test environments.";
+                                            }
+                                        }
+                                        Row {
+                                            Text { text: "Timeout (s):"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            SpinBox {
+                                                minimum: 1;
+                                                maximum: 600;
+                                                value <=> root.a-ldap-timeout;
+                                            }
+                                            HelpTip {
+                                                tip: "LDAP operation timeout in seconds (1–600, default 10).\n\nRaise this on large or deeply nested domains: the recursive membership query (LDAP_MATCHING_RULE_IN_CHAIN) can need longer than 10 s, otherwise resolution is reported as timed out and incomplete.";
                                             }
                                         }
                                     }
@@ -1006,6 +1025,10 @@ slint::slint! {
 
                     ScrollView {
                         VerticalBox {
+                            // Pack the form at the top at natural heights — without
+                            // this the sparse Groups tab would distribute the spare
+                            // vertical space onto the input fields and inflate them.
+                            alignment: start;
                             padding: Theme.spacing-md;
                             spacing: Theme.spacing-sm;
 
@@ -1026,7 +1049,55 @@ slint::slint! {
                                             LineEdit {
                                                 placeholder-text: "local name · DOMAIN\\user · user@domain.lab · S-1-5-21-…";
                                                 text <=> root.g-identity;
+                                                edited(s) => { root.groups-name-edited(s); }
                                                 accepted(s) => { root.groups-resolve-clicked(); }
+                                            }
+                                        }
+                                        Row {
+                                            Text { text: ""; }
+                                            if root.g-suggestions.length > 0: Rectangle {
+                                                background: Theme.bg-card;
+                                                border-color: Theme.border;
+                                                border-width: 1px;
+                                                border-radius: 4px;
+                                                VerticalLayout {
+                                                    padding: 4px;
+                                                    spacing: 0px;
+                                                    Text {
+                                                        text: "[L] = local identity of this machine";
+                                                        color: Theme.text-muted;
+                                                        font-size: 11px;
+                                                    }
+                                                    for sug[i] in root.g-suggestions: TouchArea {
+                                                        height: 24px;
+                                                        clicked => { root.pick-groups-suggestion(sug.name); }
+                                                        HorizontalLayout {
+                                                            padding-left: 6px;
+                                                            padding-right: 6px;
+                                                            spacing: Theme.spacing-sm;
+                                                            Text {
+                                                                text: "[" + sug.kind_icon + "]";
+                                                                color: Theme.text-secondary;
+                                                                width: 28px;
+                                                                vertical-alignment: center;
+                                                            }
+                                                            Text {
+                                                                text: sug.qualified;
+                                                                color: Theme.text-primary;
+                                                                vertical-alignment: center;
+                                                                width: 320px;
+                                                                overflow: elide;
+                                                            }
+                                                            Text {
+                                                                text: sug.description;
+                                                                color: Theme.text-muted;
+                                                                horizontal-stretch: 1;
+                                                                overflow: elide;
+                                                                vertical-alignment: center;
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -1070,6 +1141,10 @@ slint::slint! {
                                         Row {
                                             Text { text: "Password:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit { input-type: password; text <=> root.g-ldap-password; }
+                                        }
+                                        Row {
+                                            Text { text: "Timeout (s):"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            SpinBox { minimum: 1; maximum: 600; value <=> root.g-ldap-timeout; }
                                         }
                                     }
                                 }
@@ -1402,13 +1477,24 @@ slint::slint! {
                                             }
                                         }
                                         Row {
-                                            Text { text: "Passwort:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: "Password:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 input-type: password;
                                                 text <=> root.s-ldap-password;
                                             }
                                             HelpTip {
                                                 tip: "Password for the bind-DN account.\n\nNot persisted, only held in memory for the running session. With 'Plain LDAP' it crosses the wire in cleartext — use only in test environments.";
+                                            }
+                                        }
+                                        Row {
+                                            Text { text: "Timeout (s):"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            SpinBox {
+                                                minimum: 1;
+                                                maximum: 600;
+                                                value <=> root.s-ldap-timeout;
+                                            }
+                                            HelpTip {
+                                                tip: "LDAP operation timeout in seconds (1–600, default 10).\n\nRaise this on large or deeply nested domains: the recursive membership query (LDAP_MATCHING_RULE_IN_CHAIN) can need longer than 10 s, otherwise resolution is reported as timed out and incomplete.";
                                             }
                                         }
                                     }
@@ -2237,6 +2323,25 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         });
     }
 
+    // Groups tab: same live suggestion list as Analyze, from the same cache.
+    {
+        let weak = ui.as_weak();
+        ui.on_groups_name_edited(move |query| {
+            let Some(ui) = weak.upgrade() else { return };
+            ui.set_g_suggestions(filter_suggestions_model(query.as_str()));
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_pick_groups_suggestion(move |name| {
+            let Some(ui) = weak.upgrade() else { return };
+            // The Groups view resolves on "Show groups", so picking only fills
+            // the field and closes the list — no eager SID lookup needed.
+            ui.set_g_identity(name);
+            ui.set_g_suggestions(empty_suggestion_model());
+        });
+    }
+
     let analyze_tx = req_tx.clone();
     let weak = ui.as_weak();
     ui.on_analyze_clicked(move || {
@@ -2294,6 +2399,7 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             ui.get_a_ldap_base_dn().to_string(),
             ui.get_a_ldap_bind_dn().to_string(),
             ui.get_a_ldap_password().to_string(),
+            ui.get_a_ldap_timeout(),
         );
 
         let (smb_server, share_name) = if ui.get_a_smb_enabled() {
@@ -2402,6 +2508,7 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
                 ui.get_g_ldap_base_dn().to_string(),
                 ui.get_g_ldap_bind_dn().to_string(),
                 ui.get_g_ldap_password().to_string(),
+                ui.get_g_ldap_timeout(),
             );
             ui.set_g_is_running(true);
             ui.set_g_has_result(false);
@@ -2691,6 +2798,7 @@ fn wire_scan_tab(
                 ui.get_s_ldap_base_dn().to_string(),
                 ui.get_s_ldap_bind_dn().to_string(),
                 ui.get_s_ldap_password().to_string(),
+                ui.get_s_ldap_timeout(),
             );
 
             let (smb_server, share_name) = if ui.get_s_smb_enabled() {

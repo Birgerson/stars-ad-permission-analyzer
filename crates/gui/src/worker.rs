@@ -97,6 +97,11 @@ pub struct LdapParams {
     /// the CLI `--ldap-signing` flag (ADR 0051). Mutually exclusive with
     /// `insecure`; ignores `global_catalog`.
     pub signing: bool,
+    /// LDAP operation timeout in seconds. `None` keeps the `LdapConfig`
+    /// default (10 s). Mirrors the CLI `--ldap-timeout` flag — closes the gap
+    /// where the GUI was stuck at the fixed 10 s and ran into a timeout on
+    /// dense domains.
+    pub timeout_secs: Option<u64>,
 }
 
 impl std::fmt::Debug for LdapParams {
@@ -114,6 +119,7 @@ impl std::fmt::Debug for LdapParams {
             .field("insecure", &self.insecure)
             .field("global_catalog", &self.global_catalog)
             .field("signing", &self.signing)
+            .field("timeout_secs", &self.timeout_secs)
             .finish()
     }
 }
@@ -132,6 +138,7 @@ impl LdapParams {
         base_dn: String,
         bind_dn: String,
         password: String,
+        timeout_secs: i32,
     ) -> Option<LdapParams> {
         match mode {
             1..=4 => Some(LdapParams {
@@ -142,6 +149,9 @@ impl LdapParams {
                 insecure: mode == 2,
                 global_catalog: mode == 3,
                 signing: mode == 4,
+                // Clamp to the same 1–600 s range the CLI validates, so a GUI
+                // value out of range can never reach the LDAP layer.
+                timeout_secs: Some(timeout_secs.clamp(1, 600) as u64),
             }),
             _ => None,
         }
@@ -154,29 +164,39 @@ impl LdapParams {
         // Signed bind (GSSAPI sign+seal) takes precedence: it is its own
         // security mode (current Windows logon, no bind DN/password) and
         // ignores the insecure/global_catalog flags.
-        if self.signing {
-            return LdapConfig::new_signed(&self.server, &self.base_dn);
-        }
-        match (self.global_catalog, self.insecure) {
-            (true, true) => LdapConfig::new_global_catalog_insecure(
-                &self.server,
-                &self.base_dn,
-                &self.bind_dn,
-                &self.password,
-            ),
-            (true, false) => LdapConfig::new_global_catalog(
-                &self.server,
-                &self.base_dn,
-                &self.bind_dn,
-                &self.password,
-            ),
-            (false, true) => {
-                LdapConfig::new_insecure(&self.server, &self.base_dn, &self.bind_dn, &self.password)
+        let mut config = if self.signing {
+            LdapConfig::new_signed(&self.server, &self.base_dn)
+        } else {
+            match (self.global_catalog, self.insecure) {
+                (true, true) => LdapConfig::new_global_catalog_insecure(
+                    &self.server,
+                    &self.base_dn,
+                    &self.bind_dn,
+                    &self.password,
+                ),
+                (true, false) => LdapConfig::new_global_catalog(
+                    &self.server,
+                    &self.base_dn,
+                    &self.bind_dn,
+                    &self.password,
+                ),
+                (false, true) => LdapConfig::new_insecure(
+                    &self.server,
+                    &self.base_dn,
+                    &self.bind_dn,
+                    &self.password,
+                ),
+                (false, false) => {
+                    LdapConfig::new(&self.server, &self.base_dn, &self.bind_dn, &self.password)
+                }
             }
-            (false, false) => {
-                LdapConfig::new(&self.server, &self.base_dn, &self.bind_dn, &self.password)
-            }
+        };
+        // GUI timeout override (already clamped to 1–600 s in `from_mode`);
+        // `None` keeps the constructor's 10 s default — same as the CLI.
+        if let Some(secs) = self.timeout_secs {
+            config.timeout_secs = secs;
         }
+        config
     }
 }
 
@@ -811,6 +831,7 @@ fn validate_connection_inputs(
                 insecure: p.insecure,
                 global_catalog: p.global_catalog,
                 signing: p.signing,
+                timeout_secs: p.timeout_secs,
             })
         }
         None => None,
@@ -1363,6 +1384,7 @@ async fn handle_search(
         insecure: ldap.insecure,
         global_catalog: ldap.global_catalog,
         signing: ldap.signing,
+        timeout_secs: ldap.timeout_secs,
     }
     .to_config();
 
@@ -2420,12 +2442,33 @@ mod tests {
             "DC=corp,DC=local".to_owned(),
             "CN=svc,DC=corp,DC=local".to_owned(),
             "pw".to_owned(),
+            10,
         )
     }
 
     #[test]
     fn ldap_mode_off_yields_no_params() {
         assert!(params(0).is_none(), "mode 0 (Off) must mean no LDAP");
+    }
+
+    #[test]
+    fn ldap_timeout_is_clamped_and_applied_to_config() {
+        let cfg = |secs: i32| {
+            LdapParams::from_mode(
+                1,
+                "dc".to_owned(),
+                "DC=c".to_owned(),
+                "CN=s,DC=c".to_owned(),
+                "pw".to_owned(),
+                secs,
+            )
+            .expect("LDAPS mode")
+            .to_config()
+            .timeout_secs
+        };
+        assert_eq!(cfg(45), 45, "in-range value passes through to the config");
+        assert_eq!(cfg(9999), 600, "above the maximum is clamped to 600 s");
+        assert_eq!(cfg(0), 1, "below the minimum is clamped to 1 s");
     }
 
     #[test]
