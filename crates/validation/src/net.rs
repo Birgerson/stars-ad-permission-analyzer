@@ -143,6 +143,72 @@ pub fn validate_dn(input: &str) -> Result<ValidatedDn, CoreError> {
     Ok(ValidatedDn(trimmed.to_string()))
 }
 
+/// A validated LDAP **bind identity** — a full DN, a UPN (`user@domain`), or a
+/// NetBIOS logon (`DOMAIN\user`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedBindIdentity(pub String);
+
+/// Validates an LDAP **bind** identity.
+///
+/// Unlike a *base* DN (which is a path and must be a strict DN, see
+/// [`validate_dn`]), the bind account may be supplied in any of the three forms
+/// an Active Directory simple bind accepts:
+///
+/// - a distinguished name — `CN=Birger Labinsch,OU=Users,DC=res,DC=lab`
+/// - a NetBIOS logon — `RES\labinsch`
+/// - a UPN — `labinsch@res.lab`
+///
+/// The NetBIOS and UPN forms use the **stable logon name** (`sAMAccountName` /
+/// `userPrincipalName`) instead of the mutable CN, so a display-name change
+/// (e.g. after marriage) does not break the configuration. Only form and length
+/// are checked here; whether the account exists is the directory's decision at
+/// bind time.
+pub fn validate_bind_identity(input: &str) -> Result<ValidatedBindIdentity, CoreError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(CoreError::Validation(
+            "Bind identity must not be empty".into(),
+        ));
+    }
+    if trimmed.len() > MAX_DN_LEN {
+        return Err(CoreError::Validation(format!(
+            "Bind identity must not exceed {MAX_DN_LEN} characters"
+        )));
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err(CoreError::Validation(
+            "Bind identity must not contain control characters".into(),
+        ));
+    }
+
+    // Dispatch by shape. A DN is the only form containing '=', so check it
+    // first — that way an escaped backslash inside a DN value is never mistaken
+    // for a NetBIOS separator.
+    if trimmed.contains('=') {
+        validate_dn(trimmed)?;
+        return Ok(ValidatedBindIdentity(trimmed.to_string()));
+    }
+    if let Some((domain, user)) = trimmed.split_once('\\') {
+        if domain.is_empty() || user.is_empty() || user.contains('\\') {
+            return Err(CoreError::Validation(format!(
+                "NetBIOS bind identity must be exactly DOMAIN\\user: {trimmed}"
+            )));
+        }
+        return Ok(ValidatedBindIdentity(trimmed.to_string()));
+    }
+    if let Some((user, domain)) = trimmed.rsplit_once('@') {
+        if user.is_empty() || domain.is_empty() {
+            return Err(CoreError::Validation(format!(
+                "UPN bind identity must be user@domain: {trimmed}"
+            )));
+        }
+        return Ok(ValidatedBindIdentity(trimmed.to_string()));
+    }
+    Err(CoreError::Validation(format!(
+        "Bind identity must be a DN (CN=…,DC=…), a UPN (user@domain), or DOMAIN\\user: {trimmed}"
+    )))
+}
+
 /// Validates a query for the AD identity search.
 ///
 /// The value is checked before filter escaping: non-empty, length-bounded,
@@ -299,6 +365,54 @@ mod tests {
     fn dn_overlong_rejected() {
         let long = format!("DC={}", "a".repeat(MAX_DN_LEN));
         assert!(validate_dn(&long).is_err());
+    }
+
+    // --- Bind identity (DN | NetBIOS | UPN) ---
+
+    #[test]
+    fn bind_identity_accepts_full_dn() {
+        assert_eq!(
+            validate_bind_identity("CN=Birger Labinsch,OU=Users,OU=Lab,DC=res,DC=lab")
+                .expect("DN form")
+                .0,
+            "CN=Birger Labinsch,OU=Users,OU=Lab,DC=res,DC=lab"
+        );
+    }
+
+    #[test]
+    fn bind_identity_accepts_netbios_logon() {
+        assert_eq!(
+            validate_bind_identity("RES\\labinsch")
+                .expect("NetBIOS form")
+                .0,
+            "RES\\labinsch"
+        );
+    }
+
+    #[test]
+    fn bind_identity_accepts_upn() {
+        assert_eq!(
+            validate_bind_identity("labinsch@res.lab")
+                .expect("UPN form")
+                .0,
+            "labinsch@res.lab"
+        );
+    }
+
+    #[test]
+    fn bind_identity_rejects_malformed() {
+        // Bare name (no DN, no '\', no '@').
+        assert!(validate_bind_identity("labinsch").is_err());
+        // Empty domain / user halves.
+        assert!(validate_bind_identity("RES\\").is_err());
+        assert!(validate_bind_identity("\\labinsch").is_err());
+        assert!(validate_bind_identity("@res.lab").is_err());
+        assert!(validate_bind_identity("labinsch@").is_err());
+        // Two backslashes are not a single DOMAIN\user.
+        assert!(validate_bind_identity("RES\\sub\\labinsch").is_err());
+        // Empty and control characters.
+        assert!(validate_bind_identity("   ").is_err());
+        assert!(validate_bind_identity("RES\\lab\u{0}insch").is_err());
     }
 
     // --- Identity query ---

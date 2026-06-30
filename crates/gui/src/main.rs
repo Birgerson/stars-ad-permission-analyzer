@@ -840,11 +840,11 @@ slint::slint! {
                                         Row {
                                             Text { text: "Bind DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "CN=SvcScan,CN=Users,DC=domain,DC=local";
+                                                placeholder-text: "DOMAIN\\user  ·  user@domain  ·  CN=…,DC=…";
                                                 text <=> root.a-ldap-bind-dn;
                                             }
                                             HelpTip {
-                                                tip: "Full DN of the service or auditor account used to bind against LDAP.\n\nNot just the username — the full path to the object:\nCN=Max Muster,OU=Users,DC=company,DC=local\n\nA dedicated read-only service account is recommended, not the domain admin.";
+                                                tip: "The account Stars binds with to read LDAP. Three forms are accepted (all valid for an AD simple bind):\n\n• DOMAIN\\user — e.g. RES\\labinsch\n• user@domain (UPN) — e.g. labinsch@res.lab\n• full DN — e.g. CN=Birger Labinsch,OU=Users,DC=res,DC=lab\n\nPrefer DOMAIN\\user or the UPN: they use the stable logon name (sAMAccountName), whereas a DN's CN is the display name and changes when the name does. A dedicated read-only service account is recommended, not the domain admin.";
                                             }
                                         }
                                         Row {
@@ -1136,7 +1136,7 @@ slint::slint! {
                                         }
                                         Row {
                                             Text { text: "Bind DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
-                                            LineEdit { placeholder-text: "CN=SvcScan,CN=Users,DC=domain,DC=local"; text <=> root.g-ldap-bind-dn; }
+                                            LineEdit { placeholder-text: "DOMAIN\\user  ·  user@domain  ·  CN=…,DC=…"; text <=> root.g-ldap-bind-dn; }
                                         }
                                         Row {
                                             Text { text: "Password:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
@@ -1469,11 +1469,11 @@ slint::slint! {
                                         Row {
                                             Text { text: "Bind DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
-                                                placeholder-text: "CN=SvcScan,CN=Users,DC=domain,DC=local";
+                                                placeholder-text: "DOMAIN\\user  ·  user@domain  ·  CN=…,DC=…";
                                                 text <=> root.s-ldap-bind-dn;
                                             }
                                             HelpTip {
-                                                tip: "Full DN of the service or auditor account used to bind against LDAP.\n\nNot just the username — the full path to the object:\nCN=Max Muster,OU=Users,DC=company,DC=local\n\nA dedicated read-only service account is recommended, not the domain admin.";
+                                                tip: "The account Stars binds with to read LDAP. Three forms are accepted (all valid for an AD simple bind):\n\n• DOMAIN\\user — e.g. RES\\labinsch\n• user@domain (UPN) — e.g. labinsch@res.lab\n• full DN — e.g. CN=Birger Labinsch,OU=Users,DC=res,DC=lab\n\nPrefer DOMAIN\\user or the UPN: they use the stable logon name (sAMAccountName), whereas a DN's CN is the display name and changes when the name does. A dedicated read-only service account is recommended, not the domain admin.";
                                             }
                                         }
                                         Row {

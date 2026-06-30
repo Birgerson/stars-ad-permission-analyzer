@@ -372,9 +372,18 @@ In the **"Identity resolution"** section (inside the `Analyze` and
 Fields (all auto-trimmed before use):
 
 - **Server** — DC hostname (e.g. `dc01.corp.local`).
-- **Base DN** — domain root DN (e.g. `DC=corp,DC=local`).
-- **Bind DN** — account for the LDAP bind
-  (`CN=stars-svc,CN=Users,DC=corp,DC=local`).
+- **Base DN** — domain root DN (e.g. `DC=corp,DC=local`). This one
+  **must** be a distinguished name (it is a path).
+- **Bind DN** — the account Stars binds with. Any of the three forms an
+  AD simple bind accepts works:
+  - `DOMAIN\user` — e.g. `CORP\stars-svc`
+  - `user@domain` (UPN) — e.g. `stars-svc@corp.local`
+  - a full DN — e.g. `CN=Stars Svc,CN=Users,DC=corp,DC=local`
+
+  Prefer `DOMAIN\user` or the UPN — they use the **stable logon name**
+  (`sAMAccountName`), whereas a DN's `CN=` is the *display name* and
+  changes when the name does (rename, marriage). The exact DN of an
+  account is `Get-ADUser <name> -Properties distinguishedName`.
 - **Password** — bind password. **Never stored**, only valid for the
   current session.
 

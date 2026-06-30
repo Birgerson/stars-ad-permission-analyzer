@@ -36,8 +36,8 @@ use validation::{
     db_path::validate_db_path,
     export_path::{validate_export_path, ExportPathStatus},
     net::{
-        validate_dn, validate_identity_query, validate_ldap_endpoint, validate_share_name,
-        validate_smb_server,
+        validate_bind_identity, validate_dn, validate_identity_query, validate_ldap_endpoint,
+        validate_share_name, validate_smb_server,
     },
     numbers::{validate_optional_ldap_timeout, validate_optional_scan_depth},
     path::validate_path,
@@ -67,6 +67,9 @@ enum Commands {
         server: Option<String>,
         #[arg(short = 'b', long)]
         base_dn: Option<String>,
+        /// Bind account: `DOMAIN\user`, `user@domain` (UPN), or a full DN.
+        /// The logon-name forms use the stable sAMAccountName, which (unlike a
+        /// DN's CN) survives a display-name change.
         #[arg(long)]
         bind_dn: Option<String>,
         /// in an upcoming release.
@@ -122,6 +125,9 @@ enum Commands {
         server: Option<String>,
         #[arg(short = 'b', long)]
         base_dn: Option<String>,
+        /// Bind account: `DOMAIN\user`, `user@domain` (UPN), or a full DN.
+        /// The logon-name forms use the stable sAMAccountName, which (unlike a
+        /// DN's CN) survives a display-name change.
         #[arg(long)]
         bind_dn: Option<String>,
         /// in an upcoming release.
@@ -181,6 +187,9 @@ enum Commands {
         server: Option<String>,
         #[arg(short = 'b', long)]
         base_dn: Option<String>,
+        /// Bind account: `DOMAIN\user`, `user@domain` (UPN), or a full DN.
+        /// The logon-name forms use the stable sAMAccountName, which (unlike a
+        /// DN's CN) survives a display-name change.
         #[arg(long)]
         bind_dn: Option<String>,
         /// **DEPRECATED — insecure.** Visible in process listings; use the
@@ -381,8 +390,8 @@ fn validate_connection_inputs(
     };
     let bind_dn = match bind_dn {
         Some(d) => Some(
-            validate_dn(d)
-                .map_err(|e| anyhow::anyhow!("Invalid bind DN: {e}"))?
+            validate_bind_identity(d)
+                .map_err(|e| anyhow::anyhow!("Invalid bind identity: {e}"))?
                 .0,
         ),
         None => None,

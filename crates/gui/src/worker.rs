@@ -46,8 +46,8 @@ use uuid::Uuid;
 use validation::{
     export_path::{validate_export_path, ExportPathStatus},
     net::{
-        validate_dn, validate_identity_query, validate_ldap_endpoint, validate_share_name,
-        validate_smb_server,
+        validate_bind_identity, validate_dn, validate_identity_query, validate_ldap_endpoint,
+        validate_share_name, validate_smb_server,
     },
     numbers::validate_optional_scan_depth,
     path::validate_path,
@@ -819,8 +819,8 @@ fn validate_connection_inputs(
             let bind_dn = if p.signing && p.bind_dn.trim().is_empty() {
                 String::new()
             } else {
-                validate_dn(&p.bind_dn)
-                    .map_err(|e| format!("Invalid bind DN: {e}"))?
+                validate_bind_identity(&p.bind_dn)
+                    .map_err(|e| format!("Invalid bind identity: {e}"))?
                     .0
             };
             Some(LdapParams {
@@ -1371,8 +1371,8 @@ async fn handle_search(
     let bind_dn = if ldap.signing && ldap.bind_dn.trim().is_empty() {
         String::new()
     } else {
-        validate_dn(&ldap.bind_dn)
-            .map_err(|e| format!("Invalid bind DN: {e}"))?
+        validate_bind_identity(&ldap.bind_dn)
+            .map_err(|e| format!("Invalid bind identity: {e}"))?
             .0
     };
 

@@ -10,7 +10,17 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.7.5 below for the latest release.)
+### Added
+
+- **Bind by logon name, not just the DN.** The LDAP **Bind DN** field (GUI:
+  Analyze / Groups / Scan tabs; CLI: `--bind-dn`) now also accepts
+  **`DOMAIN\user`** and **`user@domain`** (UPN), in addition to a full DN —
+  all three are valid for an Active Directory simple bind. The logon-name
+  forms use the stable `sAMAccountName`, so a display-name change (rename,
+  marriage) no longer breaks the bind, and you no longer have to look up the
+  exact `CN=…,OU=…` path of the account. Validated by a new
+  `validation::net::validate_bind_identity` (the **Base DN** stays a strict DN,
+  since it is a path). Verified live against the lab with `RES\Administrator`.
 
 ---
 
