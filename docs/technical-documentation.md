@@ -519,6 +519,13 @@ Developers extending the GUI worker should implement any "LDAP search
 on demand" feature as an **explicit button with a spinner**, not as a
 keystroke trigger.
 
+**Shared across tabs.** The same local suggestion list backs the Analyze
+**and** Groups tabs — both call the one `filter_suggestions_model` over the
+cached snapshot, so the typing experience is identical. The LDAP **timeout**
+is likewise adjustable from the GUI (a `Timeout (s)` field on every LDAP
+section), carried on the shared `LdapParams::timeout_secs` and clamped to
+1–600 s in `from_mode` — full GUI/CLI parity. See ADR 0054.
+
 ### 5.8 The membership view (`groups`) — resolution without the engine
 
 The CLI `groups` command and the GUI `Groups` tab answer *"which groups

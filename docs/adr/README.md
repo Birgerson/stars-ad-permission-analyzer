@@ -63,3 +63,4 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0051 | Signed LDAP bind (GSSAPI/Kerberos sign+seal) |
 | 0052 | SID history (L3) & cross-forest trust (L4) visibility markers |
 | 0053 | Standalone group-membership view (identity → groups) |
+| 0054 | GUI LDAP timeout control (GUI/CLI parity) |
