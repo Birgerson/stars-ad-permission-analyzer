@@ -62,3 +62,4 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0050 | Streaming CLI scan with lazy SID→name cache |
 | 0051 | Signed LDAP bind (GSSAPI/Kerberos sign+seal) |
 | 0052 | SID history (L3) & cross-forest trust (L4) visibility markers |
+| 0053 | Standalone group-membership view (identity → groups) |

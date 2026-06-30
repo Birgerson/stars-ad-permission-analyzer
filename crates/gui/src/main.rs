@@ -23,8 +23,8 @@ use fs_scanner::CancellationToken;
 use permission_engine::NormalizedRights;
 
 use crate::worker::{
-    spawn_worker, DeltaRow, IdentitySuggestion, LdapParams, NotifyFn, ScanRow, ScanRunSummary,
-    TrusteeRow, WorkerEvent, WorkerRequest,
+    spawn_worker, DeltaRow, GroupsViewData, IdentitySuggestion, LdapParams, NotifyFn, ScanRow,
+    ScanRunSummary, TrusteeRow, WorkerEvent, WorkerRequest,
 };
 
 // drei voll funktionalen Tabs (Analyze, Scan Tree, Delta).
@@ -378,6 +378,18 @@ slint::slint! {
         level: int,
     }
 
+    // One group-membership row for the Groups tab — a group the identity is in,
+    // how that membership arose, and whether the group is privileged.
+    export struct GroupMemberVm {
+        name: string,
+        sid: string,
+        // "direct", "via A → B", "primary group", "local group", …
+        origin: string,
+        privileged: bool,
+        // Privileged role name (e.g. "Domain Admins") when `privileged`.
+        role: string,
+    }
+
     // A row in the scan result.
     export struct ScanRowVm {
         path: string,
@@ -594,6 +606,40 @@ slint::slint! {
         // visible. Empty = no dialog open.
         in-out property <string> d-pending-delete-id;
         in-out property <string> d-pending-delete-label;
+
+        // ============================================================
+        // Groups-Tab Properties / Groups tab properties
+        // ============================================================
+        // Single identity field (name · DOMAIN\user · UPN · SID); auto-
+        // resolved like the Analyze/Scan tabs. No path — this tab answers
+        // "which groups is this identity in?", not "what can it access?".
+        in-out property <string> g-identity;
+        // LDAP mode: 0 = off (SAM/LSA), 1 = LDAPS, 2 = plain LDAP, 3 = GC.
+        in-out property <int>    g-ldap-mode: 0;
+        in-out property <string> g-ldap-server;
+        in-out property <string> g-ldap-base-dn;
+        in-out property <string> g-ldap-bind-dn;
+        in-out property <string> g-ldap-password;
+
+        in property <bool>   g-is-running;
+        in property <string> g-status;
+        in property <bool>   g-status-is-error;
+        in property <bool>   g-has-result;
+
+        in property <string> g-identity-label;
+        in property <string> g-identity-sid;
+        in property <string> g-identity-meta;
+        in property <bool>   g-ad-connected;
+        in property <int>    g-sid-history;
+        in property <int>    g-total;
+        in property <int>    g-direct;
+
+        in property <bool>            g-has-privileged;
+        in property <[string]>        g-privileged;
+        in property <[GroupMemberVm]> g-groups;
+        in property <[DiagnosticVm]>  g-diagnostics;
+
+        callback groups-resolve-clicked();
 
         VerticalLayout {
             spacing: 0;
@@ -945,6 +991,197 @@ slint::slint! {
                                             color: Theme.text-secondary;
                                             width: 70px;
                                         }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ============================================================
+                // Tab: Groups
+                // ============================================================
+                Tab {
+                    title: "Groups";
+
+                    ScrollView {
+                        VerticalBox {
+                            padding: Theme.spacing-md;
+                            spacing: Theme.spacing-sm;
+
+                            GroupBox {
+                                title: "Identity";
+                                VerticalBox {
+                                    spacing: Theme.spacing-sm;
+                                    Text {
+                                        text: "Which groups is a user (or group) in? Recursive memberships only — no path, no rights.";
+                                        color: Theme.text-muted;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
+                                    GridBox {
+                                        spacing: Theme.spacing-sm;
+                                        Row {
+                                            Text { text: "Identity:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            LineEdit {
+                                                placeholder-text: "local name · DOMAIN\\user · user@domain.lab · S-1-5-21-…";
+                                                text <=> root.g-identity;
+                                                accepted(s) => { root.groups-resolve-clicked(); }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            GroupBox {
+                                title: "Identity resolution";
+                                VerticalBox {
+                                    spacing: Theme.spacing-sm;
+                                    HorizontalBox {
+                                        spacing: Theme.spacing-sm;
+                                        padding: 0px;
+                                        Text { text: "Mode:"; vertical-alignment: center; width: 110px; }
+                                        ComboBox {
+                                            model: [
+                                                "Off — use SAM/LSA (recommended on a DC)",
+                                                "LDAPS — encrypted, port 636",
+                                                "Plain LDAP — port 389 (test only)",
+                                                "Global Catalog — forest-wide, port 3269 (LDAPS)",
+                                                "Signed LDAP — Kerberos sign & seal, port 389",
+                                            ];
+                                            current-index <=> root.g-ldap-mode;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    if root.g-ldap-mode > 0: GridBox {
+                                        spacing: Theme.spacing-sm;
+                                        Row {
+                                            Text { text: "Server:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            LineEdit { placeholder-text: "dc01.domain.local"; text <=> root.g-ldap-server; }
+                                        }
+                                        Row {
+                                            Text { text: "Base DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            LineEdit { placeholder-text: "DC=domain,DC=local"; text <=> root.g-ldap-base-dn; }
+                                        }
+                                        Row {
+                                            Text { text: "Bind DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            LineEdit { placeholder-text: "CN=SvcScan,CN=Users,DC=domain,DC=local"; text <=> root.g-ldap-bind-dn; }
+                                        }
+                                        Row {
+                                            Text { text: "Password:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            LineEdit { input-type: password; text <=> root.g-ldap-password; }
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalBox {
+                                alignment: start;
+                                spacing: Theme.spacing-sm;
+                                padding: 0px;
+                                Button {
+                                    text: "👥 Show groups";
+                                    enabled: !root.g-is-running;
+                                    clicked => { root.groups-resolve-clicked(); }
+                                }
+                                Text {
+                                    text: root.g-status;
+                                    color: root.g-status-is-error ? Theme.error : Theme.text-secondary;
+                                    vertical-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+
+                            if root.g-has-result: GroupBox {
+                                title: "Result";
+                                VerticalBox {
+                                    spacing: Theme.spacing-sm;
+
+                                    Text { text: root.g-identity-label; font-weight: 700; color: Theme.text-primary; }
+                                    Text { text: root.g-identity-sid; color: Theme.text-secondary; font-size: 11px; }
+                                    Text { text: root.g-identity-meta; color: Theme.text-secondary; }
+                                    if root.g-sid-history > 0: Text {
+                                        text: "sIDHistory: " + root.g-sid-history + " (see diagnostics)";
+                                        color: Theme.danger;
+                                    }
+                                    if !root.g-ad-connected: Text {
+                                        text: "⚠ No AD/LDAP connection — only direct (SAM/LSA) groups resolved.";
+                                        color: Theme.warning;
+                                        wrap: word-wrap;
+                                    }
+
+                                    if root.g-has-privileged: Rectangle {
+                                        background: Theme.bg-card;
+                                        border-color: Theme.danger;
+                                        border-width: 1px;
+                                        border-radius: 4px;
+                                        VerticalLayout {
+                                            padding: 6px;
+                                            spacing: 2px;
+                                            for p in root.g-privileged: Text {
+                                                text: "⚠ " + p;
+                                                color: Theme.danger;
+                                                font-weight: 700;
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Group memberships (" + root.g-total + " total, " + root.g-direct + " direct)";
+                                        font-weight: 700;
+                                        color: Theme.text-primary;
+                                    }
+                                    if root.g-total == 0: Text { text: "(none resolved)"; color: Theme.text-muted; }
+                                    for g in root.g-groups: VerticalLayout {
+                                        padding-top: 2px;
+                                        padding-bottom: 2px;
+                                        spacing: 0px;
+                                        HorizontalLayout {
+                                            spacing: Theme.spacing-sm;
+                                            Text {
+                                                text: g.name;
+                                                color: g.privileged ? Theme.danger : Theme.text-primary;
+                                                font-weight: g.privileged ? 700 : 400;
+                                                overflow: elide;
+                                                horizontal-stretch: 1;
+                                            }
+                                            if g.privileged: Text {
+                                                text: "privileged: " + g.role;
+                                                color: Theme.danger;
+                                                font-size: 11px;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        Text {
+                                            text: g.sid + "  ·  " + g.origin;
+                                            color: Theme.text-muted;
+                                            font-size: 11px;
+                                            overflow: elide;
+                                        }
+                                    }
+
+                                    if root.g-diagnostics.length > 0: VerticalBox {
+                                        padding: 0px;
+                                        spacing: 2px;
+                                        Text {
+                                            text: "Diagnostics (" + root.g-diagnostics.length + "):";
+                                            font-weight: 700;
+                                            color: Theme.text-primary;
+                                        }
+                                        for d in root.g-diagnostics: Text {
+                                            text: (d.level == 0 ? "ℹ " : "⚠ ") + d.text;
+                                            color: d.level == 2 ? Theme.danger
+                                                 : d.level == 1 ? Theme.warning
+                                                 : Theme.text-secondary;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "→ To check effective rights on a path, use the Analyze or Scan Tree tab.";
+                                        color: Theme.text-muted;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
                                     }
                                 }
                             }
@@ -2124,6 +2361,59 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             }
         });
     }
+
+    // Groups tab — identity → recursive group memberships (no path/ACL).
+    {
+        let weak = ui.as_weak();
+        let req_tx = req_tx.clone();
+        ui.on_groups_resolve_clicked(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let identity = ui.get_g_identity().to_string();
+            let identity = identity.trim();
+            if identity.is_empty() {
+                ui.set_g_status("Identity is required.".into());
+                ui.set_g_status_is_error(true);
+                return;
+            }
+            // Resolve to a SID: a raw SID is used directly, a name / UPN is
+            // resolved via LSA (mirrors the Analyze tab). LDAP-only names are
+            // resolved by the worker once the bind succeeds.
+            let sid = if identity.starts_with("S-1-") {
+                identity.to_string()
+            } else {
+                let mut resolved = String::new();
+                let mut resolve_err = String::new();
+                resolve_name_to_sid(identity, |s| resolved = s, |e| resolve_err = e);
+                if resolved.trim().is_empty() {
+                    let msg = if resolve_err.is_empty() {
+                        "Identity could not be resolved to a SID.".to_string()
+                    } else {
+                        resolve_err
+                    };
+                    ui.set_g_status(msg.into());
+                    ui.set_g_status_is_error(true);
+                    return;
+                }
+                resolved
+            };
+            let ldap = LdapParams::from_mode(
+                ui.get_g_ldap_mode(),
+                ui.get_g_ldap_server().to_string(),
+                ui.get_g_ldap_base_dn().to_string(),
+                ui.get_g_ldap_bind_dn().to_string(),
+                ui.get_g_ldap_password().to_string(),
+            );
+            ui.set_g_is_running(true);
+            ui.set_g_has_result(false);
+            ui.set_g_status("Resolving group memberships...".into());
+            ui.set_g_status_is_error(false);
+            if let Err(e) = req_tx.send(WorkerRequest::ResolveGroups { sid, ldap }) {
+                ui.set_g_is_running(false);
+                ui.set_g_status(format!("Worker not reachable: {e}").into());
+                ui.set_g_status_is_error(true);
+            }
+        });
+    }
 }
 
 fn handle_trustees_done(ui: &MainWindow, result: Result<Vec<TrusteeRow>, String>) {
@@ -2161,6 +2451,58 @@ fn handle_trustees_done(ui: &MainWindow, result: Result<Vec<TrusteeRow>, String>
             ui.set_a_has_trustees(false);
             ui.set_a_status(format!("Trustee evaluation failed: {e}").into());
             ui.set_a_status_is_error(true);
+        }
+    }
+}
+
+/// Populates the Groups tab from a finished membership resolution.
+fn handle_groups_done(ui: &MainWindow, result: Result<GroupsViewData, String>) {
+    ui.set_g_is_running(false);
+    match result {
+        Ok(data) => {
+            ui.set_g_has_result(true);
+            ui.set_g_status_is_error(false);
+            ui.set_g_status(format!("{} group(s) — {} direct", data.total, data.direct).into());
+            ui.set_g_identity_label(data.identity_label.into());
+            ui.set_g_identity_sid(data.identity_sid.into());
+            ui.set_g_identity_meta(format!("{} \u{00B7} {}", data.status, data.kind).into());
+            ui.set_g_ad_connected(data.ad_connected);
+            ui.set_g_sid_history(data.sid_history_count);
+            ui.set_g_total(data.total);
+            ui.set_g_direct(data.direct);
+
+            ui.set_g_has_privileged(!data.privileged.is_empty());
+            let priv_model: Vec<slint::SharedString> =
+                data.privileged.into_iter().map(|p| p.into()).collect();
+            ui.set_g_privileged(slint::ModelRc::new(slint::VecModel::from(priv_model)));
+
+            let group_vms: Vec<GroupMemberVm> = data
+                .groups
+                .into_iter()
+                .map(|g| GroupMemberVm {
+                    name: g.name.into(),
+                    sid: g.sid.into(),
+                    origin: g.origin.into(),
+                    privileged: g.privileged,
+                    role: g.role.into(),
+                })
+                .collect();
+            ui.set_g_groups(slint::ModelRc::new(slint::VecModel::from(group_vms)));
+
+            let diag_vms: Vec<DiagnosticVm> = data
+                .diagnostics
+                .into_iter()
+                .map(|d| DiagnosticVm {
+                    text: d.text.into(),
+                    level: d.level,
+                })
+                .collect();
+            ui.set_g_diagnostics(slint::ModelRc::new(slint::VecModel::from(diag_vms)));
+        }
+        Err(e) => {
+            ui.set_g_has_result(false);
+            ui.set_g_status(e.into());
+            ui.set_g_status_is_error(true);
         }
     }
 }
@@ -2933,6 +3275,7 @@ fn pump_worker_events(ui: &MainWindow) {
                 }
                 WorkerEvent::IdentitiesLoaded(result) => handle_identities_loaded(ui, result),
                 WorkerEvent::TrusteesDone(result) => handle_trustees_done(ui, result),
+                WorkerEvent::GroupsDone(result) => handle_groups_done(ui, *result),
                 // Phase reserviert.
                 // SearchResults (identity picker) stays reserved for a
                 // later phase.

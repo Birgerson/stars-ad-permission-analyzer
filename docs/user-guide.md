@@ -132,7 +132,7 @@ and shows the engine in action.
 
 ---
 
-## The four GUI tabs
+## The five GUI tabs
 
 ### `Analyze` tab — single-path analysis
 
@@ -161,6 +161,39 @@ user can effectively do there.
 - explainable permission path
   (`User → Group → … → ACE → normalized right`),
 - all diagnostic markers.
+
+### `Groups` tab — which groups is a user in?
+
+**Purpose:** A pure identity question — *"which groups is this user (or
+group) a member of?"* — with **no** path, ACL, or rights computation.
+Previously you had to analyse some path just to read the resolved-groups
+panel; this tab answers the question directly.
+
+**Fields:**
+
+- **Identity** — one field for any form (local name, `DOMAIN\user`, UPN,
+  or a raw SID), resolved automatically when you click **Show groups**.
+- **Identity resolution** — the same modes as `Analyze` (Off = SAM/LSA,
+  LDAPS, plaintext LDAP, Global Catalog, Signed LDAP). On a DC, Off is
+  enough — but note it returns only **direct** global groups, so a
+  marker tells you when nested groups were not recursively resolved.
+
+**Result:**
+
+- the identity header (name, SID, status, kind);
+- **Privileged memberships** flagged at the top — membership in
+  Administrators, Domain/Enterprise/Schema Admins, Group Policy Creator
+  Owners, Key Admins, or the built-in Operators is the high-value audit
+  signal, shown in the *concern* colour;
+- the recursive group list, each entry showing **how the membership
+  arose** ("direct", "primary group", "local group", or the chain
+  "via A → B");
+- the same diagnostic markers as elsewhere (SAM/LSA fallback, FSP,
+  Global Catalog, outside-base, `sIDHistory`, a resolution timeout), so
+  an incomplete list never looks complete.
+
+This view is **one direction only** (user → groups). To check what the
+identity can actually access, switch to `Analyze` or `Scan Tree`.
 
 ### `Scan Tree` tab — recursive directory scan
 
@@ -604,6 +637,26 @@ adpa scan --path "\\fileserver\projects" --user "CORP\alice" `
 
 `Ctrl-C` triggers a cooperative shutdown — the current path is
 finished, then Stars terminates cleanly.
+
+### Show a user's groups
+
+The CLI counterpart of the `Groups` tab — recursive group memberships,
+**no path or rights:**
+
+```powershell
+adpa groups --user "CORP\alice" `
+    --server "dc01.corp.local" --base-dn "DC=corp,DC=local" `
+    --bind-dn "CN=stars-svc,CN=Users,DC=corp,DC=local" `
+    --ldap-timeout 60 --output "alice-groups.csv"
+```
+
+On a domain controller you can drop the `--server …` options entirely —
+`adpa groups --user alice` uses the local SAM/LSA, which returns the
+direct global groups (a marker flags that nested groups were not
+recursively resolved). Privileged memberships (Domain Admins and the
+like) are flagged, and `--output` writes `.json` or `.csv`. In large or
+deeply nested domains, raise `--ldap-timeout` (see
+[Large or deeply nested domains](#large-or-deeply-nested-domains----ldap-timeout)).
 
 ### More options
 

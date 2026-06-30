@@ -237,6 +237,13 @@ pub enum WorkerRequest {
         smb_server: Option<String>,
         share_name: Option<String>,
     },
+    /// Resolves the recursive group memberships of an identity for the Groups
+    /// tab — no path, no ACL, no effective rights. Mirrors the CLI `groups`
+    /// command. `ldap` is `None` for the SAM/LSA fallback.
+    ResolveGroups {
+        sid: String,
+        ldap: Option<LdapParams>,
+    },
 }
 
 /// One diagnostic marker for GUI display: its one-line reason plus a
@@ -306,6 +313,43 @@ pub struct ScanRow {
     pub trustees: Vec<TrusteeRow>,
 }
 
+/// One group-membership row for the Groups tab.
+#[derive(Clone)]
+pub struct GroupMemberRow {
+    pub name: String,
+    pub sid: String,
+    /// How the membership arose (`"direct"`, `"via A → B"`, …) from
+    /// `GroupMembership::origin_label`.
+    pub origin: String,
+    /// `true` if this group is a well-known privileged group.
+    pub privileged: bool,
+    /// Privileged role name (e.g. `"Domain Admins"`) when `privileged`.
+    pub role: String,
+}
+
+/// GUI-ready membership view for the Groups tab, built from a
+/// `MembershipReport`. No path / ACL / effective rights — those stay in the
+/// Analyze and Scan tabs.
+#[derive(Clone)]
+pub struct GroupsViewData {
+    /// `DOMAIN\name` (or the SID when no name is known).
+    pub identity_label: String,
+    pub identity_sid: String,
+    /// `"Active"` / `"DISABLED"`.
+    pub status: String,
+    /// `IdentityKind`, debug-formatted.
+    pub kind: String,
+    /// `true` when an AD/LDAP connection backed the resolution.
+    pub ad_connected: bool,
+    pub sid_history_count: i32,
+    pub total: i32,
+    pub direct: i32,
+    /// Privileged-membership banner lines (`"member of Domain Admins"`).
+    pub privileged: Vec<String>,
+    pub groups: Vec<GroupMemberRow>,
+    pub diagnostics: Vec<DiagnosticRow>,
+}
+
 /// Result from the worker thread to the GUI.
 pub enum WorkerEvent {
     AnalyzeDone {
@@ -359,6 +403,10 @@ pub enum WorkerEvent {
     },
     /// Result of a per-path trustee listing.
     TrusteesDone(Result<Vec<TrusteeRow>, String>),
+    /// Result of a Groups-tab membership resolution. Boxed because
+    /// `GroupsViewData` carries several vectors and is larger than the other
+    /// variants (clippy::large_enum_variant).
+    GroupsDone(Box<Result<GroupsViewData, String>>),
 }
 
 /// One row in the trustee view — one ACE from a path's DACL plus
@@ -642,6 +690,11 @@ pub fn spawn_worker(
                     let _ = evt_tx.send(WorkerEvent::TrusteesDone(result));
                     notify();
                 }
+                WorkerRequest::ResolveGroups { sid, ldap } => {
+                    let result = rt.block_on(handle_resolve_groups(&sid, ldap.as_ref()));
+                    let _ = evt_tx.send(WorkerEvent::GroupsDone(Box::new(result)));
+                    notify();
+                }
             }
         }
     });
@@ -852,6 +905,93 @@ async fn handle_analyze(
             group_resolution_via_global_catalog: engine_flags.group_resolution_via_global_catalog,
         })
         .map_err(|e| format!("Permission engine error: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Groups tab — identity → recursive group memberships (no path/ACL)
+// ---------------------------------------------------------------------------
+
+/// Resolves an identity's recursive group memberships for the Groups tab — the
+/// GUI counterpart to the CLI `groups` command. No path / ACL / effective
+/// rights. `ldap` is `None` for the SAM/LSA fallback.
+async fn handle_resolve_groups(
+    sid: &str,
+    ldap: Option<&LdapParams>,
+) -> Result<GroupsViewData, String> {
+    info!(sid, "ResolveGroups request");
+    // Validate the connection inputs at the GUI boundary (no SMB here).
+    let normalized = validate_connection_inputs(None, None, ldap)?;
+    let ldap = normalized.ldap.as_ref();
+    // `resolve_identity_sids` validates the SID before it reaches the resolver.
+    let res = resolve_identity_sids(sid, ldap).await?;
+    // `ad_connected` mirrors the CLI: true exactly when an LDAP bind backed
+    // the lookup (otherwise the SAM/LSA flat fallback was used).
+    let report = res.into_membership_report(ldap.is_some());
+    Ok(membership_report_to_view(&report))
+}
+
+/// Maps a [`MembershipReport`] into the GUI-ready [`GroupsViewData`].
+fn membership_report_to_view(report: &adpa_core::model::MembershipReport) -> GroupsViewData {
+    use adpa_core::model::privileged_group_role;
+
+    let name = report
+        .identity
+        .name
+        .clone()
+        .unwrap_or_else(|| report.identity.sid.0.clone());
+    let identity_label = match &report.identity.domain {
+        Some(d) if !d.is_empty() => format!("{d}\\{name}"),
+        _ => name,
+    };
+    let total = report.memberships.len() as i32;
+    let direct = report.memberships.iter().filter(|m| m.direct).count() as i32;
+    let privileged: Vec<String> = report
+        .privileged()
+        .into_iter()
+        .map(|(_, role)| format!("member of {role}"))
+        .collect();
+    let groups: Vec<GroupMemberRow> = report
+        .memberships
+        .iter()
+        .map(|m| {
+            let role = privileged_group_role(&m.group_sid);
+            GroupMemberRow {
+                name: m
+                    .group_name
+                    .clone()
+                    .unwrap_or_else(|| m.group_sid.0.clone()),
+                sid: m.group_sid.0.clone(),
+                origin: m.origin_label(),
+                privileged: role.is_some(),
+                role: role.unwrap_or("").to_owned(),
+            }
+        })
+        .collect();
+    let diagnostics: Vec<DiagnosticRow> = report
+        .diagnostics
+        .iter()
+        .map(|d| DiagnosticRow {
+            text: d.summary(),
+            level: diag_level(d.severity()),
+        })
+        .collect();
+    GroupsViewData {
+        identity_label,
+        identity_sid: report.identity.sid.0.clone(),
+        status: if report.identity.disabled {
+            "DISABLED".to_owned()
+        } else {
+            "Active".to_owned()
+        },
+        kind: format!("{:?}", report.identity.kind),
+        ad_connected: report.ad_connected,
+        sid_history_count: report.identity.sid_history_count as i32,
+        total,
+        direct,
+        privileged,
+        groups,
+        diagnostics,
+    }
 }
 
 /// Collects local group SIDs on the analysis target server — see CLI counterpart.

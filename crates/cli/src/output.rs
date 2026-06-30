@@ -4,8 +4,8 @@
 //! Formatted console output for the analyze command.
 
 use adpa_core::model::{
-    AceKind, EffectivePermission, FileSystemObject, GroupMembership, PermissionDiagnostic,
-    RiskFinding, RiskSeverity,
+    privileged_group_role, AceKind, EffectivePermission, FileSystemObject, GroupMembership,
+    MembershipReport, PermissionDiagnostic, RiskFinding, RiskSeverity,
 };
 use permission_engine::NormalizedRights;
 
@@ -169,108 +169,7 @@ pub fn print_report(
     // were only visible in JSON/CSV/HTML/GUI; the CLI output omitted them.
     // To give a CLI auditor the same information as the export formats we
     // list the diagnostics variants here.
-    if !result.diagnostics.is_empty() {
-        section("Diagnostics (structured)");
-        for d in &result.diagnostics {
-            match d {
-                PermissionDiagnostic::NonCanonicalDaclOrder { at_index } => {
-                    println!("  [i] Non-canonical DACL ordering at ACE index {at_index}.");
-                    println!("      Windows AccessCheck walks in stored order — the result is");
-                    println!("      exact but may differ from canonicalized expectations.");
-                }
-                PermissionDiagnostic::UnsupportedShareAces { count } => {
-                    println!("  [!] {count} share ACE(s) of unsupported type were skipped.");
-                    println!("      Share mask is potentially incomplete; risk findings are");
-                    println!("      flagged 'incomplete' for this path.");
-                }
-                PermissionDiagnostic::UnsupportedNtfsAces { count } => {
-                    println!(
-                        "  [!] {count} NTFS ACE(s) could not be evaluated (object / callback /"
-                    );
-                    println!("      conditional / vendor-specific). The displayed effective");
-                    println!(
-                        "      permission is a LOWER-CONFIDENCE APPROXIMATION — a hidden Deny"
-                    );
-                    println!("      among them could change the result. Risk findings are flagged");
-                    println!("      'incomplete' for this path.");
-                }
-                PermissionDiagnostic::DomainGroupRecursionIncomplete => {
-                    println!("  [i] Group resolution ran through the SAM/LSA fallback (no LDAP).");
-                    println!("      NetUserGetGroups returns only direct global groups — nested");
-                    println!("      domain groups are not recursively resolved. ACEs targeting");
-                    println!("      deeply nested groups may be missed.");
-                }
-                PermissionDiagnostic::IdentityDisabled => {
-                    println!("  [i] Identity is flagged as disabled in AD (ACCOUNTDISABLE).");
-                    println!("      Computed rights are ACL-theoretically correct, but the");
-                    println!("      account normally cannot authenticate / access SMB.");
-                }
-                PermissionDiagnostic::IdentityNotInConfiguredLdapBase => {
-                    println!("  [i] Identity was resolved via Windows LSA but the configured");
-                    println!("      LDAP base DN does not index that SID (typical for multi-");
-                    println!("      domain forests or trusted domains). Domain group recursion");
-                    println!("      ran only through the user's home domain — nested cross-");
-                    println!("      domain memberships may be missing. Treat as incomplete.");
-                }
-                PermissionDiagnostic::IdentityDisabledStatusUnknown => {
-                    println!("  [i] The 'disabled' flag for this identity could not be");
-                    println!("      determined (SAM/LSA fallback without NetUserGetInfo, or");
-                    println!("      LDAP did not return the user object). Computed rights are");
-                    println!("      ACL-theoretically correct, but whether the account is");
-                    println!("      enabled is unknown.");
-                }
-                PermissionDiagnostic::IdentityLookupFailed { reason } => {
-                    println!("  [!] LDAP identity lookup failed: {reason}.");
-                    println!("      The analysis ran with a placeholder identity and an empty");
-                    println!("      token; ACEs targeting domain groups may be missing. Treat");
-                    println!("      as incomplete.");
-                }
-                PermissionDiagnostic::GroupResolutionFailed { reason } => {
-                    println!("  [!] Recursive group resolution failed or was skipped: {reason}.");
-                    println!("      ACEs on domain groups may be missing from the computed");
-                    println!("      effective right. Treat as incomplete.");
-                }
-                PermissionDiagnostic::OwnerRightsAceApplied => {
-                    println!("  [i] OWNER RIGHTS (S-1-3-4) ACE present and the identity is the");
-                    println!("      object's owner. That DACL entry governs the owner's rights;");
-                    println!("      the implicit READ_CONTROL + WRITE_DAC owner grant was");
-                    println!("      suppressed. The evaluation is exact — informational only.");
-                }
-                PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal => {
-                    println!("  [i] Identity is a trust-forest principal found as a Foreign");
-                    println!("      Security Principal object in the home domain. Home-domain");
-                    println!("      groups were resolved through the FSP — but the principal's");
-                    println!("      memberships in its own forest are unknown. Treat as");
-                    println!("      incomplete.");
-                }
-                PermissionDiagnostic::GroupResolutionViaGlobalCatalog => {
-                    println!("  [i] Group memberships were resolved through a Global Catalog");
-                    println!("      bind. Only universal group memberships replicate fully to");
-                    println!("      the GC — global and domain-local memberships of foreign");
-                    println!("      domains can be missing. Treat as incomplete.");
-                }
-                PermissionDiagnostic::PersistedEvidenceDecodeFailed { detail } => {
-                    println!("  [!] A persisted (historical) row could not be fully decoded:");
-                    println!("      {detail}.");
-                    println!("      The reconstructed result may be less complete than it was");
-                    println!("      originally stored. Treat as incomplete.");
-                }
-                PermissionDiagnostic::SidHistoryPresent { count } => {
-                    println!("  [!] This identity carries {count} historical SID(s) (sIDHistory).");
-                    println!("      ACEs that reference a historical SID are not evaluated, but");
-                    println!("      the real logon token still includes it — effective rights");
-                    println!("      may be understated. Treat as incomplete.");
-                }
-                PermissionDiagnostic::TrustBoundaryEffectsNotModeled => {
-                    println!("  [i] Identity resolved across a domain / trust boundary (foreign");
-                    println!("      security principal, or outside the configured LDAP base).");
-                    println!("      If that boundary is a forest trust, SID filtering /");
-                    println!("      quarantine and Selective Authentication may reduce actual");
-                    println!("      access — these runtime trust effects are not modeled.");
-                }
-            }
-        }
-    }
+    print_diagnostics(&result.diagnostics);
 
     // --- Zutreffende ACEs / matching ACEs ---
     // Taken from the engine instead of rebuilding via build_token_sids —
@@ -336,6 +235,191 @@ fn severity_label(sev: &RiskSeverity) -> &'static str {
 }
 
 /// Prints the risk findings of a run to the console in a formatted block.
+/// Renders the structured diagnostic markers block. Shared by the analyze
+/// report and the membership (`groups`) report so both classify and word
+/// every marker identically.
+pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
+    if diagnostics.is_empty() {
+        return;
+    }
+    section("Diagnostics (structured)");
+    for d in diagnostics {
+        match d {
+            PermissionDiagnostic::NonCanonicalDaclOrder { at_index } => {
+                println!("  [i] Non-canonical DACL ordering at ACE index {at_index}.");
+                println!("      Windows AccessCheck walks in stored order — the result is");
+                println!("      exact but may differ from canonicalized expectations.");
+            }
+            PermissionDiagnostic::UnsupportedShareAces { count } => {
+                println!("  [!] {count} share ACE(s) of unsupported type were skipped.");
+                println!("      Share mask is potentially incomplete; risk findings are");
+                println!("      flagged 'incomplete' for this path.");
+            }
+            PermissionDiagnostic::UnsupportedNtfsAces { count } => {
+                println!("  [!] {count} NTFS ACE(s) could not be evaluated (object / callback /");
+                println!("      conditional / vendor-specific). The displayed effective");
+                println!("      permission is a LOWER-CONFIDENCE APPROXIMATION — a hidden Deny");
+                println!("      among them could change the result. Risk findings are flagged");
+                println!("      'incomplete' for this path.");
+            }
+            PermissionDiagnostic::DomainGroupRecursionIncomplete => {
+                println!("  [i] Group resolution ran through the SAM/LSA fallback (no LDAP).");
+                println!("      NetUserGetGroups returns only direct global groups — nested");
+                println!("      domain groups are not recursively resolved. ACEs targeting");
+                println!("      deeply nested groups may be missed.");
+            }
+            PermissionDiagnostic::IdentityDisabled => {
+                println!("  [i] Identity is flagged as disabled in AD (ACCOUNTDISABLE).");
+                println!("      Computed rights are ACL-theoretically correct, but the");
+                println!("      account normally cannot authenticate / access SMB.");
+            }
+            PermissionDiagnostic::IdentityNotInConfiguredLdapBase => {
+                println!("  [i] Identity was resolved via Windows LSA but the configured");
+                println!("      LDAP base DN does not index that SID (typical for multi-");
+                println!("      domain forests or trusted domains). Domain group recursion");
+                println!("      ran only through the user's home domain — nested cross-");
+                println!("      domain memberships may be missing. Treat as incomplete.");
+            }
+            PermissionDiagnostic::IdentityDisabledStatusUnknown => {
+                println!("  [i] The 'disabled' flag for this identity could not be");
+                println!("      determined (SAM/LSA fallback without NetUserGetInfo, or");
+                println!("      LDAP did not return the user object). Computed rights are");
+                println!("      ACL-theoretically correct, but whether the account is");
+                println!("      enabled is unknown.");
+            }
+            PermissionDiagnostic::IdentityLookupFailed { reason } => {
+                println!("  [!] LDAP identity lookup failed: {reason}.");
+                println!("      The analysis ran with a placeholder identity and an empty");
+                println!("      token; ACEs targeting domain groups may be missing. Treat");
+                println!("      as incomplete.");
+            }
+            PermissionDiagnostic::GroupResolutionFailed { reason } => {
+                println!("  [!] Recursive group resolution failed or was skipped: {reason}.");
+                println!("      ACEs on domain groups may be missing from the computed");
+                println!("      effective right. Treat as incomplete.");
+            }
+            PermissionDiagnostic::OwnerRightsAceApplied => {
+                println!("  [i] OWNER RIGHTS (S-1-3-4) ACE present and the identity is the");
+                println!("      object's owner. That DACL entry governs the owner's rights;");
+                println!("      the implicit READ_CONTROL + WRITE_DAC owner grant was");
+                println!("      suppressed. The evaluation is exact — informational only.");
+            }
+            PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal => {
+                println!("  [i] Identity is a trust-forest principal found as a Foreign");
+                println!("      Security Principal object in the home domain. Home-domain");
+                println!("      groups were resolved through the FSP — but the principal's");
+                println!("      memberships in its own forest are unknown. Treat as");
+                println!("      incomplete.");
+            }
+            PermissionDiagnostic::GroupResolutionViaGlobalCatalog => {
+                println!("  [i] Group memberships were resolved through a Global Catalog");
+                println!("      bind. Only universal group memberships replicate fully to");
+                println!("      the GC — global and domain-local memberships of foreign");
+                println!("      domains can be missing. Treat as incomplete.");
+            }
+            PermissionDiagnostic::PersistedEvidenceDecodeFailed { detail } => {
+                println!("  [!] A persisted (historical) row could not be fully decoded:");
+                println!("      {detail}.");
+                println!("      The reconstructed result may be less complete than it was");
+                println!("      originally stored. Treat as incomplete.");
+            }
+            PermissionDiagnostic::SidHistoryPresent { count } => {
+                println!("  [!] This identity carries {count} historical SID(s) (sIDHistory).");
+                println!("      ACEs that reference a historical SID are not evaluated, but");
+                println!("      the real logon token still includes it — effective rights");
+                println!("      may be understated. Treat as incomplete.");
+            }
+            PermissionDiagnostic::TrustBoundaryEffectsNotModeled => {
+                println!("  [i] Identity resolved across a domain / trust boundary (foreign");
+                println!("      security principal, or outside the configured LDAP base).");
+                println!("      If that boundary is a forest trust, SID filtering /");
+                println!("      quarantine and Selective Authentication may reduce actual");
+                println!("      access — these runtime trust effects are not modeled.");
+            }
+        }
+    }
+}
+
+/// Prints the standalone group-membership report (`groups` command): identity
+/// header, privileged-membership flags (the high-value audit signal), the
+/// recursive group list with how each membership arose, the shared diagnostics
+/// block, and a hand-off hint to the rights questions (`scan`).
+pub fn print_membership_report(report: &MembershipReport, user_input: &str) {
+    println!();
+    header("AD Permission Analyzer  \u{00B7}  Group Membership Report");
+
+    section("Identity");
+    let user_name = report.identity.name.as_deref().unwrap_or(user_input);
+    let domain_prefix = report
+        .identity
+        .domain
+        .as_ref()
+        .map(|d| format!("{d}\\"))
+        .unwrap_or_default();
+    println!("  Identity  : {domain_prefix}{user_name}");
+    println!("            : ({})", report.identity.sid.0);
+    let status = if report.identity.disabled {
+        "DISABLED"
+    } else {
+        "Active"
+    };
+    println!(
+        "  Status    : {status}  \u{00B7}  Kind: {:?}",
+        report.identity.kind
+    );
+    if report.identity.sid_history_count > 0 {
+        println!(
+            "  sIDHistory: {} (see diagnostics)",
+            report.identity.sid_history_count
+        );
+    }
+    if !report.ad_connected {
+        println!();
+        println!("  [!] No AD/LDAP connection — only direct (SAM/LSA) groups resolved.");
+    }
+
+    let privileged = report.privileged();
+    if !privileged.is_empty() {
+        section("Privileged memberships");
+        for (sid, role) in &privileged {
+            println!("  [!] member of {role}  ({})", sid.0);
+        }
+    }
+
+    let total = report.memberships.len();
+    let direct = report.memberships.iter().filter(|m| m.direct).count();
+    section(&format!(
+        "Group memberships ({total} total, {direct} direct)"
+    ));
+    if report.memberships.is_empty() {
+        println!("  (none resolved)");
+    } else {
+        for m in &report.memberships {
+            let name = m.group_name.as_deref().unwrap_or(&m.group_sid.0);
+            let priv_tag = if privileged_group_role(&m.group_sid).is_some() {
+                "  [! privileged]"
+            } else {
+                ""
+            };
+            println!("  {name}  ({}){priv_tag}", m.group_sid.0);
+            println!("      {}", m.origin_label());
+        }
+    }
+
+    print_diagnostics(&report.diagnostics);
+
+    section("Next");
+    println!("  \u{2192} Check this identity's effective rights on a target:");
+    println!(
+        "      adpa scan --user \"{}\" --path <root>",
+        report
+            .identity
+            .name
+            .as_deref()
+            .unwrap_or(&report.identity.sid.0)
+    );
+}
+
 pub fn print_risk_findings(findings: &[RiskFinding]) {
     section(&format!("Risk Findings ({})", findings.len()));
     if findings.is_empty() {

@@ -23,7 +23,9 @@ use async_trait::async_trait;
 use tracing::{debug, warn};
 
 use adpa_core::error::CoreError;
-use adpa_core::model::{GroupMembership, Identity, IdentityKind, PermissionDiagnostic, Sid};
+use adpa_core::model::{
+    GroupMembership, Identity, IdentityKind, MembershipReport, PermissionDiagnostic, Sid,
+};
 
 /// User-supplied input. `Auto` is classified at run time by syntax.
 #[derive(Debug, Clone)]
@@ -196,6 +198,69 @@ impl PrincipalResolution {
             group_resolution_failure_reason,
             identity_resolved_via_fsp: self.resolved_via_fsp,
             group_resolution_via_global_catalog: self.resolved_via_global_catalog,
+        }
+    }
+
+    /// Identity-/resolution-level diagnostic markers for a **membership view**
+    /// — the same set the engine surfaces for an identity (disabled, SAM
+    /// fallback, FSP, GC, outside-base, lookup/group failure, sIDHistory),
+    /// without the path-specific ones (unsupported ACEs, share, local groups).
+    /// Derived from `engine_flags()` + the resolved identity, so it cannot
+    /// drift from the engine's classification.
+    pub fn membership_diagnostics(&self) -> Vec<PermissionDiagnostic> {
+        let flags = self.engine_flags();
+        let mut d = Vec::new();
+        if flags.identity_disabled_status_unknown {
+            d.push(PermissionDiagnostic::IdentityDisabledStatusUnknown);
+        } else if self.identity.disabled {
+            d.push(PermissionDiagnostic::IdentityDisabled);
+        }
+        if flags.identity_not_in_configured_ldap_base {
+            d.push(PermissionDiagnostic::IdentityNotInConfiguredLdapBase);
+        }
+        if flags.group_resolution_via_sam_fallback {
+            d.push(PermissionDiagnostic::DomainGroupRecursionIncomplete);
+        }
+        if let Some(reason) = flags.identity_lookup_failure_reason {
+            d.push(PermissionDiagnostic::IdentityLookupFailed { reason });
+        }
+        if let Some(reason) = flags.group_resolution_failure_reason {
+            d.push(PermissionDiagnostic::GroupResolutionFailed { reason });
+        }
+        if flags.identity_resolved_via_fsp {
+            d.push(PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal);
+        }
+        if flags.group_resolution_via_global_catalog {
+            d.push(PermissionDiagnostic::GroupResolutionViaGlobalCatalog);
+        }
+        if self.identity.sid_history_count > 0 {
+            d.push(PermissionDiagnostic::SidHistoryPresent {
+                count: self.identity.sid_history_count,
+            });
+        }
+        if flags.identity_resolved_via_fsp || flags.identity_not_in_configured_ldap_base {
+            d.push(PermissionDiagnostic::TrustBoundaryEffectsNotModeled);
+        }
+        d
+    }
+
+    /// Consumes the resolution into a [`MembershipReport`]. `ad_connected`
+    /// reflects whether an LDAP connection backed the lookup (vs. SAM/LSA).
+    /// Group memberships are deduplicated by group SID (a group reachable via
+    /// several paths appears once, the first/most-direct path kept).
+    pub fn into_membership_report(self, ad_connected: bool) -> MembershipReport {
+        let diagnostics = self.membership_diagnostics();
+        let mut seen = std::collections::HashSet::new();
+        let memberships: Vec<GroupMembership> = self
+            .memberships
+            .into_iter()
+            .filter(|m| seen.insert(m.group_sid.0.clone()))
+            .collect();
+        MembershipReport {
+            identity: self.identity,
+            ad_connected,
+            memberships,
+            diagnostics,
         }
     }
 }
@@ -1501,5 +1566,77 @@ mod tests {
             !msg.contains("--global-catalog"),
             "GC miss must not recommend the flag that is already active; got: {msg}"
         );
+    }
+
+    // --- Membership view (groups command / GUI tab) ---
+
+    fn sample_identity(sid: &str, sid_history_count: usize) -> Identity {
+        Identity {
+            sid: Sid(sid.to_owned()),
+            name: Some("alice".to_owned()),
+            domain: Some("CORP".to_owned()),
+            kind: IdentityKind::User,
+            disabled: false,
+            user_principal_name: None,
+            sid_history_count,
+        }
+    }
+
+    #[test]
+    fn membership_diagnostics_surfaces_sidhistory_and_sam_fallback() {
+        let res = PrincipalResolution {
+            sid: Sid("S-1-5-21-1-2-3-1104".to_owned()),
+            identity: sample_identity("S-1-5-21-1-2-3-1104", 2),
+            memberships: vec![],
+            scope_status: IdentityScopeStatus::InsideConfiguredLdapBase,
+            group_resolution_status: GroupResolutionStatus::SamFlat,
+            disabled_status: DisabledStatus::Known(false),
+            diagnostics: vec![],
+            resolved_via_fsp: false,
+            resolved_via_global_catalog: false,
+        };
+        let d = res.membership_diagnostics();
+        assert!(
+            d.iter()
+                .any(|x| matches!(x, PermissionDiagnostic::SidHistoryPresent { count: 2 })),
+            "sIDHistory must surface as a marker: {d:?}"
+        );
+        assert!(
+            d.iter()
+                .any(|x| matches!(x, PermissionDiagnostic::DomainGroupRecursionIncomplete)),
+            "SAM fallback must surface as a marker: {d:?}"
+        );
+    }
+
+    #[test]
+    fn into_membership_report_deduplicates_by_group_sid() {
+        let member = Sid("S-1-5-21-1-2-3-1104".to_owned());
+        let group = Sid("S-1-5-21-1-2-3-512".to_owned());
+        let dup = |direct: bool| GroupMembership {
+            member_sid: member.clone(),
+            group_sid: group.clone(),
+            direct,
+            group_name: Some("Domain Admins".to_owned()),
+            path: None,
+        };
+        let res = PrincipalResolution {
+            sid: member.clone(),
+            identity: sample_identity("S-1-5-21-1-2-3-1104", 0),
+            memberships: vec![dup(true), dup(false)],
+            scope_status: IdentityScopeStatus::InsideConfiguredLdapBase,
+            group_resolution_status: GroupResolutionStatus::LdapRecursive,
+            disabled_status: DisabledStatus::Known(false),
+            diagnostics: vec![],
+            resolved_via_fsp: false,
+            resolved_via_global_catalog: false,
+        };
+        let report = res.into_membership_report(true);
+        assert_eq!(
+            report.memberships.len(),
+            1,
+            "duplicate group SID must collapse"
+        );
+        assert_eq!(report.privileged().len(), 1);
+        assert!(report.ad_connected);
     }
 }

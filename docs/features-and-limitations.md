@@ -30,6 +30,16 @@ that applies.
 - **`disabled` status** is read in the LDAP path via
   `userAccountControl` and in the SAM path via `NetUserGetInfo`
   level 1 — see ADR 0033 and ADR 0035.
+- **Standalone group-membership view** (`adpa groups` / the GUI
+  `Groups` tab): the recursive memberships of an identity on their own,
+  with **no** path/ACL/rights, each membership labelled by how it arose
+  ("direct", "primary group", "local group", "via A → B"), and
+  membership in a well-known **privileged** group (Administrators,
+  Domain/Enterprise/Schema Admins, GPO Creator Owners, Key Admins,
+  built-in Operators) flagged as the high-value audit signal. It carries
+  the same identity-level diagnostic markers as the rest of Stars, so an
+  incomplete list is never mistaken for a complete one. One direction
+  only (user → groups); see ADR 0053.
 
 ### NTFS DACL evaluation
 

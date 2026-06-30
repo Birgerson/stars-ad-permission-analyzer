@@ -21,6 +21,7 @@ validation = { path = "../validation" }
 thiserror.workspace = true
 anyhow.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true

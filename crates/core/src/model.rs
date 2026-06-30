@@ -289,6 +289,104 @@ pub enum MembershipPathSource {
     LdapMatchingRule,
 }
 
+impl GroupMembership {
+    /// Human-readable description of how this membership arose — `"primary
+    /// group"`, `"local group"`, `"direct"`, `"nested"`, or the resolved
+    /// chain `"via A → B"`. Shared by the CLI and GUI membership views so both
+    /// word it identically.
+    pub fn origin_label(&self) -> String {
+        if let Some(p) = &self.path {
+            match p.source {
+                MembershipPathSource::PrimaryGroup => return "primary group".to_owned(),
+                MembershipPathSource::LocalGroup => return "local group".to_owned(),
+                _ => {}
+            }
+        }
+        if self.direct {
+            return "direct".to_owned();
+        }
+        match &self.path {
+            Some(p) => {
+                let chain: Vec<String> = p
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, sid)| {
+                        p.names
+                            .get(i)
+                            .and_then(|n| n.clone())
+                            .unwrap_or_else(|| sid.0.clone())
+                    })
+                    .collect();
+                let arrow = chain.join(" \u{2192} ");
+                if p.complete {
+                    format!("via {arrow}")
+                } else {
+                    format!("via {arrow} (chain not fully reconstructed)")
+                }
+            }
+            None => "nested".to_owned(),
+        }
+    }
+}
+
+/// Well-known **privileged** role name if `sid` is a built-in or
+/// default-domain privileged group — `None` otherwise. Built-in aliases are
+/// matched by their constant SID, domain groups by their well-known RID
+/// suffix (`-512` Domain Admins, `-519` Enterprise Admins, …). Used to flag a
+/// sensitive membership ("⚠ member of Domain Admins") in the membership view.
+pub fn privileged_group_role(sid: &Sid) -> Option<&'static str> {
+    match sid.0.as_str() {
+        "S-1-5-32-544" => return Some("Administrators"),
+        "S-1-5-32-548" => return Some("Account Operators"),
+        "S-1-5-32-549" => return Some("Server Operators"),
+        "S-1-5-32-550" => return Some("Print Operators"),
+        "S-1-5-32-551" => return Some("Backup Operators"),
+        _ => {}
+    }
+    // Domain groups: `S-1-5-21-<domain>-<RID>`, identified by the RID suffix.
+    let rid = sid
+        .0
+        .strip_prefix("S-1-5-21-")
+        .and_then(|rest| rest.rsplit('-').next())?;
+    match rid {
+        "512" => Some("Domain Admins"),
+        "519" => Some("Enterprise Admins"),
+        "518" => Some("Schema Admins"),
+        "520" => Some("Group Policy Creator Owners"),
+        "526" => Some("Key Admins"),
+        "527" => Some("Enterprise Key Admins"),
+        _ => None,
+    }
+}
+
+/// A standalone "which groups is this identity in?" report — no path, no ACL,
+/// no effective rights (those stay in `analyze` / `scan`). Rendered by the CLI
+/// `groups` command and the GUI Groups tab from one shared structure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MembershipReport {
+    pub identity: Identity,
+    /// `true` when an AD/LDAP connection backed the resolution (as opposed to
+    /// the SAM/LSA fallback, which returns only direct global groups).
+    pub ad_connected: bool,
+    /// Recursive group memberships, deduplicated by group SID.
+    pub memberships: Vec<GroupMembership>,
+    /// Identity-/resolution-level diagnostic markers (the same set the engine
+    /// surfaces for an identity, without the path-specific ones).
+    pub diagnostics: Vec<PermissionDiagnostic>,
+}
+
+impl MembershipReport {
+    /// Memberships that resolve to a privileged group, as
+    /// `(group SID, role name)` — the high-value audit signal.
+    pub fn privileged(&self) -> Vec<(&Sid, &'static str)> {
+        self.memberships
+            .iter()
+            .filter_map(|m| privileged_group_role(&m.group_sid).map(|role| (&m.group_sid, role)))
+            .collect()
+    }
+}
+
 /// ACE type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AceKind {
@@ -1209,5 +1307,89 @@ mod tests {
             AccessContext::for_path_with_smb(r"C:\Windows", Some(""), Some("")),
             AccessContext::LocalInteractive
         );
+    }
+
+    // --- Privileged-group detection (membership view) ---
+
+    #[test]
+    fn privileged_group_role_matches_builtin_aliases() {
+        assert_eq!(
+            privileged_group_role(&Sid("S-1-5-32-544".into())),
+            Some("Administrators")
+        );
+        assert_eq!(
+            privileged_group_role(&Sid("S-1-5-32-551".into())),
+            Some("Backup Operators")
+        );
+    }
+
+    #[test]
+    fn privileged_group_role_matches_domain_rids_independent_of_domain() {
+        // Same RID under two different domains both resolve to the role.
+        assert_eq!(
+            privileged_group_role(&Sid("S-1-5-21-111-222-333-512".into())),
+            Some("Domain Admins")
+        );
+        assert_eq!(
+            privileged_group_role(&Sid("S-1-5-21-9-8-7-512".into())),
+            Some("Domain Admins")
+        );
+        assert_eq!(
+            privileged_group_role(&Sid("S-1-5-21-1-2-3-519".into())),
+            Some("Enterprise Admins")
+        );
+    }
+
+    #[test]
+    fn privileged_group_role_rejects_non_privileged_and_builtin_users() {
+        // BUILTIN\Users (545) and Domain Users (513) are NOT privileged.
+        assert_eq!(privileged_group_role(&Sid("S-1-5-32-545".into())), None);
+        assert_eq!(
+            privileged_group_role(&Sid("S-1-5-21-1-2-3-513".into())),
+            None
+        );
+        // A plain user RID (1104) must not be flagged.
+        assert_eq!(
+            privileged_group_role(&Sid("S-1-5-21-1-2-3-1104".into())),
+            None
+        );
+        // A built-in well-known SID that is not in the privileged set.
+        assert_eq!(privileged_group_role(&Sid("S-1-1-0".into())), None);
+    }
+
+    #[test]
+    fn membership_report_privileged_collects_only_privileged_groups() {
+        let report = MembershipReport {
+            identity: Identity {
+                sid: Sid("S-1-5-21-1-2-3-1104".into()),
+                name: Some("alice".into()),
+                domain: Some("CORP".into()),
+                kind: IdentityKind::User,
+                disabled: false,
+                user_principal_name: None,
+                sid_history_count: 0,
+            },
+            ad_connected: true,
+            memberships: vec![
+                GroupMembership {
+                    member_sid: Sid("S-1-5-21-1-2-3-1104".into()),
+                    group_sid: Sid("S-1-5-21-1-2-3-512".into()), // Domain Admins
+                    direct: false,
+                    group_name: Some("Domain Admins".into()),
+                    path: None,
+                },
+                GroupMembership {
+                    member_sid: Sid("S-1-5-21-1-2-3-1104".into()),
+                    group_sid: Sid("S-1-5-21-1-2-3-513".into()), // Domain Users (not priv.)
+                    direct: true,
+                    group_name: Some("Domain Users".into()),
+                    path: None,
+                },
+            ],
+            diagnostics: vec![],
+        };
+        let privileged = report.privileged();
+        assert_eq!(privileged.len(), 1);
+        assert_eq!(privileged[0].1, "Domain Admins");
     }
 }

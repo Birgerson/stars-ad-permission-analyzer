@@ -690,6 +690,7 @@ dependencies = [
  "persistence",
  "risk_engine",
  "serde",
+ "serde_json",
  "share_scanner",
  "thiserror 2.0.18",
  "tokio",

@@ -171,6 +171,44 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+
+    /// Show the recursive group memberships of a user (or group) — no path,
+    /// no ACL, no effective rights (those stay in `analyze` / `scan`).
+    Groups {
+        #[arg(short, long)]
+        user: String,
+        #[arg(short = 's', long)]
+        server: Option<String>,
+        #[arg(short = 'b', long)]
+        base_dn: Option<String>,
+        #[arg(long)]
+        bind_dn: Option<String>,
+        /// **DEPRECATED — insecure.** Visible in process listings; use the
+        /// `ADPA_BIND_PASSWORD` environment variable instead.
+        #[arg(long)]
+        bind_password: Option<String>,
+        /// Unencrypted LDAP (port 389) — password in plaintext. Test environments only.
+        #[arg(long)]
+        insecure_ldap: bool,
+        /// Bind against the Global Catalog (forest-wide). Only universal group
+        /// memberships replicate fully — results are flagged potentially incomplete.
+        #[arg(long)]
+        global_catalog: bool,
+        /// Bind with SASL GSSAPI/Kerberos sign+seal using the current Windows
+        /// logon (no bind DN/password). --server must be the DC's FQDN.
+        #[arg(long)]
+        ldap_signing: bool,
+        /// LDAP operation timeout in seconds (default 10; range 1–600). Only
+        /// takes effect together with --server.
+        #[arg(long)]
+        ldap_timeout: Option<u64>,
+        /// Optional export path (`.json` or `.csv`).
+        #[arg(short = 'o', long)]
+        output: Option<String>,
+        /// Overwrite an existing export file without confirmation.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -253,6 +291,36 @@ async fn main() -> anyhow::Result<()> {
                     global_catalog,
                     ldap_signing,
                     ldap_timeout,
+                    force,
+                },
+            )
+            .await?;
+        }
+        Commands::Groups {
+            user,
+            server,
+            base_dn,
+            bind_dn,
+            bind_password,
+            insecure_ldap,
+            global_catalog,
+            ldap_signing,
+            ldap_timeout,
+            output,
+            force,
+        } => {
+            run_groups(
+                user,
+                server,
+                base_dn,
+                bind_dn,
+                bind_password,
+                GroupsOptions {
+                    insecure_ldap,
+                    global_catalog,
+                    ldap_signing,
+                    ldap_timeout,
+                    output,
                     force,
                 },
             )
@@ -1344,6 +1412,168 @@ fn compute_risk_findings(permissions: &[EffectivePermission]) -> Vec<RiskFinding
     })
 }
 
+// ---------------------------------------------------------------------------
+// groups subcommand — identity → recursive group memberships (no path/ACL)
+// ---------------------------------------------------------------------------
+
+struct GroupsOptions {
+    insecure_ldap: bool,
+    global_catalog: bool,
+    ldap_signing: bool,
+    ldap_timeout: Option<u64>,
+    output: Option<String>,
+    force: bool,
+}
+
+async fn run_groups(
+    user: String,
+    server: Option<String>,
+    base_dn: Option<String>,
+    bind_dn: Option<String>,
+    bind_password: Option<String>,
+    opts: GroupsOptions,
+) -> anyhow::Result<()> {
+    let GroupsOptions {
+        insecure_ldap,
+        global_catalog,
+        ldap_signing,
+        ldap_timeout,
+        output,
+        force,
+    } = opts;
+
+    // AGENTS.md DoD 11: validate every input before processing.
+    let user_trimmed = user.trim();
+    let user = if user_trimmed.starts_with("S-1-") {
+        validate_sid(user_trimmed)
+            .map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?
+            .0
+    } else {
+        validate_identity_query(user_trimmed)
+            .map_err(|e| anyhow::anyhow!("Invalid user / sAMAccountName: {e}"))?
+            .0
+    };
+    let conn = validate_connection_inputs(
+        server.as_deref(),
+        base_dn.as_deref(),
+        bind_dn.as_deref(),
+        None,
+        None,
+    )?;
+    let server = conn.server;
+    let base_dn = conn.base_dn;
+    let bind_dn = conn.bind_dn;
+    let ldap_timeout = validate_optional_ldap_timeout(ldap_timeout)
+        .map_err(|e| anyhow::anyhow!("Invalid --ldap-timeout: {e}"))?
+        .map(|t| t.0);
+    // Validate the export target up front (fail fast, before the LDAP work).
+    let export_status = match &output {
+        Some(out) => {
+            let status = validate_export_path(out)
+                .map_err(|e| anyhow::anyhow!("Invalid export path: {e}"))?;
+            // The membership export supports .json / .csv only — reject an
+            // otherwise-valid .html target here, not after the LDAP work.
+            membership_export_format(&status.path().0)?;
+            check_overwrite_policy(&status, force)?;
+            Some(status)
+        }
+        None => None,
+    };
+
+    let resolved = resolve_identity(
+        &user,
+        server,
+        base_dn,
+        bind_dn,
+        bind_password,
+        insecure_ldap,
+        global_catalog,
+        ldap_signing,
+        ldap_timeout,
+    )
+    .await?;
+    let ad_connected = resolved.ad_connected;
+    let report = resolved.resolution.into_membership_report(ad_connected);
+
+    output::print_membership_report(&report, &user);
+
+    if let Some(status) = export_status {
+        export_membership(&report, &status.path().0)?;
+    }
+    Ok(())
+}
+
+/// The membership export format the `groups` command supports.
+enum MembershipExportFormat {
+    Json,
+    Csv,
+}
+
+/// Classifies an export target by extension — the single source of truth for
+/// "which formats does `groups --output` support". Errors with the shared
+/// fail-fast message so `run_groups` can reject an unsupported target before
+/// the LDAP work and `export_membership` cannot diverge from it.
+fn membership_export_format(path: &std::path::Path) -> anyhow::Result<MembershipExportFormat> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("json") => Ok(MembershipExportFormat::Json),
+        Some("csv") => Ok(MembershipExportFormat::Csv),
+        other => Err(anyhow::anyhow!(
+            "Unsupported export extension for 'groups': {other:?} (use .json or .csv)"
+        )),
+    }
+}
+
+/// Writes a [`MembershipReport`] to `.json` (serde) or `.csv`. The overwrite
+/// policy and the format were already enforced in `run_groups` (fail-fast).
+fn export_membership(
+    report: &adpa_core::model::MembershipReport,
+    out_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let content = match membership_export_format(out_path)? {
+        MembershipExportFormat::Json => serde_json::to_string_pretty(report)
+            .map_err(|e| anyhow::anyhow!("JSON serialization failed: {e}"))?,
+        MembershipExportFormat::Csv => membership_csv(report),
+    };
+    std::fs::write(out_path, content)
+        .map_err(|e| anyhow::anyhow!("Cannot write export '{}': {e}", out_path.display()))?;
+    println!("Exported to: {}", out_path.display());
+    Ok(())
+}
+
+fn membership_csv(report: &adpa_core::model::MembershipReport) -> String {
+    let mut s = String::from("group_name,group_sid,direct,source,privileged_role\n");
+    for m in &report.memberships {
+        let source = m
+            .path
+            .as_ref()
+            .map(|p| format!("{:?}", p.source))
+            .unwrap_or_default();
+        let role = adpa_core::model::privileged_group_role(&m.group_sid).unwrap_or("");
+        s.push_str(&format!(
+            "{},{},{},{},{}\n",
+            csv_field(m.group_name.as_deref().unwrap_or("")),
+            csv_field(&m.group_sid.0),
+            m.direct,
+            csv_field(&source),
+            csv_field(role),
+        ));
+    }
+    s
+}
+
+/// Minimal RFC-4180 CSV field escaping.
+fn csv_field(v: &str) -> String {
+    if v.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", v.replace('"', "\"\""))
+    } else {
+        v.to_string()
+    }
+}
+
 /// Enforces the overwrite policy: without `--force` an existing export file is
 /// not overwritten but rejected as an error.
 fn check_overwrite_policy(status: &ExportPathStatus, force: bool) -> anyhow::Result<()> {
@@ -1502,9 +1732,25 @@ fn print_scan_summary(
 
 #[cfg(test)]
 mod tests {
-    use super::{check_overwrite_policy, resolve_search_base};
+    use super::{check_overwrite_policy, csv_field, resolve_search_base};
     use std::path::PathBuf;
     use validation::export_path::{ExportPathStatus, ValidatedExportPath};
+
+    // --- CSV escaping for the groups export ---
+
+    #[test]
+    fn csv_field_passes_plain_values_through() {
+        assert_eq!(csv_field("Domain Admins"), "Domain Admins");
+        assert_eq!(csv_field("S-1-5-32-544"), "S-1-5-32-544");
+    }
+
+    #[test]
+    fn csv_field_quotes_and_escapes_special_characters() {
+        // Comma → wrap; embedded quote → doubled and wrapped.
+        assert_eq!(csv_field("Sales, EMEA"), "\"Sales, EMEA\"");
+        assert_eq!(csv_field("a\"b"), "\"a\"\"b\"");
+        assert_eq!(csv_field("line1\nline2"), "\"line1\nline2\"");
+    }
 
     // --- Search-base resolution (review 2026-06-13 finding 3) ---
     //

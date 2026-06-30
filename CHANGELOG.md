@@ -10,7 +10,29 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.7.3 below for the latest release.)
+### Added
+
+- **Group-membership view — "which groups is this user in?"** A dedicated,
+  read-only view that lists an identity's **recursive** group memberships
+  (primary, nested domain, and local groups) **without** a path, ACL, or
+  effective-rights computation — answering the pure identity question that
+  previously forced you to analyse an arbitrary path just to read the
+  resolved-groups panel. Available identically as:
+  - **CLI:** `adpa groups --user <name|SID> [--server … --ldap-* … --ldap-timeout N] [--output report.json|.csv] [--force]`.
+  - **GUI:** a new **Groups** tab — one identity field (local name ·
+    `DOMAIN\user` · UPN · SID, auto-resolved) plus the same LDAP modes as
+    Analyze/Scan.
+
+  Each membership shows **how it arose** ("direct", "primary group", "local
+  group", or the chain "via A → B"), and memberships in a **well-known
+  privileged group** (Administrators, Domain/Enterprise/Schema Admins, Group
+  Policy Creator Owners, Key Admins, the built-in Operators) are flagged
+  prominently — the high-value audit signal, detected by SID/RID with no extra
+  directory query. The same identity-level diagnostic markers as the rest of
+  Stars are surfaced (SAM/LSA fallback, FSP, Global Catalog, outside-base,
+  `sIDHistory`, resolution timeout), so an incomplete list never looks
+  complete. The view is one direction only (user → groups); group → members is
+  a planned later step. See ADR 0053.
 
 ---
 
