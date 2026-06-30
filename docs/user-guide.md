@@ -112,8 +112,8 @@ access).
 
 ## First run — the GUI
 
-After starting Stars the main window shows **four tabs:** `Analyze`,
-`Scan Tree`, `Delta`, `Info`. **Recommended first workflow:**
+After starting Stars the main window shows **five tabs:** `Analyze`,
+`Groups`, `Scan Tree`, `Delta`, `Info`. **Recommended first workflow:**
 
 1. Open the **`Analyze`** tab — type an identity (user/group + SID)
    and a path. Hit "Analyze".

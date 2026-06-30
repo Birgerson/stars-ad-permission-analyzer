@@ -10,6 +10,17 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+(No unreleased changes — see v1.7.4 below for the latest release.)
+
+---
+
+## [1.7.4] — 2026-06-30
+
+**New feature: the group-membership view.** A dedicated, read-only
+*"which groups is this user in?"* view — CLI `adpa groups` and a new GUI
+`Groups` tab — with privileged-membership flagging and the recursive nesting
+chain. No engine-behaviour changes to Analyze/Scan.
+
 ### Added
 
 - **Group-membership view — "which groups is this user in?"** A dedicated,

@@ -519,6 +519,35 @@ Developers extending the GUI worker should implement any "LDAP search
 on demand" feature as an **explicit button with a spinner**, not as a
 keystroke trigger.
 
+### 5.8 The membership view (`groups`) — resolution without the engine
+
+The CLI `groups` command and the GUI `Groups` tab answer *"which groups
+is this identity in?"* directly, **without** running the permission
+engine (no path, no DACL, no effective rights). They reuse the principal
+pipeline above and stop at the resolution:
+
+- `PrincipalResolution::into_membership_report(ad_connected)` produces a
+  `MembershipReport` (`identity`, `ad_connected`, `memberships`
+  deduplicated by group SID, `diagnostics`). The CLI renderer and the GUI
+  worker consume the **same** structure, so the two surfaces cannot
+  diverge.
+- `PrincipalResolution::membership_diagnostics()` derives the
+  identity-/resolution-level markers from `engine_flags()` + the identity
+  — the same set §9 describes, minus the path-specific ones. It reuses
+  the engine-flag source (§5.5), so it cannot drift from the engine's
+  classification.
+- `GroupMembership::origin_label()` (in `adpa_core`) renders how a
+  membership arose ("direct", "primary group", "local group", or the
+  chain "via A → B") for both surfaces.
+- `privileged_group_role(&Sid)` flags membership in a well-known
+  privileged group — built-in aliases by their constant SID
+  (`S-1-5-32-544` …) and domain groups by their well-known RID suffix
+  (`-512` Domain Admins …). Pure SID matching against the already-resolved
+  list; **no** extra directory query.
+
+The view is one direction only (user → groups). Group → members (downward,
+with the `primaryGroupID` caveat) is a planned later step. See ADR 0053.
+
 ---
 
 ## 6. Permission engine — the AccessCheck reproduction

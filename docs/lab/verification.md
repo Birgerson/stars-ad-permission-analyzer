@@ -715,7 +715,7 @@ H.4 was a compact platform smoke (3 CLI `analyze` calls). H.6 fills in the missi
 
 | # | Test on Server 2025 | Status | Result |
 |---|---|---|---|
-| H.6.1 | **GUI walkthrough** (`adpa-gui.exe`) — all 4 tabs, theme toggle | ⏳ **open** | `adpa-gui.exe` is deployed on tier0, but no manual click test executed. Covered by Block E (Server 2022, screenshots from June 6). |
+| H.6.1 | **GUI walkthrough** (`adpa-gui.exe`) — all 5 tabs (incl. Groups), theme toggle | ⏳ **open** | `adpa-gui.exe` is deployed on tier0, but no manual click test executed. Covered by Block E (Server 2022, screenshots from June 6). |
 | H.6.2 | **CLI `scan` recursive** + HTML + JSON + CSV export over 5105 paths | ✅ **successful** | See H.6.2.* below. |
 | H.6.3 | **JSON schema v3** with Round-10 `path_trustees` enum (`entry_kind: "ace"`/`"diagnostic"`) | ✅ **successful** | See H.6.3.* below. |
 | H.6.4 | **LDAP bind** against `tier0.lab` | ⚠️ **finding** (not a bug) | Server 2025 requires LDAP signing by default + the DC has no LDAPS cert without AD CS. Stars detects both errors honestly. See H.6.4.* below. |
