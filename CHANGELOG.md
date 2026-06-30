@@ -10,6 +10,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+(No unreleased changes — see v1.7.5-rc2 below for the latest pre-release.)
+
+---
+
+## [1.7.5-rc2] — 2026-06-30
+
+**Pre-release / release candidate** (sorts below the stable `1.7.5` by SemVer).
+Adds logon-name LDAP binding for live lab testing before a final release.
+
 ### Added
 
 - **Bind by logon name, not just the DN.** The LDAP **Bind DN** field (GUI:
