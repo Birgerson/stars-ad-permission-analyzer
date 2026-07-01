@@ -246,15 +246,38 @@ impl PrincipalResolution {
 
     /// Consumes the resolution into a [`MembershipReport`]. `ad_connected`
     /// reflects whether an LDAP connection backed the lookup (vs. SAM/LSA).
-    /// Group memberships are deduplicated by group SID (a group reachable via
-    /// several paths appears once, the first/most-direct path kept).
+    ///
+    /// Group memberships are deduplicated by group SID. When a group is
+    /// reachable via several entries, the **most informative** one is kept —
+    /// ranked by [`membership_rank`]: a direct membership beats a nested one, a
+    /// complete path beats an incomplete one, more resolved names beat fewer,
+    /// and a named group beats an unnamed one. This prevents the report from
+    /// showing `nested` (or an incomplete path, or an undercounted "direct"
+    /// total) when a better entry for the same group existed but happened to
+    /// come later in the resolver's output (review 2026-07-01 finding 2). The
+    /// first-appearance order of each group SID is preserved for deterministic
+    /// output.
     pub fn into_membership_report(self, ad_connected: bool) -> MembershipReport {
         let diagnostics = self.membership_diagnostics();
-        let mut seen = std::collections::HashSet::new();
-        let memberships: Vec<GroupMembership> = self
-            .memberships
+        let mut order: Vec<String> = Vec::new();
+        let mut best: std::collections::HashMap<String, GroupMembership> =
+            std::collections::HashMap::new();
+        for m in self.memberships {
+            let key = m.group_sid.0.clone();
+            match best.get(&key) {
+                None => {
+                    order.push(key.clone());
+                    best.insert(key, m);
+                }
+                Some(existing) if membership_rank(&m) > membership_rank(existing) => {
+                    best.insert(key, m);
+                }
+                Some(_) => {}
+            }
+        }
+        let memberships: Vec<GroupMembership> = order
             .into_iter()
-            .filter(|m| seen.insert(m.group_sid.0.clone()))
+            .map(|k| best.remove(&k).expect("key was inserted"))
             .collect();
         MembershipReport {
             identity: self.identity,
@@ -263,6 +286,19 @@ impl PrincipalResolution {
             diagnostics,
         }
     }
+}
+
+/// Ranks a group membership by how informative it is, for deduplication in
+/// [`PrincipalResolution::into_membership_report`]. Higher is better, compared
+/// lexicographically: **direct** beats nested, a **complete path** beats an
+/// incomplete one, **more resolved names** beat fewer, and a **named** group
+/// beats an unnamed one.
+fn membership_rank(m: &GroupMembership) -> (bool, bool, usize, bool) {
+    let (complete, resolved_names) = match &m.path {
+        Some(p) => (p.complete, p.names.iter().filter(|n| n.is_some()).count()),
+        None => (false, 0),
+    };
+    (m.direct, complete, resolved_names, m.group_name.is_some())
 }
 
 /// Flag bundle fed into `PermissionEvaluationInput`.
@@ -1638,5 +1674,85 @@ mod tests {
         );
         assert_eq!(report.privileged().len(), 1);
         assert!(report.ad_connected);
+    }
+
+    #[test]
+    fn into_membership_report_prefers_direct_regardless_of_order() {
+        let member = Sid("S-1-5-21-1-2-3-1104".to_owned());
+        let group = Sid("S-1-5-21-1-2-3-512".to_owned());
+        let entry = |direct: bool| GroupMembership {
+            member_sid: member.clone(),
+            group_sid: group.clone(),
+            direct,
+            group_name: Some("Domain Admins".to_owned()),
+            path: None,
+        };
+        // Nested first, direct second — the dedup must still keep the direct
+        // entry (first-wins would wrongly keep "nested" and undercount direct).
+        let res = PrincipalResolution {
+            sid: member.clone(),
+            identity: sample_identity("S-1-5-21-1-2-3-1104", 0),
+            memberships: vec![entry(false), entry(true)],
+            scope_status: IdentityScopeStatus::InsideConfiguredLdapBase,
+            group_resolution_status: GroupResolutionStatus::LdapRecursive,
+            disabled_status: DisabledStatus::Known(false),
+            diagnostics: vec![],
+            resolved_via_fsp: false,
+            resolved_via_global_catalog: false,
+        };
+        let report = res.into_membership_report(true);
+        assert_eq!(report.memberships.len(), 1);
+        assert!(
+            report.memberships[0].direct,
+            "the direct entry must win even when it appears second"
+        );
+    }
+
+    #[test]
+    fn into_membership_report_prefers_complete_path_over_incomplete() {
+        use adpa_core::model::{MembershipPath, MembershipPathSource};
+        let member = Sid("S-1-5-21-1-2-3-1104".to_owned());
+        let group = Sid("S-1-5-21-1-2-3-700".to_owned());
+        let nested = |complete: bool, names: Vec<Option<String>>| GroupMembership {
+            member_sid: member.clone(),
+            group_sid: group.clone(),
+            direct: false,
+            group_name: Some("Nested".to_owned()),
+            path: Some(MembershipPath {
+                nodes: vec![member.clone(), group.clone()],
+                names,
+                source: MembershipPathSource::DomainGroup,
+                complete,
+            }),
+        };
+        // Incomplete path first, complete (and better-named) path second — the
+        // dedup must keep the complete one.
+        let res = PrincipalResolution {
+            sid: member.clone(),
+            identity: sample_identity("S-1-5-21-1-2-3-1104", 0),
+            memberships: vec![
+                nested(false, vec![None, None]),
+                nested(
+                    true,
+                    vec![Some("alice".to_owned()), Some("Nested".to_owned())],
+                ),
+            ],
+            scope_status: IdentityScopeStatus::InsideConfiguredLdapBase,
+            group_resolution_status: GroupResolutionStatus::LdapRecursive,
+            disabled_status: DisabledStatus::Known(false),
+            diagnostics: vec![],
+            resolved_via_fsp: false,
+            resolved_via_global_catalog: false,
+        };
+        let report = res.into_membership_report(true);
+        assert_eq!(report.memberships.len(), 1);
+        assert!(
+            report.memberships[0]
+                .path
+                .as_ref()
+                .expect("path kept")
+                .complete,
+            "the complete path must be kept over the incomplete one"
+        );
     }
 }
