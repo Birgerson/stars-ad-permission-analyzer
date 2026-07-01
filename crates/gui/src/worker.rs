@@ -261,7 +261,10 @@ pub enum WorkerRequest {
     /// tab — no path, no ACL, no effective rights. Mirrors the CLI `groups`
     /// command. `ldap` is `None` for the SAM/LSA fallback.
     ResolveGroups {
-        sid: String,
+        /// Raw identity string (name, `DOMAIN\user`, UPN, or SID). The worker
+        /// auto-dispatches it — with LDAP configured the principal pipeline
+        /// resolves a name; otherwise the local LSA/SAM path does.
+        identity: String,
         ldap: Option<LdapParams>,
     },
 }
@@ -710,8 +713,8 @@ pub fn spawn_worker(
                     let _ = evt_tx.send(WorkerEvent::TrusteesDone(result));
                     notify();
                 }
-                WorkerRequest::ResolveGroups { sid, ldap } => {
-                    let result = rt.block_on(handle_resolve_groups(&sid, ldap.as_ref()));
+                WorkerRequest::ResolveGroups { identity, ldap } => {
+                    let result = rt.block_on(handle_resolve_groups(&identity, ldap.as_ref()));
                     let _ = evt_tx.send(WorkerEvent::GroupsDone(Box::new(result)));
                     notify();
                 }
@@ -936,15 +939,16 @@ async fn handle_analyze(
 /// GUI counterpart to the CLI `groups` command. No path / ACL / effective
 /// rights. `ldap` is `None` for the SAM/LSA fallback.
 async fn handle_resolve_groups(
-    sid: &str,
+    identity: &str,
     ldap: Option<&LdapParams>,
 ) -> Result<GroupsViewData, String> {
-    info!(sid, "ResolveGroups request");
+    info!(identity, "ResolveGroups request");
     // Validate the connection inputs at the GUI boundary (no SMB here).
     let normalized = validate_connection_inputs(None, None, ldap)?;
     let ldap = normalized.ldap.as_ref();
-    // `resolve_identity_sids` validates the SID before it reaches the resolver.
-    let res = resolve_identity_sids(sid, ldap).await?;
+    // `resolve_identity_sids` validates the identity and auto-dispatches it
+    // (LDAP principal pipeline for a name, or the local LSA/SAM path).
+    let res = resolve_identity_sids(identity, ldap).await?;
     // `ad_connected` mirrors the CLI: true exactly when an LDAP bind backed
     // the lookup (otherwise the SAM/LSA flat fallback was used).
     let report = res.into_membership_report(ldap.is_some());
@@ -1860,39 +1864,62 @@ fn format_mask(mask: u32) -> String {
 /// in that case the domain group recursion is incomplete and the caller
 /// must forward the fact into the engine input (review finding 6).
 async fn resolve_identity_sids(
-    sid: &str,
+    identity: &str,
     ldap: Option<&LdapParams>,
 ) -> Result<PrincipalResolution, String> {
-    // Validate the SID at this GUI boundary so a malformed value never
-    // reaches the resolver/LSA as a typed `Sid` (review 2026-06-14
-    // finding 3). Covers both the LDAP and the SAM/LSA branch below.
-    let sid = Sid::try_new(sid).map_err(|e| format!("Invalid SID: {e}"))?;
+    // Validate the identity at this GUI boundary (AGENTS.md: validate before
+    // use) — a raw SID syntactically, a name/UPN via the identity-query
+    // validator. Covers both the LDAP and the SAM/LSA branch below.
+    let trimmed = identity.trim();
+    let is_sid = trimmed.starts_with("S-1-");
+    if is_sid {
+        validate_sid(trimmed).map_err(|e| format!("Invalid SID: {e}"))?;
+    } else {
+        validate_identity_query(trimmed).map_err(|e| format!("Invalid identity: {e}"))?;
+    }
+
     if let Some(params) = ldap {
         let config = params.to_config();
         let resolver = std::sync::Arc::new(LdapResolver::new(config));
         let backend = LdapIdentityBackend::new(resolver);
-        // Central principal pipeline — closes review round 3 finding 1.
+        // Central principal pipeline. `PrincipalInput::Auto` lets LDAP resolve
+        // a name / UPN / SID by itself — the same auto-dispatch the CLI uses.
+        // Closes the GUI/CLI parity gap where the GUI required a locally
+        // (LSA-)resolvable SID before LDAP could be used, which broke
+        // cross-domain, Global Catalog, and LDAP-only name/UPN workflows even
+        // though the configured LDAP mode was sufficient (review 2026-07-01
+        // finding 1).
         #[cfg(windows)]
         let principal = PrincipalResolver::new(backend, Some(WindowsLsaBackend));
         #[cfg(not(windows))]
         let principal: PrincipalResolver<_, NoLsaBackend> = PrincipalResolver::new(backend, None);
         return principal
-            .resolve(PrincipalInput::Sid(sid.clone()))
+            .resolve(PrincipalInput::Auto(trimmed.to_owned()))
             .await
             .map_err(|e| format!("LDAP identity resolution failed: {e}"));
     }
 
-    //
-    // Without LDAP: use the local SAM/LSA as the default resolver on Windows.
-    // On a domain controller this covers full domain membership; on a
-    // fails (or we are not on Windows) does the worker fall back to a bare
-    // SID identity — then the effective rights are only what direct ACEs on
-    // the SID grant.
-    // `used_sam_fallback = true`.
-    // Both paths (SAM success and bare SID fallback) are LDAP-free → nested
-    // domain groups are not fully resolved, so `used_sam_fallback = true`.
-    // Closes review 2026-06-04 round 2 finding 5: `sam_resolve_fallback`
-    // passenden Diagnose-Marker. Closes review round 2 finding 5.
+    // Without LDAP: resolve a raw SID directly, or a name via the local LSA
+    // (LookupAccountName) on Windows, then the SAM/LSA group fallback. On a
+    // domain controller this covers full domain membership; nested domain
+    // groups are not recursively resolved, which the SamFlat status signals.
+    #[cfg(windows)]
+    let sid = if is_sid {
+        Sid::try_new(trimmed).map_err(|e| format!("Invalid SID: {e}"))?
+    } else {
+        ad_resolver::lookup_sid_for_account(None, trimmed)
+            .map_err(|e| format!("LSA name lookup failed: {e}"))?
+    };
+    #[cfg(not(windows))]
+    let sid = {
+        if !is_sid {
+            return Err(
+                "Without an LDAP server, the identity must be a SID (S-1-5-…).".to_string(),
+            );
+        }
+        Sid::try_new(trimmed).map_err(|e| format!("Invalid SID: {e}"))?
+    };
+
     let (identity, memberships, disabled_known) = sam_resolve_fallback(&sid.0)?;
     let disabled_status = if disabled_known {
         ad_resolver::DisabledStatus::Known(identity.disabled)
@@ -2026,6 +2053,28 @@ fn resolve_share_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // F1 (review 2026-07-01): the worker takes the RAW identity and dispatches
+    // it, instead of requiring a pre-resolved SID. The LDAP name→SID path
+    // (`PrincipalInput::Auto`) is covered by the ad_resolver principal-pipeline
+    // tests (FakeLdapBackend) and proven live against the lab. Here we pin the
+    // deterministic no-LDAP dispatch: a raw SID resolves, a name does not
+    // (off-Windows there is no local LSA to fall back to).
+    #[test]
+    #[cfg(not(windows))]
+    fn resolve_identity_sids_without_ldap_dispatches_sid_vs_name() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ok = rt.block_on(resolve_identity_sids("S-1-5-21-1-2-3-1000", None));
+        assert!(ok.is_ok(), "a raw SID must resolve without LDAP: {ok:?}");
+        assert_eq!(ok.unwrap().sid.0, "S-1-5-21-1-2-3-1000");
+
+        let err = rt.block_on(resolve_identity_sids("alice", None));
+        assert!(err.is_err(), "a name without LDAP must error off-Windows");
+        assert!(
+            err.unwrap_err().contains("must be a SID"),
+            "the error should explain that a SID (or LDAP) is required"
+        );
+    }
 
     // (sentinel bug from review finding 1).
     // The UNC parsing tests moved to validation::path where the shared

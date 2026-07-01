@@ -2475,33 +2475,11 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         ui.on_groups_resolve_clicked(move || {
             let Some(ui) = weak.upgrade() else { return };
             let identity = ui.get_g_identity().to_string();
-            let identity = identity.trim();
-            if identity.is_empty() {
+            if identity.trim().is_empty() {
                 ui.set_g_status("Identity is required.".into());
                 ui.set_g_status_is_error(true);
                 return;
             }
-            // Resolve to a SID: a raw SID is used directly, a name / UPN is
-            // resolved via LSA (mirrors the Analyze tab). LDAP-only names are
-            // resolved by the worker once the bind succeeds.
-            let sid = if identity.starts_with("S-1-") {
-                identity.to_string()
-            } else {
-                let mut resolved = String::new();
-                let mut resolve_err = String::new();
-                resolve_name_to_sid(identity, |s| resolved = s, |e| resolve_err = e);
-                if resolved.trim().is_empty() {
-                    let msg = if resolve_err.is_empty() {
-                        "Identity could not be resolved to a SID.".to_string()
-                    } else {
-                        resolve_err
-                    };
-                    ui.set_g_status(msg.into());
-                    ui.set_g_status_is_error(true);
-                    return;
-                }
-                resolved
-            };
             let ldap = LdapParams::from_mode(
                 ui.get_g_ldap_mode(),
                 ui.get_g_ldap_server().to_string(),
@@ -2514,7 +2492,13 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             ui.set_g_has_result(false);
             ui.set_g_status("Resolving group memberships...".into());
             ui.set_g_status_is_error(false);
-            if let Err(e) = req_tx.send(WorkerRequest::ResolveGroups { sid, ldap }) {
+            // Pass the raw identity (name / DOMAIN\user / UPN / SID) instead of
+            // pre-resolving it via the local LSA. With LDAP configured the
+            // worker's principal pipeline resolves a name itself, so the Groups
+            // tab reaches cross-domain / GC / LDAP-only identities exactly like
+            // the CLI (review 2026-07-01 finding 1); without LDAP the worker
+            // still uses the local LSA/SAM path.
+            if let Err(e) = req_tx.send(WorkerRequest::ResolveGroups { identity, ldap }) {
                 ui.set_g_is_running(false);
                 ui.set_g_status(format!("Worker not reachable: {e}").into());
                 ui.set_g_status_is_error(true);
