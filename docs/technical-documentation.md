@@ -533,11 +533,23 @@ is this identity in?"* directly, **without** running the permission
 engine (no path, no DACL, no effective rights). They reuse the principal
 pipeline above and stop at the resolution:
 
+- Both surfaces feed the **raw identity** (name / `DOMAIN\user` / UPN / SID)
+  into the shared pipeline: with LDAP configured `PrincipalInput::Auto`
+  resolves it (cross-domain / Global Catalog / LDAP-only names included),
+  otherwise the local LSA/SAM path does. The GUI no longer pre-resolves the
+  name via the local LSA first — that used to abort on identities the LSA
+  could not resolve, even when the configured LDAP mode was sufficient
+  (review 2026-07-01 finding 1).
 - `PrincipalResolution::into_membership_report(ad_connected)` produces a
-  `MembershipReport` (`identity`, `ad_connected`, `memberships`
-  deduplicated by group SID, `diagnostics`). The CLI renderer and the GUI
-  worker consume the **same** structure, so the two surfaces cannot
-  diverge.
+  `MembershipReport` (`identity`, `ad_connected`, `memberships`,
+  `diagnostics`). Memberships are **deduplicated by group SID keeping the most
+  informative entry** — ranked direct > complete path > more resolved names >
+  named (`membership_rank`), first-appearance order preserved — so a group
+  reachable via several entries never renders as `nested`/incomplete when a
+  better entry came later in the resolver output (review 2026-07-01 finding 2).
+  The CLI renderer and the GUI worker consume the **same** structure, so the
+  two surfaces cannot diverge. The identity header shows an enabled/disabled
+  **Status only for accounts** (`User`/`Computer`) — a group has no such state.
 - `PrincipalResolution::membership_diagnostics()` derives the
   identity-/resolution-level markers from `engine_flags()` + the identity
   — the same set §9 describes, minus the path-specific ones. It reuses

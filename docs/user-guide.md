@@ -187,7 +187,8 @@ panel; this tab answers the question directly.
 
 **Result:**
 
-- the identity header (name, SID, status, kind);
+- the identity header (name, SID, kind, and — for **user accounts** only —
+  the enabled/disabled status; a group has no such state);
 - **Privileged memberships** flagged at the top — membership in
   Administrators, Domain/Enterprise/Schema Admins, Group Policy Creator
   Owners, Key Admins, or the built-in Operators is the high-value audit
