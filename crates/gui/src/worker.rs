@@ -1003,10 +1003,20 @@ fn membership_report_to_view(report: &adpa_core::model::MembershipReport) -> Gro
     GroupsViewData {
         identity_label,
         identity_sid: report.identity.sid.0.clone(),
-        status: if report.identity.disabled {
-            "DISABLED".to_owned()
+        // Enabled/disabled is a user-account concept; a group has no such
+        // state, so leave the status empty for non-account kinds (the GUI then
+        // shows just the kind).
+        status: if matches!(
+            report.identity.kind,
+            IdentityKind::User | IdentityKind::Computer
+        ) {
+            if report.identity.disabled {
+                "DISABLED".to_owned()
+            } else {
+                "Active".to_owned()
+            }
         } else {
-            "Active".to_owned()
+            String::new()
         },
         kind: format!("{:?}", report.identity.kind),
         ad_connected: report.ad_connected,
@@ -2073,6 +2083,36 @@ mod tests {
         assert!(
             err.unwrap_err().contains("must be a SID"),
             "the error should explain that a SID (or LDAP) is required"
+        );
+    }
+
+    #[test]
+    fn membership_view_shows_status_only_for_accounts_not_groups() {
+        use adpa_core::model::{Identity, IdentityKind, MembershipReport, Sid};
+        let report = |kind: IdentityKind| MembershipReport {
+            identity: Identity {
+                sid: Sid("S-1-5-21-1-2-3-500".to_owned()),
+                name: Some("x".to_owned()),
+                domain: Some("CORP".to_owned()),
+                kind,
+                disabled: false,
+                user_principal_name: None,
+                sid_history_count: 0,
+            },
+            ad_connected: true,
+            memberships: vec![],
+            diagnostics: vec![],
+        };
+        // A user account gets a status; a group does not (no enabled/disabled).
+        assert_eq!(
+            membership_report_to_view(&report(IdentityKind::User)).status,
+            "Active"
+        );
+        assert!(
+            membership_report_to_view(&report(IdentityKind::Group))
+                .status
+                .is_empty(),
+            "a group must not show an Active/DISABLED status"
         );
     }
 

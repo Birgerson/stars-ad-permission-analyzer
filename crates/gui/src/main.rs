@@ -2556,7 +2556,14 @@ fn handle_groups_done(ui: &MainWindow, result: Result<GroupsViewData, String>) {
             ui.set_g_status(format!("{} group(s) — {} direct", data.total, data.direct).into());
             ui.set_g_identity_label(data.identity_label.into());
             ui.set_g_identity_sid(data.identity_sid.into());
-            ui.set_g_identity_meta(format!("{} \u{00B7} {}", data.status, data.kind).into());
+            // No enabled/disabled status for non-account kinds (groups): show
+            // just the kind rather than a meaningless "Active".
+            let meta = if data.status.is_empty() {
+                data.kind.clone()
+            } else {
+                format!("{} \u{00B7} {}", data.status, data.kind)
+            };
+            ui.set_g_identity_meta(meta.into());
             ui.set_g_ad_connected(data.ad_connected);
             ui.set_g_sid_history(data.sid_history_count);
             ui.set_g_total(data.total);

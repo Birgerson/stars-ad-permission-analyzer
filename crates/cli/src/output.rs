@@ -5,7 +5,7 @@
 
 use adpa_core::model::{
     privileged_group_role, AceKind, EffectivePermission, FileSystemObject, GroupMembership,
-    MembershipReport, PermissionDiagnostic, RiskFinding, RiskSeverity,
+    IdentityKind, MembershipReport, PermissionDiagnostic, RiskFinding, RiskSeverity,
 };
 use permission_engine::NormalizedRights;
 
@@ -358,15 +358,19 @@ pub fn print_membership_report(report: &MembershipReport, user_input: &str) {
         .unwrap_or_default();
     println!("  Identity  : {domain_prefix}{user_name}");
     println!("            : ({})", report.identity.sid.0);
-    let status = if report.identity.disabled {
-        "DISABLED"
+    // Enabled/disabled is a *user account* concept (userAccountControl); a
+    // group has no such state, so only accounts get a Status line.
+    let kind = &report.identity.kind;
+    if matches!(kind, IdentityKind::User | IdentityKind::Computer) {
+        let status = if report.identity.disabled {
+            "DISABLED"
+        } else {
+            "Active"
+        };
+        println!("  Status    : {status}  \u{00B7}  Kind: {kind:?}");
     } else {
-        "Active"
-    };
-    println!(
-        "  Status    : {status}  \u{00B7}  Kind: {:?}",
-        report.identity.kind
-    );
+        println!("  Kind      : {kind:?}");
+    }
     if report.identity.sid_history_count > 0 {
         println!(
             "  sIDHistory: {} (see diagnostics)",
