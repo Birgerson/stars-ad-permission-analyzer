@@ -275,10 +275,11 @@ impl PrincipalResolution {
                 Some(_) => {}
             }
         }
-        let memberships: Vec<GroupMembership> = order
-            .into_iter()
-            .map(|k| best.remove(&k).expect("key was inserted"))
-            .collect();
+        // filter_map instead of map+expect: the invariant (every key in `order`
+        // was inserted into `best`) holds, but production logic stays free of
+        // panic paths entirely (AGENTS error-handling rule 1).
+        let memberships: Vec<GroupMembership> =
+            order.into_iter().filter_map(|k| best.remove(&k)).collect();
         MembershipReport {
             identity: self.identity,
             ad_connected,

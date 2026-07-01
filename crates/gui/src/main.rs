@@ -1123,28 +1123,46 @@ slint::slint! {
                                             current-index <=> root.g-ldap-mode;
                                             horizontal-stretch: 1;
                                         }
+                                        HelpTip {
+                                            tip: "How should identity and groups be resolved?\n\n• Off (recommended): uses the local Windows LSA/SAM. On a domain controller this returns complete data (users, global groups, local groups). No configuration, no certificate needed.\n\n• LDAPS: encrypted LDAP connection on port 636. Requires the DC to have a valid LDAPS certificate that this machine trusts (AD CS enterprise CA); a self-signed certificate is rejected. Connect by FQDN, not IP.\n\n• Plain LDAP: port 389, no TLS. For test environments only — transmits the password in cleartext, and is refused by hardened Windows Server 2022/2025 DCs (LDAP signing).\n\n• Global Catalog: forest-wide bind over LDAPS (port 3269). Base DN may be left empty. Same certificate requirement as LDAPS. Only universal groups replicate fully to the GC, so memberships are flagged potentially incomplete.\n\n• Signed LDAP: port 389 with Kerberos sign & seal — no certificate needed. The cert-free way to query a hardened DC that enforces LDAP signing. Uses the current Windows logon (no bind DN / password); Server must be the DC's FQDN. Run Stars as the domain account whose context you want.";
+                                        }
                                     }
                                     if root.g-ldap-mode > 0: GridBox {
                                         spacing: Theme.spacing-sm;
                                         Row {
                                             Text { text: "Server:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit { placeholder-text: "dc01.domain.local"; text <=> root.g-ldap-server; }
+                                            HelpTip {
+                                                tip: "Fully qualified hostname (FQDN) of the domain controller.\n\nExample: dc01.company.local\n\nDo not enter a scheme prefix (no ldap:// or ldaps://) — the mode determines it.";
+                                            }
                                         }
                                         Row {
                                             Text { text: "Base DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit { placeholder-text: "DC=domain,DC=local"; text <=> root.g-ldap-base-dn; }
+                                            HelpTip {
+                                                tip: "Distinguished Name of the domain root.\n\nExample: DC=company,DC=local\n\nComma-separated, no spaces after the commas. Derivable from the DNS domain: 'company.local' becomes 'DC=company,DC=local'.";
+                                            }
                                         }
                                         Row {
                                             Text { text: "Bind DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit { placeholder-text: "DOMAIN\\user  ·  user@domain  ·  CN=…,DC=…"; text <=> root.g-ldap-bind-dn; }
+                                            HelpTip {
+                                                tip: "The account Stars binds with to read LDAP. Three forms are accepted (all valid for an AD simple bind):\n\n• DOMAIN\\user — e.g. RES\\labinsch\n• user@domain (UPN) — e.g. labinsch@res.lab\n• full DN — e.g. CN=Birger Labinsch,OU=Users,DC=res,DC=lab\n\nPrefer DOMAIN\\user or the UPN: they use the stable logon name (sAMAccountName), whereas a DN's CN is the display name and changes when the name does. A dedicated read-only service account is recommended, not the domain admin.";
+                                            }
                                         }
                                         Row {
                                             Text { text: "Password:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit { input-type: password; text <=> root.g-ldap-password; }
+                                            HelpTip {
+                                                tip: "Password for the bind-DN account.\n\nNot persisted, only held in memory for the running session. With 'Plain LDAP' it crosses the wire in cleartext — use only in test environments.";
+                                            }
                                         }
                                         Row {
                                             Text { text: "Timeout (s):"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             SpinBox { minimum: 1; maximum: 600; value <=> root.g-ldap-timeout; }
+                                            HelpTip {
+                                                tip: "LDAP operation timeout in seconds (1–600, default 10).\n\nRaise this on large or deeply nested domains: the recursive membership query (LDAP_MATCHING_RULE_IN_CHAIN) can need longer than 10 s, otherwise resolution is reported as timed out and incomplete.";
+                                            }
                                         }
                                     }
                                 }
@@ -2155,8 +2173,11 @@ fn main() {
                 .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
                 .unwrap_or_else(|| "<unknown>".to_string());
             tracing::error!(target: "stars-gui", "panic at {location}: {payload}");
+            // The hook fires for ANY panic — including a runtime panic on the
+            // worker thread — so the title must not claim "at startup" (deep
+            // review 2026-07-01, finding 6).
             show_fatal_dialog(
-                "Stars — crash at startup",
+                "Stars — unexpected error",
                 &format!(
                     "The application has crashed.\n\nLocation: {location}\nReason: {payload}\n\nDetails: {}",
                     log_path.display()

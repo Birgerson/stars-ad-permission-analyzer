@@ -27,6 +27,13 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   opens with `create_new` (error if the file appeared meanwhile) and truncates
   only with `--force`, matching the `Exporter` trait policy used by all other
   report writers.
+- **Review hygiene (deep review 2026-07-01, findings 3–6):** the membership
+  dedup no longer contains a panic path (`filter_map` instead of
+  `map`+`expect`); an out-of-range GUI LDAP timeout is logged when clamped
+  instead of being silently rewritten; the Groups tab's LDAP section now
+  carries the same HelpTips as Analyze/Scan (mode, server, base DN, bind
+  identity, password, timeout); and a runtime panic no longer shows the
+  misleading "crash at startup" dialog title ("Stars — unexpected error").
 
 ---
 

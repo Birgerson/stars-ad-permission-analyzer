@@ -141,18 +141,32 @@ impl LdapParams {
         timeout_secs: i32,
     ) -> Option<LdapParams> {
         match mode {
-            1..=4 => Some(LdapParams {
-                server,
-                base_dn,
-                bind_dn,
-                password,
-                insecure: mode == 2,
-                global_catalog: mode == 3,
-                signing: mode == 4,
+            1..=4 => {
                 // Clamp to the same 1–600 s range the CLI validates, so a GUI
-                // value out of range can never reach the LDAP layer.
-                timeout_secs: Some(timeout_secs.clamp(1, 600) as u64),
-            }),
+                // value out of range can never reach the LDAP layer. The
+                // SpinBox already enforces the range, so a clamp firing means
+                // a programmatic caller passed a raw value — surface it
+                // instead of silently rewriting the input (deep review
+                // 2026-07-01, finding 4).
+                let clamped = timeout_secs.clamp(1, 600);
+                if clamped != timeout_secs {
+                    warn!(
+                        requested = timeout_secs,
+                        applied = clamped,
+                        "LDAP timeout outside 1-600 s was clamped"
+                    );
+                }
+                Some(LdapParams {
+                    server,
+                    base_dn,
+                    bind_dn,
+                    password,
+                    insecure: mode == 2,
+                    global_catalog: mode == 3,
+                    signing: mode == 4,
+                    timeout_secs: Some(clamped as u64),
+                })
+            }
             _ => None,
         }
     }
