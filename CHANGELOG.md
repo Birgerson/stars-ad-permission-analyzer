@@ -20,6 +20,13 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   the local LSA/SAM path without LDAP). The share-token evaluation now always
   uses the **resolved** SID rather than the raw input. The "🔍 Resolve SID"
   button remains as an explicit preview.
+- **`groups --output` honors the conservative overwrite policy at write time.**
+  The existence check ran before the (potentially minutes-long) LDAP
+  resolution, but the write itself truncated unconditionally — a file created
+  in that window was silently overwritten without `--force`. The export now
+  opens with `create_new` (error if the file appeared meanwhile) and truncates
+  only with `--force`, matching the `Exporter` trait policy used by all other
+  report writers.
 
 ---
 

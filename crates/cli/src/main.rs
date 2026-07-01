@@ -1507,7 +1507,7 @@ async fn run_groups(
     output::print_membership_report(&report, &user);
 
     if let Some(status) = export_status {
-        export_membership(&report, &status.path().0)?;
+        export_membership(&report, &status.path().0, force)?;
     }
     Ok(())
 }
@@ -1536,18 +1536,44 @@ fn membership_export_format(path: &std::path::Path) -> anyhow::Result<Membership
     }
 }
 
-/// Writes a [`MembershipReport`] to `.json` (serde) or `.csv`. The overwrite
-/// policy and the format were already enforced in `run_groups` (fail-fast).
+/// Writes a [`MembershipReport`] to `.json` (serde) or `.csv`.
+///
+/// `run_groups` fail-fast-checks the target before the LDAP work (good UX),
+/// but that check alone is not the enforcement: the LDAP resolution can take
+/// minutes (`--ldap-timeout` up to 600 s), and a file created in that window
+/// must not be silently truncated. The write itself therefore follows the same
+/// conservative policy as the `Exporter` trait (`ExportTarget::File` →
+/// `create_new`): without `force` an existing file is an error, only `force`
+/// truncates (deep review 2026-07-01, finding 2).
 fn export_membership(
     report: &adpa_core::model::MembershipReport,
     out_path: &std::path::Path,
+    force: bool,
 ) -> anyhow::Result<()> {
+    use std::io::Write as _;
     let content = match membership_export_format(out_path)? {
         MembershipExportFormat::Json => serde_json::to_string_pretty(report)
             .map_err(|e| anyhow::anyhow!("JSON serialization failed: {e}"))?,
         MembershipExportFormat::Csv => membership_csv(report),
     };
-    std::fs::write(out_path, content)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    if force {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+    let mut file = options.open(out_path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            anyhow::anyhow!(
+                "Export file already exists: {}. Pass --force to overwrite it.",
+                out_path.display()
+            )
+        } else {
+            anyhow::anyhow!("Cannot write export '{}': {e}", out_path.display())
+        }
+    })?;
+    file.write_all(content.as_bytes())
         .map_err(|e| anyhow::anyhow!("Cannot write export '{}': {e}", out_path.display()))?;
     println!("Exported to: {}", out_path.display());
     Ok(())
@@ -1759,6 +1785,54 @@ mod tests {
         assert_eq!(csv_field("Sales, EMEA"), "\"Sales, EMEA\"");
         assert_eq!(csv_field("a\"b"), "\"a\"\"b\"");
         assert_eq!(csv_field("line1\nline2"), "\"line1\nline2\"");
+    }
+
+    // --- Groups export overwrite policy (deep review 2026-07-01 finding 2) ---
+    //
+    // The fail-fast check in run_groups is UX, not enforcement: a file created
+    // while the (potentially minutes-long) LDAP resolution runs must not be
+    // silently truncated. The write itself uses create_new without --force.
+
+    #[test]
+    fn export_membership_refuses_existing_file_without_force() {
+        use adpa_core::model::{Identity, IdentityKind, MembershipReport, Sid};
+        let report = MembershipReport {
+            identity: Identity {
+                sid: Sid("S-1-5-21-1-2-3-1104".to_owned()),
+                name: Some("alice".to_owned()),
+                domain: None,
+                kind: IdentityKind::User,
+                disabled: false,
+                user_principal_name: None,
+                sid_history_count: 0,
+            },
+            ad_connected: false,
+            memberships: vec![],
+            diagnostics: vec![],
+        };
+        let path = std::env::temp_dir().join(format!(
+            "stars-test-groups-export-{}.csv",
+            std::process::id()
+        ));
+        // Simulate the race: the file appears AFTER the fail-fast check and
+        // BEFORE the write.
+        std::fs::write(&path, "pre-existing").expect("create file");
+        let err = super::export_membership(&report, &path, false)
+            .expect_err("existing file without --force must be refused");
+        assert!(
+            err.to_string().contains("already exists"),
+            "error should name the overwrite policy: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read back"),
+            "pre-existing",
+            "the existing file must be untouched"
+        );
+        // --force overwrites explicitly.
+        super::export_membership(&report, &path, true).expect("--force overwrites");
+        let content = std::fs::read_to_string(&path).expect("read back");
+        assert!(content.starts_with("group_name,"), "CSV written: {content}");
+        let _ = std::fs::remove_file(&path);
     }
 
     // --- Search-base resolution (review 2026-06-13 finding 3) ---
