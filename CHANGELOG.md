@@ -10,7 +10,32 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.7.6-rc1 below for the latest pre-release.)
+(No unreleased changes — see v1.7.6-rc2 below for the latest pre-release.)
+
+---
+
+## [1.7.6-rc2] — 2026-07-01
+
+**Second release candidate for 1.7.6.** Adds the code-review fixes (F1, F2) and
+the "Active for groups" correction on top of rc1's logon-name binding.
+
+### Fixed
+
+- **Groups tab resolves LDAP-only identities (GUI/CLI parity, F1).** The Groups
+  tab pre-resolved the name→SID via the local LSA and aborted if that failed;
+  it now passes the raw identity to the worker, which resolves it via the LDAP
+  principal pipeline (`PrincipalInput::Auto`) just like the CLI. Cross-domain,
+  Global Catalog, and LDAP-only name/UPN identities now work in the GUI.
+  Isolating alt-vs-new proof against the lab (`ext.lab\selauth01`).
+- **Membership dedup keeps the most informative entry (F2).** When a group was
+  reachable via several entries, the report kept the *first*; it now ranks by
+  direct > complete path > more names > named, so a group is never shown as
+  `nested` (or with an incomplete path, or undercounted "direct") when a better
+  entry existed later in the resolver output.
+- **No "Active" status for groups.** Enabled/disabled is a user-account concept
+  (`userAccountControl`); a group has no such state, so the membership view now
+  shows a Status line only for accounts (`User`/`Computer`) and just the kind
+  for groups.
 
 ---
 
