@@ -10,30 +10,41 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+(No unreleased changes — see v1.7.6 below for the latest release.)
+
+---
+
+## [1.7.6] — 2026-07-01
+
+**LDAP usability & review-fix release.** Consolidates the two release
+candidates (rc1: bind by logon name; rc2: Groups-tab parity, dedup ranking,
+no "Active" for groups — see their sections below) and adds the fixes from the
+2026-07-01 deep code review. Verified live against the multi-forest lab,
+including the isolating before/after proof with an identity only LDAP can
+resolve (`ext.lab\selauth01`) in both the Groups and Analyze tabs.
+
+### Added (since 1.7.5, via rc1/rc2)
+
+- **Bind by logon name:** the LDAP bind field accepts `DOMAIN\user`, a UPN, or
+  a full DN (rc1).
+
 ### Fixed
 
-- **Analyze and Scan tabs resolve LDAP-only identities (completes the F1
-  parity fix).** Both tabs still pre-resolved the typed identity via the local
-  LSA and aborted when that failed — the same gap fixed for the Groups tab in
-  1.7.6-rc2. They now send the raw identity (name, `DOMAIN\user`, UPN, or SID)
-  to the worker, which dispatches it through the LDAP principal pipeline (or
-  the local LSA/SAM path without LDAP). The share-token evaluation now always
-  uses the **resolved** SID rather than the raw input. The "🔍 Resolve SID"
-  button remains as an explicit preview.
-- **`groups --output` honors the conservative overwrite policy at write time.**
-  The existence check ran before the (potentially minutes-long) LDAP
-  resolution, but the write itself truncated unconditionally — a file created
-  in that window was silently overwritten without `--force`. The export now
-  opens with `create_new` (error if the file appeared meanwhile) and truncates
-  only with `--force`, matching the `Exporter` trait policy used by all other
-  report writers.
-- **Review hygiene (deep review 2026-07-01, findings 3–6):** the membership
-  dedup no longer contains a panic path (`filter_map` instead of
-  `map`+`expect`); an out-of-range GUI LDAP timeout is logged when clamped
-  instead of being silently rewritten; the Groups tab's LDAP section now
-  carries the same HelpTips as Analyze/Scan (mode, server, base DN, bind
-  identity, password, timeout); and a runtime panic no longer shows the
-  misleading "crash at startup" dialog title ("Stars — unexpected error").
+- **All three tabs resolve LDAP-only identities (F1, completed).** Groups
+  (rc2), then Analyze and Scan: the handlers no longer pre-resolve the typed
+  identity via the local LSA — the raw identity goes to the worker, which
+  dispatches it through the LDAP principal pipeline (or the local LSA/SAM path
+  without LDAP). The share-token evaluation always uses the **resolved** SID.
+- **Membership dedup keeps the most informative entry** (direct > complete
+  path > names; rc2) and no longer contains a panic path.
+- **No "Active" status for groups** — enabled/disabled is a user-account
+  concept (rc2).
+- **`groups --output` honors the conservative overwrite policy at write time**
+  (`create_new` unless `--force`), closing the race window during the
+  potentially minutes-long LDAP resolution.
+- **Review hygiene:** out-of-range GUI LDAP timeouts are logged when clamped;
+  the Groups tab's LDAP section carries the same HelpTips as Analyze/Scan; a
+  runtime panic no longer shows the misleading "crash at startup" dialog title.
 
 ---
 
