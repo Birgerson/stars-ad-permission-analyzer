@@ -10,7 +10,16 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.7.6-rc2 below for the latest pre-release.)
+### Fixed
+
+- **Analyze and Scan tabs resolve LDAP-only identities (completes the F1
+  parity fix).** Both tabs still pre-resolved the typed identity via the local
+  LSA and aborted when that failed — the same gap fixed for the Groups tab in
+  1.7.6-rc2. They now send the raw identity (name, `DOMAIN\user`, UPN, or SID)
+  to the worker, which dispatches it through the LDAP principal pipeline (or
+  the local LSA/SAM path without LDAP). The share-token evaluation now always
+  uses the **resolved** SID rather than the raw input. The "🔍 Resolve SID"
+  button remains as an explicit preview.
 
 ---
 

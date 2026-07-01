@@ -2354,40 +2354,23 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             return;
         }
 
-        // Identity: use the SID field if set, otherwise take what was typed in
-        // the identity field — a raw SID is used directly, a name / UPN is
-        // resolved to a SID via LSA. This lets the user just type an identity
-        // and click Analyze; the separate "Resolve SID" step is now optional.
-        let mut sid = ui.get_a_sid().to_string();
-        if sid.trim().is_empty() {
-            let identity = ui.get_a_name().to_string();
-            let identity = identity.trim();
-            if identity.is_empty() {
+        // Identity: the Resolved-SID field takes precedence when set; otherwise
+        // the RAW identity (name / DOMAIN\user / UPN / SID) is sent to the
+        // worker, which dispatches it — with LDAP configured the principal
+        // pipeline resolves a name itself, otherwise the local LSA/SAM path
+        // does. No LSA pre-resolve here: it used to abort on identities only
+        // LDAP can resolve, even with a sufficient LDAP mode configured
+        // (review 2026-07-01 deep pass, finding 1). The "🔍 Resolve SID"
+        // button remains the explicit LSA preview.
+        let mut identity = ui.get_a_sid().to_string();
+        if identity.trim().is_empty() {
+            identity = ui.get_a_name().to_string();
+            if identity.trim().is_empty() {
                 ui.set_a_status("Path and identity are required.".into());
                 ui.set_a_status_is_error(true);
                 return;
             }
-            if identity.starts_with("S-1-") {
-                sid = identity.to_string();
-            } else {
-                let mut resolved = String::new();
-                let mut resolve_err = String::new();
-                resolve_name_to_sid(identity, |s| resolved = s, |e| resolve_err = e);
-                if resolved.trim().is_empty() {
-                    let msg = if resolve_err.is_empty() {
-                        "Identity could not be resolved to a SID.".to_string()
-                    } else {
-                        resolve_err
-                    };
-                    ui.set_a_name_error(msg.clone().into());
-                    ui.set_a_status(msg.into());
-                    ui.set_a_status_is_error(true);
-                    return;
-                }
-                ui.set_a_name_error("".into());
-                sid = resolved;
-            }
-            ui.set_a_sid(sid.clone().into());
+            ui.set_a_name_error("".into());
         }
 
         // LDAP mode: 0 = off (SAM/LSA), 1 = LDAPS, 2 = plain LDAP,
@@ -2421,7 +2404,7 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
 
         if let Err(e) = req_tx.send(WorkerRequest::Analyze {
             path,
-            sid,
+            identity,
             ldap,
             smb_server,
             share_name,
@@ -2735,39 +2718,19 @@ fn wire_scan_tab(
                 return;
             }
 
-            // Identity: SID field if set, else resolve the typed identity (a raw
-            // SID is used directly, a name / UPN is resolved via LSA) — same as
-            // the Analyze tab, so the user can just type an identity and Scan.
-            let mut sid = ui.get_s_sid().to_string();
-            if sid.trim().is_empty() {
-                let identity = ui.get_s_name().to_string();
-                let identity = identity.trim();
-                if identity.is_empty() {
+            // Identity: the Resolved-SID field takes precedence when set;
+            // otherwise the RAW identity goes to the worker, which dispatches
+            // it (LDAP principal pipeline or local LSA/SAM) — same as the
+            // Analyze and Groups tabs (review 2026-07-01 deep pass, finding 1).
+            let mut identity = ui.get_s_sid().to_string();
+            if identity.trim().is_empty() {
+                identity = ui.get_s_name().to_string();
+                if identity.trim().is_empty() {
                     ui.set_s_status("Root path and identity are required.".into());
                     ui.set_s_status_is_error(true);
                     return;
                 }
-                if identity.starts_with("S-1-") {
-                    sid = identity.to_string();
-                } else {
-                    let mut resolved = String::new();
-                    let mut resolve_err = String::new();
-                    resolve_name_to_sid(identity, |s| resolved = s, |e| resolve_err = e);
-                    if resolved.trim().is_empty() {
-                        let msg = if resolve_err.is_empty() {
-                            "Identity could not be resolved to a SID.".to_string()
-                        } else {
-                            resolve_err
-                        };
-                        ui.set_s_name_error(msg.clone().into());
-                        ui.set_s_status(msg.into());
-                        ui.set_s_status_is_error(true);
-                        return;
-                    }
-                    ui.set_s_name_error("".into());
-                    sid = resolved;
-                }
-                ui.set_s_sid(sid.clone().into());
+                ui.set_s_name_error("".into());
             }
 
             let max_depth = if ui.get_s_limit_depth() {
@@ -2825,7 +2788,7 @@ fn wire_scan_tab(
 
             if let Err(e) = req_tx.send(WorkerRequest::Scan {
                 root,
-                sid,
+                identity,
                 max_depth,
                 smb_server,
                 share_name,

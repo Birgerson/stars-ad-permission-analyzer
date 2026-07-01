@@ -216,14 +216,17 @@ pub struct IdentitySearchResult {
 pub enum WorkerRequest {
     Analyze {
         path: String,
-        sid: String,
+        /// Raw identity (name, `DOMAIN\user`, UPN, or SID) — dispatched by the
+        /// worker (LDAP principal pipeline or local LSA/SAM).
+        identity: String,
         ldap: Option<LdapParams>,
         smb_server: Option<String>,
         share_name: Option<String>,
     },
     Scan {
         root: String,
-        sid: String,
+        /// Raw identity — same dispatch as `Analyze`.
+        identity: String,
         max_depth: Option<u32>,
         smb_server: Option<String>,
         share_name: Option<String>,
@@ -543,7 +546,7 @@ pub fn spawn_worker(
             match req {
                 WorkerRequest::Analyze {
                     path,
-                    sid,
+                    identity,
                     ldap,
                     smb_server,
                     share_name,
@@ -551,7 +554,7 @@ pub fn spawn_worker(
                     let started_at = Utc::now();
                     let result = rt.block_on(handle_analyze(
                         &path,
-                        &sid,
+                        &identity,
                         ldap.as_ref(),
                         smb_server.as_deref(),
                         share_name.as_deref(),
@@ -593,7 +596,7 @@ pub fn spawn_worker(
                 }
                 WorkerRequest::Scan {
                     root,
-                    sid,
+                    identity,
                     max_depth,
                     smb_server,
                     share_name,
@@ -602,7 +605,7 @@ pub fn spawn_worker(
                     let started_at = Utc::now();
                     let scan_result = rt.block_on(handle_scan(
                         &root,
-                        &sid,
+                        &identity,
                         max_depth,
                         smb_server.as_deref(),
                         share_name.as_deref(),
@@ -852,34 +855,30 @@ fn validate_connection_inputs(
 
 async fn handle_analyze(
     path: &str,
-    sid: &str,
+    identity: &str,
     ldap: Option<&LdapParams>,
     smb_server: Option<&str>,
     share_name: Option<&str>,
 ) -> Result<adpa_core::model::EffectivePermission, String> {
-    info!(path, sid, "Analyze request");
+    info!(path, identity, "Analyze request");
     // Review 2026-06-04 round 2, finding 6: forward the canonical form
     // from here on, not the raw string.
     let normalized_path = validate_path(path)
         .map_err(|e| format!("Invalid path: {e}"))?
         .0;
     let path = normalized_path.as_str();
-    // Review round 4 finding 2: classify on the trimmed value.
-    let sid_trimmed = sid.trim();
-    let sid_owned = if sid_trimmed.starts_with("S-1-") {
-        validate_sid(sid_trimmed)
-            .map_err(|e| format!("Invalid SID: {e}"))?
-            .0
-    } else {
-        sid_trimmed.to_string()
-    };
-    let sid = sid_owned.as_str();
     let normalized = validate_connection_inputs(smb_server, share_name, ldap)?;
     let smb_server = normalized.smb_server.as_deref();
     let share_name = normalized.share_name.as_deref();
     let ldap = normalized.ldap.as_ref();
     let fso = read_fso(path).map_err(|e| format!("Failed to read path: {e}"))?;
-    let res = resolve_identity_sids(sid, ldap).await?;
+    // Raw identity in (name / DOMAIN\user / UPN / SID) — validated and
+    // dispatched inside `resolve_identity_sids`. Everything downstream uses
+    // the RESOLVED SID, never the raw input: a name passed into the share
+    // token would silently match nothing (review 2026-07-01 deep pass,
+    // finding 1).
+    let res = resolve_identity_sids(identity, ldap).await?;
+    let user_sid = res.identity.sid.0.clone();
 
     let (local_group_sids, local_group_memberships, local_group_status) =
         collect_local_group_sids_for_path(path, smb_server, &res.identity, &res.memberships);
@@ -888,7 +887,7 @@ async fn handle_analyze(
         path,
         smb_server,
         share_name,
-        sid,
+        &user_sid,
         &res.memberships,
         &local_group_sids,
         AccessContext::for_path_with_smb(path, smb_server, share_name),
@@ -1093,7 +1092,7 @@ fn collect_local_group_sids_for_path(
 #[allow(clippy::too_many_arguments)]
 async fn handle_scan(
     root: &str,
-    sid: &str,
+    identity: &str,
     max_depth: Option<u32>,
     smb_server: Option<&str>,
     share_name: Option<&str>,
@@ -1101,7 +1100,7 @@ async fn handle_scan(
     evt_tx: &Sender<WorkerEvent>,
     cancel: &CancellationToken,
 ) -> ScanSummary {
-    info!(root, sid, "Scan request");
+    info!(root, identity, "Scan request");
 
     // persist_scan in `scan_errors` landet.
     // Helper: emit a validation/setup error to the UI AND structurally
@@ -1136,18 +1135,6 @@ async fn handle_scan(
         Ok(d) => d.map(|s| s.0),
         Err(e) => return make_early_summary(format!("Invalid max_depth: {e}")),
     };
-    // Review round 4 finding 2: classify on the trimmed value.
-    let sid_trimmed = sid.trim();
-    let sid_owned = if sid_trimmed.starts_with("S-1-") {
-        match validate_sid(sid_trimmed) {
-            Ok(v) => v.0,
-            Err(e) => return make_early_summary(format!("Invalid SID: {e}")),
-        }
-    } else {
-        sid_trimmed.to_string()
-    };
-    let sid = sid_owned.as_str();
-
     let normalized = match validate_connection_inputs(smb_server, share_name, ldap) {
         Ok(n) => n,
         Err(e) => return make_early_summary(e),
@@ -1156,12 +1143,17 @@ async fn handle_scan(
     let share_name = normalized.share_name.as_deref();
     let ldap = normalized.ldap.as_ref();
 
-    let res = match resolve_identity_sids(sid, ldap).await {
+    // Raw identity in — validated and dispatched inside
+    // `resolve_identity_sids`. Everything downstream uses the RESOLVED SID
+    // (`user_sid`), never the raw input (review 2026-07-01 deep pass,
+    // finding 1).
+    let res = match resolve_identity_sids(identity, ldap).await {
         Ok(r) => r,
         Err(e) => {
             return make_early_summary(format!("Identity resolution failed: {e}"));
         }
     };
+    let user_sid = res.identity.sid.0.clone();
     let engine_flags = res.engine_flags();
     let sam_fallback = engine_flags.group_resolution_via_sam_fallback;
     let identity_not_in_configured_ldap_base = engine_flags.identity_not_in_configured_ldap_base;
@@ -1204,7 +1196,7 @@ async fn handle_scan(
         root,
         smb_server,
         share_name,
-        sid,
+        &user_sid,
         &memberships,
         &local_group_sids,
         AccessContext::for_path_with_smb(root, smb_server, share_name),
