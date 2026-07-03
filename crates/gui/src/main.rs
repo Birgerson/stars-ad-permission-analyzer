@@ -2376,7 +2376,9 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         let weak = ui.as_weak();
         ui.on_groups_name_edited(move |query| {
             let Some(ui) = weak.upgrade() else { return };
-            ui.set_g_suggestions(filter_suggestions_model(query.as_str()));
+            // Members direction expects a group — suggest only groups then.
+            let groups_only = ui.get_g_direction() == 1;
+            ui.set_g_suggestions(filter_suggestions_model_kinds(query.as_str(), groups_only));
         });
     }
     {
@@ -3458,6 +3460,16 @@ fn empty_suggestion_model() -> slint::ModelRc<IdentitySuggestionVm> {
 const MAX_SUGGESTIONS: usize = 15;
 
 fn filter_suggestions_model(query: &str) -> slint::ModelRc<IdentitySuggestionVm> {
+    filter_suggestions_model_kinds(query, false)
+}
+
+/// `groups_only` keeps only group suggestions (`G` = domain/local group,
+/// `L` = BUILTIN group) — used by the Groups tab's Members direction, where a
+/// group is expected and user entries are noise (review 2026-07-03, F5).
+fn filter_suggestions_model_kinds(
+    query: &str,
+    groups_only: bool,
+) -> slint::ModelRc<IdentitySuggestionVm> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
         return empty_suggestion_model();
@@ -3465,6 +3477,7 @@ fn filter_suggestions_model(query: &str) -> slint::ModelRc<IdentitySuggestionVm>
     let suggestions: Vec<IdentitySuggestionVm> = IDENTITY_CACHE.with(|c| {
         c.borrow()
             .iter()
+            .filter(|s| !groups_only || s.kind_icon == "G" || s.kind_icon == "L")
             .filter(|s| {
                 s.qualified.to_lowercase().contains(&q) || s.name.to_lowercase().contains(&q)
             })

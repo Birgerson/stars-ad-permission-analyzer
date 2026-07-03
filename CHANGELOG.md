@@ -29,6 +29,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
     partial lookup raises an incompleteness marker rather than a short list.
   - A member that is itself a **privileged** group is flagged; `.json` / `.csv`
     export under the same overwrite policy as `groups`. See ADR 0055.
+  - **Review-hardened (two independent reviews, 2026-07-03):** `primaryGroupID`
+    hits are filtered to the group's own domain (a bare RID is not
+    forest-unique — on a Global Catalog bind the unfiltered query would list
+    users of *other* domains: false positives); a **universal group** queried
+    over a domain bind carries a marker that cross-domain members are not
+    visible; shared "not a group / could not be resolved" rejection wording in
+    CLI and GUI; the Members direction suggests only groups; neutral
+    membership-export error message; boundary tests (LDAP-required guards,
+    partial-enumeration rendering).
   - v1 lists **direct** members; recursive nesting (the member tree) is planned.
 
 ---

@@ -131,6 +131,12 @@ impl LdapResolver {
                         }
                     };
                 let group_dn = group_entry.dn.clone();
+                // A universal group queried over a plain domain bind cannot
+                // see members from other domains of the forest (other
+                // partitions) — surfaced as a marker, never silently
+                // (review 2026-07-03, finding F2).
+                let universal_on_domain_bind =
+                    is_universal_group_entry(&group_entry) && !self.config.global_catalog;
 
                 // 2. Direct members via the memberOf back-link, and
                 // 3. primaryGroupID members — degrade gracefully if one fails.
@@ -150,12 +156,24 @@ impl LdapResolver {
                     Err(e) => incomplete = Some(format!("member back-link search failed: {e}")),
                 }
                 match primary {
-                    Ok(entries) => push_member_entries(
-                        &entries,
-                        MemberVia::PrimaryGroup,
-                        &mut members,
-                        &mut seen,
-                    ),
+                    Ok(entries) => {
+                        // `primaryGroupID` holds a bare RID, which is NOT
+                        // forest-unique (513 = Domain Users in every domain).
+                        // On a Global Catalog bind the search base is empty →
+                        // forest-wide, so the query would also match users of
+                        // OTHER domains whose own group happens to carry the
+                        // same RID — false positives. A primary member lies by
+                        // definition in its group's domain, so filter the hits
+                        // to the group's domain-SID prefix (Fable review
+                        // 2026-07-03, finding F1).
+                        let same_domain = filter_same_domain(entries, group_sid);
+                        push_member_entries(
+                            &same_domain,
+                            MemberVia::PrimaryGroup,
+                            &mut members,
+                            &mut seen,
+                        )
+                    }
                     Err(e) => {
                         let msg = format!("primaryGroupID search failed: {e}");
                         incomplete = Some(match incomplete {
@@ -176,6 +194,7 @@ impl LdapResolver {
                 Ok(GroupMemberEnumeration {
                     members,
                     incomplete,
+                    universal_on_domain_bind,
                 })
             },
         )
@@ -624,6 +643,23 @@ impl IdentityResolver for LdapResolver {
 pub struct GroupMemberEnumeration {
     pub members: Vec<MemberNode>,
     pub incomplete: Option<String>,
+    /// `true` when the group is a **universal** group and the bind was a plain
+    /// domain bind — members from other domains of the forest are then not
+    /// visible (surfaced as a marker by [`Self::into_report`]).
+    pub universal_on_domain_bind: bool,
+}
+
+/// Universal bit (0x8) of the `groupType` attribute. `groupType` is a signed
+/// value (the 0x80000000 security bit makes security groups negative), so it
+/// is parsed as `i64`. Absent/unparsable → `false` (no marker rather than a
+/// false alarm; the attribute is readable for any bind that can read the
+/// group entry itself).
+fn is_universal_group_entry(entry: &RawEntry) -> bool {
+    entry
+        .first_attr("groupType")
+        .and_then(|v| v.parse::<i64>().ok())
+        .map(|gt| gt & 0x8 != 0)
+        .unwrap_or(false)
 }
 
 impl GroupMemberEnumeration {
@@ -657,6 +693,9 @@ impl GroupMemberEnumeration {
         if let Some(reason) = self.incomplete {
             diagnostics.push(PermissionDiagnostic::GroupMemberEnumerationIncomplete { reason });
         }
+        if self.universal_on_domain_bind {
+            diagnostics.push(PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible);
+        }
 
         GroupMembersReport {
             group,
@@ -670,6 +709,33 @@ impl GroupMemberEnumeration {
 /// `primaryGroupID`. `None` if the SID has no numeric final component.
 fn rid_from_sid(sid: &Sid) -> Option<u32> {
     sid.0.rsplit('-').next().and_then(|r| r.parse::<u32>().ok())
+}
+
+/// The SID minus its final (RID) component — the domain identifier
+/// (`S-1-5-21-a-b-c-513` → `S-1-5-21-a-b-c`). `None` for a SID without a `-`.
+fn sid_domain_prefix(sid: &Sid) -> Option<&str> {
+    sid.0.rsplit_once('-').map(|(prefix, _rid)| prefix)
+}
+
+/// Keeps only the entries whose `objectSid` shares the group's domain-SID
+/// prefix. A `primaryGroupID` search matches a bare RID, which is not
+/// forest-unique — on a forest-wide (GC) base it would return users of other
+/// domains whose group carries the same RID. A primary member always lives in
+/// its group's own domain, so this filter is exact, never lossy. Entries
+/// without a decodable SID are dropped (they would be skipped downstream
+/// anyway).
+fn filter_same_domain(entries: Vec<RawEntry>, group_sid: &Sid) -> Vec<RawEntry> {
+    let Some(group_domain) = sid_domain_prefix(group_sid).map(str::to_owned) else {
+        return entries;
+    };
+    entries
+        .into_iter()
+        .filter(|e| {
+            extract_sid_from_entry(e)
+                .and_then(|s| sid_domain_prefix(&s).map(|p| p == group_domain))
+                .unwrap_or(false)
+        })
+        .collect()
 }
 
 /// Builds [`MemberNode`]s from raw LDAP entries, tagging each with `via`,
@@ -906,6 +972,42 @@ mod tests {
     }
 
     #[test]
+    fn sid_domain_prefix_strips_the_rid() {
+        assert_eq!(
+            sid_domain_prefix(&Sid("S-1-5-21-1-2-3-513".into())),
+            Some("S-1-5-21-1-2-3")
+        );
+        assert_eq!(
+            sid_domain_prefix(&Sid("S-1-5-32-544".into())),
+            Some("S-1-5-32")
+        );
+        assert_eq!(sid_domain_prefix(&Sid("nodash".into())), None);
+    }
+
+    /// SID bytes for arbitrary sub-authorities (authority 5) — lets a test
+    /// build entries from DIFFERENT domains.
+    fn sid_bytes(subauths: &[u32]) -> Vec<u8> {
+        let mut b = vec![1u8, subauths.len() as u8, 0, 0, 0, 0, 0, 5];
+        for s in subauths {
+            b.extend_from_slice(&s.to_le_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn filter_same_domain_drops_foreign_domain_primary_group_hits() {
+        // Group: S-1-5-21-1-2-3-513 (Domain Users of domain 1-2-3).
+        let group_sid = Sid("S-1-5-21-1-2-3-513".into());
+        // Same-domain user (kept) vs. a user of ANOTHER domain whose own
+        // Domain Users shares RID 513 — the GC false-positive case (F1).
+        let same = member_entry("alice", sid_bytes(&[21, 1, 2, 3, 1104]));
+        let foreign = member_entry("mallory", sid_bytes(&[21, 9, 9, 9, 1105]));
+        let kept = filter_same_domain(vec![same, foreign], &group_sid);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].first_attr("sAMAccountName"), Some("alice"));
+    }
+
+    #[test]
     fn push_member_entries_tags_via_and_dedups_by_sid() {
         let direct = vec![
             member_entry("alice", sid_bytes_with_rid(1001)),
@@ -994,6 +1096,7 @@ mod tests {
                 node("bob", 1002, MemberVia::PrimaryGroup),
             ],
             incomplete: None,
+            universal_on_domain_bind: false,
         };
         let report = enumeration.into_report(grp_identity());
         let names: Vec<_> = report
@@ -1016,6 +1119,7 @@ mod tests {
         let enumeration = GroupMemberEnumeration {
             members: vec![node("alice", 1001, MemberVia::Direct)],
             incomplete: Some("primaryGroupID search failed: timeout".into()),
+            universal_on_domain_bind: false,
         };
         let report = enumeration.into_report(grp_identity());
         assert!(report.diagnostics.iter().any(|d| matches!(
@@ -1026,6 +1130,47 @@ mod tests {
         assert!(!report.diagnostics.iter().any(|d| matches!(
             d,
             PermissionDiagnostic::MembersViaPrimaryGroupIncluded { .. }
+        )));
+    }
+
+    #[test]
+    fn is_universal_group_entry_reads_the_0x8_bit() {
+        let entry = |group_type: &str| {
+            let mut attrs = HashMap::new();
+            attrs.insert("groupType".to_string(), vec![group_type.to_string()]);
+            RawEntry {
+                dn: "CN=G,DC=res,DC=lab".to_string(),
+                attrs,
+                bin_attrs: HashMap::new(),
+            }
+        };
+        // -2147483640 = 0x80000008 (universal security group).
+        assert!(is_universal_group_entry(&entry("-2147483640")));
+        // -2147483646 = 0x80000002 (global security group).
+        assert!(!is_universal_group_entry(&entry("-2147483646")));
+        // 8 = universal distribution group.
+        assert!(is_universal_group_entry(&entry("8")));
+        // Absent attribute → no marker (no false alarm).
+        let empty = RawEntry {
+            dn: "CN=G,DC=res,DC=lab".to_string(),
+            attrs: HashMap::new(),
+            bin_attrs: HashMap::new(),
+        };
+        assert!(!is_universal_group_entry(&empty));
+    }
+
+    #[test]
+    fn into_report_marks_universal_group_on_domain_bind() {
+        use adpa_core::model::PermissionDiagnostic;
+        let enumeration = GroupMemberEnumeration {
+            members: vec![node("alice", 1001, MemberVia::Direct)],
+            incomplete: None,
+            universal_on_domain_bind: true,
+        };
+        let report = enumeration.into_report(grp_identity());
+        assert!(report.diagnostics.iter().any(|d| matches!(
+            d,
+            PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible
         )));
     }
 

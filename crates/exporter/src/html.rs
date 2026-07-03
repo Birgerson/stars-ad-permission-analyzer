@@ -429,6 +429,16 @@ fn write_permissions_table(
                          incomplete</span>"
                     ));
                 }
+                PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible => {
+                    diag_parts.push(
+                        "<span class=\"badge badge-neutral\" \
+                         title=\"Universal group queried over a domain bind — members \
+                         from other domains of the forest are not visible here; in a \
+                         multi-domain forest the list may be incomplete.\">ℹ universal \
+                         group: cross-domain members not visible</span>"
+                            .to_string(),
+                    );
+                }
             }
         }
         let diagnostics = if diag_parts.is_empty() {

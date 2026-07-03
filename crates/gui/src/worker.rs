@@ -1096,12 +1096,10 @@ async fn handle_resolve_group_members(
         .await
         .map_err(|e| format!("Group resolution failed: {e}"))?;
     let group = resolution.identity;
-    if group.kind != IdentityKind::Group {
-        return Err(format!(
-            "'{}' is a {:?}, not a group — the members view only applies to groups.",
-            group.name.as_deref().unwrap_or(&group.sid.0),
-            group.kind
-        ));
+    // Wording shared with the CLI via core::members_view_rejection
+    // (review 2026-07-03, finding F4).
+    if let Some(rejection) = adpa_core::model::members_view_rejection(&group) {
+        return Err(rejection);
     }
 
     let enumeration = resolver
@@ -2259,6 +2257,45 @@ mod tests {
                 .is_empty(),
             "a group must not show an Active/DISABLED status"
         );
+    }
+
+    #[test]
+    fn resolve_group_members_requires_ldap() {
+        // The LDAP-required guard fires before any directory work, so this is
+        // deterministic on every platform (review 2026-07-03, C2).
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let Err(err) = rt.block_on(handle_resolve_group_members("Domain Users", None)) else {
+            panic!("members without LDAP must be refused");
+        };
+        assert!(err.contains("requires an LDAP connection"), "{err}");
+    }
+
+    #[test]
+    fn group_members_view_renders_incompleteness_as_concern() {
+        // A partial enumeration must surface as a Concern-level diagnostic row
+        // in the GUI view — not vanish in rendering (review 2026-07-03, C2).
+        use adpa_core::model::{
+            GroupMembersReport, Identity, IdentityKind, PermissionDiagnostic, Sid,
+        };
+        let report = GroupMembersReport {
+            group: Identity {
+                sid: Sid("S-1-5-21-1-2-3-513".into()),
+                name: Some("Domain Users".into()),
+                domain: Some("CORP".into()),
+                kind: IdentityKind::Group,
+                disabled: false,
+                user_principal_name: None,
+                sid_history_count: 0,
+            },
+            members: vec![],
+            diagnostics: vec![PermissionDiagnostic::GroupMemberEnumerationIncomplete {
+                reason: "primaryGroupID search failed: timeout".into(),
+            }],
+        };
+        let view = group_members_report_to_view(&report);
+        assert_eq!(view.diagnostics.len(), 1);
+        assert_eq!(view.diagnostics[0].level, 2, "Concern renders as level 2");
+        assert!(view.diagnostics[0].text.contains("lower bound"));
     }
 
     #[test]

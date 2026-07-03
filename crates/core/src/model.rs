@@ -440,6 +440,24 @@ pub struct GroupMembersReport {
     pub diagnostics: Vec<PermissionDiagnostic>,
 }
 
+/// Shared CLI/GUI guard for the members view: `None` when `identity` is a
+/// group, otherwise the operator-facing rejection message — worded once here
+/// so both surfaces say the same thing. Unresolved kinds get a "could not be
+/// resolved" wording instead of the cryptic "resolved to a Unknown"
+/// (review 2026-07-03, finding F4).
+pub fn members_view_rejection(identity: &Identity) -> Option<String> {
+    let display = identity.name.as_deref().unwrap_or(identity.sid.0.as_str());
+    match identity.kind {
+        IdentityKind::Group => None,
+        IdentityKind::Unknown | IdentityKind::Orphaned => Some(format!(
+            "'{display}' could not be resolved as a group in the directory."
+        )),
+        ref kind => Some(format!(
+            "'{display}' is a {kind:?}, not a group — the members view only applies to groups."
+        )),
+    }
+}
+
 impl GroupMembersReport {
     /// Count of direct members (top level), split by source — the headline the
     /// CLI/GUI show ("N members — M direct, K via primaryGroupID").
@@ -914,6 +932,16 @@ pub enum PermissionDiagnostic {
     /// carries this trigger so the count is treated as a lower bound.
     /// `reason` names what went wrong. Incompleteness trigger; Concern.
     GroupMemberEnumerationIncomplete { reason: String },
+
+    /// The enumerated group is a **universal** group queried over a plain
+    /// domain bind: members from *other* domains of the forest live in other
+    /// directory partitions and are not visible from this bind, so the list
+    /// may be incomplete in a multi-domain forest (in a single-domain forest
+    /// this is only a formal caveat). The upward view marks the equivalent
+    /// boundary (Global Catalog / outside-base); this is the downward
+    /// counterpart. Incompleteness trigger, but Neutral — an expected
+    /// bind-scope caveat, not an error (ADR 0055, review 2026-07-03 F2).
+    UniversalGroupCrossDomainMembersNotVisible,
 }
 
 /// **Visual attention** of a [`PermissionDiagnostic`] — "do I need to look?".
@@ -1022,6 +1050,12 @@ impl PermissionDiagnostic {
                 "Group members could not be enumerated completely ({reason}); the member list \
                  is a lower bound and may be missing entries."
             ),
+            PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible => {
+                "This is a universal group queried over a domain bind — members from other \
+                 domains of the forest are not visible here, so in a multi-domain forest the \
+                 list may be incomplete."
+                    .to_owned()
+            }
         }
     }
 
@@ -1044,6 +1078,7 @@ impl PermissionDiagnostic {
                 | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
                 | PermissionDiagnostic::SidHistoryPresent { .. }
                 | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
+                | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible
         )
     }
 
@@ -1062,6 +1097,7 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
             | PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
             | PermissionDiagnostic::MembersViaPrimaryGroupIncluded { .. }
+            | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible
             | PermissionDiagnostic::GroupResolutionViaGlobalCatalog => DiagnosticSeverity::Neutral,
             // Worth a look — a hidden Deny among skipped ACEs could change the
             // result.
@@ -1596,6 +1632,40 @@ mod tests {
             "primary-group members were included, not missed"
         );
         assert!(d.summary().contains("2000"));
+    }
+
+    #[test]
+    fn members_view_rejection_wording_by_kind() {
+        let identity = |kind: IdentityKind| Identity {
+            sid: Sid("S-1-5-21-1-2-3-500".into()),
+            name: Some("x".into()),
+            domain: None,
+            kind,
+            disabled: false,
+            user_principal_name: None,
+            sid_history_count: 0,
+        };
+        // A group passes.
+        assert!(members_view_rejection(&identity(IdentityKind::Group)).is_none());
+        // A user is rejected with the "not a group" wording.
+        let user_msg = members_view_rejection(&identity(IdentityKind::User)).unwrap();
+        assert!(user_msg.contains("not a group"), "{user_msg}");
+        // Unresolved kinds get the honest "could not be resolved" wording,
+        // not a cryptic "is a Unknown" (review 2026-07-03, F4).
+        let unknown_msg = members_view_rejection(&identity(IdentityKind::Unknown)).unwrap();
+        assert!(
+            unknown_msg.contains("could not be resolved"),
+            "{unknown_msg}"
+        );
+        assert!(!unknown_msg.contains("Unknown"), "{unknown_msg}");
+    }
+
+    #[test]
+    fn universal_group_marker_is_neutral_but_incompleteness_trigger() {
+        let d = PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible;
+        assert_eq!(d.severity(), DiagnosticSeverity::Neutral);
+        assert!(d.is_incompleteness_trigger());
+        assert!(d.summary().contains("universal"));
     }
 
     #[test]

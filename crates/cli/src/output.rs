@@ -348,6 +348,11 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      The member list is a LOWER BOUND and may be missing entries.");
                 println!("      Treat as incomplete.");
             }
+            PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible => {
+                println!("  [i] This is a universal group queried over a domain bind.");
+                println!("      Members from other domains of the forest are not visible");
+                println!("      here — in a multi-domain forest the list may be incomplete.");
+            }
         }
     }
 }

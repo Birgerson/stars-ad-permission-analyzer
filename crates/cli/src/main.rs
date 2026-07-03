@@ -1704,16 +1704,10 @@ async fn run_members(
     let group_identity = resolution.identity;
 
     // The members view only applies to groups — be honest rather than showing
-    // an empty list for a user/computer.
-    if group_identity.kind != adpa_core::model::IdentityKind::Group {
-        return Err(anyhow::anyhow!(
-            "'{}' resolved to a {:?}, not a group — the members view only applies to groups.",
-            group_identity
-                .name
-                .as_deref()
-                .unwrap_or(&group_identity.sid.0),
-            group_identity.kind
-        ));
+    // an empty list for a user/computer. Wording shared with the GUI via
+    // core::members_view_rejection (review 2026-07-03, finding F4).
+    if let Some(rejection) = adpa_core::model::members_view_rejection(&group_identity) {
+        return Err(anyhow::anyhow!(rejection));
     }
 
     let enumeration = ldap_resolver
@@ -1748,8 +1742,11 @@ fn membership_export_format(path: &std::path::Path) -> anyhow::Result<Membership
     match ext.as_deref() {
         Some("json") => Ok(MembershipExportFormat::Json),
         Some("csv") => Ok(MembershipExportFormat::Csv),
+        // Neutral wording: this helper serves both `groups` and `members`
+        // (ChatGPT review 2026-07-03, finding 1 — the old message blamed
+        // 'groups' even when `members` rejected the target).
         other => Err(anyhow::anyhow!(
-            "Unsupported export extension for 'groups': {other:?} (use .json or .csv)"
+            "Unsupported extension for the membership export: {other:?} (use .json or .csv)"
         )),
     }
 }
@@ -2095,6 +2092,44 @@ mod tests {
         let content = std::fs::read_to_string(&path).expect("read back");
         assert!(content.starts_with("group_name,"), "CSV written: {content}");
         let _ = std::fs::remove_file(&path);
+    }
+
+    // --- Members command boundaries (reviews 2026-07-03: ChatGPT C1/C2, Fable) ---
+
+    #[test]
+    fn membership_export_format_error_is_command_neutral() {
+        // Shared by `groups` and `members` — must not blame 'groups'
+        // when `members` rejects the target (C1).
+        let Err(err) = super::membership_export_format(std::path::Path::new("report.html")) else {
+            panic!(".html is not a membership export format");
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("membership export"), "{msg}");
+        assert!(!msg.contains("'groups'"), "{msg}");
+    }
+
+    #[test]
+    fn members_requires_server() {
+        // The LDAP-required guard fires before any network work (C2).
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let err = rt
+            .block_on(super::run_members(
+                "Domain Users".to_owned(),
+                None,
+                None,
+                None,
+                None,
+                super::GroupsOptions {
+                    insecure_ldap: false,
+                    global_catalog: false,
+                    ldap_signing: false,
+                    ldap_timeout: None,
+                    output: None,
+                    force: false,
+                },
+            ))
+            .expect_err("members without --server must be refused");
+        assert!(err.to_string().contains("requires --server"), "{err}");
     }
 
     // --- Group members CSV (reverse view) ---

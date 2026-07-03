@@ -89,6 +89,25 @@ a misleading empty "0 members". Members are deduplicated by SID.
 - **Export:** `.json` / `.csv`, under the same conservative `create_new`
   overwrite policy as the `groups` export (deep review 2026-07-01 finding 2).
 
+### Timeout budget
+
+The whole enumeration (group DN lookup + both member searches) runs under
+**one** `--ldap-timeout` budget — unlike most resolver calls, which are
+per-operation. On very large groups, size the timeout for the *sum* of the
+searches; on expiry the operation fails as a whole (a clear error, never a
+silently short list).
+
+### Follow-up review fixes (2026-07-03)
+
+Two independent reviews of the initial implementation led to hardening within
+the same release: the `primaryGroupID` hits are filtered to the group's
+**domain-SID prefix** (a bare RID is not forest-unique — on a GC bind the
+unfiltered query would return users of *other* domains whose group shares the
+RID: false positives), and a **universal group** queried over a plain domain
+bind now carries a `UniversalGroupCrossDomainMembersNotVisible` marker
+(members from other domains live in other partitions and are not visible from
+that bind — Neutral, but an incompleteness trigger).
+
 ## Consequences
 
 - The most-requested reverse question is answerable, correctly, including the

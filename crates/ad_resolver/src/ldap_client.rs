@@ -67,6 +67,10 @@ const IDENTITY_ATTRS: &[&str] = &[
     "distinguishedName",
     "primaryGroupID",
     "memberOf",
+    // Group scope bits (0x2 global, 0x4 domain-local, 0x8 universal; sign bit
+    // = security group). The members view uses the universal bit to warn that
+    // a domain bind cannot see cross-domain members (ADR 0055 / finding F2).
+    "groupType",
     // Binary, multi-valued: historical SIDs from a domain/forest migration.
     // Only the COUNT is used (PermissionDiagnostic::SidHistoryPresent) — Stars
     // does not evaluate the values into the token. May be unreadable for a
