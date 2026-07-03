@@ -345,11 +345,12 @@ Actions:
 
 ![Stars Groups tab — the identity "Administrator" resolved to its recursive group memberships, with a red "member of Administrators" privileged banner, each membership labelled by how it arose, and the SAM/LSA-fallback diagnostic](docs/screenshots/stars-groups-tab.png)
 
-Answers a pure identity question — **"which groups is this user (or group) in?"** — without touching a path or computing rights.
+Answers a pure identity question — **"which groups is this user (or group) in?"** — without touching a path or computing rights. A **direction toggle** flips it to the reverse question, **"who is in this group?"** (see below).
 
 Inputs:
+- **Direction** — **Member of** (groups this identity is in) or **Members** (who is in this group).
 - **Identity** — one field for any form (local name, `DOMAIN\user`, UPN, or a raw SID), auto-resolved when you click.
-- Optional: the same LDAP modes as `Analyze`/`Scan` (not needed on a DC — SAM/LSA is enough, though it returns only direct global groups).
+- Optional: the same LDAP modes as `Analyze`/`Scan` (not needed on a DC — SAM/LSA is enough, though it returns only direct global groups). The **Members** direction requires LDAP.
 
 Output:
 - The identity header (name, SID, status, kind).
@@ -357,7 +358,7 @@ Output:
 - The recursive group list, each entry showing **how the membership arose** ("direct", "primary group", "local group", or the chain "via A → B").
 - The same diagnostic markers as elsewhere (SAM/LSA fallback, FSP, Global Catalog, outside-base, `sIDHistory`, resolution timeout) so an incomplete list never looks complete.
 
-This is **one direction only** (user → groups). To check effective rights on a path, switch to the `Analyze` or `Scan Tree` tab.
+Switch the **Direction** toggle to **Members** to list **who is in a group** instead — direct members plus accounts whose *primary* group it is (found via a `primaryGroupID` search and tagged, so *Domain Users* is not wrongly shown as empty). Large groups are read via a paged search, so they are not silently truncated; a member that is itself a privileged group is flagged. This direction requires LDAP and lists direct members (recursive nesting planned). To check effective rights on a path, switch to the `Analyze` or `Scan Tree` tab.
 
 #### `Scan Tree` tab
 
@@ -424,6 +425,7 @@ If you have a SID copied from another tool (e.g. `S-1-5-21-1234-5678-…-500`), 
 ```
 adpa.exe analyze   — effective permission for a single path
 adpa.exe groups    — recursive group memberships of a user (no path/rights)
+adpa.exe members   — members of a group (reverse of groups; requires LDAP)
 adpa.exe scan      — recursive scan of a directory tree
 adpa.exe --help    — full help with all options
 ```

@@ -10,7 +10,26 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.7.6 below for the latest release.)
+### Added
+
+- **Group → Members (reverse direction, v1).** The complement of the group
+  view: *who is in this group?*
+  - **CLI** `adpa members --group <name|DOMAIN\group|SID>` (same LDAP / bind /
+    timeout / `--output` flags as `groups`). Lists each direct member with its
+    name, SID, kind, and how it was found. **Requires `--server`** — the local
+    SAM/LSA path cannot enumerate domain-group members.
+  - **GUI**: a **direction toggle** in the Groups tab ("Member of" ↔
+    "Members"), reusing the identity field, LDAP controls, and result widgets.
+  - **Primary-group members are included and tagged.** Accounts whose *primary*
+    group is the target (classically every user for *Domain Users*) are not in
+    the `member` attribute; Stars finds them via a `primaryGroupID` search and
+    marks how many were added, so the count is complete instead of showing zero.
+  - **No silent truncation.** Members are read via a paged `memberOf` back-link
+    search (not `member` range retrieval), so large groups enumerate fully; a
+    partial lookup raises an incompleteness marker rather than a short list.
+  - A member that is itself a **privileged** group is flagged; `.json` / `.csv`
+    export under the same overwrite policy as `groups`. See ADR 0055.
+  - v1 lists **direct** members; recursive nesting (the member tree) is planned.
 
 ---
 

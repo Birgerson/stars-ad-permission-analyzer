@@ -218,6 +218,42 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Reverse of `groups`: list the **members** of a group (who is in it),
+    /// including members whose primary group it is. Requires --server (LDAP);
+    /// the local SAM/LSA path cannot enumerate domain-group members.
+    Members {
+        /// The group to enumerate: `name`, `DOMAIN\group`, or a SID.
+        #[arg(short = 'g', long)]
+        group: String,
+        #[arg(short = 's', long)]
+        server: Option<String>,
+        #[arg(short = 'b', long)]
+        base_dn: Option<String>,
+        /// Bind account: `DOMAIN\user`, `user@domain` (UPN), or a full DN.
+        #[arg(long)]
+        bind_dn: Option<String>,
+        /// **DEPRECATED — insecure.** Use the `ADPA_BIND_PASSWORD` env var.
+        #[arg(long)]
+        bind_password: Option<String>,
+        /// Unencrypted LDAP (port 389) — password in plaintext. Test only.
+        #[arg(long)]
+        insecure_ldap: bool,
+        /// Bind against the Global Catalog (forest-wide).
+        #[arg(long)]
+        global_catalog: bool,
+        /// Bind with SASL GSSAPI/Kerberos sign+seal using the current logon.
+        #[arg(long)]
+        ldap_signing: bool,
+        /// LDAP operation timeout in seconds (default 10; range 1–600).
+        #[arg(long)]
+        ldap_timeout: Option<u64>,
+        /// Optional export path (`.json` or `.csv`).
+        #[arg(short = 'o', long)]
+        output: Option<String>,
+        /// Overwrite an existing export file without confirmation.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -320,6 +356,36 @@ async fn main() -> anyhow::Result<()> {
         } => {
             run_groups(
                 user,
+                server,
+                base_dn,
+                bind_dn,
+                bind_password,
+                GroupsOptions {
+                    insecure_ldap,
+                    global_catalog,
+                    ldap_signing,
+                    ldap_timeout,
+                    output,
+                    force,
+                },
+            )
+            .await?;
+        }
+        Commands::Members {
+            group,
+            server,
+            base_dn,
+            bind_dn,
+            bind_password,
+            insecure_ldap,
+            global_catalog,
+            ldap_signing,
+            ldap_timeout,
+            output,
+            force,
+        } => {
+            run_members(
+                group,
                 server,
                 base_dn,
                 bind_dn,
@@ -460,6 +526,91 @@ fn resolve_search_base(base_dn: Option<String>, global_catalog: bool) -> anyhow:
     }
 }
 
+/// Builds the [`LdapConfig`] for a `--server` connection from the shared CLI
+/// LDAP flags. Extracted from `resolve_identity` so the `members` command
+/// (which needs the concrete resolver for member enumeration) constructs the
+/// connection identically — bind mode, GC, insecure, signing, and the
+/// `--ldap-timeout` override all behave the same across commands.
+///
+/// The argument list mirrors the CLI flags 1:1; bundling them into a struct
+/// here would only add indirection without improving clarity.
+#[allow(clippy::too_many_arguments)]
+fn build_ldap_config(
+    server: &str,
+    base_dn: Option<String>,
+    bind_dn: Option<String>,
+    bind_password: Option<String>,
+    insecure_ldap: bool,
+    global_catalog: bool,
+    ldap_signing: bool,
+    ldap_timeout: Option<u64>,
+) -> anyhow::Result<LdapConfig> {
+    let mut config = if ldap_signing {
+        // GSSAPI/Kerberos sign+seal bind (ADR 0051): cert-free path for a
+        // hardened DC that enforces LDAP signing. Uses the current Windows
+        // logon (SSPI single sign-on), so no --bind-dn / password is read.
+        // `--server` must be the DC's FQDN (it forms the ldap/<fqdn> SPN).
+        // A base DN is required (this is a domain bind, not the GC).
+        let base = resolve_search_base(base_dn, false)?;
+        if global_catalog {
+            eprintln!(
+                "[WARNING] --global-catalog is ignored together with --ldap-signing; \
+                 performing a signed bind against the domain DC on port 389."
+            );
+        }
+        LdapConfig::new_signed(server, &base)
+    } else {
+        let base = resolve_search_base(base_dn, global_catalog)?;
+        let bind = bind_dn.ok_or_else(|| {
+            anyhow::anyhow!(
+                "--bind-dn is required when --server is specified \
+                 (e.g. CN=Administrator,CN=Users,DC=corp,DC=local). \
+                 Tip: --ldap-signing binds with the current Windows logon \
+                 and needs no bind DN or password."
+            )
+        })?;
+        let password = if let Some(p) = bind_password {
+            eprintln!(
+                "[WARNING] --bind-password is DEPRECATED — credentials passed as a CLI \
+                 argument are visible in process listings and shell history. \
+                 Use the ADPA_BIND_PASSWORD environment variable instead. \
+                 --bind-password will be removed in a future release."
+            );
+            p
+        } else if let Ok(p) = std::env::var("ADPA_BIND_PASSWORD") {
+            p
+        } else {
+            return Err(anyhow::anyhow!(
+                "ADPA_BIND_PASSWORD environment variable is required (the --bind-password \
+                 argument exists for backwards compatibility but is deprecated). \
+                 Tip: --ldap-signing avoids passwords entirely (current-logon SSO)."
+            ));
+        };
+
+        if insecure_ldap {
+            eprintln!(
+                "[WARNING] --insecure-ldap: the bind password is transmitted in plaintext. \
+                 Use only in isolated test environments."
+            );
+        }
+
+        match (global_catalog, insecure_ldap) {
+            (true, true) => {
+                LdapConfig::new_global_catalog_insecure(server, &base, &bind, &password)
+            }
+            (true, false) => LdapConfig::new_global_catalog(server, &base, &bind, &password),
+            (false, true) => LdapConfig::new_insecure(server, &base, &bind, &password),
+            (false, false) => LdapConfig::new(server, &base, &bind, &password),
+        }
+    };
+    // An explicit --ldap-timeout overrides the 10s default baked into the
+    // LdapConfig constructors. Already validated at the CLI boundary (1–600s).
+    if let Some(secs) = ldap_timeout {
+        config.timeout_secs = secs;
+    }
+    Ok(config)
+}
+
 // CLI-internal plumbing helper: it forwards the validated connection inputs
 // to the resolver. The argument list mirrors the CLI flags 1:1; bundling them
 // into a struct here would only add an indirection without improving clarity.
@@ -483,69 +634,16 @@ async fn resolve_identity(
         );
     }
     if let Some(server) = server {
-        let mut config = if ldap_signing {
-            // GSSAPI/Kerberos sign+seal bind (ADR 0051): cert-free path for a
-            // hardened DC that enforces LDAP signing. Uses the current Windows
-            // logon (SSPI single sign-on), so no --bind-dn / password is read.
-            // `--server` must be the DC's FQDN (it forms the ldap/<fqdn> SPN).
-            // A base DN is required (this is a domain bind, not the GC).
-            let base = resolve_search_base(base_dn, false)?;
-            if global_catalog {
-                eprintln!(
-                    "[WARNING] --global-catalog is ignored together with --ldap-signing; \
-                     performing a signed bind against the domain DC on port 389."
-                );
-            }
-            LdapConfig::new_signed(&server, &base)
-        } else {
-            let base = resolve_search_base(base_dn, global_catalog)?;
-            let bind = bind_dn.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "--bind-dn is required when --server is specified \
-                     (e.g. CN=Administrator,CN=Users,DC=corp,DC=local). \
-                     Tip: --ldap-signing binds with the current Windows logon \
-                     and needs no bind DN or password."
-                )
-            })?;
-            let password = if let Some(p) = bind_password {
-                eprintln!(
-                    "[WARNING] --bind-password is DEPRECATED — credentials passed as a CLI \
-                     argument are visible in process listings and shell history. \
-                     Use the ADPA_BIND_PASSWORD environment variable instead. \
-                     --bind-password will be removed in a future release."
-                );
-                p
-            } else if let Ok(p) = std::env::var("ADPA_BIND_PASSWORD") {
-                p
-            } else {
-                return Err(anyhow::anyhow!(
-                    "ADPA_BIND_PASSWORD environment variable is required (the --bind-password \
-                     argument exists for backwards compatibility but is deprecated). \
-                     Tip: --ldap-signing avoids passwords entirely (current-logon SSO)."
-                ));
-            };
-
-            if insecure_ldap {
-                eprintln!(
-                    "[WARNING] --insecure-ldap: the bind password is transmitted in plaintext. \
-                     Use only in isolated test environments."
-                );
-            }
-
-            match (global_catalog, insecure_ldap) {
-                (true, true) => {
-                    LdapConfig::new_global_catalog_insecure(&server, &base, &bind, &password)
-                }
-                (true, false) => LdapConfig::new_global_catalog(&server, &base, &bind, &password),
-                (false, true) => LdapConfig::new_insecure(&server, &base, &bind, &password),
-                (false, false) => LdapConfig::new(&server, &base, &bind, &password),
-            }
-        };
-        // An explicit --ldap-timeout overrides the 10s default baked into the
-        // LdapConfig constructors. Already validated at the CLI boundary (1–600s).
-        if let Some(secs) = ldap_timeout {
-            config.timeout_secs = secs;
-        }
+        let config = build_ldap_config(
+            &server,
+            base_dn,
+            bind_dn,
+            bind_password,
+            insecure_ldap,
+            global_catalog,
+            ldap_signing,
+            ldap_timeout,
+        )?;
         let ldap_resolver = std::sync::Arc::new(LdapResolver::new(config));
         let backend = LdapIdentityBackend::new(ldap_resolver);
 
@@ -1512,6 +1610,126 @@ async fn run_groups(
     Ok(())
 }
 
+/// `members` command: enumerate the direct members of a group (reverse of
+/// `groups`). Requires LDAP — the SAM/LSA path cannot enumerate domain-group
+/// members. Resolves the `--group` input to a group identity via the shared
+/// principal pipeline, then enumerates members (memberOf back-link +
+/// primaryGroupID) with the retained resolver.
+async fn run_members(
+    group: String,
+    server: Option<String>,
+    base_dn: Option<String>,
+    bind_dn: Option<String>,
+    bind_password: Option<String>,
+    opts: GroupsOptions,
+) -> anyhow::Result<()> {
+    let GroupsOptions {
+        insecure_ldap,
+        global_catalog,
+        ldap_signing,
+        ldap_timeout,
+        output,
+        force,
+    } = opts;
+
+    // Validate the group input (SID or identity query) before any I/O.
+    let group_trimmed = group.trim();
+    let group_query = if group_trimmed.starts_with("S-1-") {
+        validate_sid(group_trimmed)
+            .map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?
+            .0
+    } else {
+        validate_identity_query(group_trimmed)
+            .map_err(|e| anyhow::anyhow!("Invalid group name: {e}"))?
+            .0
+    };
+
+    // members requires LDAP — no silent SAM fallback that would return nothing.
+    let conn = validate_connection_inputs(
+        server.as_deref(),
+        base_dn.as_deref(),
+        bind_dn.as_deref(),
+        None,
+        None,
+    )?;
+    let server = conn.server.ok_or_else(|| {
+        anyhow::anyhow!(
+            "The 'members' command requires --server: enumerating a group's members needs \
+             an LDAP connection (the local SAM/LSA path cannot list domain-group members)."
+        )
+    })?;
+    let base_dn = conn.base_dn;
+    let bind_dn = conn.bind_dn;
+    let ldap_timeout = validate_optional_ldap_timeout(ldap_timeout)
+        .map_err(|e| anyhow::anyhow!("Invalid --ldap-timeout: {e}"))?
+        .map(|t| t.0);
+
+    // Validate the export target up front (fail fast, before the LDAP work),
+    // reusing the shared .json/.csv classifier and overwrite policy.
+    let export_status = match &output {
+        Some(out) => {
+            let status = validate_export_path(out)
+                .map_err(|e| anyhow::anyhow!("Invalid export path: {e}"))?;
+            membership_export_format(&status.path().0)?;
+            check_overwrite_policy(&status, force)?;
+            Some(status)
+        }
+        None => None,
+    };
+
+    // Build the connection once and keep the resolver: it both resolves the
+    // group input and enumerates the members.
+    let config = build_ldap_config(
+        &server,
+        base_dn,
+        bind_dn,
+        bind_password,
+        insecure_ldap,
+        global_catalog,
+        ldap_signing,
+        ldap_timeout,
+    )?;
+    let ldap_resolver = std::sync::Arc::new(LdapResolver::new(config));
+    let backend = LdapIdentityBackend::new(ldap_resolver.clone());
+    #[cfg(windows)]
+    let principal_resolver = PrincipalResolver::new(backend, Some(WindowsLsaBackend));
+    #[cfg(not(windows))]
+    let principal_resolver: PrincipalResolver<_, NoLsaBackend> =
+        PrincipalResolver::new(backend, None);
+
+    let resolution = principal_resolver
+        .resolve(PrincipalInput::Auto(group_query.clone()))
+        .await
+        .map_err(|e| anyhow::anyhow!("Group resolution failed: {e}"))?;
+    let group_identity = resolution.identity;
+
+    // The members view only applies to groups — be honest rather than showing
+    // an empty list for a user/computer.
+    if group_identity.kind != adpa_core::model::IdentityKind::Group {
+        return Err(anyhow::anyhow!(
+            "'{}' resolved to a {:?}, not a group — the members view only applies to groups.",
+            group_identity
+                .name
+                .as_deref()
+                .unwrap_or(&group_identity.sid.0),
+            group_identity.kind
+        ));
+    }
+
+    let enumeration = ldap_resolver
+        .enumerate_group_members(&group_identity.sid)
+        .await
+        .map_err(|e| anyhow::anyhow!("Member enumeration failed: {e}"))?;
+    let report = enumeration.into_report(group_identity);
+
+    output::print_group_members_report(&report, &group);
+
+    if let Some(status) = export_status {
+        export_group_members(&report, &status.path().0, force)?;
+    }
+    Ok(())
+}
+
 /// The membership export format the `groups` command supports.
 enum MembershipExportFormat {
     Json,
@@ -1550,12 +1768,22 @@ fn export_membership(
     out_path: &std::path::Path,
     force: bool,
 ) -> anyhow::Result<()> {
-    use std::io::Write as _;
     let content = match membership_export_format(out_path)? {
         MembershipExportFormat::Json => serde_json::to_string_pretty(report)
             .map_err(|e| anyhow::anyhow!("JSON serialization failed: {e}"))?,
         MembershipExportFormat::Csv => membership_csv(report),
     };
+    write_export_file(&content, out_path, force)
+}
+
+/// Writes an export file under the conservative overwrite policy shared by the
+/// `groups` and `members` exports: without `force` an existing file is an error
+/// (`create_new`), only `force` truncates. This is the enforcement — the
+/// fail-fast check in the command runs *before* the (minutes-long) LDAP work,
+/// so a file appearing in that window must not be silently overwritten (deep
+/// review 2026-07-01, finding 2).
+fn write_export_file(content: &str, out_path: &std::path::Path, force: bool) -> anyhow::Result<()> {
+    use std::io::Write as _;
     let mut options = std::fs::OpenOptions::new();
     options.write(true);
     if force {
@@ -1577,6 +1805,40 @@ fn export_membership(
         .map_err(|e| anyhow::anyhow!("Cannot write export '{}': {e}", out_path.display()))?;
     println!("Exported to: {}", out_path.display());
     Ok(())
+}
+
+/// Writes a [`GroupMembersReport`] to `.json` (serde) or `.csv`, under the same
+/// overwrite policy as the membership export.
+fn export_group_members(
+    report: &adpa_core::model::GroupMembersReport,
+    out_path: &std::path::Path,
+    force: bool,
+) -> anyhow::Result<()> {
+    let content = match membership_export_format(out_path)? {
+        MembershipExportFormat::Json => serde_json::to_string_pretty(report)
+            .map_err(|e| anyhow::anyhow!("JSON serialization failed: {e}"))?,
+        MembershipExportFormat::Csv => group_members_csv(report),
+    };
+    write_export_file(&content, out_path, force)
+}
+
+/// CSV of a group's members — one row per member (name, SID, kind, how found,
+/// disabled, privileged role if the member is itself a privileged group).
+fn group_members_csv(report: &adpa_core::model::GroupMembersReport) -> String {
+    let mut s = String::from("member_name,member_sid,kind,via,disabled,privileged_role\n");
+    for m in &report.members {
+        let role = adpa_core::model::privileged_group_role(&m.identity.sid).unwrap_or("");
+        s.push_str(&format!(
+            "{},{},{:?},{},{},{}\n",
+            csv_field(m.identity.name.as_deref().unwrap_or("")),
+            csv_field(&m.identity.sid.0),
+            m.identity.kind,
+            csv_field(m.via.label()),
+            m.identity.disabled,
+            csv_field(role),
+        ));
+    }
+    s
 }
 
 fn membership_csv(report: &adpa_core::model::MembershipReport) -> String {
@@ -1833,6 +2095,72 @@ mod tests {
         let content = std::fs::read_to_string(&path).expect("read back");
         assert!(content.starts_with("group_name,"), "CSV written: {content}");
         let _ = std::fs::remove_file(&path);
+    }
+
+    // --- Group members CSV (reverse view) ---
+
+    #[test]
+    fn group_members_csv_has_header_and_one_row_per_member() {
+        use adpa_core::model::{
+            GroupMembersReport, Identity, IdentityKind, MemberNode, MemberVia, Sid,
+        };
+        let mk = |sid: &str, name: &str, kind, via, disabled| MemberNode {
+            identity: Identity {
+                sid: Sid(sid.into()),
+                name: Some(name.into()),
+                domain: Some("res.lab".into()),
+                kind,
+                disabled,
+                user_principal_name: None,
+                sid_history_count: 0,
+            },
+            via,
+            children: vec![],
+        };
+        let report = GroupMembersReport {
+            group: Identity {
+                sid: Sid("S-1-5-21-1-2-3-513".into()),
+                name: Some("Domain Users".into()),
+                domain: Some("res.lab".into()),
+                kind: IdentityKind::Group,
+                disabled: false,
+                user_principal_name: None,
+                sid_history_count: 0,
+            },
+            members: vec![
+                mk(
+                    "S-1-5-21-1-2-3-1104",
+                    "alice",
+                    IdentityKind::User,
+                    MemberVia::PrimaryGroup,
+                    false,
+                ),
+                // A nested privileged group member with a comma in the name →
+                // exercises CSV quoting and the privileged_role column.
+                mk(
+                    "S-1-5-21-1-2-3-512",
+                    "Domain Admins, Tier0",
+                    IdentityKind::Group,
+                    MemberVia::Direct,
+                    false,
+                ),
+            ],
+            diagnostics: vec![],
+        };
+        let csv = super::group_members_csv(&report);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(
+            lines[0],
+            "member_name,member_sid,kind,via,disabled,privileged_role"
+        );
+        assert_eq!(lines.len(), 3, "header + 2 members");
+        assert!(lines[1].contains("alice") && lines[1].contains("via primaryGroupID"));
+        // Comma in the name is quoted; the member is flagged as Domain Admins.
+        assert!(lines[2].contains("\"Domain Admins, Tier0\""));
+        assert!(
+            lines[2].contains("Domain Admins"),
+            "privileged_role column set"
+        );
     }
 
     // --- Search-base resolution (review 2026-06-13 finding 3) ---

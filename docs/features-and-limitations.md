@@ -38,8 +38,16 @@ that applies.
   Domain/Enterprise/Schema Admins, GPO Creator Owners, Key Admins,
   built-in Operators) flagged as the high-value audit signal. It carries
   the same identity-level diagnostic markers as the rest of Stars, so an
-  incomplete list is never mistaken for a complete one. One direction
-  only (user → groups); see ADR 0053.
+  incomplete list is never mistaken for a complete one. See ADR 0053.
+- **Group → members (reverse direction)** (`adpa members` / the GUI Groups
+  tab "Members" toggle): the complement — *who is in this group?* Lists the
+  direct members with how each was found, **including members whose primary
+  group it is** (found via a `primaryGroupID` search and tagged, so a group
+  like *Domain Users* is not wrongly shown as empty). Members are read via a
+  paged back-link search, so large groups are not silently truncated; a
+  partial read raises an incompleteness marker. A member that is itself a
+  privileged group is flagged. Requires LDAP; lists direct members (v1 —
+  recursive nesting planned). See ADR 0055.
 
 ### NTFS DACL evaluation
 

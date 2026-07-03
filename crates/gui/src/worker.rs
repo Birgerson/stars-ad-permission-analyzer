@@ -284,6 +284,13 @@ pub enum WorkerRequest {
         identity: String,
         ldap: Option<LdapParams>,
     },
+    /// Downward direction of the Groups tab: enumerate the **members** of a
+    /// group (who is in it). Requires LDAP. Mirrors the CLI `members` command.
+    ResolveGroupMembers {
+        /// Raw group string (name, `DOMAIN\group`, or SID).
+        identity: String,
+        ldap: Option<LdapParams>,
+    },
 }
 
 /// One diagnostic marker for GUI display: its one-line reason plus a
@@ -388,6 +395,10 @@ pub struct GroupsViewData {
     pub privileged: Vec<String>,
     pub groups: Vec<GroupMemberRow>,
     pub diagnostics: Vec<DiagnosticRow>,
+    /// `false` for the upward view (groups of an identity), `true` for the
+    /// downward view (members of a group). The GUI relabels counts/headers
+    /// from this flag; the row/diagnostic plumbing is shared.
+    pub is_members: bool,
 }
 
 /// Result from the worker thread to the GUI.
@@ -735,6 +746,12 @@ pub fn spawn_worker(
                     let _ = evt_tx.send(WorkerEvent::GroupsDone(Box::new(result)));
                     notify();
                 }
+                WorkerRequest::ResolveGroupMembers { identity, ldap } => {
+                    let result =
+                        rt.block_on(handle_resolve_group_members(&identity, ldap.as_ref()));
+                    let _ = evt_tx.send(WorkerEvent::GroupsDone(Box::new(result)));
+                    notify();
+                }
             }
         }
     });
@@ -1039,6 +1056,128 @@ fn membership_report_to_view(report: &adpa_core::model::MembershipReport) -> Gro
         privileged,
         groups,
         diagnostics,
+        is_members: false,
+    }
+}
+
+/// Handles the downward direction: enumerate the **members** of a group.
+/// Requires LDAP (the SAM/LSA path cannot list domain-group members). Resolves
+/// the group input via the shared principal pipeline, then enumerates members
+/// (memberOf back-link + primaryGroupID) with the retained resolver.
+async fn handle_resolve_group_members(
+    identity: &str,
+    ldap: Option<&LdapParams>,
+) -> Result<GroupsViewData, String> {
+    info!(identity, "ResolveGroupMembers request");
+    let trimmed = identity.trim();
+    if trimmed.starts_with("S-1-") {
+        validate_sid(trimmed).map_err(|e| format!("Invalid SID: {e}"))?;
+    } else {
+        validate_identity_query(trimmed).map_err(|e| format!("Invalid group name: {e}"))?;
+    }
+    let normalized = validate_connection_inputs(None, None, ldap)?;
+    let params = normalized.ldap.ok_or_else(|| {
+        "Listing a group's members requires an LDAP connection (set the resolution mode to \
+         LDAPS / Plain / Global Catalog / Signed). The local SAM/LSA path cannot enumerate \
+         domain-group members."
+            .to_string()
+    })?;
+
+    let config = params.to_config();
+    let resolver = std::sync::Arc::new(LdapResolver::new(config));
+    let backend = LdapIdentityBackend::new(resolver.clone());
+    #[cfg(windows)]
+    let principal = PrincipalResolver::new(backend, Some(WindowsLsaBackend));
+    #[cfg(not(windows))]
+    let principal: PrincipalResolver<_, NoLsaBackend> = PrincipalResolver::new(backend, None);
+
+    let resolution = principal
+        .resolve(PrincipalInput::Auto(trimmed.to_owned()))
+        .await
+        .map_err(|e| format!("Group resolution failed: {e}"))?;
+    let group = resolution.identity;
+    if group.kind != IdentityKind::Group {
+        return Err(format!(
+            "'{}' is a {:?}, not a group — the members view only applies to groups.",
+            group.name.as_deref().unwrap_or(&group.sid.0),
+            group.kind
+        ));
+    }
+
+    let enumeration = resolver
+        .enumerate_group_members(&group.sid)
+        .await
+        .map_err(|e| format!("Member enumeration failed: {e}"))?;
+    let report = enumeration.into_report(group);
+    Ok(group_members_report_to_view(&report))
+}
+
+/// Maps a [`GroupMembersReport`] into the shared [`GroupsViewData`] so the
+/// Groups tab renders the downward direction with the same widgets. The group
+/// occupies the identity header; each member becomes a row whose `origin`
+/// carries how it was found plus its kind/disabled state.
+fn group_members_report_to_view(report: &adpa_core::model::GroupMembersReport) -> GroupsViewData {
+    use adpa_core::model::privileged_group_role;
+
+    let name = report
+        .group
+        .name
+        .clone()
+        .unwrap_or_else(|| report.group.sid.0.clone());
+    let identity_label = match &report.group.domain {
+        Some(d) if !d.is_empty() => format!("{d}\\{name}"),
+        _ => name,
+    };
+    let (total, via_primary) = report.direct_counts();
+    let direct = total - via_primary;
+    let privileged: Vec<String> = report
+        .privileged_members()
+        .into_iter()
+        .map(|(_, role)| format!("member: {role}"))
+        .collect();
+    let groups: Vec<GroupMemberRow> = report
+        .members
+        .iter()
+        .map(|m| {
+            let role = privileged_group_role(&m.identity.sid);
+            let mut origin = format!("{} · {:?}", m.via.label(), m.identity.kind);
+            if m.identity.disabled {
+                origin.push_str(" · DISABLED");
+            }
+            GroupMemberRow {
+                name: m
+                    .identity
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| m.identity.sid.0.clone()),
+                sid: m.identity.sid.0.clone(),
+                origin,
+                privileged: role.is_some(),
+                role: role.unwrap_or("").to_owned(),
+            }
+        })
+        .collect();
+    let diagnostics: Vec<DiagnosticRow> = report
+        .diagnostics
+        .iter()
+        .map(|d| DiagnosticRow {
+            text: d.summary(),
+            level: diag_level(d.severity()),
+        })
+        .collect();
+    GroupsViewData {
+        identity_label,
+        identity_sid: report.group.sid.0.clone(),
+        status: String::new(), // a group has no enabled/disabled state
+        kind: format!("{:?}", report.group.kind),
+        ad_connected: true, // members always requires LDAP
+        sid_history_count: report.group.sid_history_count as i32,
+        total: total as i32,
+        direct: direct as i32,
+        privileged,
+        groups,
+        diagnostics,
+        is_members: true,
     }
 }
 
@@ -2120,6 +2259,69 @@ mod tests {
                 .is_empty(),
             "a group must not show an Active/DISABLED status"
         );
+    }
+
+    #[test]
+    fn group_members_view_maps_via_kind_and_counts() {
+        use adpa_core::model::{
+            GroupMembersReport, Identity, IdentityKind, MemberNode, MemberVia, Sid,
+        };
+        let mk = |sid: &str, name: &str, kind, via, disabled| MemberNode {
+            identity: Identity {
+                sid: Sid(sid.into()),
+                name: Some(name.into()),
+                domain: Some("CORP".into()),
+                kind,
+                disabled,
+                user_principal_name: None,
+                sid_history_count: 0,
+            },
+            via,
+            children: vec![],
+        };
+        let report = GroupMembersReport {
+            group: Identity {
+                sid: Sid("S-1-5-21-1-2-3-513".into()),
+                name: Some("Domain Users".into()),
+                domain: Some("CORP".into()),
+                kind: IdentityKind::Group,
+                disabled: false,
+                user_principal_name: None,
+                sid_history_count: 0,
+            },
+            members: vec![
+                mk(
+                    "S-1-5-21-1-2-3-1104",
+                    "alice",
+                    IdentityKind::User,
+                    MemberVia::Direct,
+                    false,
+                ),
+                mk(
+                    "S-1-5-21-1-2-3-1105",
+                    "svc",
+                    IdentityKind::User,
+                    MemberVia::PrimaryGroup,
+                    true,
+                ),
+            ],
+            diagnostics: vec![],
+        };
+        let view = group_members_report_to_view(&report);
+        assert!(view.is_members, "downward view flag");
+        assert_eq!(view.identity_label, "CORP\\Domain Users");
+        assert!(
+            view.status.is_empty(),
+            "a group has no Active/DISABLED status"
+        );
+        assert_eq!(view.total, 2);
+        assert_eq!(view.direct, 1, "one direct, one via primaryGroupID");
+        // The row origin carries how the member was found + its kind, and the
+        // disabled flag surfaces in the label.
+        let svc = view.groups.iter().find(|r| r.name == "svc").unwrap();
+        assert!(svc.origin.contains("via primaryGroupID"));
+        assert!(svc.origin.contains("User"));
+        assert!(svc.origin.contains("DISABLED"));
     }
 
     // (sentinel bug from review finding 1).

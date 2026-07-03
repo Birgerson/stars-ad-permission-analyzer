@@ -408,6 +408,27 @@ fn write_permissions_table(
                             .to_string(),
                     );
                 }
+                // The two members-view markers do not occur on a permission
+                // report (they belong to the reverse group→members view), but
+                // the match is exhaustive, so they are rendered for
+                // completeness with the same neutral/high mapping as elsewhere.
+                PermissionDiagnostic::MembersViaPrimaryGroupIncluded { count } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-neutral\" \
+                         title=\"{count} member(s) were found via their primaryGroupID \
+                         and included so the member count is complete.\">ℹ {count} via \
+                         primaryGroupID</span>"
+                    ));
+                }
+                PermissionDiagnostic::GroupMemberEnumerationIncomplete { reason } => {
+                    let safe = escape_html(reason);
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-high\" \
+                         title=\"Group members could not be enumerated completely \
+                         ({safe}); the list is a lower bound.\">⚠ member list \
+                         incomplete</span>"
+                    ));
+                }
             }
         }
         let diagnostics = if diag_parts.is_empty() {

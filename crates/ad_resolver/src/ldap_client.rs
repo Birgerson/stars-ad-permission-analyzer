@@ -347,6 +347,48 @@ pub async fn search_transitive_groups_for_member(
     search_paged_with_limit(ldap, base_dn, &filter, MEMBERSHIP_ATTRS, None).await
 }
 
+/// Direct members of a group by its `member` **back-link** (`memberOf`).
+///
+/// Instead of reading the group's multi-valued `member` attribute — which AD
+/// returns in 1500-value ranges (`member;range=0-1499`) and would truncate
+/// silently if the range paging were mishandled — this searches for the objects
+/// that carry the group's DN in their `memberOf`. That is a normal paged
+/// search (`PagedResults`), so the standard, tested paging applies and there is
+/// no range boundary to get wrong. `memberOf` is AD's referential back-link of
+/// `member`, so it returns exactly the group's direct members. Note this does
+/// **not** include `primaryGroupID` members — those are fetched separately (see
+/// [`search_by_primary_group`]). ADR 0055.
+pub async fn search_members_by_backlink(
+    ldap: &mut Ldap,
+    base_dn: &str,
+    group_dn: &str,
+) -> Result<Vec<RawEntry>, CoreError> {
+    let escaped = escape_dn_for_filter(group_dn);
+    let filter = format!("(memberOf={escaped})");
+    debug!("LDAP member back-link search: base={base_dn} group={group_dn}");
+    search_paged_with_limit(ldap, base_dn, &filter, IDENTITY_ATTRS, None).await
+}
+
+/// Members whose **primary** group is the group with the given RID.
+///
+/// `primaryGroupID` holds the RID of a user's/computer's primary group; those
+/// members are **not** listed in the group's `member` attribute nor found via
+/// the `memberOf` back-link. Classic case: every user's primary group is Domain
+/// Users (RID 513), so without this query Domain Users appears to have zero
+/// members. The attribute exists only on security principals (users,
+/// computers), so `(primaryGroupID=<rid>)` returns exactly the primary-group
+/// members. `rid` is numeric (the last component of the group SID), so no
+/// filter escaping is required. ADR 0055.
+pub async fn search_by_primary_group(
+    ldap: &mut Ldap,
+    base_dn: &str,
+    rid: u32,
+) -> Result<Vec<RawEntry>, CoreError> {
+    let filter = format!("(primaryGroupID={rid})");
+    debug!("LDAP primaryGroupID search: base={base_dn} rid={rid}");
+    search_paged_with_limit(ldap, base_dn, &filter, IDENTITY_ATTRS, None).await
+}
+
 ///
 /// control so that results larger than `MaxPageSize` are not silently
 /// truncated. An optional `client_limit` stops collection once enough

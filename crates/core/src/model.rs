@@ -387,6 +387,83 @@ impl MembershipReport {
     }
 }
 
+/// How a member ended up in a group — the audit-relevant distinction between
+/// the two AD enumeration sources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MemberVia {
+    /// Listed in the group's `member` attribute (equivalently, the object
+    /// carries the group's DN in its `memberOf` back-link).
+    Direct,
+    /// The group is the member's **primary** group (`primaryGroupID`). Such
+    /// members are **not** in `member` — classically every user has Domain
+    /// Users as primary group, so a naive `member`-only read reports zero.
+    PrimaryGroup,
+}
+
+impl MemberVia {
+    /// Short, stable label for the CLI/GUI ("direct" / "via primaryGroupID").
+    pub fn label(&self) -> &'static str {
+        match self {
+            MemberVia::Direct => "direct",
+            MemberVia::PrimaryGroup => "via primaryGroupID",
+        }
+    }
+}
+
+/// One member of a group. `children` stays empty in v1 (direct members only);
+/// v2 will populate it for nested subgroups (recursive tree with cycle
+/// detection), which is why the field exists now — the serialized shape stays
+/// stable across the two versions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemberNode {
+    pub identity: Identity,
+    pub via: MemberVia,
+    /// Nested members when this member is itself a group and recursion is on
+    /// (v2). Empty for direct-only enumeration and for non-group members.
+    #[serde(default)]
+    pub children: Vec<MemberNode>,
+}
+
+/// The reverse of [`MembershipReport`]: **who is in this group?** — the group
+/// plus its members (users and subgroups). Read-only, no path/ACL/rights, same
+/// scope discipline as the upward view. Rendered by the CLI `members` command
+/// and the GUI Groups tab (direction "Members") from one shared structure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupMembersReport {
+    /// The group whose members were enumerated.
+    pub group: Identity,
+    /// Direct members: those in `member` (`MemberVia::Direct`) plus those whose
+    /// primary group is this group (`MemberVia::PrimaryGroup`). In v1 all nodes
+    /// are direct; `children` is always empty.
+    pub members: Vec<MemberNode>,
+    /// Resolution-level markers (primary-group inclusion, incompleteness).
+    pub diagnostics: Vec<PermissionDiagnostic>,
+}
+
+impl GroupMembersReport {
+    /// Count of direct members (top level), split by source — the headline the
+    /// CLI/GUI show ("N members — M direct, K via primaryGroupID").
+    pub fn direct_counts(&self) -> (usize, usize) {
+        let via_primary = self
+            .members
+            .iter()
+            .filter(|m| matches!(m.via, MemberVia::PrimaryGroup))
+            .count();
+        (self.members.len(), via_primary)
+    }
+
+    /// Members that are themselves a privileged group — a nested privileged
+    /// group is as sensitive here as a privileged parent is in the upward view.
+    pub fn privileged_members(&self) -> Vec<(&Sid, &'static str)> {
+        self.members
+            .iter()
+            .filter_map(|m| {
+                privileged_group_role(&m.identity.sid).map(|role| (&m.identity.sid, role))
+            })
+            .collect()
+    }
+}
+
 /// ACE type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AceKind {
@@ -822,6 +899,21 @@ pub enum PermissionDiagnostic {
     /// markers, which already set `incomplete = true`, so it deliberately
     /// does **not** raise a second incompleteness trigger. See ADR 0052.
     TrustBoundaryEffectsNotModeled,
+
+    /// The group-members view (reverse direction) included `count` members
+    /// found via their **`primaryGroupID`** — accounts whose primary group is
+    /// this group and which therefore do **not** appear in the `member`
+    /// attribute (classically every user for Domain Users). This marker makes
+    /// the *inclusion* transparent so the number is trusted; it is **not** an
+    /// incompleteness trigger (those members were found, not missed). Neutral.
+    MembersViaPrimaryGroupIncluded { count: usize },
+
+    /// The group-members view could not enumerate the group's members
+    /// completely — e.g. an LDAP page/read failed partway. Rather than
+    /// presenting a short list as if it were the whole group, the report
+    /// carries this trigger so the count is treated as a lower bound.
+    /// `reason` names what went wrong. Incompleteness trigger; Concern.
+    GroupMemberEnumerationIncomplete { reason: String },
 }
 
 /// **Visual attention** of a [`PermissionDiagnostic`] — "do I need to look?".
@@ -921,6 +1013,15 @@ impl PermissionDiagnostic {
                  SID filtering and Selective Authentication may reduce actual access (not modeled)."
                     .to_owned()
             }
+            PermissionDiagnostic::MembersViaPrimaryGroupIncluded { count } => format!(
+                "{count} member(s) were found via their primaryGroupID — accounts whose \
+                 primary group is this group do not appear in the 'member' attribute and are \
+                 included here so the count is complete."
+            ),
+            PermissionDiagnostic::GroupMemberEnumerationIncomplete { reason } => format!(
+                "Group members could not be enumerated completely ({reason}); the member list \
+                 is a lower bound and may be missing entries."
+            ),
         }
     }
 
@@ -942,6 +1043,7 @@ impl PermissionDiagnostic {
                 | PermissionDiagnostic::GroupResolutionViaGlobalCatalog
                 | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
                 | PermissionDiagnostic::SidHistoryPresent { .. }
+                | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
         )
     }
 
@@ -959,6 +1061,7 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::DomainGroupRecursionIncomplete
             | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
             | PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
+            | PermissionDiagnostic::MembersViaPrimaryGroupIncluded { .. }
             | PermissionDiagnostic::GroupResolutionViaGlobalCatalog => DiagnosticSeverity::Neutral,
             // Worth a look — a hidden Deny among skipped ACEs could change the
             // result.
@@ -968,6 +1071,7 @@ impl PermissionDiagnostic {
             PermissionDiagnostic::SidHistoryPresent { .. }
             | PermissionDiagnostic::IdentityLookupFailed { .. }
             | PermissionDiagnostic::GroupResolutionFailed { .. }
+            | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
             | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. } => {
                 DiagnosticSeverity::Concern
             }
@@ -1391,5 +1495,116 @@ mod tests {
         let privileged = report.privileged();
         assert_eq!(privileged.len(), 1);
         assert_eq!(privileged[0].1, "Domain Admins");
+    }
+
+    // --- Group → Members (reverse view) ---
+
+    fn member(sid: &str, name: &str, kind: IdentityKind, via: MemberVia) -> MemberNode {
+        MemberNode {
+            identity: Identity {
+                sid: Sid(sid.into()),
+                name: Some(name.into()),
+                domain: Some("CORP".into()),
+                kind,
+                disabled: false,
+                user_principal_name: None,
+                sid_history_count: 0,
+            },
+            via,
+            children: vec![],
+        }
+    }
+
+    fn members_report(members: Vec<MemberNode>) -> GroupMembersReport {
+        GroupMembersReport {
+            group: Identity {
+                sid: Sid("S-1-5-21-1-2-3-513".into()),
+                name: Some("Domain Users".into()),
+                domain: Some("CORP".into()),
+                kind: IdentityKind::Group,
+                disabled: false,
+                user_principal_name: None,
+                sid_history_count: 0,
+            },
+            members,
+            diagnostics: vec![],
+        }
+    }
+
+    #[test]
+    fn member_via_labels_are_stable() {
+        assert_eq!(MemberVia::Direct.label(), "direct");
+        assert_eq!(MemberVia::PrimaryGroup.label(), "via primaryGroupID");
+    }
+
+    #[test]
+    fn direct_counts_splits_total_and_primary_group() {
+        let report = members_report(vec![
+            member(
+                "S-1-5-21-1-2-3-1104",
+                "alice",
+                IdentityKind::User,
+                MemberVia::Direct,
+            ),
+            member(
+                "S-1-5-21-1-2-3-1105",
+                "bob",
+                IdentityKind::User,
+                MemberVia::PrimaryGroup,
+            ),
+            member(
+                "S-1-5-21-1-2-3-1106",
+                "carol",
+                IdentityKind::User,
+                MemberVia::PrimaryGroup,
+            ),
+        ]);
+        let (total, via_primary) = report.direct_counts();
+        assert_eq!(total, 3);
+        assert_eq!(via_primary, 2);
+    }
+
+    #[test]
+    fn privileged_members_flags_nested_privileged_group() {
+        let report = members_report(vec![
+            member(
+                "S-1-5-21-1-2-3-1104",
+                "alice",
+                IdentityKind::User,
+                MemberVia::Direct,
+            ),
+            // Domain Admins nested as a member — as sensitive here as a
+            // privileged parent is in the upward view.
+            member(
+                "S-1-5-21-1-2-3-512",
+                "Domain Admins",
+                IdentityKind::Group,
+                MemberVia::Direct,
+            ),
+        ]);
+        let priv_members = report.privileged_members();
+        assert_eq!(priv_members.len(), 1);
+        assert_eq!(priv_members[0].1, "Domain Admins");
+    }
+
+    #[test]
+    fn primary_group_inclusion_marker_is_neutral_and_not_incompleteness() {
+        let d = PermissionDiagnostic::MembersViaPrimaryGroupIncluded { count: 2000 };
+        assert_eq!(d.severity(), DiagnosticSeverity::Neutral);
+        assert!(
+            !d.is_incompleteness_trigger(),
+            "primary-group members were included, not missed"
+        );
+        assert!(d.summary().contains("2000"));
+    }
+
+    #[test]
+    fn member_enumeration_incomplete_marker_is_concern_and_incompleteness() {
+        let d = PermissionDiagnostic::GroupMemberEnumerationIncomplete {
+            reason: "LDAP page read failed".into(),
+        };
+        assert_eq!(d.severity(), DiagnosticSeverity::Concern);
+        assert!(d.is_incompleteness_trigger());
+        assert!(d.summary().contains("LDAP page read failed"));
     }
 }

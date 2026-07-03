@@ -4,8 +4,9 @@
 //! Formatted console output for the analyze command.
 
 use adpa_core::model::{
-    privileged_group_role, AceKind, EffectivePermission, FileSystemObject, GroupMembership,
-    IdentityKind, MembershipReport, PermissionDiagnostic, RiskFinding, RiskSeverity,
+    privileged_group_role, AceKind, EffectivePermission, FileSystemObject, GroupMembersReport,
+    GroupMembership, IdentityKind, MembershipReport, PermissionDiagnostic, RiskFinding,
+    RiskSeverity,
 };
 use permission_engine::NormalizedRights;
 
@@ -336,6 +337,17 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      quarantine and Selective Authentication may reduce actual");
                 println!("      access — these runtime trust effects are not modeled.");
             }
+            PermissionDiagnostic::MembersViaPrimaryGroupIncluded { count } => {
+                println!("  [i] {count} member(s) were found via their primaryGroupID.");
+                println!("      Accounts whose primary group is this group do not appear in");
+                println!("      the 'member' attribute; they are included so the count is");
+                println!("      complete (e.g. Domain Users).");
+            }
+            PermissionDiagnostic::GroupMemberEnumerationIncomplete { reason } => {
+                println!("  [!] Group members could not be enumerated completely: {reason}.");
+                println!("      The member list is a LOWER BOUND and may be missing entries.");
+                println!("      Treat as incomplete.");
+            }
         }
     }
 }
@@ -422,6 +434,73 @@ pub fn print_membership_report(report: &MembershipReport, user_input: &str) {
             .as_deref()
             .unwrap_or(&report.identity.sid.0)
     );
+}
+
+/// Prints the group-members report (`members` command): the group header, the
+/// member-count split (direct vs. via primaryGroupID), any members that are
+/// themselves privileged groups, the member list with how each was found, the
+/// shared diagnostics block, and a hand-off hint. The reverse of
+/// [`print_membership_report`].
+pub fn print_group_members_report(report: &GroupMembersReport, group_input: &str) {
+    println!();
+    header("AD Permission Analyzer  \u{00B7}  Group Members Report");
+
+    section("Group");
+    let group_name = report.group.name.as_deref().unwrap_or(group_input);
+    let domain_prefix = report
+        .group
+        .domain
+        .as_ref()
+        .map(|d| format!("{d}\\"))
+        .unwrap_or_default();
+    println!("  Group     : {domain_prefix}{group_name}");
+    println!("            : ({})", report.group.sid.0);
+    println!("  Kind      : {:?}", report.group.kind);
+    if let Some(role) = privileged_group_role(&report.group.sid) {
+        println!("  [!] This is a privileged group: {role}");
+    }
+
+    let privileged = report.privileged_members();
+    if !privileged.is_empty() {
+        section("Privileged members");
+        for (sid, role) in &privileged {
+            println!("  [!] {role}  ({})", sid.0);
+        }
+    }
+
+    let (total, via_primary) = report.direct_counts();
+    let direct = total - via_primary;
+    section(&format!(
+        "Members ({total} total, {direct} direct, {via_primary} via primaryGroupID)"
+    ));
+    if report.members.is_empty() {
+        println!("  (no members)");
+    } else {
+        for m in &report.members {
+            let name = m.identity.name.as_deref().unwrap_or(&m.identity.sid.0);
+            let priv_tag = if privileged_group_role(&m.identity.sid).is_some() {
+                "  [! privileged]"
+            } else {
+                ""
+            };
+            let disabled_tag = if m.identity.disabled {
+                "  [DISABLED]"
+            } else {
+                ""
+            };
+            println!(
+                "  {name}  ({})  {:?}{priv_tag}{disabled_tag}",
+                m.identity.sid.0, m.identity.kind
+            );
+            println!("      {}", m.via.label());
+        }
+    }
+
+    print_diagnostics(&report.diagnostics);
+
+    section("Next");
+    println!("  \u{2192} List the groups a member itself belongs to:");
+    println!("      adpa groups --user <member> --server <dc> ...");
 }
 
 pub fn print_risk_findings(findings: &[RiskFinding]) {

@@ -169,6 +169,13 @@ group) a member of?"* — with **no** path, ACL, or rights computation.
 Previously you had to analyse some path just to read the resolved-groups
 panel; this tab answers the question directly.
 
+**Direction:** a toggle at the top switches between:
+
+- **Member of** (default, upward) — the groups the identity is in
+  (described below);
+- **Members** (downward) — *who is in this group?* See
+  [Members of a group](#members-of-a-group-reverse-direction) below.
+
 **Fields:**
 
 - **Identity** — one field for any form (local name, `DOMAIN\user`, UPN,
@@ -200,8 +207,37 @@ panel; this tab answers the question directly.
   Global Catalog, outside-base, `sIDHistory`, a resolution timeout), so
   an incomplete list never looks complete.
 
-This view is **one direction only** (user → groups). To check what the
-identity can actually access, switch to `Analyze` or `Scan Tree`.
+To check what the identity can actually access, switch to `Analyze` or
+`Scan Tree`.
+
+#### Members of a group (reverse direction)
+
+Set the **Direction** toggle to **Members** and enter a **group** (name,
+`DOMAIN\group`, or SID) to list **who is in it**. This answers the reverse
+question and shows, for each member, its name, SID, kind, and **how it was
+found**.
+
+Two things make this trustworthy where naive tools get it wrong:
+
+- **Primary-group members are included.** A user whose *primary* group is
+  the one you asked about does **not** appear in the group's `member`
+  attribute — classically, nearly every user has *Domain Users* as their
+  primary group, so a naive listing shows *Domain Users* as empty. Stars
+  runs a second lookup and tags those members **"via primaryGroupID"**, and
+  a marker states how many were added that way, so the count is complete.
+- **Large groups are not truncated.** Members are read via a paged search,
+  so a group with thousands of members is enumerated fully; if a lookup is
+  interrupted, an **incompleteness marker** flags the list as a lower bound
+  rather than presenting a short list as the whole group.
+
+A member that is **itself a privileged group** (e.g. *Domain Admins* nested
+inside another group) is flagged just like a privileged parent is in the
+upward view.
+
+**Requires LDAP:** enumerating a domain group's members needs a directory
+connection, so set the resolution mode to LDAPS / Plain / Global Catalog /
+Signed (not *Off*). The current v1 lists **direct** members; recursive
+nesting (the full member tree) is planned.
 
 ### `Scan Tree` tab — recursive directory scan
 
@@ -678,6 +714,31 @@ recursively resolved). Privileged memberships (Domain Admins and the
 like) are flagged, and `--output` writes `.json` or `.csv`. In large or
 deeply nested domains, raise `--ldap-timeout` (see
 [Large or deeply nested domains](#large-or-deeply-nested-domains----ldap-timeout)).
+
+### List a group's members
+
+The reverse of `groups` — *who is in this group?* (direct members plus
+primary-group members):
+
+```powershell
+adpa members --group "CORP\Domain Users" `
+    --server "dc01.corp.local" --base-dn "DC=corp,DC=local" `
+    --bind-dn "CN=stars-svc,CN=Users,DC=corp,DC=local" `
+    --ldap-timeout 60 --output "domain-users-members.csv"
+```
+
+Each member is listed with its name, SID, kind, and **how it was found** —
+`direct` or `via primaryGroupID`. The primary-group lookup is what makes
+*Domain Users* (and any group that is someone's primary group) list its
+members at all: those accounts are not in the group's `member` attribute,
+so a naive listing would show them as empty. A marker states how many
+members were added that way.
+
+Unlike `groups`, **`members` requires `--server`** (LDAP): the local
+SAM/LSA path cannot enumerate a domain group's members, so Stars errors
+rather than returning an empty list. A nested **privileged** group member
+is flagged, and `--output` writes `.json` or `.csv`. This lists **direct**
+members; recursive nesting is planned.
 
 ### More options
 

@@ -616,6 +616,13 @@ slint::slint! {
         // resolved like the Analyze/Scan tabs. No path — this tab answers
         // "which groups is this identity in?", not "what can it access?".
         in-out property <string> g-identity;
+        // Direction: 0 = "Member of" (groups this identity is in, upward),
+        // 1 = "Members" (who is in this group, downward). The downward view
+        // requires LDAP and mirrors the CLI `members` command.
+        in-out property <int>    g-direction: 0;
+        // Set by the worker result so the labels match what was computed
+        // (independent of the toggle, which the user may flip before re-running).
+        in property <bool>       g-result-is-members;
         // Live suggestion list while typing the identity — same source and
         // behaviour as the Analyze tab (local NetAPI snapshot, filtered).
         in property <[IdentitySuggestionVm]> g-suggestions;
@@ -1036,8 +1043,26 @@ slint::slint! {
                                 title: "Identity";
                                 VerticalBox {
                                     spacing: Theme.spacing-sm;
+                                    HorizontalBox {
+                                        spacing: Theme.spacing-sm;
+                                        padding: 0px;
+                                        Text { text: "Direction:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                        ComboBox {
+                                            model: [
+                                                "Member of — groups this identity is in",
+                                                "Members — who is in this group",
+                                            ];
+                                            current-index <=> root.g-direction;
+                                            horizontal-stretch: 1;
+                                        }
+                                        HelpTip {
+                                            tip: "Which way to look?\n\n• Member of (upward): the recursive groups the identity belongs to. Works with or without LDAP (SAM/LSA on a DC covers direct groups).\n\n• Members (downward): who is in the given group — direct members plus accounts whose primary group it is (e.g. Domain Users). Requires LDAP; the local SAM/LSA path cannot enumerate domain-group members.";
+                                        }
+                                    }
                                     Text {
-                                        text: "Which groups is a user (or group) in? Recursive memberships only — no path, no rights.";
+                                        text: root.g-direction == 1
+                                            ? "Who is in this group? Direct members + primary-group members (e.g. Domain Users). Requires LDAP. No path, no rights."
+                                            : "Which groups is a user (or group) in? Recursive memberships only — no path, no rights.";
                                         color: Theme.text-muted;
                                         font-size: 11px;
                                         wrap: word-wrap;
@@ -1045,7 +1070,7 @@ slint::slint! {
                                     GridBox {
                                         spacing: Theme.spacing-sm;
                                         Row {
-                                            Text { text: "Identity:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            Text { text: root.g-direction == 1 ? "Group:" : "Identity:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
                                             LineEdit {
                                                 placeholder-text: "local name · DOMAIN\\user · user@domain.lab · S-1-5-21-…";
                                                 text <=> root.g-identity;
@@ -1173,7 +1198,7 @@ slint::slint! {
                                 spacing: Theme.spacing-sm;
                                 padding: 0px;
                                 Button {
-                                    text: "👥 Show groups";
+                                    text: root.g-direction == 1 ? "👥 Show members" : "👥 Show groups";
                                     enabled: !root.g-is-running;
                                     clicked => { root.groups-resolve-clicked(); }
                                 }
@@ -1197,7 +1222,7 @@ slint::slint! {
                                         text: "sIDHistory: " + root.g-sid-history + " (see diagnostics)";
                                         color: Theme.danger;
                                     }
-                                    if !root.g-ad-connected: Text {
+                                    if !root.g-ad-connected && !root.g-result-is-members: Text {
                                         text: "⚠ No AD/LDAP connection — only direct (SAM/LSA) groups resolved.";
                                         color: Theme.warning;
                                         wrap: word-wrap;
@@ -1220,11 +1245,13 @@ slint::slint! {
                                     }
 
                                     Text {
-                                        text: "Group memberships (" + root.g-total + " total, " + root.g-direct + " direct)";
+                                        text: root.g-result-is-members
+                                            ? "Members (" + root.g-total + " total, " + root.g-direct + " direct, " + (root.g-total - root.g-direct) + " via primaryGroupID)"
+                                            : "Group memberships (" + root.g-total + " total, " + root.g-direct + " direct)";
                                         font-weight: 700;
                                         color: Theme.text-primary;
                                     }
-                                    if root.g-total == 0: Text { text: "(none resolved)"; color: Theme.text-muted; }
+                                    if root.g-total == 0: Text { text: root.g-result-is-members ? "(no members)" : "(none resolved)"; color: Theme.text-muted; }
                                     for g in root.g-groups: VerticalLayout {
                                         padding-top: 2px;
                                         padding-bottom: 2px;
@@ -2492,9 +2519,17 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
                 ui.get_g_ldap_password().to_string(),
                 ui.get_g_ldap_timeout(),
             );
+            let members_direction = ui.get_g_direction() == 1;
             ui.set_g_is_running(true);
             ui.set_g_has_result(false);
-            ui.set_g_status("Resolving group memberships...".into());
+            ui.set_g_status(
+                if members_direction {
+                    "Enumerating group members..."
+                } else {
+                    "Resolving group memberships..."
+                }
+                .into(),
+            );
             ui.set_g_status_is_error(false);
             // Pass the raw identity (name / DOMAIN\user / UPN / SID) instead of
             // pre-resolving it via the local LSA. With LDAP configured the
@@ -2502,7 +2537,12 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             // tab reaches cross-domain / GC / LDAP-only identities exactly like
             // the CLI (review 2026-07-01 finding 1); without LDAP the worker
             // still uses the local LSA/SAM path.
-            if let Err(e) = req_tx.send(WorkerRequest::ResolveGroups { identity, ldap }) {
+            let request = if members_direction {
+                WorkerRequest::ResolveGroupMembers { identity, ldap }
+            } else {
+                WorkerRequest::ResolveGroups { identity, ldap }
+            };
+            if let Err(e) = req_tx.send(request) {
                 ui.set_g_is_running(false);
                 ui.set_g_status(format!("Worker not reachable: {e}").into());
                 ui.set_g_status_is_error(true);
@@ -2557,7 +2597,19 @@ fn handle_groups_done(ui: &MainWindow, result: Result<GroupsViewData, String>) {
         Ok(data) => {
             ui.set_g_has_result(true);
             ui.set_g_status_is_error(false);
-            ui.set_g_status(format!("{} group(s) — {} direct", data.total, data.direct).into());
+            // Tie the labels to what was actually computed, not the current
+            // toggle (the user may flip the toggle before re-running).
+            ui.set_g_result_is_members(data.is_members);
+            let status = if data.is_members {
+                let via_primary = data.total - data.direct;
+                format!(
+                    "{} member(s) — {} direct, {} via primaryGroupID",
+                    data.total, data.direct, via_primary
+                )
+            } else {
+                format!("{} group(s) — {} direct", data.total, data.direct)
+            };
+            ui.set_g_status(status.into());
             ui.set_g_identity_label(data.identity_label.into());
             ui.set_g_identity_sid(data.identity_sid.into());
             // No enabled/disabled status for non-account kinds (groups): show

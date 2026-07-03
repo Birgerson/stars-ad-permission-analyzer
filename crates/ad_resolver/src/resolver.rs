@@ -25,7 +25,10 @@ use tracing::{debug, warn};
 
 use adpa_core::{
     error::CoreError,
-    model::{GroupMembership, Identity, IdentityKind, MembershipPath, MembershipPathSource, Sid},
+    model::{
+        GroupMembership, Identity, IdentityKind, MemberNode, MemberVia, MembershipPath,
+        MembershipPathSource, Sid,
+    },
     traits::IdentityResolver,
 };
 
@@ -78,6 +81,102 @@ impl LdapResolver {
                         Ok(Some((sid, identity)))
                     }
                 }
+            },
+        )
+        .await
+    }
+
+    /// Enumerate the **direct members** of a group (reverse direction).
+    ///
+    /// Looks the group up by SID to get its DN, then combines two sources so no
+    /// member is silently missed (ADR 0055):
+    /// 1. the `member` back-link (`(memberOf=<groupDN>)`, paged) —
+    ///    `MemberVia::Direct`;
+    /// 2. `primaryGroupID` members (`(primaryGroupID=<RID>)`, paged) —
+    ///    `MemberVia::PrimaryGroup` — which are **not** in `member`.
+    ///
+    /// If exactly one of the two searches fails the other's results are still
+    /// returned, with an `incomplete` reason (graceful degradation, no silent
+    /// skip). If the group itself is not found, that is an error. Members are
+    /// deduplicated by SID (a member cannot legitimately be in both sets, but
+    /// the guard keeps the count honest).
+    pub async fn enumerate_group_members(
+        &self,
+        group_sid: &Sid,
+    ) -> Result<GroupMemberEnumeration, CoreError> {
+        let rid = rid_from_sid(group_sid).ok_or_else(|| {
+            CoreError::SidResolution(format!("Cannot derive RID from group SID: {}", group_sid.0))
+        })?;
+        ldap_client::with_timeout(
+            "enumerate_group_members",
+            ldap_client::ldap_timeout(&self.config),
+            async {
+                let mut ldap = ldap_client::connect(&self.config).await?;
+                let base_dn = &self.config.base_dn;
+
+                // 1. Resolve the group's DN (needed for the memberOf back-link).
+                let group_entry =
+                    match ldap_client::search_by_sid(&mut ldap, base_dn, &group_sid.0).await {
+                        Ok(Some(e)) => e,
+                        Ok(None) => {
+                            ldap_client::disconnect(ldap).await;
+                            return Err(CoreError::SidResolution(format!(
+                                "Group not found in the configured base: {}",
+                                group_sid.0
+                            )));
+                        }
+                        Err(e) => {
+                            ldap_client::disconnect(ldap).await;
+                            return Err(e);
+                        }
+                    };
+                let group_dn = group_entry.dn.clone();
+
+                // 2. Direct members via the memberOf back-link, and
+                // 3. primaryGroupID members — degrade gracefully if one fails.
+                let backlink =
+                    ldap_client::search_members_by_backlink(&mut ldap, base_dn, &group_dn).await;
+                let primary = ldap_client::search_by_primary_group(&mut ldap, base_dn, rid).await;
+                ldap_client::disconnect(ldap).await;
+
+                let mut members: Vec<MemberNode> = Vec::new();
+                let mut seen: HashSet<String> = HashSet::new();
+                let mut incomplete: Option<String> = None;
+
+                match backlink {
+                    Ok(entries) => {
+                        push_member_entries(&entries, MemberVia::Direct, &mut members, &mut seen)
+                    }
+                    Err(e) => incomplete = Some(format!("member back-link search failed: {e}")),
+                }
+                match primary {
+                    Ok(entries) => push_member_entries(
+                        &entries,
+                        MemberVia::PrimaryGroup,
+                        &mut members,
+                        &mut seen,
+                    ),
+                    Err(e) => {
+                        let msg = format!("primaryGroupID search failed: {e}");
+                        incomplete = Some(match incomplete {
+                            Some(prev) => format!("{prev}; {msg}"),
+                            None => msg,
+                        });
+                    }
+                }
+
+                // Both failed → hard error rather than an empty "0 members".
+                if members.is_empty() && incomplete.is_some() {
+                    return Err(CoreError::LdapQuery(format!(
+                        "member enumeration failed: {}",
+                        incomplete.unwrap_or_default()
+                    )));
+                }
+
+                Ok(GroupMemberEnumeration {
+                    members,
+                    incomplete,
+                })
             },
         )
         .await
@@ -518,6 +617,87 @@ impl IdentityResolver for LdapResolver {
 // --- Hilfsfunktionen / Helper functions ---
 
 /// Parses an Identity from an LDAP entry.
+/// Result of [`LdapResolver::enumerate_group_members`]: the direct members
+/// plus an optional reason the enumeration was incomplete (one of the two
+/// source searches failed but the other succeeded).
+#[derive(Debug, Clone)]
+pub struct GroupMemberEnumeration {
+    pub members: Vec<MemberNode>,
+    pub incomplete: Option<String>,
+}
+
+impl GroupMemberEnumeration {
+    /// Assembles the shared [`GroupMembersReport`] for the given group:
+    /// sorts members by name (case-insensitive, SID as tie-break) for stable
+    /// output, and derives the diagnostics — a neutral primary-group inclusion
+    /// note when any member came via `primaryGroupID`, and the incompleteness
+    /// marker when a source search failed. Pure (no I/O), so the diagnostics
+    /// logic is unit-tested without a directory.
+    pub fn into_report(mut self, group: Identity) -> adpa_core::model::GroupMembersReport {
+        use adpa_core::model::{GroupMembersReport, MemberVia, PermissionDiagnostic};
+
+        self.members.sort_by(|a, b| {
+            let an = a.identity.name.as_deref().unwrap_or("").to_lowercase();
+            let bn = b.identity.name.as_deref().unwrap_or("").to_lowercase();
+            an.cmp(&bn)
+                .then_with(|| a.identity.sid.0.cmp(&b.identity.sid.0))
+        });
+
+        let via_primary = self
+            .members
+            .iter()
+            .filter(|m| matches!(m.via, MemberVia::PrimaryGroup))
+            .count();
+
+        let mut diagnostics = Vec::new();
+        if via_primary > 0 {
+            diagnostics
+                .push(PermissionDiagnostic::MembersViaPrimaryGroupIncluded { count: via_primary });
+        }
+        if let Some(reason) = self.incomplete {
+            diagnostics.push(PermissionDiagnostic::GroupMemberEnumerationIncomplete { reason });
+        }
+
+        GroupMembersReport {
+            group,
+            members: self.members,
+            diagnostics,
+        }
+    }
+}
+
+/// Extracts the RID (last SID component) as a number — the value AD stores in
+/// `primaryGroupID`. `None` if the SID has no numeric final component.
+fn rid_from_sid(sid: &Sid) -> Option<u32> {
+    sid.0.rsplit('-').next().and_then(|r| r.parse::<u32>().ok())
+}
+
+/// Builds [`MemberNode`]s from raw LDAP entries, tagging each with `via`,
+/// skipping entries without an `objectSid`, and deduplicating by SID against
+/// `seen` (a member cannot be both a `member` and a primary-group member, but
+/// the guard keeps the count honest and the output stable).
+fn push_member_entries(
+    entries: &[RawEntry],
+    via: MemberVia,
+    out: &mut Vec<MemberNode>,
+    seen: &mut HashSet<String>,
+) {
+    for entry in entries {
+        let Some(sid) = extract_sid_from_entry(entry) else {
+            continue;
+        };
+        if !seen.insert(sid.0.clone()) {
+            continue;
+        }
+        let identity = parse_identity_from_entry(entry, &sid);
+        out.push(MemberNode {
+            identity,
+            via,
+            children: vec![],
+        });
+    }
+}
+
 fn parse_identity_from_entry(entry: &RawEntry, sid: &Sid) -> Identity {
     let name = entry
         .first_attr("sAMAccountName")
@@ -686,6 +866,167 @@ mod tests {
         };
         let id = parse_identity_from_entry(&entry, &Sid("S-1-5-21-1-2-3-1001".into()));
         assert_eq!(id.sid_history_count, 0);
+    }
+
+    // --- Group → Members (reverse view): pure helpers, no LDAP ---
+
+    /// Little (SID string, sAMAccountName) → RawEntry with a decodable
+    /// objectSid. `sid_bytes` is a synthetic marker; `extract_sid_from_entry`
+    /// must map it back to `sid_str` for the test to be meaningful, so we set
+    /// the SID via a real byte encoding path is overkill — instead we assert on
+    /// name/via/dedup using a fixed, unique byte tag per entry and read the
+    /// resulting SID through the same decoder used in production.
+    fn member_entry(name: &str, sid_bytes: Vec<u8>) -> RawEntry {
+        let mut attrs = HashMap::new();
+        attrs.insert("sAMAccountName".to_string(), vec![name.to_string()]);
+        attrs.insert("objectClass".to_string(), vec!["user".to_string()]);
+        let mut bin = HashMap::new();
+        bin.insert("objectSid".to_string(), vec![sid_bytes]);
+        RawEntry {
+            dn: format!("CN={name},DC=res,DC=lab"),
+            attrs,
+            bin_attrs: bin,
+        }
+    }
+
+    // A minimal valid SID byte layout: revision(1) + subauth_count(1) +
+    // 6-byte authority + N*4-byte subauthorities. Distinct RID → distinct SID.
+    fn sid_bytes_with_rid(rid: u32) -> Vec<u8> {
+        let mut b = vec![1u8, 2, 0, 0, 0, 0, 0, 5]; // rev=1, 2 subauths, authority 5
+        b.extend_from_slice(&21u32.to_le_bytes());
+        b.extend_from_slice(&rid.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn rid_from_sid_extracts_last_component() {
+        assert_eq!(rid_from_sid(&Sid("S-1-5-21-1-2-3-513".into())), Some(513));
+        assert_eq!(rid_from_sid(&Sid("S-1-5-32-544".into())), Some(544));
+        assert_eq!(rid_from_sid(&Sid("not-a-sid".into())), None);
+    }
+
+    #[test]
+    fn push_member_entries_tags_via_and_dedups_by_sid() {
+        let direct = vec![
+            member_entry("alice", sid_bytes_with_rid(1001)),
+            member_entry("bob", sid_bytes_with_rid(1002)),
+        ];
+        // "bob" appears again in the primary-group set — must be deduped, and
+        // the already-seen SID keeps its FIRST classification (Direct).
+        let primary = vec![
+            member_entry("bob", sid_bytes_with_rid(1002)),
+            member_entry("carol", sid_bytes_with_rid(1003)),
+        ];
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        push_member_entries(&direct, MemberVia::Direct, &mut out, &mut seen);
+        push_member_entries(&primary, MemberVia::PrimaryGroup, &mut out, &mut seen);
+
+        assert_eq!(out.len(), 3, "bob deduped");
+        let carol = out
+            .iter()
+            .find(|m| m.identity.name.as_deref() == Some("carol"))
+            .unwrap();
+        assert!(matches!(carol.via, MemberVia::PrimaryGroup));
+        let bob = out
+            .iter()
+            .find(|m| m.identity.name.as_deref() == Some("bob"))
+            .unwrap();
+        assert!(
+            matches!(bob.via, MemberVia::Direct),
+            "first classification wins"
+        );
+    }
+
+    #[test]
+    fn push_member_entries_skips_entries_without_sid() {
+        let mut attrs = HashMap::new();
+        attrs.insert("sAMAccountName".to_string(), vec!["ghost".to_string()]);
+        let no_sid = RawEntry {
+            dn: "CN=ghost,DC=res,DC=lab".to_string(),
+            attrs,
+            bin_attrs: HashMap::new(),
+        };
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        push_member_entries(&[no_sid], MemberVia::Direct, &mut out, &mut seen);
+        assert!(
+            out.is_empty(),
+            "entry without objectSid is skipped, not panicked on"
+        );
+    }
+
+    fn grp_identity() -> Identity {
+        Identity {
+            sid: Sid("S-1-5-21-1-2-3-513".into()),
+            name: Some("Domain Users".into()),
+            domain: Some("res.lab".into()),
+            kind: IdentityKind::Group,
+            disabled: false,
+            user_principal_name: None,
+            sid_history_count: 0,
+        }
+    }
+
+    fn node(name: &str, rid: u32, via: MemberVia) -> MemberNode {
+        MemberNode {
+            identity: Identity {
+                sid: Sid(format!("S-1-5-21-1-2-3-{rid}")),
+                name: Some(name.into()),
+                domain: Some("res.lab".into()),
+                kind: IdentityKind::User,
+                disabled: false,
+                user_principal_name: None,
+                sid_history_count: 0,
+            },
+            via,
+            children: vec![],
+        }
+    }
+
+    #[test]
+    fn into_report_sorts_by_name_and_flags_primary_group_inclusion() {
+        use adpa_core::model::PermissionDiagnostic;
+        let enumeration = GroupMemberEnumeration {
+            members: vec![
+                node("charlie", 1003, MemberVia::PrimaryGroup),
+                node("alice", 1001, MemberVia::Direct),
+                node("bob", 1002, MemberVia::PrimaryGroup),
+            ],
+            incomplete: None,
+        };
+        let report = enumeration.into_report(grp_identity());
+        let names: Vec<_> = report
+            .members
+            .iter()
+            .map(|m| m.identity.name.clone().unwrap())
+            .collect();
+        assert_eq!(names, vec!["alice", "bob", "charlie"], "sorted by name");
+        let (total, via_primary) = report.direct_counts();
+        assert_eq!((total, via_primary), (3, 2));
+        assert!(report.diagnostics.iter().any(|d| matches!(
+            d,
+            PermissionDiagnostic::MembersViaPrimaryGroupIncluded { count: 2 }
+        )));
+    }
+
+    #[test]
+    fn into_report_propagates_incompleteness() {
+        use adpa_core::model::PermissionDiagnostic;
+        let enumeration = GroupMemberEnumeration {
+            members: vec![node("alice", 1001, MemberVia::Direct)],
+            incomplete: Some("primaryGroupID search failed: timeout".into()),
+        };
+        let report = enumeration.into_report(grp_identity());
+        assert!(report.diagnostics.iter().any(|d| matches!(
+            d,
+            PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
+        )));
+        // No primary-group members here → no inclusion note.
+        assert!(!report.diagnostics.iter().any(|d| matches!(
+            d,
+            PermissionDiagnostic::MembersViaPrimaryGroupIncluded { .. }
+        )));
     }
 
     fn test_config() -> Option<LdapConfig> {
