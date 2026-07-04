@@ -10,6 +10,20 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Fixed
+
+- **Update policy: a pre-release now orders before its final release
+  (ADR 0057).** Closes deep-review 2026-07-04 finding F4. The version
+  comparison used to strip `-rc1` and treat `1.1.0-rc1` as equal to
+  `1.1.0`, so a system running a release candidate would have rejected
+  the final build as "not newer" (acute: the project itself ships
+  `v1.7.7-rc1`). Versions now compare with SemVer §11 precedence
+  (`1.1.0-rc1 < 1.1.0`, `rc1 < rc2`, numeric identifiers numerically,
+  build metadata ignored), and the manifest schema rejects non-versions
+  such as `latest` at schema time instead of failing later in the policy
+  check. Same-version re-installs and final→rc transitions remain
+  rejected without `allow_downgrade`.
+
 ### Added
 
 - **`sIDHistory` is evaluated into the access token (ADR 0056).** Closes the

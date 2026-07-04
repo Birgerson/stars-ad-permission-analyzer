@@ -163,7 +163,11 @@ pub struct UpdateManifest {
     /// Schema version of the manifest itself — decoupled from the application version.
     /// Manifest schema version itself — decoupled from app version.
     pub manifest_version: u32,
-    /// Target application version (SemVer recommended, not enforced).
+    /// Target application version. Enforced by `validate_schema` to be a
+    /// parseable SemVer-like version (`MAJOR.MINOR.PATCH[-pre][+build]`,
+    /// see [`crate::version::AppVersion`]) — non-versions such as
+    /// `latest` are rejected at schema time instead of failing later in
+    /// the policy comparison (deep review 2026-07-04, F4).
     pub app_version: String,
     pub channel: UpdateChannel,
     pub platform: TargetPlatform,
@@ -200,6 +204,11 @@ impl UpdateManifest {
                 "app_version must not be empty".into(),
             ));
         }
+        // Must parse as a version so the policy comparison cannot be the
+        // first place a bad `app_version` (e.g. `latest`) blows up (F4).
+        crate::version::AppVersion::parse(&self.app_version).map_err(|e| {
+            CoreError::Validation(format!("app_version is not a valid version: {e}"))
+        })?;
         if self.issued_at.trim().is_empty() {
             return Err(CoreError::Validation("issued_at must not be empty".into()));
         }
@@ -292,6 +301,28 @@ mod tests {
             msg.contains("signature must not be empty"),
             "unsigned manifests must be rejected, got: {msg}"
         );
+    }
+
+    /// Deep review 2026-07-04, F4: a non-version `app_version` must fail
+    /// at schema time, not later in the policy comparison.
+    #[test]
+    fn rejects_non_version_app_version() {
+        let json = valid_manifest_json().replace("\"0.3.0\"", "\"latest\"");
+        let err = UpdateManifest::from_json(&json).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("app_version is not a valid version"),
+            "got: {msg}"
+        );
+    }
+
+    /// Pre-release versions are valid schema — the ordering is the policy
+    /// layer's job (`1.1.0-rc1 < 1.1.0`).
+    #[test]
+    fn accepts_prerelease_app_version() {
+        let json = valid_manifest_json().replace("\"0.3.0\"", "\"1.7.7-rc1\"");
+        let m = UpdateManifest::from_json(&json).unwrap();
+        assert_eq!(m.app_version, "1.7.7-rc1");
     }
 
     #[test]
