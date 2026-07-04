@@ -550,11 +550,14 @@ impl RawPermRow {
                 // UPN is not persisted today; it's only relevant for live AD/NetAPI
                 // calls, not for historical reports.
                 user_principal_name: None,
-                // sid_history_count is an evaluation-time input, not persisted:
-                // the derived SidHistoryPresent marker is already stored in the
-                // `diagnostics` column, so the reloaded report stays correct
-                // with the field at 0 (ADR 0052).
+                // sIDHistory (count and values) is an evaluation-time input,
+                // not persisted: the derived SidHistoryPresent /
+                // SidHistoryEvaluated markers are already stored in the
+                // `diagnostics` column and the explanation path names each
+                // evaluated historical SID, so the reloaded report stays
+                // correct with empty fields (ADR 0052 / ADR 0056).
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             path: NormalizedPath(path),
             ntfs_mask: AccessMask(ntfs as u32),
@@ -668,6 +671,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             path: NormalizedPath(path.to_owned()),
             ntfs_mask: AccessMask(ntfs),

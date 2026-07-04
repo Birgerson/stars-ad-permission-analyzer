@@ -233,11 +233,10 @@ impl PrincipalResolution {
         if flags.group_resolution_via_global_catalog {
             d.push(PermissionDiagnostic::GroupResolutionViaGlobalCatalog);
         }
-        if self.identity.sid_history_count > 0 {
-            d.push(PermissionDiagnostic::SidHistoryPresent {
-                count: self.identity.sid_history_count,
-            });
-        }
+        // ADR 0056: same evaluated/not-evaluated split as the permission
+        // engine — single source of truth on Identity, so the membership
+        // view cannot drift from the engine's classification.
+        d.extend(self.identity.sid_history_diagnostics());
         if flags.identity_resolved_via_fsp || flags.identity_not_in_configured_ldap_base {
             d.push(PermissionDiagnostic::TrustBoundaryEffectsNotModeled);
         }
@@ -701,6 +700,7 @@ where
                     disabled: false,
                     user_principal_name: None,
                     sid_history_count: 0,
+                    sid_history: Vec::new(),
                 };
                 let scope = IdentityScopeStatus::OutsideConfiguredLdapBase;
                 // Memberships unknown from LDAP; flagged NotAttempted.
@@ -773,9 +773,11 @@ where
                     disabled: false,
                     user_principal_name: None,
                     // Consistent with the name/domain fallback above: carry the
-                    // FSP entry's count. (FSP objects do not expose the foreign
-                    // sIDHistory, so this is 0 in practice — see ADR 0052.)
+                    // FSP entry's count and values. (FSP objects do not expose
+                    // the foreign sIDHistory, so both are empty in practice —
+                    // see ADR 0052 / ADR 0056.)
                     sid_history_count: fsp_identity.sid_history_count,
+                    sid_history: fsp_identity.sid_history.clone(),
                 },
                 Err(e) => {
                     debug!(sid = %sid.0, error = %e, "FSP hit: LSA enrichment failed — keeping FSP identity");
@@ -836,6 +838,7 @@ where
             disabled: false,
             user_principal_name: None,
             sid_history_count: 0,
+            sid_history: Vec::new(),
         };
         PrincipalResolution {
             sid,
@@ -859,6 +862,7 @@ where
             disabled: false,
             user_principal_name: None,
             sid_history_count: 0,
+            sid_history: Vec::new(),
         };
         PrincipalResolution {
             sid,
@@ -991,6 +995,7 @@ mod tests {
             disabled: false,
             user_principal_name: None,
             sid_history_count: 0,
+            sid_history: Vec::new(),
         }
     }
 
@@ -1616,6 +1621,7 @@ mod tests {
             disabled: false,
             user_principal_name: None,
             sid_history_count,
+            sid_history: Vec::new(),
         }
     }
 
@@ -1642,6 +1648,36 @@ mod tests {
             d.iter()
                 .any(|x| matches!(x, PermissionDiagnostic::DomainGroupRecursionIncomplete)),
             "SAM fallback must surface as a marker: {d:?}"
+        );
+    }
+
+    /// ADR 0056: parsed history values classify as SidHistoryEvaluated in
+    /// the membership view — same split as the engine (shared helper).
+    #[test]
+    fn membership_diagnostics_splits_evaluated_and_unevaluated_history() {
+        let mut identity = sample_identity("S-1-5-21-1-2-3-1104", 2);
+        identity.sid_history = vec![Sid("S-1-5-21-9-9-9-1104".to_owned())];
+        let res = PrincipalResolution {
+            sid: Sid("S-1-5-21-1-2-3-1104".to_owned()),
+            identity,
+            memberships: vec![],
+            scope_status: IdentityScopeStatus::InsideConfiguredLdapBase,
+            group_resolution_status: GroupResolutionStatus::LdapRecursive,
+            disabled_status: DisabledStatus::Known(false),
+            diagnostics: vec![],
+            resolved_via_fsp: false,
+            resolved_via_global_catalog: false,
+        };
+        let d = res.membership_diagnostics();
+        assert!(
+            d.iter()
+                .any(|x| matches!(x, PermissionDiagnostic::SidHistoryEvaluated { count: 1 })),
+            "parsed value must classify as evaluated: {d:?}"
+        );
+        assert!(
+            d.iter()
+                .any(|x| matches!(x, PermissionDiagnostic::SidHistoryPresent { count: 1 })),
+            "un-parsed remainder must stay visible: {d:?}"
         );
     }
 

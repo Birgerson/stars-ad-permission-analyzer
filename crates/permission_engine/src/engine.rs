@@ -230,15 +230,14 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if input.group_resolution_via_global_catalog {
             diagnostics.push(PermissionDiagnostic::GroupResolutionViaGlobalCatalog);
         }
-        // ADR 0052 (L3): the identity carries historical SIDs (sIDHistory).
-        // The real Windows token includes them, but Stars does not add them
-        // to the evaluated token — ACEs on a historical SID are not matched,
-        // so effective rights may be understated. Incompleteness trigger.
-        if input.identity.sid_history_count > 0 {
-            diagnostics.push(PermissionDiagnostic::SidHistoryPresent {
-                count: input.identity.sid_history_count,
-            });
-        }
+        // ADR 0052 (L3) / ADR 0056: historical SIDs (sIDHistory). Parsed
+        // values were evaluated into the token via `collect_user_sids`
+        // (SidHistoryEvaluated, informational); an un-parsed remainder
+        // stays un-evaluated and keeps the incompleteness trigger
+        // (SidHistoryPresent). Single source of truth:
+        // `Identity::sid_history_diagnostics` — shared with the
+        // membership view so the two surfaces cannot drift.
+        diagnostics.extend(input.identity.sid_history_diagnostics());
         // ADR 0052 (L4): the identity crosses a forest trust — resolved via a
         // Foreign Security Principal or found outside the configured LDAP
         // base. SID filtering / quarantine and Selective Authentication are
@@ -287,7 +286,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
 /// Note: uses `AccessContext::Unspecified` and therefore does not add
 /// context-specific well-knowns like `NETWORK`.
 pub fn build_token_sids(user_sid: &str, memberships: &[GroupMembership]) -> HashSet<String> {
-    build_token_sids_with_context(user_sid, memberships, &[], AccessContext::Unspecified)
+    build_token_sids_with_context(user_sid, &[], memberships, &[], AccessContext::Unspecified)
 }
 
 /// Like [`build_token_sids`], plus additional SIDs of local groups on the target
@@ -312,27 +311,34 @@ pub fn build_token_sids_with_local(
 ) -> HashSet<String> {
     build_token_sids_with_context(
         user_sid,
+        &[],
         memberships,
         local_group_sids,
         AccessContext::Unspecified,
     )
 }
 
-/// Full token construction: own SID, AD groups, local server groups, the
-/// universal well-knowns (`Everyone`, `Authenticated Users`), and the
-/// context-specific well-knowns:
+/// Full token construction: own SID, the user's historical SIDs
+/// (`sIDHistory` — Windows includes them in the logon token
+/// unconditionally within the account's forest, ADR 0056), AD groups,
+/// local server groups, the universal well-knowns (`Everyone`,
+/// `Authenticated Users`), and the context-specific well-knowns:
 ///
 /// - `RemoteSmb` → `NETWORK` (S-1-5-2)
 /// - `LocalInteractive` → `INTERACTIVE` (S-1-5-4) + `LOCAL` (S-1-2-0)
 /// - `Unspecified` → no additional well-knowns
 pub fn build_token_sids_with_context(
     user_sid: &str,
+    sid_history: &[Sid],
     memberships: &[GroupMembership],
     local_group_sids: &[Sid],
     access_context: AccessContext,
 ) -> HashSet<String> {
     let mut sids = HashSet::new();
     sids.insert(user_sid.to_string());
+    for old in sid_history {
+        sids.insert(old.0.clone());
+    }
     for gm in memberships {
         sids.insert(gm.group_sid.0.clone());
     }
@@ -365,6 +371,7 @@ fn collect_user_sids(
 ) -> HashSet<String> {
     build_token_sids_with_context(
         &identity.sid.0,
+        &identity.sid_history,
         memberships,
         local_group_sids,
         access_context,
@@ -670,6 +677,18 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     let display_name = identity.name.as_deref().unwrap_or(identity.sid.0.as_str());
     steps.push(format!("User: {} ({})", display_name, identity.sid.0));
 
+    // 1b. Historical SIDs (ADR 0056): each parsed sIDHistory value is part
+    // of the evaluated token, so name it here — an ACE further down that
+    // matches an old SID is then explainable straight from the step list.
+    for old in &identity.sid_history {
+        steps.push(format!(
+            "Historical SID (sIDHistory): {} — included in the evaluated token \
+             (migrated account; Windows includes it in the logon token within \
+             the forest)",
+            old.0
+        ));
+    }
+
     // 2. Group memberships.
     //
     // De-duplicate identical edges: the same (target, via-chain, source) can
@@ -883,6 +902,7 @@ mod tests {
             disabled: false,
             user_principal_name: None,
             sid_history_count: 0,
+            sid_history: Vec::new(),
         }
     }
 
@@ -2832,7 +2852,7 @@ mod tests {
     #[test]
     fn build_token_sids_with_context_includes_universal_well_knowns_for_unspecified() {
         let token =
-            super::build_token_sids_with_context(USER, &[], &[], AccessContext::Unspecified);
+            super::build_token_sids_with_context(USER, &[], &[], &[], AccessContext::Unspecified);
         assert!(token.contains("S-1-1-0"), "Everyone must be present");
         assert!(
             token.contains("S-1-5-11"),
@@ -2850,7 +2870,8 @@ mod tests {
 
     #[test]
     fn build_token_sids_with_context_adds_network_for_remote_smb() {
-        let token = super::build_token_sids_with_context(USER, &[], &[], AccessContext::RemoteSmb);
+        let token =
+            super::build_token_sids_with_context(USER, &[], &[], &[], AccessContext::RemoteSmb);
         assert!(
             token.contains(SID_NETWORK),
             "NETWORK must be added for RemoteSmb"
@@ -2863,8 +2884,13 @@ mod tests {
 
     #[test]
     fn build_token_sids_with_context_adds_interactive_and_local_for_local_interactive() {
-        let token =
-            super::build_token_sids_with_context(USER, &[], &[], AccessContext::LocalInteractive);
+        let token = super::build_token_sids_with_context(
+            USER,
+            &[],
+            &[],
+            &[],
+            AccessContext::LocalInteractive,
+        );
         assert!(
             token.contains(SID_INTERACTIVE),
             "INTERACTIVE must be added for LocalInteractive"
@@ -2877,6 +2903,23 @@ mod tests {
             !token.contains(SID_NETWORK),
             "NETWORK must NOT be added for LocalInteractive"
         );
+    }
+
+    /// ADR 0056: the user's historical SIDs (sIDHistory) are part of the
+    /// token in every access context.
+    #[test]
+    fn build_token_sids_with_context_includes_sid_history() {
+        const OLD: &str = "S-1-5-21-4000-4000-4000-1104";
+        let history = vec![Sid(OLD.into())];
+        let token = super::build_token_sids_with_context(
+            USER,
+            &history,
+            &[],
+            &[],
+            AccessContext::Unspecified,
+        );
+        assert!(token.contains(USER), "own SID must be present");
+        assert!(token.contains(OLD), "historical SID must be present");
     }
 
     // ------------------------------------------------------------------
@@ -3207,9 +3250,10 @@ mod tests {
         }
     }
 
-    /// ADR 0052 (L3): an identity carrying historical SIDs (sIDHistory)
-    /// surfaces as `SidHistoryPresent { count }` so the under-report risk is
-    /// visible. The engine reads `identity.sid_history_count`.
+    /// ADR 0052 (L3) / ADR 0056: a history count without parsed values
+    /// (e.g. rows persisted under ADR 0052, or all values malformed) still
+    /// surfaces as `SidHistoryPresent { count }` — nothing was evaluated,
+    /// the under-report risk stays visible.
     #[test]
     fn engine_pushes_sid_history_present_diagnostic() {
         let mut identity = user(USER);
@@ -3245,6 +3289,121 @@ mod tests {
                 .any(|d| matches!(d, PermissionDiagnostic::SidHistoryPresent { .. })),
             "no SidHistoryPresent when count is 0; got {:?}",
             result.diagnostics
+        );
+    }
+
+    /// ADR 0056 acceptance case (deep review 2026-07-04 F1): the user's SID
+    /// is `USER`, `sIDHistory` carries an old SID, and the ACL grants that
+    /// old SID Modify. The engine must grant Modify via the historical SID,
+    /// name it in the explanation path, mark it `SidHistoryEvaluated` — and
+    /// must NOT flag the result incomplete for history reasons.
+    #[test]
+    fn engine_grants_access_via_historical_sid() {
+        const OLD: &str = "S-1-5-21-4000-4000-4000-1104";
+        let mut identity = user(USER);
+        identity.sid_history_count = 1;
+        identity.sid_history = vec![Sid(OLD.into())];
+        let result = DefaultPermissionEngine
+            .evaluate(base_input(
+                identity,
+                fso(None, vec![allow_ace(OLD, MASK_MODIFY, false)]),
+            ))
+            .unwrap();
+        assert_eq!(
+            result.ntfs_mask.0, MASK_MODIFY,
+            "ACE on the historical SID must grant Modify"
+        );
+        assert!(
+            result
+                .diagnostics
+                .contains(&PermissionDiagnostic::SidHistoryEvaluated { count: 1 }),
+            "SidHistoryEvaluated must fire; got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d, PermissionDiagnostic::SidHistoryPresent { .. })),
+            "fully parsed history must not raise the incompleteness marker; got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            !result.is_incomplete(),
+            "history-evaluated result must not be incomplete; got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result
+                .path_explanation
+                .steps
+                .iter()
+                .any(|s| s.contains("Historical SID (sIDHistory)") && s.contains(OLD)),
+            "explanation must name the historical SID; got {:?}",
+            result.path_explanation.steps
+        );
+    }
+
+    /// ADR 0056: a Deny ACE on a historical SID must also be honored —
+    /// history evaluation applies to the whole token, not only to grants.
+    #[test]
+    fn engine_honors_deny_on_historical_sid() {
+        const OLD: &str = "S-1-5-21-4000-4000-4000-1104";
+        let mut identity = user(USER);
+        identity.sid_history_count = 1;
+        identity.sid_history = vec![Sid(OLD.into())];
+        let result = DefaultPermissionEngine
+            .evaluate(base_input(
+                identity,
+                fso(
+                    None,
+                    vec![
+                        deny_ace(OLD, MASK_WRITE, false),
+                        allow_ace(USER, MASK_MODIFY, false),
+                    ],
+                ),
+            ))
+            .unwrap();
+        assert_eq!(
+            result.ntfs_mask.0,
+            MASK_MODIFY & !MASK_WRITE,
+            "Deny on the historical SID must strip the write bits"
+        );
+    }
+
+    /// ADR 0056 partial parse: count 2 but only one value parsed → both
+    /// markers fire — `SidHistoryEvaluated { count: 1 }` for the token part
+    /// and `SidHistoryPresent { count: 1 }` for the un-evaluated remainder;
+    /// the result stays incomplete.
+    #[test]
+    fn engine_partial_sid_history_parse_keeps_incompleteness() {
+        const OLD: &str = "S-1-5-21-4000-4000-4000-1104";
+        let mut identity = user(USER);
+        identity.sid_history_count = 2;
+        identity.sid_history = vec![Sid(OLD.into())];
+        let result = DefaultPermissionEngine
+            .evaluate(base_input(
+                identity,
+                fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            ))
+            .unwrap();
+        assert!(
+            result
+                .diagnostics
+                .contains(&PermissionDiagnostic::SidHistoryEvaluated { count: 1 }),
+            "evaluated part must be visible; got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result
+                .diagnostics
+                .contains(&PermissionDiagnostic::SidHistoryPresent { count: 1 }),
+            "un-evaluated remainder must stay visible; got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.is_incomplete(),
+            "partial parse must keep the result incomplete"
         );
     }
 

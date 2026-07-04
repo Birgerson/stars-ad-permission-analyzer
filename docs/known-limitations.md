@@ -1,6 +1,6 @@
 # Stars — Known Limitations and Roadmap (v1.6+)
 
-**Status:** v1.7.2 — 2026-06-28
+**Status:** v1.7.7 — 2026-07-04
 **Purpose:** Honest enumeration of the places where Stars **structurally
 cannot guarantee** to deliver a complete picture.
 
@@ -150,51 +150,59 @@ because the LDAP protocol is the same — only port and scope change).
 
 ---
 
-## L3 — SID History is not evaluated
+## L3 — SID History evaluation
 
 **Priority:** Medium
-**Tracking:** v1.7+ candidate
+**Tracking:** **user history closed 2026-07-04 — shipped (ADR 0056)**;
+group history remains open
+
+> **Status update (2026-07-04, ADR 0056):** the **user's** `sIDHistory`
+> values are now parsed on the direct in-base LDAP path and **evaluated
+> into the token**: an ACE on the old SID matches (Allow and Deny), the
+> explanation path names each historical SID, and the finding carries the
+> informational `SidHistoryEvaluated { count }` marker instead of being
+> flagged incomplete. `SidHistoryPresent { count }` narrows to the
+> un-evaluated remainder (a malformed value, or reports persisted before
+> ADR 0056) and stays an incompleteness trigger. The share-side token uses
+> the same history SIDs, so NTFS and share evaluation cannot diverge.
+> Identities resolved via SAM/LSA or as an FSP still cannot read the
+> attribute (count 0 — no false positives; their own boundary markers
+> apply). This closed exactly the deep-review 2026-07-04 finding F1
+> acceptance case: `S-new` + `sIDHistory = [S-old]` + ACL `S-old: Modify`
+> → Modify, explained, complete.
 
 ### Problem
 
-In domain migration scenarios, users carry the `sIDHistory` attribute,
-which contains earlier SIDs from migrated domains. NTFS DACLs that
-were not migrated along still reference these old SIDs.
+In domain migration scenarios, users **and groups** carry the
+`sIDHistory` attribute, which contains earlier SIDs from migrated
+domains. NTFS DACLs that were not migrated along still reference these
+old SIDs — the Windows logon token includes them, so they grant access
+at runtime.
 
-Stars currently does not evaluate `sIDHistory`. If a DACL contains a
-SID-history SID, no match against the user can occur.
+### Remaining gap — group `sIDHistory`
 
-### Effect
+The token also contains the historical SIDs of the user's **groups**.
+Stars does not read those yet: an ACE on a migrated group's old SID is
+still missed, and — unlike the pre-ADR-0052 user case — this gap
+currently produces **no marker** (the group entries' `sIDHistory` is not
+even counted).
 
-Findings understate the rights of migrated users on non-migrated
-filesystem structures: Stars sees the old SID as "another user" and finds
-no match.
+### Solution sketch (group history)
 
-**Status (ADR 0052 — visibility step):** the gap is now **visible**. When an
-LDAP-resolved in-base identity carries `sIDHistory`, Stars fetches the count
-and emits the `SidHistoryPresent` marker — an incompleteness trigger — so
-the finding is flagged "may be understated" instead of silently looking
-safe. Coverage note: the count is read only on the **direct in-base LDAP
-path** (`parse_identity_from_entry`); identities resolved via SAM/LSA or as
-a Foreign Security Principal report count `0`, so the marker does not fire
-there. The historical SIDs are **not yet evaluated** into the token; that
-remains the deeper follow-up (see the solution sketch).
+- Add `sIDHistory` to `MEMBERSHIP_ATTRS` — the transitive in-chain group
+  search already returns every group entry, so the values are cheap to
+  fetch.
+- Carry them on `GroupMembership` (new `#[serde(default)]` field;
+  32 construction sites) and decide how the membership cache schema
+  handles the extra field.
+- Add them to `build_token_sids_with_context` and to the membership
+  explanation step, mirroring ADR 0056.
 
-### Solution sketch
+### Test plan (group history)
 
-- Have `parse_identity_from_entry` additionally evaluate the
-  `sIDHistory` multi-value attribute.
-- Extend `PrincipalResolution` by `historical_sids: Vec<Sid>`.
-- Token construction in `build_token_sids_with_context` adds the
-  history SIDs.
-- New marker `MembershipResolvedViaSidHistory` with the historical SID
-  in the reason so the auditor can see that a right applies via the
-  old SID.
-
-### Test plan
-
-Extend the LDAP fake by the `sIDHistory` attribute. ACE on the old
-SID, expectation: right is granted and marker appears.
+Group entry with `sIDHistory`, ACE on the group's old SID: right is
+granted and the membership step explains it — mirroring the shipped
+user-history tests in `engine.rs` / `resolver.rs` / `principal.rs`.
 
 ---
 
@@ -583,7 +591,7 @@ download-and-verify step.
 | --- | --- | --- | --- |
 | L1 — FSP | High | **yes** (IdentityResolvedViaForeignSecurityPrincipal) | **closed 2026-06-11** (trust-side groups still need L2) |
 | L2 — GC bind | High | **yes** (GroupResolutionViaGlobalCatalog) | **closed 2026-06-11** (GUI toggle shipped v1.6.4) |
-| L3 — SID History | Medium | **no** | yes, with implementation |
+| L3 — SID History | Medium | **yes** (SidHistoryEvaluated / SidHistoryPresent) | **user history closed 2026-07-04** (ADR 0056); group history still open |
 | L4 — Cross-forest filter | Medium | no | no (documentation only) |
 | L5 — Empty memberships | Medium | yes (incomplete) | only via L1/L2 |
 | L6 — Live tests | High | n/a | **partially** — live 3-domain run 2026-06-14 committed (verification.md Block L); automated CI suite still open |

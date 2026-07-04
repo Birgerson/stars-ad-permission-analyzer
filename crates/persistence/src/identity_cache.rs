@@ -145,6 +145,7 @@ fn row_to_identity(row: &rusqlite::Row<'_>) -> rusqlite::Result<Identity> {
         // UPN is not persisted in the identity cache (see scan_store).
         user_principal_name: None,
         sid_history_count: 0,
+        sid_history: Vec::new(),
     })
 }
 
@@ -171,6 +172,7 @@ mod tests {
             disabled: false,
             user_principal_name: None,
             sid_history_count: 0,
+            sid_history: Vec::new(),
         }
     }
 
@@ -238,6 +240,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             };
             cache.upsert(&id).unwrap();
             let found = cache.lookup(&id.sid).unwrap().unwrap();

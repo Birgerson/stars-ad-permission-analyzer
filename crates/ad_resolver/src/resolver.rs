@@ -276,6 +276,7 @@ impl LdapResolver {
                             disabled: false,
                             user_principal_name: None,
                             sid_history_count: 0,
+                            sid_history: Vec::new(),
                         }
                     }
                 })
@@ -791,9 +792,26 @@ fn parse_identity_from_entry(entry: &RawEntry, sid: &Sid) -> Identity {
         .map(|uac| uac & UAC_ACCOUNT_DISABLE != 0)
         .unwrap_or(false);
 
-    // sIDHistory: only the count matters — Stars surfaces it as a marker and
-    // does not evaluate the historical SIDs into the token (ADR 0052).
+    // sIDHistory: parse the values so the engine can evaluate them into the
+    // token (ADR 0056). The count stays the authoritative total: a malformed
+    // value is skipped with a warning and the difference between count and
+    // parsed values surfaces as SidHistoryPresent ("not evaluated").
     let sid_history_count = entry.value_count("sIDHistory");
+    let sid_history: Vec<Sid> = entry
+        .all_values("sIDHistory")
+        .into_iter()
+        .filter_map(|bytes| match bytes_to_sid_str(bytes) {
+            Ok(s) => Some(Sid(s)),
+            Err(e) => {
+                warn!(
+                    dn = %entry.dn,
+                    error = %e,
+                    "Malformed sIDHistory value skipped — it stays un-evaluated"
+                );
+                None
+            }
+        })
+        .collect();
 
     Identity {
         sid: sid.clone(),
@@ -803,6 +821,7 @@ fn parse_identity_from_entry(entry: &RawEntry, sid: &Sid) -> Identity {
         disabled,
         user_principal_name,
         sid_history_count,
+        sid_history,
     }
 }
 
@@ -906,10 +925,19 @@ mod tests {
     // --- Unit tests (no LDAP needed): sIDHistory count from the entry ---
 
     #[test]
-    fn parse_identity_reads_sid_history_count() {
-        // Two binary sIDHistory values → count 2 (ADR 0052).
+    fn parse_identity_reads_sid_history_values() {
+        // Two binary sIDHistory values → count 2 AND both values parsed
+        // into `sid_history` (ADR 0056).
+        let old_a = "S-1-5-21-900-901-902-1104";
+        let old_b = "S-1-5-21-900-901-902-1105";
         let mut bin = HashMap::new();
-        bin.insert("sIDHistory".to_string(), vec![vec![1u8], vec![2u8]]);
+        bin.insert(
+            "sIDHistory".to_string(),
+            vec![
+                crate::sid_util::sid_str_to_bytes(old_a).expect("encode test SID"),
+                crate::sid_util::sid_str_to_bytes(old_b).expect("encode test SID"),
+            ],
+        );
         let mut attrs = HashMap::new();
         attrs.insert("sAMAccountName".to_string(), vec!["mig01".to_string()]);
         let entry = RawEntry {
@@ -919,6 +947,36 @@ mod tests {
         };
         let id = parse_identity_from_entry(&entry, &Sid("S-1-5-21-1-2-3-1000".into()));
         assert_eq!(id.sid_history_count, 2);
+        assert_eq!(
+            id.sid_history,
+            vec![Sid(old_a.to_string()), Sid(old_b.to_string())]
+        );
+    }
+
+    #[test]
+    fn parse_identity_keeps_count_when_a_sid_history_value_is_malformed() {
+        // One valid + one malformed value: the count stays 2 (authoritative
+        // total), only the valid value is parsed — the difference is what
+        // SidHistoryPresent reports as "not evaluated" (ADR 0056).
+        let old_a = "S-1-5-21-900-901-902-1104";
+        let mut bin = HashMap::new();
+        bin.insert(
+            "sIDHistory".to_string(),
+            vec![
+                crate::sid_util::sid_str_to_bytes(old_a).expect("encode test SID"),
+                vec![0xFFu8, 0x00], // not a valid SID structure
+            ],
+        );
+        let mut attrs = HashMap::new();
+        attrs.insert("sAMAccountName".to_string(), vec!["mig02".to_string()]);
+        let entry = RawEntry {
+            dn: "CN=mig02,DC=res,DC=lab".to_string(),
+            attrs,
+            bin_attrs: bin,
+        };
+        let id = parse_identity_from_entry(&entry, &Sid("S-1-5-21-1-2-3-1002".into()));
+        assert_eq!(id.sid_history_count, 2);
+        assert_eq!(id.sid_history, vec![Sid(old_a.to_string())]);
     }
 
     #[test]
@@ -932,6 +990,7 @@ mod tests {
         };
         let id = parse_identity_from_entry(&entry, &Sid("S-1-5-21-1-2-3-1001".into()));
         assert_eq!(id.sid_history_count, 0);
+        assert!(id.sid_history.is_empty());
     }
 
     // --- Group → Members (reverse view): pure helpers, no LDAP ---
@@ -1067,6 +1126,7 @@ mod tests {
             disabled: false,
             user_principal_name: None,
             sid_history_count: 0,
+            sid_history: Vec::new(),
         }
     }
 
@@ -1080,6 +1140,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             via,
             children: vec![],

@@ -734,6 +734,7 @@ async fn resolve_identity(
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             };
             let resolution = PrincipalResolution {
                 sid,
@@ -1416,6 +1417,9 @@ fn resolve_scan_share_status(
             // review finding 1).
             let user_sids = build_token_sids_with_context(
                 &resolved.resolution.identity.sid.0,
+                // ADR 0056: the share token must contain the same historical
+                // SIDs as the NTFS token, otherwise the two sides diverge.
+                &resolved.resolution.identity.sid_history,
                 &resolved.resolution.memberships,
                 local_group_sids,
                 access_context,
@@ -2064,6 +2068,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             ad_connected: false,
             memberships: vec![],
@@ -2148,6 +2153,7 @@ mod tests {
                 disabled,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             via,
             children: vec![],
@@ -2161,6 +2167,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             members: vec![
                 mk(

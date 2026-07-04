@@ -468,6 +468,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             path: NormalizedPath(path.to_string()),
             ntfs_mask: AccessMask(mask),
@@ -553,6 +554,21 @@ mod tests {
         assert!(
             r[0].incomplete,
             "SidHistoryPresent diagnostic -> finding must be incomplete"
+        );
+    }
+
+    /// ADR 0056: SidHistoryEvaluated means the historical SIDs WERE part
+    /// of the evaluated token — the result is exact, so the marker alone
+    /// must NOT flag a finding incomplete.
+    #[test]
+    fn sid_history_evaluated_diagnostic_alone_does_not_mark_incomplete() {
+        let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
+        p.diagnostics = vec![PermissionDiagnostic::SidHistoryEvaluated { count: 1 }];
+        let r = FullControlRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(
+            !r[0].incomplete,
+            "SidHistoryEvaluated alone must NOT flag incomplete"
         );
     }
 

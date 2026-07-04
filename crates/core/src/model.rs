@@ -143,16 +143,53 @@ pub struct Identity {
     /// name which we cannot reliably derive from the DN.
     #[serde(default)]
     pub user_principal_name: Option<String>,
-    /// Number of historical SIDs (`sIDHistory`) the account carries — set
-    /// when resolved via LDAP, `0` otherwise (e.g. the SAM/LSA path, which
-    /// cannot read it). A non-zero count means the real Windows logon token
-    /// includes additional SIDs that Stars does **not** add to the evaluated
-    /// token: ACEs referencing a historical SID are therefore not matched,
-    /// so effective rights may be understated. The engine surfaces this as
-    /// `PermissionDiagnostic::SidHistoryPresent`. `#[serde(default)]` keeps
-    /// older persisted rows readable.
+    /// Total number of historical SIDs (`sIDHistory`) the account carries —
+    /// set when resolved via the direct in-base LDAP path, `0` otherwise
+    /// (the SAM/LSA and FSP paths cannot read the attribute). This is the
+    /// authoritative total as reported by LDAP; `sid_history` holds the
+    /// parsed values and may be shorter when a value was malformed. The
+    /// difference (`sid_history_count - sid_history.len()`) is what stays
+    /// **un-evaluated** and is surfaced as
+    /// `PermissionDiagnostic::SidHistoryPresent` (incompleteness trigger);
+    /// the parsed values are evaluated into the token and surfaced as
+    /// `PermissionDiagnostic::SidHistoryEvaluated` (ADR 0056).
+    /// `#[serde(default)]` keeps older persisted rows readable.
     #[serde(default)]
     pub sid_history_count: usize,
+    /// Parsed historical SIDs (`sIDHistory`) of the account. Windows
+    /// includes these SIDs in the real logon token unconditionally within
+    /// the account's forest, so the permission engine adds them to the
+    /// evaluated token and the explanation path names each one (ADR 0056).
+    /// Empty when the resolver path cannot read the attribute (then
+    /// `sid_history_count` is also `0`) or for rows persisted before this
+    /// field existed (`#[serde(default)]`).
+    #[serde(default)]
+    pub sid_history: Vec<Sid>,
+}
+
+impl Identity {
+    /// Diagnostic classification of this identity's `sIDHistory` state —
+    /// the single source of truth consumed by both the permission engine
+    /// and the membership view so the two surfaces cannot drift (ADR 0056).
+    ///
+    /// - Parsed values (`sid_history`) are evaluated into the token →
+    ///   `SidHistoryEvaluated { count }`, informational.
+    /// - The remainder (`sid_history_count - sid_history.len()`, e.g.
+    ///   malformed values, or rows persisted under ADR 0052 where values
+    ///   were never fetched) stays un-evaluated →
+    ///   `SidHistoryPresent { count }`, an incompleteness trigger.
+    pub fn sid_history_diagnostics(&self) -> Vec<PermissionDiagnostic> {
+        let mut d = Vec::new();
+        let evaluated = self.sid_history.len();
+        if evaluated > 0 {
+            d.push(PermissionDiagnostic::SidHistoryEvaluated { count: evaluated });
+        }
+        let unevaluated = self.sid_history_count.saturating_sub(evaluated);
+        if unevaluated > 0 {
+            d.push(PermissionDiagnostic::SidHistoryPresent { count: unevaluated });
+        }
+        d
+    }
 }
 
 /// Access context for permission evaluation.
@@ -881,24 +918,36 @@ pub enum PermissionDiagnostic {
     /// 2026-06-13 (Codex) finding 3.
     PersistedEvidenceDecodeFailed { detail: String },
 
-    /// The analyzed identity carries one or more historical SIDs in its
-    /// `sIDHistory` attribute (typical after a domain or forest
-    /// migration). The real Windows logon token includes those SIDs, but
-    /// Stars does **not** add them to the evaluated token — so an ACE that
-    /// grants access to a historical SID is not matched and the effective
+    /// The analyzed identity carries historical SIDs (`sIDHistory`) that
+    /// were **not evaluated** into the token. Since ADR 0056 parsed values
+    /// *are* evaluated (see [`SidHistoryEvaluated`]), so this marker now
+    /// covers only the un-evaluated remainder: values that could not be
+    /// parsed, and rows persisted under ADR 0052 where values were never
+    /// fetched. The real Windows logon token includes those SIDs, so an
+    /// ACE granting access to one of them is not matched and the effective
     /// right can be **understated** ("looks safe, isn't safe"). This
     /// marker is an incompleteness trigger; derived risk findings carry
-    /// `incomplete = true`. `count` is the number of historical SIDs
-    /// found. Note: whether a historical SID is actually honored also
-    /// depends on the trust's SID-filtering / quarantine state, which
-    /// Stars does not model — see [`TrustBoundaryEffectsNotModeled`].
+    /// `incomplete = true`. `count` is the number of un-evaluated
+    /// historical SIDs.
     ///
-    /// Scope: this marker makes the gap **visible**; it does not yet
-    /// evaluate the historical SIDs into the token (see ADR 0052).
+    /// [`SidHistoryEvaluated`]: PermissionDiagnostic::SidHistoryEvaluated
+    SidHistoryPresent { count: usize },
+
+    /// `count` historical SIDs (`sIDHistory`) of the analyzed identity
+    /// **were evaluated** into the token (ADR 0056): within the account's
+    /// forest Windows includes them in the real logon token
+    /// unconditionally, so ACEs referencing an old SID now match exactly
+    /// as `AccessCheck` would. Informational, **not** an incompleteness
+    /// trigger — it exists so the token composition change is never
+    /// silent: an ACE matching an unfamiliar SID is explained here and in
+    /// the explanation path. Note: only identities resolved on the direct
+    /// in-base LDAP path carry history values; cross-boundary identities
+    /// (FSP / outside base) keep their own markers instead — see
+    /// [`TrustBoundaryEffectsNotModeled`].
     ///
     /// [`TrustBoundaryEffectsNotModeled`]:
     /// PermissionDiagnostic::TrustBoundaryEffectsNotModeled
-    SidHistoryPresent { count: usize },
+    SidHistoryEvaluated { count: usize },
 
     /// The analyzed identity was resolved **across a domain or trust
     /// boundary** — either via a Foreign Security Principal object (a
@@ -1033,8 +1082,13 @@ impl PermissionDiagnostic {
                  reconstructed result may be less complete than the original."
             ),
             PermissionDiagnostic::SidHistoryPresent { count } => format!(
-                "Identity carries {count} historical SID(s) (sIDHistory); ACEs referencing them \
-                 are not evaluated — effective rights may be understated."
+                "Identity carries {count} historical SID(s) (sIDHistory) that were NOT \
+                 evaluated into the token — effective rights may be understated."
+            ),
+            PermissionDiagnostic::SidHistoryEvaluated { count } => format!(
+                "{count} historical SID(s) (sIDHistory) of this identity were evaluated \
+                 into the token — ACEs referencing an old SID match like in the real \
+                 logon token (see the explanation path)."
             ),
             PermissionDiagnostic::TrustBoundaryEffectsNotModeled => {
                 "Identity resolved across a domain/trust boundary; if it is a forest trust, \
@@ -1098,6 +1152,7 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
             | PermissionDiagnostic::MembersViaPrimaryGroupIncluded { .. }
             | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible
+            | PermissionDiagnostic::SidHistoryEvaluated { .. }
             | PermissionDiagnostic::GroupResolutionViaGlobalCatalog => DiagnosticSeverity::Neutral,
             // Worth a look — a hidden Deny among skipped ACEs could change the
             // result.
@@ -1508,6 +1563,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             ad_connected: true,
             memberships: vec![
@@ -1545,6 +1601,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             via,
             children: vec![],
@@ -1561,6 +1618,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             members,
             diagnostics: vec![],
@@ -1644,6 +1702,7 @@ mod tests {
             disabled: false,
             user_principal_name: None,
             sid_history_count: 0,
+            sid_history: Vec::new(),
         };
         // A group passes.
         assert!(members_view_rejection(&identity(IdentityKind::Group)).is_none());

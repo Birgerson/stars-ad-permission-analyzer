@@ -389,10 +389,23 @@ fn write_permissions_table(
                     diag_parts.push(format!(
                         "<span class=\"badge badge-high\" \
                          title=\"This identity carries {count} historical SID(s) \
-                         (sIDHistory). ACEs referencing a historical SID are not \
-                         evaluated, but the real logon token includes it — \
-                         effective rights may be understated. Treat as \
+                         (sIDHistory) that were NOT evaluated into the token \
+                         (value unreadable, or the row was stored before \
+                         evaluation existed). The real logon token includes \
+                         them — effective rights may be understated. Treat as \
                          incomplete.\">⚠ {count} historical SID(s) not evaluated</span>"
+                    ));
+                }
+                PermissionDiagnostic::SidHistoryEvaluated { count } => {
+                    // Neutral: the token faithfully includes the old SIDs
+                    // (ADR 0056) — informational, the evaluation is exact.
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-neutral\" \
+                         title=\"{count} historical SID(s) (sIDHistory) of this \
+                         identity were evaluated into the token. ACEs referencing \
+                         an old SID match exactly like in the real logon token — \
+                         the explanation path names each historical SID. \
+                         Informational.\">ℹ {count} historical SID(s) evaluated</span>"
                     ));
                 }
                 PermissionDiagnostic::TrustBoundaryEffectsNotModeled => {
@@ -635,6 +648,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             path: NormalizedPath("C:\\Test".to_owned()),
             ntfs_mask: AccessMask(0x0012_0089),

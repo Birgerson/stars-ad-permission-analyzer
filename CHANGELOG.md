@@ -10,7 +10,35 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see v1.7.7-rc1 below for the latest pre-release.)
+### Added
+
+- **`sIDHistory` is evaluated into the access token (ADR 0056).** Closes the
+  user-history half of known-limitations L3 and deep-review 2026-07-04
+  finding F1. For a migrated account resolved on the direct in-base LDAP
+  path, the historical SIDs are parsed and added to the evaluated token —
+  Windows includes them in the real logon token unconditionally within the
+  account's forest, so an ACE on the old SID now **matches** (Allow *and*
+  Deny) instead of understating the effective right:
+  - the explanation path names each historical SID
+    (`Historical SID (sIDHistory): S-… — included in the evaluated token`);
+  - new informational marker **`SidHistoryEvaluated { count }`** (Neutral,
+    not an incompleteness trigger) makes the token change visible in the
+    CLI, GUI, and HTML report;
+  - **`SidHistoryPresent { count }`** narrows to "present but **not**
+    evaluated" (a malformed value, or reports persisted before this
+    change) and stays a Concern-level incompleteness trigger — old stored
+    reports keep decoding to exactly their original meaning;
+  - the **share-side token carries the same history SIDs** (CLI and GUI),
+    so NTFS ∩ Share evaluation cannot diverge;
+  - the evaluated/not-evaluated split lives in one place
+    (`Identity::sid_history_diagnostics`), shared by the permission engine
+    and the membership view;
+  - SAM/LSA- and FSP-resolved identities cannot read the attribute — count
+    stays 0, no false positives, their boundary markers still apply.
+  - **Deliberately out of scope** (documented in ADR 0056 / L3): the
+    historical SIDs of *groups* (still missed, now explicitly tracked),
+    trust SID-filtering topology (L4), and a "granted via historical SID"
+    risk rule.
 
 ---
 

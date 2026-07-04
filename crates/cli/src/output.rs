@@ -325,10 +325,17 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      originally stored. Treat as incomplete.");
             }
             PermissionDiagnostic::SidHistoryPresent { count } => {
-                println!("  [!] This identity carries {count} historical SID(s) (sIDHistory).");
-                println!("      ACEs that reference a historical SID are not evaluated, but");
-                println!("      the real logon token still includes it — effective rights");
-                println!("      may be understated. Treat as incomplete.");
+                println!("  [!] This identity carries {count} historical SID(s) (sIDHistory)");
+                println!("      that were NOT evaluated into the token (value unreadable, or");
+                println!("      the row was stored before evaluation existed). The real");
+                println!("      logon token still includes them — effective rights may be");
+                println!("      understated. Treat as incomplete.");
+            }
+            PermissionDiagnostic::SidHistoryEvaluated { count } => {
+                println!("  [i] {count} historical SID(s) (sIDHistory) of this identity were");
+                println!("      evaluated into the token (ADR 0056). ACEs referencing an old");
+                println!("      SID match exactly like in the real logon token — see the");
+                println!("      explanation path for each historical SID. Informational.");
             }
             PermissionDiagnostic::TrustBoundaryEffectsNotModeled => {
                 println!("  [i] Identity resolved across a domain / trust boundary (foreign");

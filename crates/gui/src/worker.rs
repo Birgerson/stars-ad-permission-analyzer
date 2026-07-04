@@ -909,7 +909,6 @@ async fn handle_analyze(
     // token would silently match nothing (review 2026-07-01 deep pass,
     // finding 1).
     let res = resolve_identity_sids(identity, ldap).await?;
-    let user_sid = res.identity.sid.0.clone();
 
     let (local_group_sids, local_group_memberships, local_group_status) =
         collect_local_group_sids_for_path(path, smb_server, &res.identity, &res.memberships);
@@ -918,7 +917,7 @@ async fn handle_analyze(
         path,
         smb_server,
         share_name,
-        &user_sid,
+        &res.identity,
         &res.memberships,
         &local_group_sids,
         AccessContext::for_path_with_smb(path, smb_server, share_name),
@@ -1295,8 +1294,8 @@ async fn handle_scan(
     let ldap = normalized.ldap.as_ref();
 
     // Raw identity in — validated and dispatched inside
-    // `resolve_identity_sids`. Everything downstream uses the RESOLVED SID
-    // (`user_sid`), never the raw input (review 2026-07-01 deep pass,
+    // `resolve_identity_sids`. Everything downstream uses the RESOLVED
+    // identity, never the raw input (review 2026-07-01 deep pass,
     // finding 1).
     let res = match resolve_identity_sids(identity, ldap).await {
         Ok(r) => r,
@@ -1304,7 +1303,6 @@ async fn handle_scan(
             return make_early_summary(format!("Identity resolution failed: {e}"));
         }
     };
-    let user_sid = res.identity.sid.0.clone();
     let engine_flags = res.engine_flags();
     let sam_fallback = engine_flags.group_resolution_via_sam_fallback;
     let identity_not_in_configured_ldap_base = engine_flags.identity_not_in_configured_ldap_base;
@@ -1347,7 +1345,7 @@ async fn handle_scan(
         root,
         smb_server,
         share_name,
-        &user_sid,
+        &identity,
         &memberships,
         &local_group_sids,
         AccessContext::for_path_with_smb(root, smb_server, share_name),
@@ -2144,6 +2142,7 @@ fn bare_sid_identity(sid: &str) -> (Identity, Vec<GroupMembership>) {
         disabled: false,
         user_principal_name: None,
         sid_history_count: 0,
+        sid_history: Vec::new(),
     };
     (identity, vec![])
 }
@@ -2156,7 +2155,9 @@ fn resolve_share_status(
     path: &str,
     smb_server: Option<&str>,
     share_name: Option<&str>,
-    sid: &str,
+    // The RESOLVED identity — its SID and its historical SIDs (sIDHistory,
+    // ADR 0056) both go into the share token so it matches the NTFS token.
+    identity: &Identity,
     memberships: &[GroupMembership],
     local_group_sids: &[adpa_core::model::Sid],
     access_context: AccessContext,
@@ -2178,8 +2179,13 @@ fn resolve_share_status(
     // access context further ensures e.g. NETWORK (S-1-5-2) is in the SMB
     // token, otherwise Deny-NETWORK share ACEs are ignored (follow-up
     // review finding 1).
-    let user_sids =
-        build_token_sids_with_context(sid, memberships, local_group_sids, access_context);
+    let user_sids = build_token_sids_with_context(
+        &identity.sid.0,
+        &identity.sid_history,
+        memberships,
+        local_group_sids,
+        access_context,
+    );
 
     match get_share_dacl(&server, &share) {
         Ok(scan) => {
@@ -2241,6 +2247,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             ad_connected: true,
             memberships: vec![],
@@ -2286,6 +2293,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             members: vec![],
             diagnostics: vec![PermissionDiagnostic::GroupMemberEnumerationIncomplete {
@@ -2312,6 +2320,7 @@ mod tests {
                 disabled,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             via,
             children: vec![],
@@ -2325,6 +2334,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             members: vec![
                 mk(
@@ -2378,12 +2388,13 @@ mod tests {
             disabled: false,
             user_principal_name: None,
             sid_history_count: 0,
+            sid_history: Vec::new(),
         };
         let (status, _unsupported) = resolve_share_status(
             r"C:\Windows\SYSVOL",
             None,
             None,
-            &dummy_id.sid.0,
+            &dummy_id,
             &[],
             &[],
             AccessContext::LocalInteractive,
@@ -2726,6 +2737,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             path: NormalizedPath(r"C:\Root\Sub".to_owned()),
             ntfs_mask: AccessMask(0x001F01FF),
