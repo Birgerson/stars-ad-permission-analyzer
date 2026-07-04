@@ -48,8 +48,6 @@ const CONTAINER_INHERIT_ACE: u8 = 0x02;
 const NO_PROPAGATE_INHERIT_ACE: u8 = 0x04;
 const INHERIT_ONLY_ACE: u8 = 0x08;
 
-/// `propagation_flags` (NP|IO — wie/ob es weiterpropagiert).
-///
 /// Splits `ACE_HEADER::AceFlags` into the .NET-equivalent fields
 /// `inheritance_flags` (OI|CI — which children inherit) and
 /// `propagation_flags` (NP|IO — how/whether it propagates). The INHERITED

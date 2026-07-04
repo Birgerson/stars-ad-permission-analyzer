@@ -19,8 +19,6 @@ use adpa_core::{
 };
 use serde::Serialize;
 
-///   Allow/Deny-ACE unterscheidbar.
-///
 /// Version number of the JSON schema — bump it on structural changes.
 /// * v2 (round-8 follow-up): new `path_trustees` field added.
 /// * v3 (round-10 finding 4): `path_trustees` entries are now a tagged

@@ -505,7 +505,6 @@ pub struct IdentitySuggestion {
     /// One-letter UI marker: `U` (user), `G` (group), `L` (local group),
     /// `W` (well-known).
     pub kind_icon: String,
-    /// bleiben.
     /// Optional description (NetAPI `comment` fields) — may be empty.
     pub description: String,
 }
@@ -1383,7 +1382,6 @@ async fn handle_scan(
     let mut permissions = Vec::with_capacity(walk.objects.len());
     let scan_access_context = AccessContext::for_path_with_smb(root, smb_server, share_name);
 
-    // `validation::path::SmbAuditContext` — dieselbe Quelle wie CLI
     // Round-10 finding 1: server/share derivation lives centrally in
     // `validation::path::SmbAuditContext` — the same source CLI
     // analyze/scan and `resolve_scan_share_status` use. Result: every

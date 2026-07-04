@@ -136,7 +136,6 @@ fn share_status_label(status: &ShareEvalStatus) -> String {
     }
 }
 
-/// kontaminiert (wie z. B. bei `read_failed:<lange Meldung>`).
 /// Splits `LocalGroupEvalStatus` into two CSV columns: status label and
 /// error text (empty when no error). Keeps the status grep-/Excel-filter
 /// friendly without the error text contaminating the status field.

@@ -12,6 +12,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **Language gate: closed the umlaut-free German blind spot.** Closes
+  deep-review 2026-07-04 finding F3. The detector reported green while 18
+  German remnants sat in tracked sources — 17 orphaned half-lines left
+  over from the DE→EN migration (each above its English translation) and
+  one **user-visible GUI status string** (`"Lese DACL..."` → `"Reading
+  DACL..."`). All are purged; the denylist gained the missed word stems
+  (`wie`, `Wichtig`, `Aktionen`, `destruktive`, `verworfen`, `entsteht`,
+  `Mitgliedschaften`, `Lese/lesen`, …) plus a `mitglied` substring stem,
+  and the `--selftest` suite now pins the exact previously-missed lines
+  (17 must-flag, 10 must-pass) so the gate fails loudly if they ever come
+  back. CI already runs the self-test before the repository scan.
+
 - **Update policy: a pre-release now orders before its final release
   (ADR 0057).** Closes deep-review 2026-07-04 finding F4. The version
   comparison used to strip `-rc1` and treat `1.1.0-rc1` as equal to

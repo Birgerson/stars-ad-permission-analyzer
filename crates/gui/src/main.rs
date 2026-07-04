@@ -117,10 +117,9 @@ slint::slint! {
         out property <length> font-xxl: 20px;
     }
 
-    // Haupt-Aktionen wie Analyze, Scan starten, Vergleichen.
-    // PrimaryButton — accent background, white text. For main actions.
+    // PrimaryButton — accent background, white text. For main actions
+    // like Analyze, Start Scan, Compare.
     //
-    // Wichtig: `horizontal-stretch: 0; vertical-stretch: 0` plus
     // Important: pinning stretch + max-height keeps the parent layout
     // from inflating the button to fill the available space.
     component PrimaryButton inherits Rectangle {
@@ -161,7 +160,6 @@ slint::slint! {
         }
     }
 
-    // DangerButton — destruktive Aktionen wie Cancel/Delete.
     // DangerButton — destructive actions like Cancel/Delete.
     component DangerButton inherits Rectangle {
         in property <string> text;
@@ -2487,7 +2485,7 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             };
             ui.set_a_trustees_running(true);
             ui.set_a_has_trustees(false);
-            ui.set_a_status("Lese DACL...".into());
+            ui.set_a_status("Reading DACL...".into());
             ui.set_a_status_is_error(false);
             if let Err(e) = req_tx.send(WorkerRequest::AnalyzeTrustees {
                 path,

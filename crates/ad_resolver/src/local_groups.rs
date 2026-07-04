@@ -403,13 +403,6 @@ pub fn get_local_group_members(
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
-///
-/// 1. Mitglieder von `L` via [`get_local_group_members`] holen.
-///    `complete = true`, Quelle `LocalGroup`.
-///    `[user → vermittler → L]`, `complete = true`.
-/// 4. Otherwise chain `[user, L]`, `complete = false` with source `LocalGroup`
-///
-///
 /// Reconstructs concrete membership chains for every local group in which
 /// `user_sid` is a direct or transitive member.
 ///

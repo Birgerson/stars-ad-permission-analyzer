@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::UpdateChannel;
 
-/// In Windows-Pfadkomponenten verbotene Zeichen — gleicher Satz wie in
 /// Characters forbidden inside Windows path components — same set as in
 /// [`validation::path`] so manifest paths are not accepted more leniently
 /// than user-supplied paths.

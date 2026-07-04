@@ -610,7 +610,6 @@ mod tests {
         let b = a.join("b");
 
         std::fs::create_dir_all(&a).expect("create a");
-        // starten.
         // `b` is a junction back to `root` — once the walker enters `b`,
         // without loop detection it would start over from `root`.
         let status = std::process::Command::new("cmd")

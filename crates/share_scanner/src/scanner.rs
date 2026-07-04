@@ -79,15 +79,12 @@ pub struct ShareDaclScan {
 /// Result of an SMB share scan.
 pub struct ShareScanResult {
     pub shares: Vec<Share>,
-    /// in denen `NullDacl` vs. `Acl(vec![])` unterscheidbar bleiben
     /// Flattened aggregate ACE list across all shares — a convenience
     /// for callers that don't need per-share resolution. For audits
     /// where `NullDacl` vs. `Acl(vec![])` must stay distinguishable,
     /// `share_dacls` is the authoritative source.
     pub permissions: Vec<SharePermission>,
     pub errors: Vec<ShareScanError>,
-    /// verworfen.
-    ///
     /// Per-share DACL status in enumeration order including audit
     /// diagnostics. Preserves two things: first, the `NullDacl` vs.
     /// present-but-empty `Acl(vec![])` distinction (Finding 7); second,
@@ -228,7 +225,6 @@ pub fn enumerate_shares(server: &str) -> Result<Vec<Share>, CoreError> {
         std::slice::from_raw_parts(buf.as_ptr() as *const SHARE_INFO_502, entries_read as usize)
     };
 
-    // \\\share entsteht.
     // For empty server names produce UNC paths with "localhost" to avoid \\\share.
     let server_for_unc = if server.is_empty() {
         "localhost"

@@ -622,7 +622,7 @@ mod tests {
             .is_empty());
     }
 
-    // --- AdminRightsRule: destruktive/administrative Einzelrechte ---
+    // --- AdminRightsRule: destructive/administrative single rights ---
 
     #[test]
     fn write_dac_only_flagged_as_permission_change() {
