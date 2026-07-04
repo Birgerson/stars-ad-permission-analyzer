@@ -10,6 +10,22 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+(No unreleased changes — see 1.7.7 below for the latest release.)
+
+---
+
+## [1.7.7] — 2026-07-04
+
+**Final release.** Consolidates the `1.7.7-rc1` Group → Members reverse view
+with the full round of post-rc1 hardening: a deep external review (findings
+F1–F5, all fixed) and the completion of SID-history evaluation for both
+users and groups — closing known-limitations **L3** entirely. The update
+version policy now orders pre-releases correctly (so this very rc1 → final
+transition is a clean upgrade), the language gate's blind spot is closed,
+and the walker distinguishes real reparse cycles from duplicate targets.
+Verified live against the multi-forest lab (verification.md Block M) and by
+the Windows `AccessCheck` conformance harness in CI.
+
 ### Fixed
 
 - **Walker: real reparse cycles are now distinguished from duplicate
