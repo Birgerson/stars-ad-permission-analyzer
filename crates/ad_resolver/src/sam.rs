@@ -403,6 +403,7 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
         disabled,
         user_principal_name: None,
         sid_history_count: 0,
+        sid_history: Vec::new(),
     };
 
     // Global groups only meaningful for user accounts.

@@ -272,6 +272,7 @@ fn stars_multigroup_mask(fixture: &[MultiAce], user_sid: &str) -> u32 {
         disabled: false,
         user_principal_name: None,
         sid_history_count: 0,
+        sid_history: Vec::new(),
     };
 
     let result = DefaultPermissionEngine
@@ -438,6 +439,7 @@ fn stars_effective_mask(fixture: &[FixtureAce], sid_str: &str) -> u32 {
         disabled: false,
         user_principal_name: None,
         sid_history_count: 0,
+        sid_history: Vec::new(),
     };
 
     let result = DefaultPermissionEngine

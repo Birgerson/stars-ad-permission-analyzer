@@ -264,6 +264,7 @@ mod tests {
                 disabled: false,
                 user_principal_name: None,
                 sid_history_count: 0,
+                sid_history: Vec::new(),
             },
             path: NormalizedPath(path.to_string()),
             ntfs_mask: AccessMask(mask),

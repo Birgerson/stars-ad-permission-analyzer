@@ -155,7 +155,8 @@ out; the report font is Arial.
 | `GroupResolutionViaGlobalCatalog` | Neutral | **yes** | Memberships came from a Global Catalog bind; only universal groups replicate fully to the GC. |
 | `UnsupportedShareAces { count }` | Notice | **yes** | The share DACL contained ACE types the parser could not evaluate; the share mask is potentially incomplete. |
 | `UnsupportedNtfsAces { count }` | Notice | **yes** | The NTFS DACL contained ACE types the parser could not evaluate; a hidden Deny among them could change the result. |
-| `SidHistoryPresent { count }` | Concern | **yes** | The account carries `sIDHistory`; ACEs on a historical SID are not evaluated — the effective right may be **understated** (ADR 0052). |
+| `SidHistoryPresent { count }` | Concern | **yes** | The account carries `count` historical SIDs (`sIDHistory`) that were **not** evaluated into the token (value unreadable, or the row predates evaluation) — the effective right may be **understated** (ADR 0052 / ADR 0056). |
+| `SidHistoryEvaluated { count }` | Neutral | no | `count` historical SIDs (`sIDHistory`) **were evaluated** into the token — ACEs on an old SID match like in the real logon token; the explanation path names each one (ADR 0056). |
 | `IdentityLookupFailed { reason }` | Concern | **yes** | LDAP identity lookup failed (bind / timeout / DC / query); analysis ran with a placeholder identity — domain-group ACEs may be missing. `reason` carries the original error. |
 | `GroupResolutionFailed { reason }` | Concern | **yes** | Recursive group resolution failed or was skipped; domain-group ACEs may be missing. `reason` carries the original error. |
 | `PersistedEvidenceDecodeFailed { detail }` | Concern | **yes** | A persisted (historical) row could not be fully decoded; the reconstructed result may be less complete than originally stored. |
@@ -364,13 +365,22 @@ permanently not part of the product:
   answer "is the user even allowed to use SMB?", you also need the
   SMB server configuration.
 
-### 13. SID history and cross-forest trust filtering — the silent gaps
+### 13. SID history and cross-forest trust filtering
 
+- **What we evaluate (since ADR 0056):**
+  - **User SID history:** a migrated account carries earlier SIDs
+    (`sIDHistory`). Within the account's forest Windows includes them in
+    the logon token unconditionally, so Stars now adds the parsed values
+    to the evaluated token: an ACE on the old SID **matches**, the
+    explanation path names the historical SID, and the finding carries
+    the informational `SidHistoryEvaluated` marker. History values are
+    read only on the direct in-base LDAP path — exactly where the
+    same-forest assumption behind the whole group model holds.
 - **What we do not model:**
-  - **SID history:** a migrated account carries earlier SIDs
-    (`sIDHistory`). A DACL that still references the old SID grants
-    access at runtime, but Stars only matches the current SID.
-    → effective rights **understated**.
+  - **Group SID history:** the logon token also carries the historical
+    SIDs of the user's *groups*; those are not read yet — an ACE on a
+    migrated group's old SID is still missed (tracked in
+    known-limitations L3 as the open remainder).
   - **SID filtering / quarantine:** across a trust, the DC drops
     certain SIDs from the token. Stars credits an ACE on such a SID
     even though the trust filters it out. → effective rights
@@ -379,29 +389,28 @@ permanently not part of the product:
     "Allowed to authenticate" on the resource computer. Without it the
     user cannot log on at all, regardless of the DACL. Stars does not
     model this. → effective rights **overstated**.
-- **Effect:** Stars shows the **theoretical DACL view**, not the
-  filtered runtime result. In migrated or multi-forest environments a
-  finding can be wrong in **both** directions.
-- **How visible (since ADR 0052):** the gaps are now **flagged**.
-  `SidHistoryPresent { count }` (high, `incomplete = true`) fires when an
-  LDAP-resolved in-base account carries `sIDHistory` — the under-report case
-  (the SAM/LSA/FSP path cannot read `sIDHistory`, so it does not fire there).
-  `TrustBoundaryEffectsNotModeled` (info) fires for identities resolved
-  across a domain/trust boundary (via an FSP or outside the configured LDAP
-  base) and warns that *if* the boundary is a forest trust, SID filtering
-  and Selective Authentication may make access lower than shown — the
-  over-report case. Both render in the CLI and the HTML report. (Before ADR
-  0052 these produced no marker — the one place Stars could be *silently*
-  wrong.)
-- **Solution:** the **visibility step shipped** (ADR 0052) — the markers
-  above make the gaps honest instead of silent. The deeper work
-  (evaluating `sIDHistory` into the token; reading `trustAttributes` to
-  model the actual filter) remains a tracked roadmap item
-  (known-limitations L3/L4); real detection of the runtime filter would
-  require a synthetic logon, which violates the read-only principle and is
-  deliberately not implemented. Until the deeper step lands, still
-  cross-check migrated or trust accounts against the trust configuration
-  (`trustAttributes`, `trustDirection`) and the `sIDHistory` attribute.
+- **Effect:** for migrated accounts the user-history part is now exact;
+  the trust-runtime filters remain the **theoretical DACL view**, so in
+  multi-forest environments a finding can still be **overstated**.
+- **How visible:** `SidHistoryEvaluated { count }` (info) says the old
+  SIDs were part of the token. `SidHistoryPresent { count }` (high,
+  `incomplete = true`) now means the opposite — historical SIDs that were
+  **not** evaluated (unreadable value, or a report stored before ADR
+  0056; the SAM/LSA/FSP path cannot read `sIDHistory`, so it does not
+  fire there). `TrustBoundaryEffectsNotModeled` (info) fires for
+  identities resolved across a domain/trust boundary (via an FSP or
+  outside the configured LDAP base) and warns that *if* the boundary is
+  a forest trust, SID filtering and Selective Authentication may make
+  access lower than shown — the over-report case. All render in the CLI
+  and the HTML report.
+- **Solution:** user-history evaluation **shipped** (ADR 0056, on top of
+  the ADR 0052 visibility step). The remaining work — group `sIDHistory`
+  and reading `trustAttributes` to model the actual filter — stays a
+  tracked roadmap item (known-limitations L3/L4); real detection of the
+  runtime filter would require a synthetic logon, which violates the
+  read-only principle and is deliberately not implemented. Until then,
+  cross-check trust accounts against the trust configuration
+  (`trustAttributes`, `trustDirection`).
 
 ---
 

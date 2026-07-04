@@ -72,10 +72,11 @@ const IDENTITY_ATTRS: &[&str] = &[
     // a domain bind cannot see cross-domain members (ADR 0055 / finding F2).
     "groupType",
     // Binary, multi-valued: historical SIDs from a domain/forest migration.
-    // Only the COUNT is used (PermissionDiagnostic::SidHistoryPresent) — Stars
-    // does not evaluate the values into the token. May be unreadable for a
-    // least-privilege bind, in which case the count is 0 (marker just stays
-    // silent — no false positive).
+    // The values are parsed and evaluated into the token (ADR 0056); the
+    // count stays the authoritative total so an unparseable value remains
+    // visible as "present, not evaluated". May be unreadable for a
+    // least-privilege bind, in which case count and values are empty
+    // (markers just stay silent — no false positive).
     "sIDHistory",
 ];
 
@@ -122,11 +123,27 @@ impl RawEntry {
 
     /// Total number of values for an attribute, regardless of whether the
     /// LDAP layer classified them as string or binary. Used for multi-valued
-    /// binary attributes such as `sIDHistory`, where the count matters but
-    /// the raw SID bytes do not.
+    /// binary attributes such as `sIDHistory`, where the count is the
+    /// authoritative total even when a value fails to parse.
     pub fn value_count(&self, name: &str) -> usize {
         self.attrs.get(name).map(Vec::len).unwrap_or(0)
             + self.bin_attrs.get(name).map(Vec::len).unwrap_or(0)
+    }
+
+    /// All values of an attribute as raw bytes, regardless of whether the
+    /// LDAP layer classified them as string or binary. The classification
+    /// happens per value: binary SID bytes that happen to form valid UTF-8
+    /// land in `attrs`, all others in `bin_attrs` — so a caller parsing
+    /// binary values (e.g. `sIDHistory`, ADR 0056) must consider both maps.
+    pub fn all_values(&self, name: &str) -> Vec<&[u8]> {
+        let mut out: Vec<&[u8]> = Vec::new();
+        if let Some(vals) = self.attrs.get(name) {
+            out.extend(vals.iter().map(|s| s.as_bytes()));
+        }
+        if let Some(vals) = self.bin_attrs.get(name) {
+            out.extend(vals.iter().map(Vec::as_slice));
+        }
+        out
     }
 }
 
