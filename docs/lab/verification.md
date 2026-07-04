@@ -1,6 +1,6 @@
 # Verification of the Lab Setup and the Stars Software
 
-> **Last update:** post-v1.7.7-rc1 (2026-07-04, Block M). This file grows by one verification block per release; older blocks stay unchanged as a historical record.
+> **Last update:** post-ADR-0059 (2026-07-04, Block N). This file grows by one verification block per release; older blocks stay unchanged as a historical record.
 > Each verification block notes its own Stars version (e.g. "Block C — v1.5.8"). The lab topology itself comes from the initial setup (see commit timestamps of [`forest-topology.md`](forest-topology.md)).
 
 This file documents *what* was verified, *how* it was checked, and *what* Stars actually produced. Reproduce with the scripts under [`scripts/`](scripts/).
@@ -1371,6 +1371,56 @@ trust-modeling gap.
 - **Closes:** the live proof of ADR 0056 — the L3 user-history
   under-report is fixed in the main result, with explainable provenance,
   and matches Windows in the current (history-honoring) trust state.
-- **Stays open:** group `sIDHistory` (L3 remainder), trust-filtering
-  modeling (L4, see M.5), and — as everywhere in this file — this is a
-  manual recorded run, not a CI-automated lab suite.
+- **Stays open:** group `sIDHistory` (L3 remainder — since closed in code
+  by ADR 0059, see Block N), trust-filtering modeling (L4, see M.5), and —
+  as everywhere in this file — this is a manual recorded run, not a
+  CI-automated lab suite.
+
+## Block N — Group `sIDHistory` (ADR 0059): code complete, live proof deferred (2026-07-04)
+
+**Stars version:** post-ADR-0059, main commit `81c3c59`.
+**What shipped:** group `sIDHistory` is now parsed from the transitive
+membership entries, evaluated into the token, named on the membership
+step, and split into `GroupSidHistoryEvaluated` / `GroupSidHistoryPresent`
+markers — known-limitations L3 is closed in code (see ADR 0059). This is
+mechanically **identical** to the user-history path proven live in Block M:
+the same `parse_sid_history` helper, the same token insertion, only the
+source is a `GroupMembership` instead of the `Identity`. Coverage:
+grant-via-group-old-SID, deny-via-group-old-SID, partial-parse
+incompleteness, token-builder inclusion, membership-step naming, plus
+model / principal / risk-rule tests — all green in CI, alongside the
+Windows `AccessCheck` conformance job.
+
+**Live-proof attempt (recorded honestly):** building a *group* fixture
+needs a migrated group carrying `sIDHistory`, which — like the user
+fixture — cannot be written directly (AD rejects it) and must be produced
+by a real cross/intra-domain migration. The attempt:
+
+1. Chose `emea.res.lab` as the source domain — it is **intra-forest**
+   (`Get-ADTrust`: `IntraForest = True`), which is the *unconditional*
+   ADR 0059 case (Windows honors intra-forest history with no trust
+   filter, so no L4 caveat).
+2. Created a source group `EMEA_GSrc01` in `emea.res.lab`
+   (SID `S-1-5-21-4254209233-87866225-73770373-1108`) and a destination
+   group `gmig01` in `res.lab` with `t.reader` as a member.
+3. `Add-ADReplSidHistory` (DSInternals, DRSUAPI) to migrate the source
+   SID into `gmig01.sIDHistory` → **`The RPC server is unavailable`**.
+
+The blocker is infrastructure, not the feature: `Add-ADReplSidHistory`
+uses the DRS replication RPC and requires **"Audit account management"
+enabled on the source domain** plus a marker group — exactly the fiddly
+setup the ext2.lab cross-forest user injection needed (see LabTopology
+§ext2 notes). `emea.res.lab` does not have that audit configuration, so
+the injection cannot bind. Configuring it (source-domain audit policy +
+DRS reachability) is a substantial lab-infra task disproportionate to a
+*confirmatory* run, given the mechanism is already live-proven for the
+identical user path (Block M) and the group path is fully unit- and
+integration-tested.
+
+**Cleanup:** both test groups (`EMEA_GSrc01`, `gmig01`) were removed; the
+lab is back to its prior state. No half-built fixture is left behind.
+
+**Status:** ADR 0059 is **code-complete and test-proven**; a dedicated
+live group fixture is deferred future lab work (enable source-domain audit
+on `emea.res.lab`, then repeat steps 2–3 and set an ACE on the migrated
+group's old SID for a member to reach).
