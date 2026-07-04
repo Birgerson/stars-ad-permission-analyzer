@@ -1,6 +1,6 @@
 # Stars — Technical Documentation
 
-**Version:** v1.5.16 (2026-06-06)
+**Version:** v1.7.7 (2026-07-04)
 **Audience:** Developers, code reviewers, and security engineers who
 want to understand *how* Stars works internally — not *how to use* it
 (that's the [User Guide](user-guide.md)).
@@ -965,12 +965,30 @@ auditable at all. It works in three layers:
 enum PermissionDiagnostic {
     NonCanonicalDaclOrder { at_index: usize },
     UnsupportedShareAces { count: usize },
+    UnsupportedNtfsAces { count: usize },
     DomainGroupRecursionIncomplete,
     IdentityDisabled,
     IdentityNotInConfiguredLdapBase,
     IdentityDisabledStatusUnknown,
     IdentityLookupFailed { reason: String },
     GroupResolutionFailed { reason: String },
+    OwnerRightsAceApplied,
+    IdentityResolvedViaForeignSecurityPrincipal,
+    GroupResolutionViaGlobalCatalog,
+    PersistedEvidenceDecodeFailed { detail: String },
+    // sIDHistory (ADR 0056 user / ADR 0059 groups): the "…Evaluated"
+    // variants are informational (the old SIDs WERE added to the token);
+    // the "…Present" variants are the incompleteness case (an
+    // unparseable value that could not be evaluated).
+    SidHistoryEvaluated { count: usize },
+    SidHistoryPresent { count: usize },
+    GroupSidHistoryEvaluated { groups: usize, count: usize },
+    GroupSidHistoryPresent { count: usize },
+    TrustBoundaryEffectsNotModeled,
+    // Members-view (reverse Group → members) markers:
+    MembersViaPrimaryGroupIncluded { count: usize },
+    GroupMemberEnumerationIncomplete { reason: String },
+    UniversalGroupCrossDomainMembersNotVisible,
 }
 ```
 
@@ -993,6 +1011,18 @@ The strict rule here: **no marker arises in the engine without a
 corresponding input.** When a marker is missing, you don't debug the
 engine — you debug the caller (CLI / GUI) that failed to forward the
 flags correctly from `engine_flags()`.
+
+Two marker families derive not from `engine_flags()` but from the
+resolved data itself, through **shared helpers on the core model** so the
+engine and the standalone membership view cannot classify them
+differently: `Identity::sid_history_diagnostics()` (the user's
+`sIDHistory`, ADR 0056) and `group_sid_history_diagnostics(&memberships)`
+(the groups' `sIDHistory`, ADR 0059). Each splits into an informational
+`…Evaluated` marker (the historical SIDs were added to the token) and an
+incompleteness `…Present` marker (a value that could not be parsed). The
+reparse cycle / duplicate-target markers (`ReparseCycle`,
+`ReparseDuplicateTarget`, ADR 0058) are the walker's, not the engine's —
+they travel as `WalkError`s on the scan result.
 
 ### 9.3 Risk layer — incomplete classification
 

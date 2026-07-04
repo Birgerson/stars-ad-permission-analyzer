@@ -16,7 +16,7 @@ For every user, the tool shows the effective access rights that actually apply t
 
 > **Stars is exclusively a read-and-analyze tool. It does not modify any permissions, groups, or AD objects.**
 
-![Stars Analyze tab (v1.7.6) — target path, identity, resolution mode, SMB share fields, and the two action buttons "Analyze" and "Who has access?"](docs/screenshots/stars-analyze-tab.png)
+![Stars Analyze tab (v1.7.7) — target path, identity, resolution mode, SMB share fields, and the two action buttons "Analyze" and "Who has access?"](docs/screenshots/stars-analyze-tab.png)
 
 ## Contents
 
@@ -116,7 +116,7 @@ Get the current Windows installer from the **[Releases page](https://github.com/
 
 System requirements: Windows 10, Windows 11, or Windows Server. No additional runtime needed.
 
-> ⚠️ **Antivirus false positive (every unsigned release, incl. v1.7.6).** Because the installer is **not yet code-signed**, Microsoft Defender — and some other engines — may flag it with a **generic, machine-learning heuristic** such as `Trojan:Win32/Wacatac.C!ml`. The `!ml` suffix means "flagged by an ML model," **not** a match against known malware; `Wacatac` is Defender's catch-all label and is the single most common false positive for new, unsigned, freshly-compiled binaries. It is triggered by the combination of *unsigned + zero reputation + AD/SMB enumeration behaviour* — exactly what a read-only permission auditor legitimately does.
+> ⚠️ **Antivirus false positive (every unsigned release, incl. v1.7.7).** Because the installer is **not yet code-signed**, Microsoft Defender — and some other engines — may flag it with a **generic, machine-learning heuristic** such as `Trojan:Win32/Wacatac.C!ml`. The `!ml` suffix means "flagged by an ML model," **not** a match against known malware; `Wacatac` is Defender's catch-all label and is the single most common false positive for new, unsigned, freshly-compiled binaries. It is triggered by the combination of *unsigned + zero reputation + AD/SMB enumeration behaviour* — exactly what a read-only permission auditor legitimately does.
 >
 > **This is a false positive, and you can prove it yourself:** verify the SHA256 (see below) against the `Stars-vX.Y.Z-Setup.exe.sha256` published next to the installer on the release page. A matching hash means the file is bit-for-bit the build GitHub Actions produced from this public source — by definition nothing could have been injected.
 >
@@ -127,13 +127,13 @@ System requirements: Windows 10, Windows 11, or Windows Server. No additional ru
 So you can confirm your download is bit-for-bit identical to the build produced by GitHub Actions:
 
 ```powershell
-$exe = "Stars-v1.7.6-Setup.exe"  # adapt to your version
+$exe = "Stars-v1.7.7-Setup.exe"  # adapt to your version
 $expected = (Get-Content "$exe.sha256").Split("  ")[0]
 $actual   = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
 if ($actual -eq $expected) { "OK — file matches" } else { "MISMATCH — do NOT use" }
 ```
 
-On WSL / Linux / macOS, `sha256sum -c Stars-v1.7.6-Setup.exe.sha256` works directly.
+On WSL / Linux / macOS, `sha256sum -c Stars-v1.7.7-Setup.exe.sha256` works directly.
 
 > **What the hash file gives you — and what it doesn't:** The hash protects against tampered downloads (mirror modification, MITM). It does **not** replace code signing — you verify the authenticity of the source through the GitHub repo itself, not through the hash. Code signing is planned; see [`docs/codesigning.md`](docs/codesigning.md) for status.
 
@@ -159,7 +159,7 @@ It consists of two programs:
 
 | Program | Description |
 |---------|-------------|
-| `adpa-gui.exe` | Graphical interface (GUI) with Analyze, Groups, Scan, and Delta views |
+| `adpa-gui.exe` | Graphical interface (GUI) with Analyze, Groups, Scan Tree, Delta, and Info views |
 | `adpa.exe` | Command-line interface (CLI) for scripting and automation |
 
 Both programs analyze the same data and use the same permission logic.
@@ -200,7 +200,7 @@ Stars reads Windows access control lists (ACLs) directly from the file system:
 - Explicit and inherited entries
 - Inheritance breaks
 - Owner special rule (implicit READ_CONTROL + WRITE_DAC — correctly suppressed when an OWNER RIGHTS / S-1-3-4 entry governs the owner)
-- Reparse points, junctions, and symbolic links (without infinite loops)
+- Reparse points, junctions, and symbolic links — real cycles and duplicate targets (two junctions to one directory) are told apart, each surfaced as its own typed diagnostic rather than looped, silently skipped, or double-counted
 
 #### Active Directory
 
@@ -214,6 +214,7 @@ Stars resolves users and groups via LDAP:
 - Cyclic group structures
 - **Cross-forest trust users (Foreign Security Principals):** a trust user's home-domain group memberships are resolved through the FSP object and credited to the effective permission — the trust-side gap is flagged, never silently dropped
 - **Multi-domain forests via the Global Catalog (`--global-catalog`):** forest-wide identity lookups in a single run; memberships that the GC only partially replicates are marked accordingly
+- **SID history (`sIDHistory`):** the historical SIDs a migrated user **and** its groups carry are read and **evaluated into the token**, so an ACE on an old SID is honoured exactly as in the real Windows logon token; the explanation names each historical SID, and an informational marker makes the evaluation transparent
 
 #### SMB shares
 
@@ -238,7 +239,7 @@ User max.muster → member of "Accounting" → member of "FileServer_Read"
 
 ### How is Stars started?
 
-Stars is distributed as a **setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.7.6-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and installs **no background services** and **no auto-start components**.
+Stars is distributed as a **setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.7.7-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and installs **no background services** and **no auto-start components**.
 
 > **Note on code signing:** The installer is currently **not code-signed**. Windows SmartScreen will warn on first launch ("Windows protected your PC — unrecognized publisher"). A code-signing certificate is planned but not yet in place — see [`docs/codesigning.md`](docs/codesigning.md). Until then, you can verify the integrity of the file via the SHA256 hash above.
 
@@ -449,7 +450,7 @@ Stars is deliberately limited to analysis. The following is **not** planned and 
 - [![User Guide](https://img.shields.io/badge/User_Guide-c2410c?style=flat-square)](docs/user-guide.md) — step-by-step walkthrough of the GUI and CLI, every tab explained, identity input, AD binding, marker reading, FAQ. **Start here when using Stars for the first time.**
 - [![Technical Documentation](https://img.shields.io/badge/Technical_Docs-c2410c?style=flat-square)](docs/technical-documentation.md) — how Stars works internally: architecture, crate layering, Principal pipeline, permission engine algorithm, diagnostic marker system, threading model. **Start here when reading or contributing code.**
 - [![Features and limits](https://img.shields.io/badge/Features_and_limits-c2410c?style=flat-square)](docs/features-and-limitations.md) — what Stars reliably covers, what is deliberately out of scope, and how the diagnostic markers (`DomainGroupRecursionIncomplete`, `IdentityNotInConfiguredLdapBase`, …) should be read. **Start here when a finding is unexpected.**
-- [![Known limitations](https://img.shields.io/badge/Known_limitations-c2410c?style=flat-square)](docs/known-limitations.md) — structural gaps. Some are flagged at runtime (FSP, Global Catalog, SAM fallback); **SID history and cross-forest trust filtering / selective authentication are not yet modelled and produce no marker** — results in migrated or multi-forest environments can be wrong without warning. Roadmap tracking for future releases.
+- [![Known limitations](https://img.shields.io/badge/Known_limitations-c2410c?style=flat-square)](docs/known-limitations.md) — structural gaps and how each is surfaced. Most are flagged at runtime (FSP, Global Catalog, SAM fallback); **SID history is now evaluated into the token** for users and groups (ADR 0056 / 0059), so migrated accounts are no longer silently under-reported. The one remaining unflagged gap is **cross-forest trust filtering / selective authentication** (L4) — in multi-forest environments a result can still be over-reported. Roadmap tracking for future releases.
 - [![Audit Criteria](https://img.shields.io/badge/Audit_Criteria-c2410c?style=flat-square)](docs/audit-criteria.md) — a complete write-up of which rules Stars uses to evaluate permissions, which risk rules are implemented, what severities they carry, and which permissions are considered optimal for which role.
 - [![OWNER RIGHTS](https://img.shields.io/badge/OWNER_RIGHTS-c2410c?style=flat-square)](docs/owner-rights-sid-s-1-3-4.md) — OWNER RIGHTS (`S-1-3-4`): the implicit owner grant, how an OWNER RIGHTS ACE caps it, and why naive tools state the owner's effective rights wrong. **A real differentiator of Stars.**
 - [![ADRs](https://img.shields.io/badge/ADRs-c2410c?style=flat-square)](docs/adr/) — historical justifications for individual technology and model decisions.
@@ -519,9 +520,9 @@ Stars persists its scan history in `%APPDATA%\Stars\stars_data.db` (SQLite, sepa
 **Birger Labinsch** — IT Specialist for Application Development / Prompt Engineer
 
 **Implementation (Rust workspace, Slint GUI, engine, resolver, tests, documentation):**
-**Claude Opus 4.7** (Anthropic) — as an AI model under direct guidance and continuous review by Birger Labinsch.
+**Claude** (Anthropic) — successive models over the project's lifetime (Opus 4.x and, most recently, Claude Fable 5), as AI tools under direct guidance and continuous review by Birger Labinsch.
 
-This attribution is deliberately transparent: Birger Labinsch did **not** write the code himself but, as a prompt engineer, directed the entire development process through the AI model — from architectural decisions to individual code changes to tests, bug fixes, and documentation. Every commit in this repository therefore also carries a `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>` line that makes the AI contribution visible per change.
+This attribution is deliberately transparent: Birger Labinsch did **not** write the code himself but, as a prompt engineer, directed the entire development process through the AI models — from architectural decisions to individual code changes to tests, bug fixes, and documentation. Every commit in this repository therefore also carries a `Co-Authored-By: Claude <model> <noreply@anthropic.com>` line that records **which** model made each change, so the AI contribution is visible and attributable per commit.
 
 **Embedded attribution marker (disclosed, not hidden):** the compiled binaries carry a small author / AGPL attribution string embedded in the engine (the `*_ATTRIBUTION` constants in `permission_engine` and `risk_engine`, kept with `#[used]`). Because source comments are stripped at compile time but these constants are not, the author's name and the AGPL-3.0 license travel with the shipped `.exe` and can be recovered from it (e.g. `strings Stars.exe | findstr "Birger Labinsch"`). This is a provenance marker for license enforcement under AGPL-3.0; it is plain data, never read by the permission logic, and changes nothing about how Stars evaluates rights.
 

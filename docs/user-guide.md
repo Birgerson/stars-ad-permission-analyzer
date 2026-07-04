@@ -1,6 +1,6 @@
 # Stars — User Guide
 
-**Version:** v1.5.16 (2026-06-06)
+**Version:** v1.7.7 (2026-07-04)
 **Audience:** Windows / AD administrators who want to audit NTFS and
 SMB permissions **without changing anything**.
 
@@ -16,7 +16,7 @@ SMB permissions **without changing anything**.
 1. [What can Stars do?](#what-can-stars-do)
 2. [Installation and prerequisites](#installation-and-prerequisites)
 3. [First run — the GUI](#first-run--the-gui)
-4. [The four GUI tabs](#the-four-gui-tabs)
+4. [The five GUI tabs](#the-five-gui-tabs)
 5. [Identity input forms](#identity-input-forms)
 6. [Active Directory binding (optional)](#active-directory-binding-optional)
 7. [Local paths vs. SMB shares](#local-paths-vs-smb-shares)
@@ -53,8 +53,10 @@ To answer them, Stars reads:
   inherited entries, inheritance flags, owner.
 - **SMB share DACL** and combines it restrictively with the NTFS mask
   (Share ∩ NTFS).
-- **Reparse points / junctions / symlinks** — followed; loops are
-  detected and surfaced.
+- **Reparse points / junctions / symlinks** — followed; a real cycle
+  (a junction back into its own parent chain) and a duplicate target
+  (two junctions to the same directory) are told apart and each surfaced
+  as its own typed diagnostic, never a silent skip or a double count.
 - **Long paths** (`\\?\…`, UNC long-path form `\\?\UNC\…`).
 
 For each finding Stars builds **structured diagnostic markers** when
@@ -92,7 +94,9 @@ The full list lives in
 
 Get the installer from the GitHub release page:
 [releases](https://github.com/Birgerson/stars-ad-permission-analyzer/releases).
-Currently recommended: `Stars-v1.7.2-Setup.exe`.
+Always take the newest **`Stars-vX.Y.Z-Setup.exe`** at the top of the list
+(the current release is `v1.7.7`), and — recommended — the matching
+`.sha256` file to verify integrity.
 
 ### Installation
 
@@ -127,10 +131,11 @@ and shows the engine in action.
 
 > **Important on terminology:** "Identity", "Trustees", and "Risk
 > findings" are **not separate tabs**. They are sections inside the
-> four real tabs. Earlier versions of this guide accidentally listed
-> them as five tabs — this is the corrected wording.
+> five real tabs (`Analyze`, `Groups`, `Scan Tree`, `Delta`, `Info`).
 
 ---
+
+<a name="the-five-gui-tabs"></a>
 
 ## The five GUI tabs
 
@@ -306,8 +311,9 @@ Unchanged paths are hidden so only the relevant entries remain.
 ### `Info` tab — about Stars
 
 Shows version, platform status (e.g. "verified against Server 2022
-and 2025"), license, AI authorship (Co-Author Claude Opus), and
-links to the online documentation. No interactive content.
+and 2025"), license, AI authorship (the implementation was carried out
+by Claude models under direction — see [About the project](../README.md#about-the-project)),
+and links to the online documentation. No interactive content.
 
 ---
 
@@ -576,19 +582,35 @@ Every `EffectivePermission` entry in CLI, HTML, or JSON carries a
 `diagnostics` list. A marker means Stars **warned** you that
 something about the computation is uncertain.
 
+The table below covers the markers you meet most often. The **complete**
+list, grouped by visual severity (grey / amber / orange-red) with the
+exact wording, lives in
+[features-and-limitations.md](features-and-limitations.md#structured-diagnostic-markers-per-finding).
+
 | Marker | Severity | Risk `incomplete`? | What it tells you |
 | --- | --- | --- | --- |
 | `NonCanonicalDaclOrder` | medium | no | DACL is not in Windows canonical order. AccessCheck still walks in stored order — result may differ from a canonicalized expectation. |
-| `UnsupportedShareAces` | medium | **yes** | Share DACL contained ACE types the parser could not interpret (object / callback / conditional / vendor-specific). Share mask is potentially incomplete. |
+| `UnsupportedShareAces` / `UnsupportedNtfsAces` | medium | **yes** | The DACL contained ACE types the parser could not interpret (object / callback / conditional / vendor-specific). A hidden Deny among them could change the result — the mask is potentially incomplete. |
 | `DomainGroupRecursionIncomplete` | medium | **yes** | Group resolution ran through SAM/LSA instead of LDAP. `NetUserGetGroups` returns only direct global groups — nested domain groups are not recursively resolved. |
 | `IdentityDisabled` | info | no | Account is flagged disabled in AD via `userAccountControl/UF_ACCOUNTDISABLE`. ACL-theoretical rights are correct, but the account normally cannot authenticate. |
 | `IdentityNotInConfiguredLdapBase` | medium | **yes** | LSA resolved the SID, but the configured LDAP `base_dn` does not index it. Typical in multi-domain forests / trusts — cross-domain memberships may be missing. |
 | `IdentityDisabledStatusUnknown` | info | no | The `disabled` flag could not be determined (e.g. SAM path without `NetUserGetInfo`, or LDAP did not return the user object). |
+| `IdentityResolvedViaForeignSecurityPrincipal` | info | **yes** | A trust-forest principal resolved via an FSP object; its home-domain groups are credited, but its memberships in its own forest are unknown. |
+| `GroupResolutionViaGlobalCatalog` | info | **yes** | Memberships came from a Global Catalog bind; only universal groups replicate fully to the GC, so foreign-domain global / domain-local memberships may be missing. |
+| `SidHistoryEvaluated { count }` | info | no | The identity carries `count` historical SIDs (`sIDHistory`) and Stars **evaluated them into the token** — an ACE on a migrated account's old SID matches like in the real logon token. The explanation path names each one. |
+| `SidHistoryPresent { count }` | high | **yes** | `count` of the identity's historical SIDs could **not** be evaluated (unreadable value, or a report stored before evaluation existed). The real token includes them, so the right may be understated. |
+| `GroupSidHistoryEvaluated { groups, count }` | info | no | `count` historical SIDs carried by `groups` of the token **groups** were evaluated into the token — an ACE on a migrated group's old SID matches for every member. The membership steps name each one. |
+| `GroupSidHistoryPresent { count }` | high | **yes** | `count` historical SIDs on token groups could not be evaluated — the right may be understated. |
+| `TrustBoundaryEffectsNotModeled` | info | no | The identity was resolved across a domain / trust boundary. **If** that boundary is a forest trust, SID filtering and Selective Authentication may reduce the actual access — these runtime trust effects are not modelled (see [known-limitations.md L4](known-limitations.md)). |
 | `IdentityLookupFailed { reason }` | high | **yes** | LDAP identity lookup failed with a technical error (bind, timeout, DC unreachable). The analysis ran with a placeholder identity and an empty token — ACEs targeting domain groups may be missing. `reason` carries the underlying error. |
 | `GroupResolutionFailed { reason }` | high | **yes** | Recursive group resolution failed or was skipped (e.g. cross-domain path with no GC crawl). ACEs on domain groups may be missing. `reason` carries the underlying error. |
 
 **Risk `incomplete = true`** means: the risk finding is structurally
-incomplete — the auditor should additionally inspect manually.
+incomplete — the auditor should additionally inspect manually. Note the
+distinction Stars draws for `sIDHistory`: the `…Evaluated` markers are
+**informational** (the old SIDs *were* honoured, the result is exact),
+while the `…Present` markers are the incompleteness case (something could
+not be evaluated).
 
 **Golden rule:** finding + marker = honest finding. Finding without a
 marker = Stars trusts its computation.
