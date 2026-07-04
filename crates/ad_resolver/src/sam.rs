@@ -440,6 +440,12 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
                                     source: MembershipPathSource::DomainGroup,
                                     complete: true,
                                 }),
+                                // The SAM/NetAPI path cannot read sIDHistory;
+                                // that gap is covered by the
+                                // DomainGroupRecursionIncomplete marker this
+                                // path already carries (ADR 0059).
+                                group_sid_history_count: 0,
+                                group_sid_history: Vec::new(),
                             });
                         }
                         Err(e) => warn!(
@@ -481,13 +487,16 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
                     memberships.push(GroupMembership {
                         member_sid: Sid(sid_str.to_owned()),
                         group_sid,
-                        // direct == path.nodes.len() == 2 → echte direkte
                         // direct == path.nodes.len() == 2 → real direct
                         // membership on the local group; otherwise
                         // (mediated via domain group) transitive.
                         direct: path.nodes.len() == 2 && path.complete,
                         group_name,
                         path: Some(path),
+                        // Local server groups have no sIDHistory — 0 is
+                        // exact (ADR 0059).
+                        group_sid_history_count: 0,
+                        group_sid_history: Vec::new(),
                     });
                 }
             }
@@ -761,6 +770,8 @@ mod tests {
             direct: true,
             group_name: name.map(|s| s.to_owned()),
             path: None,
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
         }
     }
 

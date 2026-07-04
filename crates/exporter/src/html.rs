@@ -408,6 +408,32 @@ fn write_permissions_table(
                          Informational.\">ℹ {count} historical SID(s) evaluated</span>"
                     ));
                 }
+                PermissionDiagnostic::GroupSidHistoryEvaluated { groups, count } => {
+                    // Neutral: group history in the token (ADR 0059) —
+                    // informational, the evaluation is exact.
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-neutral\" \
+                         title=\"{count} historical SID(s) (sIDHistory) carried by \
+                         {groups} token group(s) were evaluated into the token. \
+                         ACEs referencing a migrated group's old SID match exactly \
+                         like in the real logon token — the membership steps name \
+                         each historical SID. Informational.\">ℹ {count} group \
+                         historical SID(s) evaluated</span>"
+                    ));
+                }
+                PermissionDiagnostic::GroupSidHistoryPresent { count } => {
+                    // High: an understated right is the "looks safe, isn't
+                    // safe" case (ADR 0059).
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-high\" \
+                         title=\"{count} historical SID(s) (sIDHistory) on token \
+                         groups could NOT be evaluated into the token (unreadable \
+                         value). The real logon token includes them — effective \
+                         rights may be understated. Treat as \
+                         incomplete.\">⚠ {count} group historical SID(s) not \
+                         evaluated</span>"
+                    ));
+                }
                 PermissionDiagnostic::TrustBoundaryEffectsNotModeled => {
                     diag_parts.push(
                         "<span class=\"badge badge-neutral\" \

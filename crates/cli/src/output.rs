@@ -337,6 +337,19 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      SID match exactly like in the real logon token — see the");
                 println!("      explanation path for each historical SID. Informational.");
             }
+            PermissionDiagnostic::GroupSidHistoryEvaluated { groups, count } => {
+                println!("  [i] {count} historical SID(s) (sIDHistory) carried by {groups} token");
+                println!("      group(s) were evaluated into the token (ADR 0059). ACEs");
+                println!("      referencing a migrated group's old SID match exactly like in");
+                println!("      the real logon token — the membership steps name each");
+                println!("      historical SID. Informational.");
+            }
+            PermissionDiagnostic::GroupSidHistoryPresent { count } => {
+                println!("  [!] {count} historical SID(s) (sIDHistory) on token groups could");
+                println!("      NOT be evaluated into the token (unreadable value). The real");
+                println!("      logon token still includes them — effective rights may be");
+                println!("      understated. Treat as incomplete.");
+            }
             PermissionDiagnostic::TrustBoundaryEffectsNotModeled => {
                 println!("  [i] Identity resolved across a domain / trust boundary (foreign");
                 println!("      security principal, or outside the configured LDAP base).");

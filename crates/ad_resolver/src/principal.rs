@@ -237,6 +237,10 @@ impl PrincipalResolution {
         // engine — single source of truth on Identity, so the membership
         // view cannot drift from the engine's classification.
         d.extend(self.identity.sid_history_diagnostics());
+        // ADR 0059: the groups' own historical SIDs, same shared split.
+        d.extend(adpa_core::model::group_sid_history_diagnostics(
+            &self.memberships,
+        ));
         if flags.identity_resolved_via_fsp || flags.identity_not_in_configured_ldap_base {
             d.push(PermissionDiagnostic::TrustBoundaryEffectsNotModeled);
         }
@@ -1456,6 +1460,8 @@ mod tests {
                 direct: true,
                 group_name: Some("HomeDomain-FileAdmins".to_owned()),
                 path: None,
+                group_sid_history_count: 0,
+                group_sid_history: Vec::new(),
             }],
         );
         let mut lsa = FakeLsaBackend::new();
@@ -1680,6 +1686,44 @@ mod tests {
         );
     }
 
+    /// ADR 0059: a membership whose GROUP carries parsed history surfaces
+    /// the group split in the membership view — same shared helper as the
+    /// engine.
+    #[test]
+    fn membership_diagnostics_includes_group_sid_history_split() {
+        let gm = GroupMembership {
+            member_sid: Sid("S-1-5-21-1-2-3-1104".to_owned()),
+            group_sid: Sid("S-1-5-21-1-2-3-512".to_owned()),
+            direct: true,
+            group_name: Some("MigratedAdmins".to_owned()),
+            path: None,
+            group_sid_history_count: 1,
+            group_sid_history: vec![Sid("S-1-5-21-9-9-9-512".to_owned())],
+        };
+        let res = PrincipalResolution {
+            sid: Sid("S-1-5-21-1-2-3-1104".to_owned()),
+            identity: sample_identity("S-1-5-21-1-2-3-1104", 0),
+            memberships: vec![gm],
+            scope_status: IdentityScopeStatus::InsideConfiguredLdapBase,
+            group_resolution_status: GroupResolutionStatus::LdapRecursive,
+            disabled_status: DisabledStatus::Known(false),
+            diagnostics: vec![],
+            resolved_via_fsp: false,
+            resolved_via_global_catalog: false,
+        };
+        let d = res.membership_diagnostics();
+        assert!(
+            d.iter().any(|x| matches!(
+                x,
+                PermissionDiagnostic::GroupSidHistoryEvaluated {
+                    groups: 1,
+                    count: 1
+                }
+            )),
+            "group history must classify as evaluated: {d:?}"
+        );
+    }
+
     #[test]
     fn into_membership_report_deduplicates_by_group_sid() {
         let member = Sid("S-1-5-21-1-2-3-1104".to_owned());
@@ -1690,6 +1734,8 @@ mod tests {
             direct,
             group_name: Some("Domain Admins".to_owned()),
             path: None,
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
         };
         let res = PrincipalResolution {
             sid: member.clone(),
@@ -1722,6 +1768,8 @@ mod tests {
             direct,
             group_name: Some("Domain Admins".to_owned()),
             path: None,
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
         };
         // Nested first, direct second — the dedup must still keep the direct
         // entry (first-wins would wrongly keep "nested" and undercount direct).
@@ -1760,6 +1808,8 @@ mod tests {
                 source: MembershipPathSource::DomainGroup,
                 complete,
             }),
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
         };
         // Incomplete path first, complete (and better-named) path second — the
         // dedup must keep the complete one.

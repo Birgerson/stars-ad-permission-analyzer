@@ -54,6 +54,28 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Added
 
+- **Group `sIDHistory` is evaluated into the access token (ADR 0059) —
+  known-limitations L3 is now fully closed.** The Windows PAC carries the
+  historical SIDs of the token *groups* as well, so an ACE on a migrated
+  group's old SID grants (or denies) at runtime; previously Stars missed
+  it silently, without any marker:
+  - `GroupMembership` carries the group's history (count/values pair like
+    `Identity`, read from the same transitive membership search — no new
+    LDAP query);
+  - the token includes the values automatically on the engine, CLI and
+    GUI share paths (they all ride inside `GroupMembership`);
+  - the membership step in the explanation names each group historical
+    SID (`… [carries historical SID(s) (sIDHistory) in the evaluated
+    token: S-…]`);
+  - new markers `GroupSidHistoryEvaluated { groups, count }` (Neutral,
+    informational) and `GroupSidHistoryPresent { count }` (Concern,
+    incompleteness — unparseable values), mirroring the ADR 0056 split;
+  - SAM/LSA fallback cannot read the attribute (0 — that path already
+    carries `DomainGroupRecursionIncomplete`); local server groups have
+    no `sIDHistory` (0 is exact); the membership cache stays
+    topology-only. The foreign-forest trust caveat (verification.md M.5)
+    applies unchanged (L4).
+
 - **`sIDHistory` is evaluated into the access token (ADR 0056).** Closes the
   user-history half of known-limitations L3 and deep-review 2026-07-04
   finding F1. For a migrated account resolved on the direct in-base LDAP

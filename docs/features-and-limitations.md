@@ -157,6 +157,8 @@ out; the report font is Arial.
 | `UnsupportedNtfsAces { count }` | Notice | **yes** | The NTFS DACL contained ACE types the parser could not evaluate; a hidden Deny among them could change the result. |
 | `SidHistoryPresent { count }` | Concern | **yes** | The account carries `count` historical SIDs (`sIDHistory`) that were **not** evaluated into the token (value unreadable, or the row predates evaluation) — the effective right may be **understated** (ADR 0052 / ADR 0056). |
 | `SidHistoryEvaluated { count }` | Neutral | no | `count` historical SIDs (`sIDHistory`) **were evaluated** into the token — ACEs on an old SID match like in the real logon token; the explanation path names each one (ADR 0056). |
+| `GroupSidHistoryEvaluated { groups, count }` | Neutral | no | `count` historical SIDs carried by `groups` token **groups** were evaluated into the token — ACEs on a migrated group's old SID match like at runtime; the membership steps name each one (ADR 0059). |
+| `GroupSidHistoryPresent { count }` | Concern | **yes** | `count` historical SIDs on token groups could **not** be evaluated (unreadable value) — the effective right may be **understated** (ADR 0059). |
 | `IdentityLookupFailed { reason }` | Concern | **yes** | LDAP identity lookup failed (bind / timeout / DC / query); analysis ran with a placeholder identity — domain-group ACEs may be missing. `reason` carries the original error. |
 | `GroupResolutionFailed { reason }` | Concern | **yes** | Recursive group resolution failed or was skipped; domain-group ACEs may be missing. `reason` carries the original error. |
 | `PersistedEvidenceDecodeFailed { detail }` | Concern | **yes** | A persisted (historical) row could not be fully decoded; the reconstructed result may be less complete than originally stored. |
@@ -367,7 +369,7 @@ permanently not part of the product:
 
 ### 13. SID history and cross-forest trust filtering
 
-- **What we evaluate (since ADR 0056):**
+- **What we evaluate (since ADR 0056 / ADR 0059):**
   - **User SID history:** a migrated account carries earlier SIDs
     (`sIDHistory`). Within the account's forest Windows includes them in
     the logon token unconditionally, so Stars now adds the parsed values
@@ -376,11 +378,13 @@ permanently not part of the product:
     the informational `SidHistoryEvaluated` marker. History values are
     read only on the direct in-base LDAP path — exactly where the
     same-forest assumption behind the whole group model holds.
+  - **Group SID history (ADR 0059):** the logon token also carries the
+    historical SIDs of the token *groups*. Stars reads them from the
+    same transitive membership search, evaluates them into the token
+    (an ACE on a migrated group's old SID matches for every member),
+    names them on the membership step, and marks the finding with the
+    informational `GroupSidHistoryEvaluated`.
 - **What we do not model:**
-  - **Group SID history:** the logon token also carries the historical
-    SIDs of the user's *groups*; those are not read yet — an ACE on a
-    migrated group's old SID is still missed (tracked in
-    known-limitations L3 as the open remainder).
   - **SID filtering / quarantine:** across a trust, the DC drops
     certain SIDs from the token. Stars credits an ACE on such a SID
     even though the trust filters it out. → effective rights
@@ -403,14 +407,14 @@ permanently not part of the product:
   a forest trust, SID filtering and Selective Authentication may make
   access lower than shown — the over-report case. All render in the CLI
   and the HTML report.
-- **Solution:** user-history evaluation **shipped** (ADR 0056, on top of
-  the ADR 0052 visibility step). The remaining work — group `sIDHistory`
-  and reading `trustAttributes` to model the actual filter — stays a
-  tracked roadmap item (known-limitations L3/L4); real detection of the
-  runtime filter would require a synthetic logon, which violates the
-  read-only principle and is deliberately not implemented. Until then,
-  cross-check trust accounts against the trust configuration
-  (`trustAttributes`, `trustDirection`).
+- **Solution:** SID-history evaluation **shipped for users and groups**
+  (ADR 0056 / ADR 0059, on top of the ADR 0052 visibility step) —
+  known-limitations L3 is closed. The remaining work — reading
+  `trustAttributes` to model the actual runtime filter — stays a tracked
+  roadmap item (L4); real detection of the filter effect would require a
+  synthetic logon, which violates the read-only principle and is
+  deliberately not implemented. Until then, cross-check trust accounts
+  against the trust configuration (`trustAttributes`, `trustDirection`).
 
 ---
 

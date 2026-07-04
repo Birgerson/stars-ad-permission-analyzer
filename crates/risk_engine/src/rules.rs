@@ -572,6 +572,37 @@ mod tests {
         );
     }
 
+    /// ADR 0059: GroupSidHistoryEvaluated means the groups' historical
+    /// SIDs WERE in the token — exact, must NOT flag incomplete.
+    #[test]
+    fn group_sid_history_evaluated_diagnostic_alone_does_not_mark_incomplete() {
+        let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
+        p.diagnostics = vec![PermissionDiagnostic::GroupSidHistoryEvaluated {
+            groups: 1,
+            count: 1,
+        }];
+        let r = FullControlRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(
+            !r[0].incomplete,
+            "GroupSidHistoryEvaluated alone must NOT flag incomplete"
+        );
+    }
+
+    /// ADR 0059: un-evaluated group history means the right may be
+    /// understated — the finding must be incomplete.
+    #[test]
+    fn group_sid_history_present_diagnostic_marks_finding_incomplete() {
+        let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
+        p.diagnostics = vec![PermissionDiagnostic::GroupSidHistoryPresent { count: 1 }];
+        let r = FullControlRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(
+            r[0].incomplete,
+            "GroupSidHistoryPresent -> finding must be incomplete"
+        );
+    }
+
     /// ADR 0052 (L4): TrustBoundaryEffectsNotModeled is informational —
     /// it fires beside the FSP / outside-base markers, which already flag
     /// incompleteness, so alone it must NOT mark a finding incomplete.
