@@ -6,6 +6,7 @@
 pub mod manager;
 pub mod manifest;
 pub mod verifier;
+pub mod version;
 
 pub use manager::{UpdateChannel, UpdateManager};
 pub use manifest::{ManifestFile, TargetPlatform, UpdateManifest};

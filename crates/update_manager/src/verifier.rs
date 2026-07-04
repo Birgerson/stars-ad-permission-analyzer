@@ -154,8 +154,10 @@ pub struct UpdatePolicyContext {
 ///
 /// 1. Platform matches `current_platform`.
 /// 2. Manifest channel matches `allowed_channel`.
-/// 3. `app_version` is higher (numeric dotted) than `current_version`,
-///    unless `allow_downgrade == true`.
+/// 3. `app_version` is higher than `current_version` under SemVer
+///    precedence — a pre-release orders **before** its final release
+///    (`1.1.0-rc1 < 1.1.0`), so rc-to-final is an upgrade — unless
+///    `allow_downgrade == true`.
 /// 4. `issued_at` is ISO-8601 parsable.
 /// 5. `issued_at` is no further than `max_future_skew` in the future.
 /// 6. `issued_at` is no further than `max_age` in the past.
@@ -205,49 +207,18 @@ pub fn verify_update_policy(
     Ok(())
 }
 
-/// Vergleicht zwei punktgetrennte numerische Versionsstrings (z. B.
-///
-/// Compares two dotted-numeric version strings (e.g. `1.10.0` vs
-/// `1.9.5`). Pre-release suffixes after `-` are dropped for comparison
-/// because the project currently ships only plain
-/// `major.minor.patch` versions. Non-numeric segments produce a
-/// validation error — the caller must ensure both sides parse.
+/// Compares two application version strings with SemVer precedence
+/// (deep review 2026-07-04, finding F4). The core is dotted-numeric with
+/// zero padding (`1.2` == `1.2.0`); a **pre-release orders before its
+/// final release** (`1.1.0-rc1 < 1.1.0`), so an rc-to-final transition is
+/// an upgrade; pre-release identifiers order per SemVer §11; build
+/// metadata (`+…`) carries no precedence. Unparseable versions produce a
+/// validation error — the manifest schema rejects them earlier, this
+/// covers the caller-supplied `current_version`.
 fn compare_dotted_versions(a: &str, b: &str) -> Result<Ordering, CoreError> {
-    let trim_prerelease = |s: &str| {
-        s.split('-')
-            .next()
-            .unwrap_or(s)
-            .split('+')
-            .next()
-            .unwrap_or(s)
-            .to_owned()
-    };
-    let a_core = trim_prerelease(a);
-    let b_core = trim_prerelease(b);
-    let parse = |s: &str| -> Result<Vec<u64>, CoreError> {
-        s.split('.')
-            .map(|seg| {
-                seg.parse::<u64>().map_err(|e| {
-                    CoreError::Validation(format!(
-                        "version segment '{seg}' in '{s}' is not numeric: {e}"
-                    ))
-                })
-            })
-            .collect()
-    };
-    let a_parts = parse(&a_core)?;
-    let b_parts = parse(&b_core)?;
-    // Pad to the same length with 0 — `1.0` and `1.0.0` are equal.
-    let len = a_parts.len().max(b_parts.len());
-    for i in 0..len {
-        let av = a_parts.get(i).copied().unwrap_or(0);
-        let bv = b_parts.get(i).copied().unwrap_or(0);
-        match av.cmp(&bv) {
-            Ordering::Equal => continue,
-            other => return Ok(other),
-        }
-    }
-    Ok(Ordering::Equal)
+    let a_v = crate::version::AppVersion::parse(a)?;
+    let b_v = crate::version::AppVersion::parse(b)?;
+    Ok(a_v.cmp(&b_v))
 }
 
 #[cfg(test)]
@@ -527,12 +498,49 @@ mod tests {
     }
 
     #[test]
-    fn compare_dotted_versions_strips_prerelease_for_compare() {
-        // `1.1.0-rc1` and `1.1.0` compare as equal — deliberate simplification
-        // until the project ships real SemVer pre-releases.
+    fn compare_dotted_versions_orders_prerelease_before_final() {
+        // Deep review 2026-07-04, F4: the old behavior compared
+        // `1.1.0-rc1` equal to `1.1.0`, so a system on rc1 rejected the
+        // final release as "not newer". SemVer precedence fixes that.
         assert_eq!(
             compare_dotted_versions("1.1.0-rc1", "1.1.0").unwrap(),
-            Ordering::Equal
+            Ordering::Less
         );
+        assert_eq!(
+            compare_dotted_versions("1.1.0-rc1", "1.1.0-rc2").unwrap(),
+            Ordering::Less
+        );
+    }
+
+    /// The F4 release-management case end-to-end: a system running the
+    /// release candidate must accept the final build as an upgrade.
+    #[test]
+    fn policy_accepts_final_release_over_running_rc() {
+        let mut policy = base_policy();
+        policy.current_version = "1.1.0-rc1".into();
+        let m = policy_manifest("1.1.0", "2026-06-01T11:00:00Z");
+        verify_update_policy(&m, &policy).unwrap();
+    }
+
+    /// Re-installing the same rc is still rejected without
+    /// `allow_downgrade` — equality is unchanged.
+    #[test]
+    fn policy_rejects_same_rc_reinstall() {
+        let mut policy = base_policy();
+        policy.current_version = "1.1.0-rc1".into();
+        let m = policy_manifest("1.1.0-rc1", "2026-06-01T11:00:00Z");
+        let err = verify_update_policy(&m, &policy).unwrap_err();
+        assert!(format!("{err}").contains("not newer"));
+    }
+
+    /// Moving from the final release back to a pre-release of the same
+    /// core is a downgrade and must be rejected by default.
+    #[test]
+    fn policy_rejects_rc_when_final_is_installed() {
+        let mut policy = base_policy();
+        policy.current_version = "1.1.0".into();
+        let m = policy_manifest("1.1.0-rc2", "2026-06-01T11:00:00Z");
+        let err = verify_update_policy(&m, &policy).unwrap_err();
+        assert!(format!("{err}").contains("not newer"));
     }
 }
