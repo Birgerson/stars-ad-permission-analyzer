@@ -16,9 +16,11 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   user-history half of known-limitations L3 and deep-review 2026-07-04
   finding F1. For a migrated account resolved on the direct in-base LDAP
   path, the historical SIDs are parsed and added to the evaluated token —
-  Windows includes them in the real logon token unconditionally within the
-  account's forest, so an ACE on the old SID now **matches** (Allow *and*
-  Deny) instead of understating the effective right:
+  Windows includes them in the real logon token (unconditionally for
+  same-forest-sourced history; foreign-forest-sourced history depends on
+  the trust's `/EnableSIDHistory` state, see ADR 0056), so an ACE on the
+  old SID now **matches** (Allow *and* Deny) instead of understating the
+  effective right:
   - the explanation path names each historical SID
     (`Historical SID (sIDHistory): S-… — included in the evaluated token`);
   - new informational marker **`SidHistoryEvaluated { count }`** (Neutral,
@@ -39,6 +41,12 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
     historical SIDs of *groups* (still missed, now explicitly tracked),
     trust SID-filtering topology (L4), and a "granted via historical SID"
     risk rule.
+  - **Live-proven in the lab** (2026-07-04, verification.md Block M):
+    `mig01`/`_OldSid` — Modify granted via the cross-forest-injected
+    historical SID with the explanation step and the new marker, matching
+    the Windows runtime truth in the current (history-honoring) trust
+    state; Block M.5 records the remaining L4 caveat for foreign-sourced
+    history SIDs under a filtering trust.
 
 ---
 

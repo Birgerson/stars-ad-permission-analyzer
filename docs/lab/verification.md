@@ -1,6 +1,6 @@
 # Verification of the Lab Setup and the Stars Software
 
-> **Last update:** v1.7.0 (2026-06-14). This file grows by one verification block per release; older blocks stay unchanged as a historical record.
+> **Last update:** post-v1.7.7-rc1 (2026-07-04, Block M). This file grows by one verification block per release; older blocks stay unchanged as a historical record.
 > Each verification block notes its own Stars version (e.g. "Block C — v1.5.8"). The lab topology itself comes from the initial setup (see commit timestamps of [`forest-topology.md`](forest-topology.md)).
 
 This file documents *what* was verified, *how* it was checked, and *what* Stars actually produced. Reproduce with the scripts under [`scripts/`](scripts/).
@@ -1286,3 +1286,91 @@ visible to the operator.
   `#[ignore]` integration test in CI; the lab is powered down; the figures
   here are the recorded session output. Turning this into a repeatable
   automated lab suite remains future work.
+
+## Block M — Live verification of ADR 0056: sIDHistory evaluated into the token (2026-07-04)
+
+**Stars version:** post-v1.7.7-rc1, main commit `290b84f` (ADR 0056 merge).
+**Fixture:** `mig01`@`res.lab` (S-1-5-21-2300191737-…-6611) carries one
+`sIDHistory` value — the old SID of `legacy_e2`@`ext2.lab`
+(S-1-5-21-4104622353-1554712886-560824282-1103), injected cross-forest via
+`Add-ADReplSidHistory` over the res⇄ext2 forest trust (see the ext2.lab
+setup notes in LabTopology). `C:\StarsData\_OldSid` on DC01 carries an
+**explicit Allow Modify ACE on that old SID** — `mig01` can only reach
+Modify through its SID history.
+
+### M.1 — Recorded baseline (what this replaces)
+
+- v1.7.1 (pre-ADR-0052): `mig01` on `_OldSid` → **Read & Execute**, matching
+  ACEs empty, **no marker** — the silent L3 under-report.
+- v1.7.2 (ADR 0052, visibility step): same rights result, plus
+  `[!] carries 1 historical SID(s) … understated` (honest, but the main
+  number stayed wrong).
+
+### M.2 — Groups view (`adpa groups -u mig01 …`)
+
+`sIDHistory: 1 (see diagnostics)` in the identity header, and the **new
+marker fires live**:
+
+```text
+[i] 1 historical SID(s) (sIDHistory) of this identity were
+    evaluated into the token (ADR 0056). …
+```
+
+(The first run with the default 10 s LDAP timeout also reproduced the known
+dense-domain group-resolution timeout as an honest incomplete marker — the
+re-run with `--ldap-timeout 60` resolved groups fully.)
+
+### M.3 — Effective rights (`adpa analyze -p \\192.168.11.110\C$\StarsData\_OldSid -u mig01 … --ldap-timeout 60`)
+
+- **Effective NTFS: `Modify (0x001301BF)`** — granted by the explicit ACE
+  on the historical SID:
+  `Allow [explicit] S-1-5-21-4104622353-…-1103 → Modify … [granted Modify]`.
+- Explanation path, step 2:
+  `Historical SID (sIDHistory): S-1-5-21-4104622353-…-1103 — included in
+  the evaluated token …` — the grant is traceable without any out-of-band
+  knowledge.
+- Diagnostics: **only** the informational `SidHistoryEvaluated` marker; no
+  `SidHistoryPresent`, and the result is **not** flagged incomplete.
+- Group resolution completed (Domain Users via primaryGroupID + BigGroup +
+  the local BUILTIN\Users chain); the BUILTIN\Users ACE steps show
+  `matched, no effective bits contributed`, so provenance stays exact.
+
+This is precisely the deep-review 2026-07-04 F1 acceptance case, live.
+
+### M.4 — Ground truth: the current trust state honors the history SID
+
+`Get-ADTrust` on DC01 (via Proxmox guest exec):
+
+```text
+Name: ext2.lab   SIDFilteringQuarantined: False   SIDFilteringForestAware: True
+```
+
+`SIDFilteringForestAware = True` is the `/EnableSIDHistory:yes` state. The
+v1.7.1 flip experiment (baseline notes in LabTopology §5) established
+empirically: in this state Windows **honors** the history SID and grants
+`mig01` **Modify** on `_OldSid`. Stars' new answer therefore **matches the
+runtime truth** in the current trust configuration.
+
+### M.5 — Honest caveat surfaced by this fixture (documented, not fixed)
+
+This fixture is deliberately the *hard* variant: the history SID belongs to
+a **foreign forest's** domain (ext2.lab) while `mig01` itself is a plain
+in-base res.lab identity. The same flip experiment showed that with
+`/EnableSIDHistory:no` Windows **filters** the foreign history SID (access
+denied) — while Stars, which does not read trust attributes (L4), would
+keep reporting Modify. Because `mig01` is in-base, no
+`TrustBoundaryEffectsNotModeled` marker fires on this path either. So for
+**foreign-forest-sourced** history SIDs the evaluated result is exact only
+while the trust honors history; for **intra-forest-sourced** history SIDs
+(the classic domain-consolidation case) it is unconditionally exact.
+Recorded in ADR 0056 and known-limitations L3/L4 as part of the remaining
+trust-modeling gap.
+
+### M.6 — What this closes / what stays open
+
+- **Closes:** the live proof of ADR 0056 — the L3 user-history
+  under-report is fixed in the main result, with explainable provenance,
+  and matches Windows in the current (history-honoring) trust state.
+- **Stays open:** group `sIDHistory` (L3 remainder), trust-filtering
+  modeling (L4, see M.5), and — as everywhere in this file — this is a
+  manual recorded run, not a CI-automated lab suite.

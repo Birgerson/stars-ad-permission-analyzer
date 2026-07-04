@@ -169,7 +169,14 @@ group history remains open
 > attribute (count 0 — no false positives; their own boundary markers
 > apply). This closed exactly the deep-review 2026-07-04 finding F1
 > acceptance case: `S-new` + `sIDHistory = [S-old]` + ACL `S-old: Modify`
-> → Modify, explained, complete.
+> → Modify, explained, complete. **Live-proven the same day** against the
+> lab (`mig01`/`_OldSid`, verification.md Block M): Modify via the injected
+> historical SID, matching the Windows runtime truth in the current
+> (history-honoring) trust state. Block M.5 records the honest caveat: a
+> *foreign-forest-sourced* history SID on an in-base account is honored by
+> Windows only while the trust's `/EnableSIDHistory` allows it — if the
+> trust filters, Stars overstates and no trust marker fires (the identity
+> is in-base). That edge belongs to the L4 trust-modeling gap below.
 
 ### Problem
 
@@ -241,6 +248,15 @@ those filters usually do not apply, so the marker is then only a
 precautionary note.) Stars still does **not** read `trustAttributes` to
 model the actual filter effect — that is deliberately left as the deeper
 follow-up.
+
+**Additional L4 edge since ADR 0056 (verification.md Block M.5):** an
+**in-base** identity whose evaluated `sIDHistory` SID is owned by a
+*foreign forest's* domain. Windows honors that SID only while the trust's
+`/EnableSIDHistory` state allows it; Stars evaluates it unconditionally
+and — because the identity is in-base — no `TrustBoundaryEffectsNotModeled`
+marker fires. Exact while the trust honors history (the lab's current
+state), a potential over-report when it filters. Fixing this requires the
+trust-topology work described here.
 
 ### Solution sketch
 

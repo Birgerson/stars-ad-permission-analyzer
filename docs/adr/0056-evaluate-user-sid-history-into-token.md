@@ -17,15 +17,19 @@ central promise is accurate effective-rights analysis, "honestly uncertain"
 must not remain the end state when the evaluation can be made correct.
 
 Windows ground truth: when a DC builds a logon token (PAC) for an account,
-**all** `sIDHistory` values of the account are included unconditionally —
-inside the account's own forest there is no filtering of history SIDs.
-SID filtering / quarantine only strips history SIDs when the access
-**crosses a trust boundary** (inter-forest access, or an external trust).
-Stars already rests on the standing assumption that the analyzed file
-server is joined to the connected forest — the entire group-membership
-model is only valid under that same assumption. Within that assumption,
-adding the user's history SIDs to the evaluated token is not a guess; it
-is the faithful reproduction of `AccessCheck` inputs.
+the `sIDHistory` values of the account are included — for history SIDs
+**owned by a domain of the same forest** (the classic intra-forest
+migration/consolidation case) unconditionally. History SIDs owned by a
+**foreign forest's** domain are subject to that trust's SID-filtering
+state (`/EnableSIDHistory`), which Stars does not read (L4) — this was
+proven empirically in the lab's res⇄ext2 flip experiment and is recorded
+as the honest caveat in verification.md Block M.5. Stars already rests on
+the standing assumption that the analyzed file server is joined to the
+connected forest — the entire group-membership model is only valid under
+that same assumption. Within that assumption, adding the user's history
+SIDs to the evaluated token is the faithful reproduction of `AccessCheck`
+inputs for the intra-forest case, and for the foreign-sourced case it is
+exact while the trust honors history.
 
 ADR 0052 rejected "blindly adding history SIDs" because it would trade the
 L3 under-report for an L4 over-report *in the cross-forest case*. That
@@ -90,8 +94,13 @@ already flagged by their own boundary markers (`…ViaForeignSecurityPrincipal`,
   entries, so the values are cheap to fetch when that step lands.
 - **Trust topology is still not read** (`trustAttributes`, SID filtering,
   Selective Authentication — L4 unchanged). Cross-boundary identities do
-  not get history evaluation (count stays 0 on those paths), so this ADR
-  does not widen the L4 over-report surface.
+  not get history evaluation (count stays 0 on those paths). One L4-class
+  edge does widen slightly and is documented (verification.md M.5): an
+  **in-base** identity whose history SID is owned by a *foreign forest's*
+  domain is evaluated, but Windows honors that SID only while the trust's
+  `/EnableSIDHistory` allows it — if the trust filters, Stars overstates
+  and no trust marker fires (the identity is in-base). Modeling that needs
+  the L4 trust-topology work.
 - **No risk rule yet** for "access granted via historical SID" (a stale-ACL
   audit signal). Candidate follow-up once real-world feedback shows how
   common the case is; the evidence (explanation step + `SidHistoryEvaluated`)
@@ -117,6 +126,10 @@ already flagged by their own boundary markers (`…ViaForeignSecurityPrincipal`,
   `sIDHistory = [S-old]` and an ACL granting `S-old: Modify` now yields
   Modify, with an explanation path naming the historical SID, and the
   result is **not** marked incomplete for history reasons.
+- **Live-proven (2026-07-04, verification.md Block M):** `mig01`/`_OldSid`
+  in the lab — Modify granted via the injected historical SID, explanation
+  step present, `SidHistoryEvaluated` fired, result complete; matches the
+  Windows runtime truth in the current (history-honoring) trust state.
 - Old persisted reports stay truthful: their stored `SidHistoryPresent`
   markers decode unchanged and still mean "was not evaluated at scan time".
 - `build_token_sids_with_context` is a breaking internal API change
