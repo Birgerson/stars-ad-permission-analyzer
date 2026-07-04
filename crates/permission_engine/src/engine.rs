@@ -238,6 +238,12 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         // `Identity::sid_history_diagnostics` — shared with the
         // membership view so the two surfaces cannot drift.
         diagnostics.extend(input.identity.sid_history_diagnostics());
+        // ADR 0059: same split for the historical SIDs of the token
+        // GROUPS (evaluated → informational; un-parsed remainder →
+        // incompleteness trigger). Shared helper, same no-drift rationale.
+        diagnostics.extend(adpa_core::model::group_sid_history_diagnostics(
+            &input.group_memberships,
+        ));
         // ADR 0052 (L4): the identity crosses a forest trust — resolved via a
         // Foreign Security Principal or found outside the configured LDAP
         // base. SID filtering / quarantine and Selective Authentication are
@@ -341,6 +347,11 @@ pub fn build_token_sids_with_context(
     }
     for gm in memberships {
         sids.insert(gm.group_sid.0.clone());
+        // ADR 0059: the PAC also carries the historical SIDs of the token
+        // groups — ACEs on a migrated group's old SID apply to members.
+        for old in &gm.group_sid_history {
+            sids.insert(old.0.clone());
+        }
     }
     for local in local_group_sids {
         sids.insert(local.0.clone());
@@ -566,6 +577,24 @@ fn display_for_sid<'a>(
 /// from the user to the ACE-bearing group directly (finding 1 from the
 /// 2026-05-31 review).
 fn format_membership_step(
+    gm: &GroupMembership,
+    sid_names: &std::collections::BTreeMap<String, String>,
+) -> String {
+    let mut step = format_membership_step_base(gm, sid_names);
+    // ADR 0059: when the group itself carries evaluated historical SIDs,
+    // say so on the membership line — an ACE further down that matches
+    // the group's old SID is then explainable from the step list alone.
+    if !gm.group_sid_history.is_empty() {
+        let sids: Vec<&str> = gm.group_sid_history.iter().map(|s| s.0.as_str()).collect();
+        step.push_str(&format!(
+            " [carries historical SID(s) (sIDHistory) in the evaluated token: {}]",
+            sids.join(", ")
+        ));
+    }
+    step
+}
+
+fn format_membership_step_base(
     gm: &GroupMembership,
     sid_names: &std::collections::BTreeMap<String, String>,
 ) -> String {
@@ -913,7 +942,17 @@ mod tests {
             direct: true,
             group_name: None,
             path: None,
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
         }
+    }
+
+    /// Membership whose group carries historical SIDs (ADR 0059).
+    fn membership_with_history(user_sid: &str, group_sid: &str, old: &[&str]) -> GroupMembership {
+        let mut gm = membership(user_sid, group_sid);
+        gm.group_sid_history_count = old.len();
+        gm.group_sid_history = old.iter().map(|s| Sid((*s).into())).collect();
+        gm
     }
 
     fn allow_ace(sid: &str, mask: u32, inherited: bool) -> AceEntry {
@@ -2956,6 +2995,8 @@ mod tests {
                 source: MembershipPathSource::DomainGroup,
                 complete: true,
             }),
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
         }
     }
 
@@ -2977,6 +3018,8 @@ mod tests {
                 source,
                 complete: true,
             }),
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
         }
     }
 
@@ -2997,6 +3040,8 @@ mod tests {
                 source: MembershipPathSource::LdapMatchingRule,
                 complete: false,
             }),
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
         }
     }
 
@@ -3133,6 +3178,8 @@ mod tests {
             direct: true,
             group_name: Some("GRP_A".into()),
             path: None,
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
         }];
         let dacl = vec![allow_ace(GROUP_A, FILE_GENERIC_READ, true)];
         let result = eval(identity, memberships, fso_with_dacl(dacl), None);
@@ -3407,6 +3454,130 @@ mod tests {
         );
     }
 
+    /// ADR 0059 acceptance case: the user is a member of group G, G
+    /// carries the historical SID S-Gold, and the ACL grants S-Gold
+    /// Modify. The engine must grant Modify via the group's historical
+    /// SID, mark it GroupSidHistoryEvaluated, name it on the membership
+    /// step — and must NOT flag the result incomplete.
+    #[test]
+    fn engine_grants_access_via_group_historical_sid() {
+        const G_OLD: &str = "S-1-5-21-5000-5000-5000-1201";
+        let result = eval(
+            user(USER),
+            vec![membership_with_history(USER, GROUP_A, &[G_OLD])],
+            fso(None, vec![allow_ace(G_OLD, MASK_MODIFY, false)]),
+            None,
+        );
+        assert_eq!(
+            result.ntfs_mask.0, MASK_MODIFY,
+            "ACE on the group's historical SID must grant Modify"
+        );
+        assert!(
+            result
+                .diagnostics
+                .contains(&PermissionDiagnostic::GroupSidHistoryEvaluated {
+                    groups: 1,
+                    count: 1
+                }),
+            "GroupSidHistoryEvaluated must fire; got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            !result.is_incomplete(),
+            "group-history-evaluated result must not be incomplete; got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result
+                .path_explanation
+                .steps
+                .iter()
+                .any(|s| s.contains("Member of")
+                    && s.contains("carries historical SID(s) (sIDHistory)")
+                    && s.contains(G_OLD)),
+            "membership step must name the group's historical SID; got {:?}",
+            result.path_explanation.steps
+        );
+    }
+
+    /// ADR 0059: a Deny ACE on a group's historical SID must be honored.
+    #[test]
+    fn engine_honors_deny_on_group_historical_sid() {
+        const G_OLD: &str = "S-1-5-21-5000-5000-5000-1201";
+        let result = eval(
+            user(USER),
+            vec![membership_with_history(USER, GROUP_A, &[G_OLD])],
+            fso(
+                None,
+                vec![
+                    deny_ace(G_OLD, MASK_WRITE, false),
+                    allow_ace(USER, MASK_MODIFY, false),
+                ],
+            ),
+            None,
+        );
+        assert_eq!(
+            result.ntfs_mask.0,
+            MASK_MODIFY & !MASK_WRITE,
+            "Deny on the group's historical SID must strip the write bits"
+        );
+    }
+
+    /// ADR 0059 partial parse: group count 2 but only one value parsed →
+    /// evaluated part informational, remainder keeps incompleteness.
+    #[test]
+    fn engine_partial_group_sid_history_parse_keeps_incompleteness() {
+        const G_OLD: &str = "S-1-5-21-5000-5000-5000-1201";
+        let mut gm = membership_with_history(USER, GROUP_A, &[G_OLD]);
+        gm.group_sid_history_count = 2;
+        let result = eval(
+            user(USER),
+            vec![gm],
+            fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            None,
+        );
+        assert!(
+            result
+                .diagnostics
+                .contains(&PermissionDiagnostic::GroupSidHistoryEvaluated {
+                    groups: 1,
+                    count: 1
+                }),
+            "evaluated part must be visible; got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result
+                .diagnostics
+                .contains(&PermissionDiagnostic::GroupSidHistoryPresent { count: 1 }),
+            "un-evaluated remainder must stay visible; got {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.is_incomplete(),
+            "partial group-history parse must keep the result incomplete"
+        );
+    }
+
+    /// ADR 0059: group history SIDs are part of the token set.
+    #[test]
+    fn build_token_sids_with_context_includes_group_sid_history() {
+        const G_OLD: &str = "S-1-5-21-5000-5000-5000-1201";
+        let memberships = vec![membership_with_history(USER, GROUP_A, &[G_OLD])];
+        let token = super::build_token_sids_with_context(
+            USER,
+            &[],
+            &memberships,
+            &[],
+            AccessContext::Unspecified,
+        );
+        assert!(token.contains(GROUP_A), "group SID must be present");
+        assert!(
+            token.contains(G_OLD),
+            "group's historical SID must be present"
+        );
+    }
+
     /// ADR 0052 (L4): an identity resolved via an FSP (a trust boundary)
     /// surfaces the informational TrustBoundaryEffectsNotModeled marker.
     #[test]
@@ -3649,6 +3820,8 @@ mod tests {
                 source: MembershipPathSource::LocalGroup,
                 complete: true,
             }),
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
         };
 
         let result = DefaultPermissionEngine
@@ -3711,6 +3884,8 @@ mod tests {
                 source: MembershipPathSource::LocalGroup,
                 complete: false,
             }),
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
         };
 
         let result = DefaultPermissionEngine

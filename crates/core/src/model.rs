@@ -274,6 +274,61 @@ pub struct GroupMembership {
     /// `#[serde(default)]` keeps older cache entries compatible.
     #[serde(default)]
     pub path: Option<MembershipPath>,
+    /// Total number of historical SIDs (`sIDHistory`) the **group itself**
+    /// carries — same count/values model as on [`Identity`] (ADR 0056 /
+    /// ADR 0059). Set on the LDAP membership path; the SAM/LSA fallback
+    /// cannot read it (`0` — that path already carries the
+    /// recursion-incomplete marker) and local server groups have no
+    /// `sIDHistory` (`0` is exact). `group_sid_history.len() <= count`;
+    /// the difference is what stays un-evaluated
+    /// (`GroupSidHistoryPresent`).
+    #[serde(default)]
+    pub group_sid_history_count: usize,
+    /// Parsed historical SIDs of the group. The Windows PAC includes the
+    /// history SIDs of the token groups, so the engine adds these to the
+    /// evaluated token and the membership step in the explanation names
+    /// them (ADR 0059).
+    #[serde(default)]
+    pub group_sid_history: Vec<Sid>,
+}
+
+/// Diagnostic classification of the **groups'** `sIDHistory` state across
+/// a membership set — the single source of truth consumed by both the
+/// permission engine and the membership view (ADR 0059), mirroring
+/// [`Identity::sid_history_diagnostics`] for the user's own history.
+pub fn group_sid_history_diagnostics(memberships: &[GroupMembership]) -> Vec<PermissionDiagnostic> {
+    let mut groups = 0usize;
+    let mut evaluated = 0usize;
+    let mut unevaluated = 0usize;
+    // De-duplicate by group SID: the same group can be listed through
+    // several membership entries (e.g. the AD + local-group combination)
+    // and must not inflate the counts.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for gm in memberships {
+        if !seen.insert(gm.group_sid.0.as_str()) {
+            continue;
+        }
+        if gm.group_sid_history_count == 0 {
+            continue;
+        }
+        let parsed = gm.group_sid_history.len();
+        if parsed > 0 {
+            groups += 1;
+            evaluated += parsed;
+        }
+        unevaluated += gm.group_sid_history_count.saturating_sub(parsed);
+    }
+    let mut d = Vec::new();
+    if evaluated > 0 {
+        d.push(PermissionDiagnostic::GroupSidHistoryEvaluated {
+            groups,
+            count: evaluated,
+        });
+    }
+    if unevaluated > 0 {
+        d.push(PermissionDiagnostic::GroupSidHistoryPresent { count: unevaluated });
+    }
+    d
 }
 
 ///
@@ -948,6 +1003,23 @@ pub enum PermissionDiagnostic {
     /// PermissionDiagnostic::TrustBoundaryEffectsNotModeled
     SidHistoryEvaluated { count: usize },
 
+    /// `count` historical SIDs (`sIDHistory`) carried by `groups` of the
+    /// token **groups** were evaluated into the token (ADR 0059): the
+    /// Windows PAC includes the history SIDs of the token groups, so ACEs
+    /// referencing a migrated group's old SID now match like at runtime.
+    /// Informational, **not** an incompleteness trigger — the membership
+    /// steps in the explanation path name each historical SID. The same
+    /// forest-scope caveat as for the user's history applies (L4 /
+    /// verification.md M.5).
+    GroupSidHistoryEvaluated { groups: usize, count: usize },
+
+    /// `count` historical SIDs (`sIDHistory`) on token **groups** could
+    /// **not** be evaluated (malformed values). The real token includes
+    /// them, so ACEs on those old group SIDs are not matched and the
+    /// effective right can be understated. Incompleteness trigger;
+    /// derived risk findings carry `incomplete = true` (ADR 0059).
+    GroupSidHistoryPresent { count: usize },
+
     /// The analyzed identity was resolved **across a domain or trust
     /// boundary** — either via a Foreign Security Principal object (a
     /// principal from a trusted external/forest domain) or via LSA because
@@ -1089,6 +1161,15 @@ impl PermissionDiagnostic {
                  into the token — ACEs referencing an old SID match like in the real \
                  logon token (see the explanation path)."
             ),
+            PermissionDiagnostic::GroupSidHistoryEvaluated { groups, count } => format!(
+                "{count} historical SID(s) (sIDHistory) carried by {groups} token group(s) \
+                 were evaluated into the token — ACEs referencing a migrated group's old \
+                 SID match like in the real logon token (see the membership steps)."
+            ),
+            PermissionDiagnostic::GroupSidHistoryPresent { count } => format!(
+                "{count} historical SID(s) (sIDHistory) on token groups could NOT be \
+                 evaluated into the token — effective rights may be understated."
+            ),
             PermissionDiagnostic::TrustBoundaryEffectsNotModeled => {
                 "Identity resolved across a domain/trust boundary; if it is a forest trust, \
                  SID filtering and Selective Authentication may reduce actual access (not modeled)."
@@ -1130,6 +1211,7 @@ impl PermissionDiagnostic {
                 | PermissionDiagnostic::GroupResolutionViaGlobalCatalog
                 | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
                 | PermissionDiagnostic::SidHistoryPresent { .. }
+                | PermissionDiagnostic::GroupSidHistoryPresent { .. }
                 | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
                 | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible
         )
@@ -1152,6 +1234,7 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::MembersViaPrimaryGroupIncluded { .. }
             | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible
             | PermissionDiagnostic::SidHistoryEvaluated { .. }
+            | PermissionDiagnostic::GroupSidHistoryEvaluated { .. }
             | PermissionDiagnostic::GroupResolutionViaGlobalCatalog => DiagnosticSeverity::Neutral,
             // Worth a look — a hidden Deny among skipped ACEs could change the
             // result.
@@ -1159,6 +1242,7 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::UnsupportedNtfsAces { .. } => DiagnosticSeverity::Notice,
             // Likely a real gap — under-report or a hard resolution failure.
             PermissionDiagnostic::SidHistoryPresent { .. }
+            | PermissionDiagnostic::GroupSidHistoryPresent { .. }
             | PermissionDiagnostic::IdentityLookupFailed { .. }
             | PermissionDiagnostic::GroupResolutionFailed { .. }
             | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
@@ -1572,6 +1656,8 @@ mod tests {
                     direct: false,
                     group_name: Some("Domain Admins".into()),
                     path: None,
+                    group_sid_history_count: 0,
+                    group_sid_history: Vec::new(),
                 },
                 GroupMembership {
                     member_sid: Sid("S-1-5-21-1-2-3-1104".into()),
@@ -1579,6 +1665,8 @@ mod tests {
                     direct: true,
                     group_name: Some("Domain Users".into()),
                     path: None,
+                    group_sid_history_count: 0,
+                    group_sid_history: Vec::new(),
                 },
             ],
             diagnostics: vec![],
@@ -1586,6 +1674,72 @@ mod tests {
         let privileged = report.privileged();
         assert_eq!(privileged.len(), 1);
         assert_eq!(privileged[0].1, "Domain Admins");
+    }
+
+    // --- Group sIDHistory diagnostics (ADR 0059) ---
+
+    fn gm_with_history(group_sid: &str, count: usize, parsed: &[&str]) -> GroupMembership {
+        GroupMembership {
+            member_sid: Sid("S-1-5-21-1-2-3-1104".into()),
+            group_sid: Sid(group_sid.into()),
+            direct: true,
+            group_name: None,
+            path: None,
+            group_sid_history_count: count,
+            group_sid_history: parsed.iter().map(|s| Sid((*s).into())).collect(),
+        }
+    }
+
+    #[test]
+    fn group_sid_history_diagnostics_splits_evaluated_and_unevaluated() {
+        let memberships = vec![
+            gm_with_history(
+                "S-1-5-21-1-2-3-512",
+                2,
+                &["S-1-5-21-9-9-9-1", "S-1-5-21-9-9-9-2"],
+            ),
+            gm_with_history("S-1-5-21-1-2-3-513", 2, &["S-1-5-21-9-9-9-3"]),
+            gm_with_history("S-1-5-21-1-2-3-514", 0, &[]),
+        ];
+        let d = group_sid_history_diagnostics(&memberships);
+        assert!(
+            d.contains(&PermissionDiagnostic::GroupSidHistoryEvaluated {
+                groups: 2,
+                count: 3
+            }),
+            "3 parsed values across 2 groups must be evaluated: {d:?}"
+        );
+        assert!(
+            d.contains(&PermissionDiagnostic::GroupSidHistoryPresent { count: 1 }),
+            "1 unparsed value must stay visible: {d:?}"
+        );
+    }
+
+    #[test]
+    fn group_sid_history_diagnostics_deduplicates_by_group_sid() {
+        // The same group listed twice (e.g. the AD + local combination)
+        // must not double-count its history.
+        let memberships = vec![
+            gm_with_history("S-1-5-21-1-2-3-512", 1, &["S-1-5-21-9-9-9-1"]),
+            gm_with_history("S-1-5-21-1-2-3-512", 1, &["S-1-5-21-9-9-9-1"]),
+        ];
+        let d = group_sid_history_diagnostics(&memberships);
+        assert!(
+            d.contains(&PermissionDiagnostic::GroupSidHistoryEvaluated {
+                groups: 1,
+                count: 1
+            }),
+            "duplicate membership entries must not inflate counts: {d:?}"
+        );
+    }
+
+    #[test]
+    fn group_sid_history_diagnostics_silent_without_history() {
+        let memberships = vec![gm_with_history("S-1-5-21-1-2-3-512", 0, &[])];
+        assert!(
+            group_sid_history_diagnostics(&memberships).is_empty(),
+            "no history → no markers (no false positives)"
+        );
     }
 
     // --- Group → Members (reverse view) ---

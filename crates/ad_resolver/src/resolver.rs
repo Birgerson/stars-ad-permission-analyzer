@@ -513,6 +513,12 @@ impl LdapResolver {
                             .or_else(|| e.first_attr("cn"))
                     })
                     .map(str::to_owned);
+                // ADR 0059: the group's own historical SIDs go into the
+                // token like the user's.
+                let (gh_count, gh_values) = pg_entry
+                    .as_ref()
+                    .map(parse_sid_history)
+                    .unwrap_or((0, Vec::new()));
                 memberships.push(GroupMembership {
                     member_sid: sid.clone(),
                     group_sid: pg_sid.clone(),
@@ -524,6 +530,8 @@ impl LdapResolver {
                         source: MembershipPathSource::PrimaryGroup,
                         complete: true,
                     }),
+                    group_sid_history_count: gh_count,
+                    group_sid_history: gh_values,
                 });
             }
         }
@@ -569,12 +577,16 @@ impl LdapResolver {
                 }
             };
 
+            // ADR 0059: group history from the transitive search entry.
+            let (gh_count, gh_values) = parse_sid_history(group_entry);
             memberships.push(GroupMembership {
                 member_sid: sid.clone(),
                 group_sid,
                 direct,
                 group_name,
                 path: Some(path),
+                group_sid_history_count: gh_count,
+                group_sid_history: gh_values,
             });
         }
 
@@ -607,12 +619,16 @@ impl LdapResolver {
                     complete: false,
                 },
             };
+            // ADR 0059: group history from the parent-group entry.
+            let (gh_count, gh_values) = parse_sid_history(parent_entry);
             memberships.push(GroupMembership {
                 member_sid: sid.clone(),
                 group_sid: parent_sid,
                 direct: false,
                 group_name,
                 path: Some(path),
+                group_sid_history_count: gh_count,
+                group_sid_history: gh_values,
             });
         }
 
@@ -796,22 +812,7 @@ fn parse_identity_from_entry(entry: &RawEntry, sid: &Sid) -> Identity {
     // token (ADR 0056). The count stays the authoritative total: a malformed
     // value is skipped with a warning and the difference between count and
     // parsed values surfaces as SidHistoryPresent ("not evaluated").
-    let sid_history_count = entry.value_count("sIDHistory");
-    let sid_history: Vec<Sid> = entry
-        .all_values("sIDHistory")
-        .into_iter()
-        .filter_map(|bytes| match bytes_to_sid_str(bytes) {
-            Ok(s) => Some(Sid(s)),
-            Err(e) => {
-                warn!(
-                    dn = %entry.dn,
-                    error = %e,
-                    "Malformed sIDHistory value skipped — it stays un-evaluated"
-                );
-                None
-            }
-        })
-        .collect();
+    let (sid_history_count, sid_history) = parse_sid_history(entry);
 
     Identity {
         sid: sid.clone(),
@@ -842,6 +843,31 @@ fn classify_identity(object_classes: &[&str]) -> IdentityKind {
     } else {
         IdentityKind::Unknown
     }
+}
+
+/// Parses the multi-valued binary `sIDHistory` attribute of an entry into
+/// `(authoritative total, parsed values)` — shared by the identity parser
+/// (ADR 0056) and the group-membership construction (ADR 0059). A
+/// malformed value is skipped with a warning; the count keeps it visible
+/// as "present, not evaluated".
+fn parse_sid_history(entry: &RawEntry) -> (usize, Vec<Sid>) {
+    let count = entry.value_count("sIDHistory");
+    let values: Vec<Sid> = entry
+        .all_values("sIDHistory")
+        .into_iter()
+        .filter_map(|bytes| match bytes_to_sid_str(bytes) {
+            Ok(s) => Some(Sid(s)),
+            Err(e) => {
+                warn!(
+                    dn = %entry.dn,
+                    error = %e,
+                    "Malformed sIDHistory value skipped — it stays un-evaluated"
+                );
+                None
+            }
+        })
+        .collect();
+    (count, values)
 }
 
 /// Extracts the SID from an LDAP entry (binary objectSid attribute).

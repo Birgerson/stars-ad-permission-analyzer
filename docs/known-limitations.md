@@ -153,8 +153,23 @@ because the LDAP protocol is the same — only port and scope change).
 ## L3 — SID History evaluation
 
 **Priority:** Medium
-**Tracking:** **user history closed 2026-07-04 — shipped (ADR 0056)**;
-group history remains open
+**Tracking:** **closed 2026-07-04 — user history (ADR 0056) and group
+history (ADR 0059) both shipped**
+
+> **Status update (2026-07-04, ADR 0059 — closes the remainder):** the
+> **groups'** `sIDHistory` values are now read from the same transitive
+> membership search that already returns every group entry
+> (`MEMBERSHIP_ATTRS` + shared `parse_sid_history`), carried on
+> `GroupMembership` (count/values pair like on `Identity`), and evaluated
+> into the token — an ACE on a migrated group's old SID matches (Allow and
+> Deny) for every member. The membership step in the explanation names
+> each group historical SID; `GroupSidHistoryEvaluated { groups, count }`
+> (informational) and `GroupSidHistoryPresent { count }` (incompleteness,
+> unparseable remainder) mirror the user-level split. SAM/LSA fallback
+> cannot read the attribute (0 — that path already carries the
+> recursion-incomplete marker); local server groups have no `sIDHistory`
+> (0 is exact). The foreign-forest trust caveat (M.5) applies to group
+> history exactly as to user history and remains L4 work.
 
 > **Status update (2026-07-04, ADR 0056):** the **user's** `sIDHistory`
 > values are now parsed on the direct in-base LDAP path and **evaluated
@@ -186,30 +201,18 @@ domains. NTFS DACLs that were not migrated along still reference these
 old SIDs — the Windows logon token includes them, so they grant access
 at runtime.
 
-### Remaining gap — group `sIDHistory`
+### Resolution (both halves shipped)
 
-The token also contains the historical SIDs of the user's **groups**.
-Stars does not read those yet: an ACE on a migrated group's old SID is
-still missed, and — unlike the pre-ADR-0052 user case — this gap
-currently produces **no marker** (the group entries' `sIDHistory` is not
-even counted).
-
-### Solution sketch (group history)
-
-- Add `sIDHistory` to `MEMBERSHIP_ATTRS` — the transitive in-chain group
-  search already returns every group entry, so the values are cheap to
-  fetch.
-- Carry them on `GroupMembership` (new `#[serde(default)]` field;
-  32 construction sites) and decide how the membership cache schema
-  handles the extra field.
-- Add them to `build_token_sids_with_context` and to the membership
-  explanation step, mirroring ADR 0056.
-
-### Test plan (group history)
-
-Group entry with `sIDHistory`, ACE on the group's old SID: right is
-granted and the membership step explains it — mirroring the shipped
-user-history tests in `engine.rs` / `resolver.rs` / `principal.rs`.
+- **User history (ADR 0056):** parsed on the direct in-base LDAP path,
+  evaluated into the token, explanation step per SID, live-proven
+  (verification.md Block M).
+- **Group history (ADR 0059):** parsed from the transitive membership
+  entries, carried on `GroupMembership`, evaluated into the token,
+  membership step names the group's old SIDs; covered by engine /
+  model / principal / risk tests mirroring the user-history suite.
+- The membership **cache** deliberately does not store history (like
+  names and paths, it is a live-resolution concern; the cache only
+  carries topology and does not feed evaluation).
 
 ---
 
@@ -607,7 +610,7 @@ download-and-verify step.
 | --- | --- | --- | --- |
 | L1 — FSP | High | **yes** (IdentityResolvedViaForeignSecurityPrincipal) | **closed 2026-06-11** (trust-side groups still need L2) |
 | L2 — GC bind | High | **yes** (GroupResolutionViaGlobalCatalog) | **closed 2026-06-11** (GUI toggle shipped v1.6.4) |
-| L3 — SID History | Medium | **yes** (SidHistoryEvaluated / SidHistoryPresent) | **user history closed 2026-07-04** (ADR 0056); group history still open |
+| L3 — SID History | Medium | **yes** (SidHistoryEvaluated/Present + GroupSidHistoryEvaluated/Present) | **closed 2026-07-04** (user: ADR 0056; groups: ADR 0059) |
 | L4 — Cross-forest filter | Medium | no | no (documentation only) |
 | L5 — Empty memberships | Medium | yes (incomplete) | only via L1/L2 |
 | L6 — Live tests | High | n/a | **partially** — live 3-domain run 2026-06-14 committed (verification.md Block L); automated CI suite still open |

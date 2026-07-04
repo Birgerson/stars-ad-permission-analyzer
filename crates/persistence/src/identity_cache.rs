@@ -98,6 +98,11 @@ impl<'a> IdentityCache<'a> {
                     // live-resolution concern and are not persisted here —
                     // they are reconstructed on every run.
                     path: None,
+                    // Like group_name/path: the group's sIDHistory is a
+                    // live-resolution concern (ADR 0059); the cache only
+                    // carries the membership topology.
+                    group_sid_history_count: 0,
+                    group_sid_history: Vec::new(),
                 })
             })
             .map_err(|e| CoreError::Database(format!("Group membership query failed: {e}")))?;
@@ -260,6 +265,8 @@ mod tests {
                 direct: true,
                 group_name: None,
                 path: None,
+                group_sid_history_count: 0,
+                group_sid_history: Vec::new(),
             },
             GroupMembership {
                 member_sid: sid.clone(),
@@ -267,6 +274,8 @@ mod tests {
                 direct: false,
                 group_name: None,
                 path: None,
+                group_sid_history_count: 0,
+                group_sid_history: Vec::new(),
             },
         ];
         cache.upsert_memberships(&memberships).unwrap();
@@ -301,6 +310,8 @@ mod tests {
                 direct: false,
                 group_name: None,
                 path: None,
+                group_sid_history_count: 0,
+                group_sid_history: Vec::new(),
             }])
             .unwrap();
         cache
@@ -310,6 +321,8 @@ mod tests {
                 direct: true,
                 group_name: None,
                 path: None,
+                group_sid_history_count: 0,
+                group_sid_history: Vec::new(),
             }])
             .unwrap();
         let found = cache.lookup_memberships(&sid).unwrap();

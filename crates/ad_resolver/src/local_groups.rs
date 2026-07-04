@@ -563,6 +563,10 @@ pub fn resolve_local_group_chains_for_identity(
                                 direct: path.nodes.len() == 2 && path.complete,
                                 group_name,
                                 path: Some(path),
+                                // Local server groups have no sIDHistory —
+                                // 0 is exact, not unknown (ADR 0059).
+                                group_sid_history_count: 0,
+                                group_sid_history: Vec::new(),
                             })
                             .collect();
                         return Ok(memberships);

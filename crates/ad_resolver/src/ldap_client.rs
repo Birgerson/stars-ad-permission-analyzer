@@ -86,6 +86,10 @@ const MEMBERSHIP_ATTRS: &[&str] = &[
     "sAMAccountName",
     "memberOf",
     "distinguishedName",
+    // Binary, multi-valued: the group's own historical SIDs. The PAC
+    // includes the history SIDs of the token groups, so these are parsed
+    // and evaluated into the token like the user's (ADR 0059).
+    "sIDHistory",
 ];
 
 /// Raw LDAP entry after a search.
