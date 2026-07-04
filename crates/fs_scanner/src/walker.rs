@@ -3,16 +3,29 @@
 
 //! Recursive directory walker with error tolerance.
 //!
-//! Reparse points (symlinks, junctions) are followed by default with
-//! loop detection via the canonicalized target. Whenever a cycle is
-//! detected or the target cannot be resolved, the walker writes a
-//! visible `WalkError` into the result — never silent skips. This way a
-//! typical SYSVOL junction
+//! Reparse points (symlinks, junctions) are followed by default. Loop
+//! handling distinguishes two cases via canonicalized identities
+//! (deep review 2026-07-04, F2 — ADR 0058):
+//!
+//! - **Cycle** — the target is an ancestor of the *active* recursion
+//!   chain; descending would recurse forever. Recursion stops with a
+//!   typed [`CoreError::ReparseCycle`] error.
+//! - **Duplicate target** — the target was already enumerated anywhere
+//!   in this scan under another namespace path (e.g. two junctions to
+//!   the same directory, or a junction plus the directory's real path).
+//!   Each distinct directory is enumerated exactly once; every further
+//!   route is recorded as a typed [`CoreError::ReparseDuplicateTarget`]
+//!   error naming the first path, so the report stays deduplicated
+//!   without hiding the alternate route.
+//!
+//! Whenever recursion stops or a target cannot be resolved, the walker
+//! writes a visible `WalkError` into the result — never silent skips.
+//! This way a typical SYSVOL junction
 //! (`C:\Windows\SYSVOL\sysvol\<domain>` → `C:\Windows\SYSVOL\domain`)
 //! is fully analyzable without the operator needing insider knowledge
 //! about junctions.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use adpa_core::{error::CoreError, model::FileSystemObject};
 use tracing::{debug, info, warn};
@@ -99,18 +112,15 @@ pub fn walk_tree_streaming(
         max_depth = ?config.max_depth,
         "Starting directory tree walk"
     );
-    let mut visited_canonical: HashSet<String> = HashSet::new();
+    // Cycle vs duplicate-target bookkeeping — the root's canonical identity
+    // enters the active chain in its own `walk_dir` step, so a reparse
+    // point back to the scan root is detected as a cycle right away.
+    let mut detector = LoopDetector::new();
     // One security-descriptor cache for the whole tree so an inherited
     // DACL shared by many directories is parsed once, not once per object
     // (engine review 2026-06-12 finding 2). A cache hit is byte-validated
     // inside the reader, so it can never assign a wrong DACL.
     let mut sd_cache = crate::acl::SdCache::new();
-    // Canonicalize the root up front and seed the visited set with it so
-    // that reparse points pointing back to the scan root are detected as a
-    // cycle right away.
-    if let Some(canon) = canonicalize_path(root) {
-        visited_canonical.insert(canon);
-    }
     // Count objects and errors in a wrapping closure so the recursive walk
     // needs no extra counter parameters and the completion log keeps both
     // figures (self-review follow-up: the error count must not be lost).
@@ -125,11 +135,12 @@ pub fn walk_tree_streaming(
     };
     walk_dir(
         root,
+        None,
         0,
         config,
         cancel,
         &mut counting_sink,
-        &mut visited_canonical,
+        &mut detector,
         &mut sd_cache,
     );
     let cancelled = cancel.is_cancelled();
@@ -155,14 +166,88 @@ fn canonicalize_path(path: &str) -> Option<String> {
         .map(|p| p.to_string_lossy().to_string().to_ascii_lowercase())
 }
 
+/// The walk's decision for a directory about to be descended into —
+/// produced by [`LoopDetector::enter`].
+#[derive(Debug, PartialEq, Eq)]
+enum DescendDecision {
+    /// Not seen before — descend. The detector recorded the entry; the
+    /// caller must pair it with [`LoopDetector::leave`] when the subtree
+    /// (or the depth-limited stop) is done.
+    Fresh,
+    /// The canonical identity is an **ancestor on the active recursion
+    /// chain** — descending would recurse forever. A real cycle.
+    Cycle,
+    /// The canonical identity was **already enumerated in this scan**
+    /// under `first_path` — a second namespace route (junction/symlink)
+    /// to the same directory, not a cycle.
+    DuplicateTarget { first_path: String },
+}
+
+/// Cycle vs duplicate-target bookkeeping for one tree walk, factored out
+/// so the semantics are unit-testable without any filesystem setup
+/// (deep review 2026-07-04, F2 + F5; ADR 0058).
+///
+/// Two structures with distinct jobs — conflating them was exactly the
+/// F2 defect (a scan-wide set reported duplicate routes as "loops"):
+///
+/// - `chain`: canonical identities of the directories on the **active**
+///   recursion path. Membership means a descent would re-enter an
+///   ancestor — the only true cycle condition.
+/// - `seen_first_path`: canonical identity → first namespace path that
+///   enumerated it, scan-wide. A later hit is a duplicate route; the
+///   stored path makes the diagnostic explainable ("already enumerated
+///   under …").
+struct LoopDetector {
+    chain: Vec<String>,
+    seen_first_path: HashMap<String, String>,
+}
+
+impl LoopDetector {
+    fn new() -> Self {
+        Self {
+            chain: Vec::new(),
+            seen_first_path: HashMap::new(),
+        }
+    }
+
+    /// Decides whether the walk may descend into the directory with the
+    /// given canonical identity, reached via `namespace_path`. Records the
+    /// entry when `Fresh` — the caller must call [`Self::leave`] after the
+    /// subtree completes (and only then).
+    fn enter(&mut self, canonical: &str, namespace_path: &str) -> DescendDecision {
+        if self.chain.iter().any(|c| c == canonical) {
+            return DescendDecision::Cycle;
+        }
+        if let Some(first) = self.seen_first_path.get(canonical) {
+            return DescendDecision::DuplicateTarget {
+                first_path: first.clone(),
+            };
+        }
+        self.seen_first_path
+            .insert(canonical.to_owned(), namespace_path.to_owned());
+        self.chain.push(canonical.to_owned());
+        DescendDecision::Fresh
+    }
+
+    /// Pops the innermost chain entry — pairs with a `Fresh` result of
+    /// [`Self::enter`].
+    fn leave(&mut self) {
+        self.chain.pop();
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk_dir(
     path: &str,
+    // Canonical identity of the parent directory — `None` for the scan
+    // root. Lets plain (non-reparse) children derive their canonical form
+    // without a filesystem round trip: parent canonical + component name.
+    parent_canonical: Option<&str>,
     current_depth: u32,
     config: &WalkConfig,
     cancel: &CancellationToken,
     on_item: &mut dyn FnMut(WalkItem),
-    visited_canonical: &mut HashSet<String>,
+    detector: &mut LoopDetector,
     sd_cache: &mut crate::acl::SdCache,
 ) {
     if cancel.is_cancelled() {
@@ -182,45 +267,86 @@ fn walk_dir(
             debug!(path, is_dir, is_reparse, depth = current_depth, "Read FSO");
             on_item(WalkItem::Object(fso));
 
-            // For a reparse point we try to determine the canonical target.
-            // If it is already part of the current walk, descending further
-            // would create a cycle — we surface that as a visible error and
-            // stop the recursion at this point. If canonicalization fails
-            if is_reparse {
+            // An unresolvable reparse target (broken link, no access) stops
+            // here for files and directories alike — visible, not silent.
+            if is_reparse && canonicalize_path(path).is_none() {
+                warn!(path, "Reparse point target could not be resolved");
+                on_item(WalkItem::Error(WalkError {
+                    path: path.to_owned(),
+                    error: CoreError::AccessDenied(
+                        "Reparse point target could not be resolved — recursion stopped at this junction/link. The object itself is in the result with its DACL; objects behind the link were not enumerated."
+                            .to_owned(),
+                    ),
+                }));
+                return;
+            }
+
+            // Only directories recurse, so only directories need the cycle /
+            // duplicate-target bookkeeping (a file symlink cannot loop).
+            if !is_dir {
+                return;
+            }
+
+            // Canonical identity of this directory. Reparse points and the
+            // root resolve via the filesystem (the reparse *target* is the
+            // identity); plain children derive from the parent — same
+            // lowercased, prefix-consistent form without a syscall per
+            // directory.
+            let canonical = if is_reparse || parent_canonical.is_none() {
                 match canonicalize_path(path) {
-                    None => {
-                        warn!(path, "Reparse point target could not be resolved");
-                        on_item(WalkItem::Error(WalkError {
-                            path: path.to_owned(),
-                            error: CoreError::AccessDenied(
-                                "Reparse point target could not be resolved — recursion stopped at this junction/link. The object itself is in the result with its DACL; objects behind the link were not enumerated."
-                                    .to_owned(),
-                            ),
-                        }));
-                        return;
-                    }
-                    Some(target) => {
-                        if visited_canonical.contains(&target) {
-                            info!(
-                                path,
-                                target = %target,
-                                "Reparse point target already visited — recursion stopped to avoid loop"
-                            );
-                            on_item(WalkItem::Error(WalkError {
-                                path: path.to_owned(),
-                                error: CoreError::AccessDenied(format!(
-                                    "Reparse point target already visited in this scan — recursion stopped to avoid an infinite loop. Target: {target}. The object itself is in the result with its DACL; objects behind the link were not enumerated again."
-                                )),
-                            }));
-                            return;
-                        }
-                        visited_canonical.insert(target);
-                    }
+                    Some(c) => c,
+                    // Root that cannot be canonicalized (rare: virtual FS):
+                    // best-effort identity so the walk still runs.
+                    None => path.to_ascii_lowercase(),
                 }
+            } else {
+                let component = std::path::Path::new(path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_ascii_lowercase());
+                match (parent_canonical, component) {
+                    (Some(parent), Some(name)) => {
+                        format!("{parent}{}{name}", std::path::MAIN_SEPARATOR)
+                    }
+                    // No derivable component — fall back to the filesystem.
+                    _ => canonicalize_path(path).unwrap_or_else(|| path.to_ascii_lowercase()),
+                }
+            };
+
+            match detector.enter(&canonical, path) {
+                DescendDecision::Cycle => {
+                    info!(
+                        path,
+                        target = %canonical,
+                        "Reparse point target is an ancestor of the active chain — cycle, recursion stopped"
+                    );
+                    on_item(WalkItem::Error(WalkError {
+                        path: path.to_owned(),
+                        error: CoreError::ReparseCycle(format!(
+                            "Reparse point target is an ancestor of the current traversal chain — descending would loop forever; recursion stopped at this junction/link. Target: {canonical}. The object itself is in the result with its DACL."
+                        )),
+                    }));
+                    return;
+                }
+                DescendDecision::DuplicateTarget { first_path } => {
+                    info!(
+                        path,
+                        target = %canonical,
+                        first_path = %first_path,
+                        "Reparse point target already enumerated under another namespace path — duplicate route, not enumerated again"
+                    );
+                    on_item(WalkItem::Error(WalkError {
+                        path: path.to_owned(),
+                        error: CoreError::ReparseDuplicateTarget(format!(
+                            "Reparse point target already enumerated in this scan under '{first_path}' — subtree not enumerated again under this namespace path (duplicate target, not a cycle). Target: {canonical}. The link object itself is in the result with its DACL."
+                        )),
+                    }));
+                    return;
+                }
+                DescendDecision::Fresh => {}
             }
 
             let depth_ok = config.max_depth.is_none_or(|max| current_depth < max);
-            if is_dir && depth_ok {
+            if depth_ok {
                 // Apply the long-path prefix before `read_dir` so that
                 // directories with paths > MAX_PATH can be enumerated
                 // reliably. The `entry.path()` results carry the prefix
@@ -240,6 +366,8 @@ fn walk_dir(
                     Ok(entries) => {
                         for entry_result in entries {
                             // Check for cancellation between sibling entries.
+                            // (Aborting mid-chain without `leave()` is fine —
+                            // the whole walk ends here.)
                             if cancel.is_cancelled() {
                                 return;
                             }
@@ -257,11 +385,12 @@ fn walk_dir(
                                     let child = entry.path().to_string_lossy().into_owned();
                                     walk_dir(
                                         &child,
+                                        Some(&canonical),
                                         current_depth + 1,
                                         config,
                                         cancel,
                                         on_item,
-                                        visited_canonical,
+                                        detector,
                                         sd_cache,
                                     );
                                 }
@@ -270,6 +399,9 @@ fn walk_dir(
                     }
                 }
             }
+            // Pairs with the `Fresh` entry above — the directory leaves the
+            // active recursion chain (it stays in the scan-wide seen map).
+            detector.leave();
         }
     }
 }
@@ -553,24 +685,7 @@ mod tests {
         let link = root.join("link");
 
         std::fs::create_dir_all(&inside_target).expect("create target tree");
-        let status = std::process::Command::new("cmd")
-            .args([
-                "/C",
-                "mklink",
-                "/J",
-                &link.to_string_lossy(),
-                &target.to_string_lossy(),
-            ])
-            .status()
-            .expect("spawn mklink");
-        if !status.success() {
-            // Junction creation may fail on some CI hosts (e.g. without write
-            // permission under TEMP). Skip the test deliberately in that case
-            // so it does not fail spuriously.
-            let _ = std::fs::remove_dir_all(&root);
-            eprintln!("mklink /J failed — skipping junction test");
-            return;
-        }
+        mklink_junction(&link, &target);
 
         let root_str = root.to_string_lossy().into_owned();
         let result = walk(&root_str, &unlimited());
@@ -582,11 +697,215 @@ mod tests {
             .map(|o| o.path.0.to_ascii_lowercase())
             .collect();
 
+        // NTFS enumerates alphabetically: `link` before `target`, so the
+        // junction route enumerates the content first (the SYSVOL case).
         let inside_via_link = link.join("inside").to_string_lossy().to_ascii_lowercase();
         assert!(
             paths.iter().any(|p| p == &inside_via_link),
             "Walker must traverse the junction and find 'link\\inside' — got: {paths:?}"
         );
+        // ADR 0058: the real `target` directory is then a duplicate route to
+        // the already-enumerated content — its subtree is not enumerated
+        // again, and the walk says so with a typed diagnostic naming the
+        // first path instead of silently duplicating (or mislabelling it a
+        // "loop", the F2 defect).
+        let inside_via_target = target.join("inside").to_string_lossy().to_ascii_lowercase();
+        assert!(
+            !paths.iter().any(|p| p == &inside_via_target),
+            "duplicate route must not re-enumerate the subtree — got: {paths:?}"
+        );
+        let dup = result
+            .errors
+            .iter()
+            .find(|e| {
+                matches!(
+                    e.error,
+                    adpa_core::error::CoreError::ReparseDuplicateTarget(_)
+                )
+            })
+            .expect("the duplicate route must surface as a typed diagnostic");
+        let msg = format!("{}", dup.error).to_ascii_lowercase();
+        assert!(
+            msg.contains(&link.to_string_lossy().to_ascii_lowercase()),
+            "duplicate diagnostic must name the first namespace path: {msg}"
+        );
+        assert!(
+            msg.contains("not a cycle"),
+            "duplicate diagnostic must distinguish itself from a cycle: {msg}"
+        );
+    }
+
+    /// Creates an NTFS junction `link → target` and fails LOUDLY when that
+    /// is not possible. The old silent `return` made audit-critical reparse
+    /// coverage look green on runners that never exercised it (deep review
+    /// 2026-07-04, F5). `mklink /J` needs no admin rights — a failure here
+    /// means the environment genuinely cannot run this test, and that must
+    /// be visible, not swallowed.
+    fn mklink_junction(link: &std::path::Path, target: &std::path::Path) {
+        let status = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &link.to_string_lossy(),
+                &target.to_string_lossy(),
+            ])
+            .status()
+            .expect("spawn mklink");
+        assert!(
+            status.success(),
+            "mklink /J '{}' '{}' failed ({status}) — junction tests REQUIRE the \
+             ability to create NTFS junctions (no admin rights needed); a silent \
+             skip would fake coverage of audit-critical reparse handling (F5)",
+            link.display(),
+            target.display()
+        );
+    }
+
+    /// Review 2026-07-04 F2 acceptance case: TWO junctions to the same
+    /// (out-of-tree) target are not cyclic. The first route enumerates the
+    /// content; the second must surface as a typed duplicate-target
+    /// diagnostic naming the first route — not as a bogus "loop", and not
+    /// as a second silent enumeration.
+    #[test]
+    fn walker_reports_second_junction_to_same_target_as_duplicate_not_cycle() {
+        use std::path::PathBuf;
+
+        let stamp = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let base: PathBuf = std::env::temp_dir().join(format!("adpa-dup-{stamp}"));
+        let _ = std::fs::remove_dir_all(&base);
+        // `shared` lives OUTSIDE the walk root, so the two junctions are the
+        // only routes to it.
+        let shared = base.join("shared");
+        let root = base.join("root");
+        let link_a = root.join("link_a");
+        let link_b = root.join("link_b");
+        std::fs::create_dir_all(shared.join("inside")).expect("create shared tree");
+        std::fs::create_dir_all(&root).expect("create walk root");
+        mklink_junction(&link_a, &shared);
+        mklink_junction(&link_b, &shared);
+
+        let result = walk(&root.to_string_lossy(), &unlimited());
+        let _ = std::fs::remove_dir_all(&base);
+
+        let paths: Vec<String> = result
+            .objects
+            .iter()
+            .map(|o| o.path.0.to_ascii_lowercase())
+            .collect();
+        let inside_a = link_a.join("inside").to_string_lossy().to_ascii_lowercase();
+        let inside_b = link_b.join("inside").to_string_lossy().to_ascii_lowercase();
+        assert!(
+            paths.iter().any(|p| p == &inside_a),
+            "first junction route must enumerate the content — got: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p == &inside_b),
+            "second route must not re-enumerate — got: {paths:?}"
+        );
+        // Both link objects themselves are in the result with their DACLs.
+        assert!(paths
+            .iter()
+            .any(|p| p == &link_b.to_string_lossy().to_ascii_lowercase()));
+
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e.error, adpa_core::error::CoreError::ReparseCycle(_))),
+            "two independent junctions to one target are NOT a cycle"
+        );
+        let dup = result
+            .errors
+            .iter()
+            .find(|e| {
+                matches!(
+                    e.error,
+                    adpa_core::error::CoreError::ReparseDuplicateTarget(_)
+                )
+            })
+            .expect("second route must surface as a typed duplicate diagnostic");
+        // WalkError paths of child entries carry the `\\?\` long-path prefix
+        // (pre-existing behavior for all child error paths) — strip it for
+        // the comparison.
+        let dup_path = dup
+            .path
+            .to_ascii_lowercase()
+            .trim_start_matches(r"\\?\")
+            .to_owned();
+        assert_eq!(
+            dup_path,
+            link_b.to_string_lossy().to_ascii_lowercase(),
+            "the diagnostic must sit on the second route"
+        );
+        assert!(
+            format!("{}", dup.error)
+                .to_ascii_lowercase()
+                .contains(&link_a.to_string_lossy().to_ascii_lowercase()),
+            "the diagnostic must name the first route"
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // LoopDetector — OS-free unit tests (review 2026-07-04, F5: the
+    // cycle/duplicate decision must be validatable without mklink).
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn loop_detector_duplicate_after_leave_names_first_path() {
+        let mut d = super::LoopDetector::new();
+        assert_eq!(
+            d.enter("c:\\shared", "C:\\root\\link_a"),
+            super::DescendDecision::Fresh
+        );
+        d.leave();
+        match d.enter("c:\\shared", "C:\\root\\link_b") {
+            super::DescendDecision::DuplicateTarget { first_path } => {
+                assert_eq!(first_path, "C:\\root\\link_a");
+            }
+            other => panic!("expected DuplicateTarget, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loop_detector_ancestor_on_active_chain_is_cycle() {
+        let mut d = super::LoopDetector::new();
+        assert_eq!(d.enter("c:\\a", "C:\\a"), super::DescendDecision::Fresh);
+        assert_eq!(
+            d.enter("c:\\a\\b", "C:\\a\\b"),
+            super::DescendDecision::Fresh
+        );
+        assert_eq!(
+            d.enter("c:\\a", "C:\\a\\b\\link"),
+            super::DescendDecision::Cycle,
+            "re-entering an ancestor of the ACTIVE chain is a real cycle"
+        );
+    }
+
+    #[test]
+    fn loop_detector_left_sibling_is_duplicate_not_cycle() {
+        let mut d = super::LoopDetector::new();
+        assert_eq!(d.enter("c:\\a", "C:\\a"), super::DescendDecision::Fresh);
+        assert_eq!(
+            d.enter("c:\\a\\b", "C:\\a\\b"),
+            super::DescendDecision::Fresh
+        );
+        d.leave(); // done with c:\a\b — no longer on the active chain
+        match d.enter("c:\\a\\b", "C:\\a\\c_link") {
+            super::DescendDecision::DuplicateTarget { first_path } => {
+                assert_eq!(first_path, "C:\\a\\b");
+            }
+            other => panic!(
+                "a completed sibling reached again is a duplicate, not a cycle — got {other:?}"
+            ),
+        }
     }
 
     /// Creates a circular junction structure (`b → a`) and verifies that the
@@ -612,41 +931,31 @@ mod tests {
         std::fs::create_dir_all(&a).expect("create a");
         // `b` is a junction back to `root` — once the walker enters `b`,
         // without loop detection it would start over from `root`.
-        let status = std::process::Command::new("cmd")
-            .args([
-                "/C",
-                "mklink",
-                "/J",
-                &b.to_string_lossy(),
-                &root.to_string_lossy(),
-            ])
-            .status()
-            .expect("spawn mklink");
-        if !status.success() {
-            let _ = std::fs::remove_dir_all(&root);
-            eprintln!("mklink /J failed — skipping junction-loop test");
-            return;
-        }
+        mklink_junction(&b, &root);
 
         let result = walk(&root.to_string_lossy(), &unlimited());
         let _ = std::fs::remove_dir_all(&root);
 
+        // The cycle must surface as the TYPED cycle error (not as a
+        // duplicate route, and not silently) with an explanatory message.
+        let cycle = result
+            .errors
+            .iter()
+            .find(|e| matches!(e.error, adpa_core::error::CoreError::ReparseCycle(_)))
+            .unwrap_or_else(|| {
+                panic!(
+                    "loop junction must produce a typed ReparseCycle error, got: {:?}",
+                    result
+                        .errors
+                        .iter()
+                        .map(|e| format!("{}", e.error))
+                        .collect::<Vec<_>>()
+                )
+            });
+        let msg = format!("{}", cycle.error);
         assert!(
-            !result.errors.is_empty(),
-            "Loop junction must produce an error in the result, got 0"
-        );
-        let loop_msg = result.errors.iter().any(|e| {
-            let msg = format!("{}", e.error);
-            msg.contains("already visited") || msg.contains("loop")
-        });
-        assert!(
-            loop_msg,
-            "at least one error must explain the loop detection, got: {:?}",
-            result
-                .errors
-                .iter()
-                .map(|e| format!("{}", e.error))
-                .collect::<Vec<_>>()
+            msg.contains("loop"),
+            "the cycle error must explain the loop: {msg}"
         );
     }
 }

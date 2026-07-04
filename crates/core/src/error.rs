@@ -40,4 +40,18 @@ pub enum CoreError {
 
     #[error("Validation error: {0}")]
     Validation(String),
+
+    /// A reparse point (junction / symlink) targets a directory that is an
+    /// ancestor of the current traversal chain — descending would recurse
+    /// forever. Typed so audit consumers can distinguish a real cycle from
+    /// a mere duplicate route (deep review 2026-07-04, F2).
+    #[error("Reparse cycle: {0}")]
+    ReparseCycle(String),
+
+    /// A reparse point targets a directory that was already enumerated in
+    /// this scan under a different namespace path. Not a cycle: the target
+    /// content exists in the result once; this route is recorded instead
+    /// of being enumerated again (deep review 2026-07-04, F2).
+    #[error("Duplicate reparse target: {0}")]
+    ReparseDuplicateTarget(String),
 }

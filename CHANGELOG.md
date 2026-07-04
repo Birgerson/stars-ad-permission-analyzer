@@ -12,6 +12,22 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **Walker: real reparse cycles are now distinguished from duplicate
+  targets (ADR 0058).** Closes deep-review 2026-07-04 findings F2 and F5.
+  Previously a single scan-wide visited set reported two independent
+  junctions to the same directory as an "infinite loop" (suppressing the
+  second route with a misleading message), while a junction to an
+  already-walked plain directory silently enumerated the subtree a second
+  time. Now a `LoopDetector` separates the active recursion chain (cycle
+  check) from a scan-wide first-route map (duplicate check): each
+  directory is enumerated exactly once, every further namespace route
+  surfaces as a typed `ReparseDuplicateTarget` diagnostic naming the
+  first route, and real cycles surface as typed `ReparseCycle` errors.
+  The junction tests now fail loudly when `mklink /J` is unavailable
+  instead of silently passing (F5), the cycle/duplicate decision has
+  OS-free unit tests, and a new integration test pins the
+  two-junctions-one-target case.
+
 - **Language gate: closed the umlaut-free German blind spot.** Closes
   deep-review 2026-07-04 finding F3. The detector reported green while 18
   German remnants sat in tracked sources — 17 orphaned half-lines left
