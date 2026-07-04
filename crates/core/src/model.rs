@@ -307,7 +307,6 @@ pub struct MembershipPath {
 /// Source of a reconstructed membership chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MembershipPathSource {
-    /// Mitgliedschaften.
     /// Primary AD group (`primaryGroupID`) — a single edge from the user
     /// to the primary group, with transitive parents recorded as their
     /// own memberships.

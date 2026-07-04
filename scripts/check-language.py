@@ -179,6 +179,15 @@ DE_WORDS = [
     # Engine review 2026-06-13 (Codex) finding 6: fragments the denylist
     # missed (Cargo author title + traits.rs doc remnants).
     "Fachinformatiker", "pusht", "markiert", "abgeleitete",
+    # Deep review 2026-07-04 finding F3: umlaut-free German that slipped
+    # through (orphaned half-lines above their English translations, plus
+    # the user-visible GUI status string "Lese DACL...").
+    "wie", "Wichtig", "Aktionen", "starten", "Vergleichen",
+    "destruktive", "destruktiven", "verworfen",
+    "entsteht", "entstehen", "bleiben", "unterscheidbar",
+    "denen", "Einzelrechte",
+    "Mitgliedschaft", "Mitgliedschaften",
+    "Lese", "lesen", "liest",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -205,6 +214,7 @@ DE_SUBSTRINGS = [
     "kriterien",     # audit-kriterien (EN: "criteria")
     "berechtigung",  # Berechtigungspfad and other compounds
     "risiko",        # Risiko, Risikobefund
+    "mitglied",      # Mitglied(schaften), Gruppenmitglied — no EN collision
 ]
 
 DE_SUBSTR_RE = re.compile(
@@ -298,6 +308,17 @@ def selftest() -> int:
         "Berechtigungspfad",             # compound
         "der Scan",                      # whole-word denylist still works
         "Schlüssel",                     # umlaut pass still works
+        # Deep review 2026-07-04 F3: the exact umlaut-free lines that
+        # slipped through the gate while it reported green.
+        "Haupt-Aktionen wie Analyze, Scan starten, Vergleichen.",
+        "DangerButton — destruktive Aktionen wie Cancel/Delete.",
+        "Mitgliedschaften.",
+        "verworfen.",
+        "entsteht.",
+        "Wichtig: `horizontal-stretch: 0` plus",
+        "in denen `NullDacl` vs. `Acl(vec![])` unterscheidbar bleiben",
+        "AdminRightsRule: destruktive/administrative Einzelrechte",
+        'ui.set_a_status("Lese DACL...".into());',
     ]
     must_pass = [
         "Risk Findings",
@@ -306,6 +327,11 @@ def selftest() -> int:
         "audit criteria",
         "the scan result",
         "OWNER RIGHTS (S-1-3-4)",
+        # Guards against false positives from the F3 word additions.
+        "DangerButton — destructive actions like Cancel/Delete.",
+        "restart the scan and compare results",
+        "group membership path reconstruction",
+        "actions remain enabled while scanning",
     ]
     failures = []
     failures += [f"MISS (should flag): {s!r}" for s in must_flag if not line_has_german(s)]

@@ -1105,9 +1105,8 @@ mod tests {
             .contains(&PermissionDiagnostic::IdentityNotInConfiguredLdapBase));
     }
 
-    /// 4) GUI Name → SID-Workflow (PrincipalInput::DisplayName):
-    ///    selbe Semantik wie `DomainQualified`.
-    /// 4) GUI display name → SID workflow: same semantics.
+    /// 4) GUI display name → SID workflow (PrincipalInput::DisplayName):
+    ///    same semantics as `DomainQualified`.
     #[tokio::test]
     async fn display_name_workflow_uses_lsa_then_cross_checks() {
         let sid = Sid("S-1-5-21-9-9-9-1003".to_owned());
