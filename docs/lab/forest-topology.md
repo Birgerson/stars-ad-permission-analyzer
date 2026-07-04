@@ -6,10 +6,10 @@ State of the lab setup as captured on build day. Values from `Get-ADDomain` / `G
 
 | VMID | Name | Bridge | MAC | Cores | RAM | Boot disk | Storage |
 |------|------|--------|-----|-------|-----|-----------|---------|
-| 100 | tier0 | vmbr0 | bc:24:11:7f:c0:c0 | 8 | 16 GiB | 101 GB (linked clone of 9000) | nvme0-VMs |
-| 101 | tier1 | vmbr0 | bc:24:11:48:1b:f7 | 8 | 16 GiB | 101 GB (linked clone of 9000) | nvme0-VMs |
-| 102 | tier2 | vmbr0 | bc:24:11:22:32:0c | 8 | 16 GiB | 101 GB (linked clone of 9000) | nvme0-VMs |
-| 9000 | MS-Server-2022-Std | vmbr0 | bc:24:11:ae:a9:3d | 8 | 32 GiB | 101 GB | nvme0-VMs (template) |
+| 100 | tier0 | vmbr0 | bc:24:11:xx:xx:xx | 8 | 16 GiB | 101 GB (linked clone of 9000) | nvme0-VMs |
+| 101 | tier1 | vmbr0 | bc:24:11:xx:xx:xx | 8 | 16 GiB | 101 GB (linked clone of 9000) | nvme0-VMs |
+| 102 | tier2 | vmbr0 | bc:24:11:xx:xx:xx | 8 | 16 GiB | 101 GB (linked clone of 9000) | nvme0-VMs |
+| 9000 | MS-Server-2022-Std | vmbr0 | bc:24:11:xx:xx:xx | 8 | 32 GiB | 101 GB | nvme0-VMs (template) |
 
 Further PVE settings (all three DCs identical, inherited from template 9000):
 
@@ -31,9 +31,9 @@ All three DCs:
 
 | VMID | Hostname | IP | Domain (DNS root) | NetBIOS | Domain mode | Forest mode | Domain SID |
 |------|----------|----|--------------------|---------|--------------|--------------|------------|
-| 100 | tier0 | 192.168.11.100 | tier0.lab | T0LAB | Windows2016Domain | Windows2016Forest | S-1-5-21-82128098-3850859968-3663624259 |
-| 101 | tier1 | 192.168.11.101 | tier1.lab | T1LAB | Windows2016Domain | Windows2016Forest | S-1-5-21-2422202677-580894712-1536135282 |
-| 102 | tier2 | 192.168.11.102 | tier2.lab | T2LAB | Windows2016Domain | Windows2016Forest | S-1-5-21-2422907361-2909490334-1284861871 |
+| 100 | tier0 | 198.51.100.100 | tier0.lab | T0LAB | Windows2016Domain | Windows2016Forest | S-1-5-21-xxxxxxxxx-xxxxxxxxx-xxxxxxxxx |
+| 101 | tier1 | 198.51.100.101 | tier1.lab | T1LAB | Windows2016Domain | Windows2016Forest | S-1-5-21-xxxxxxxxx-xxxxxxxxx-xxxxxxxxx |
+| 102 | tier2 | 198.51.100.102 | tier2.lab | T2LAB | Windows2016Domain | Windows2016Forest | S-1-5-21-xxxxxxxxx-xxxxxxxxx-xxxxxxxxx |
 
 Each DC holds the FSMO roles Schema Master and Domain Naming Master in its own forest.
 
@@ -46,17 +46,17 @@ Hostname and domain NetBIOS name must not coincide. Hostname `tier0` and domain 
 Each DC is the DNS server for its own domain. To enable cross-forest resolution, every DC holds two conditional forwarders pointing at the other two DCs:
 
 ```text
-tier0 (192.168.11.100) holds CF:
-    tier1.lab -> 192.168.11.101
-    tier2.lab -> 192.168.11.102
+tier0 (198.51.100.100) holds CF:
+    tier1.lab -> 198.51.100.101
+    tier2.lab -> 198.51.100.102
 
-tier1 (192.168.11.101) holds CF:
-    tier0.lab -> 192.168.11.100
-    tier2.lab -> 192.168.11.102
+tier1 (198.51.100.101) holds CF:
+    tier0.lab -> 198.51.100.100
+    tier2.lab -> 198.51.100.102
 
-tier2 (192.168.11.102) holds CF:
-    tier0.lab -> 192.168.11.100
-    tier1.lab -> 192.168.11.101
+tier2 (198.51.100.102) holds CF:
+    tier0.lab -> 198.51.100.100
+    tier1.lab -> 198.51.100.101
 ```
 
 ReplicationScope is `Forest` (standard recommendation for AD-integrated CFs).

@@ -25,9 +25,9 @@ PSEOF
     } > "$out_file"
 }
 
-write_cf_ps /tmp/cf-tier0.ps1 "tier1.lab" "192.168.11.101" "tier2.lab" "192.168.11.102"
-write_cf_ps /tmp/cf-tier1.ps1 "tier0.lab" "192.168.11.100" "tier2.lab" "192.168.11.102"
-write_cf_ps /tmp/cf-tier2.ps1 "tier0.lab" "192.168.11.100" "tier1.lab" "192.168.11.101"
+write_cf_ps /tmp/cf-tier0.ps1 "tier1.lab" "198.51.100.101" "tier2.lab" "198.51.100.102"
+write_cf_ps /tmp/cf-tier1.ps1 "tier0.lab" "198.51.100.100" "tier2.lab" "198.51.100.102"
+write_cf_ps /tmp/cf-tier2.ps1 "tier0.lab" "198.51.100.100" "tier1.lab" "198.51.100.101"
 
 for vmid_file in "100:/tmp/cf-tier0.ps1" "101:/tmp/cf-tier1.ps1" "102:/tmp/cf-tier2.ps1"; do
     vmid="${vmid_file%%:*}"

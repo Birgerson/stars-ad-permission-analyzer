@@ -9,7 +9,7 @@
 | Proxmox VE | 9.1.1 or newer |
 | Template VM | Windows Server 2022 Standard (in the lab documented here: VMID 9000, name `MS-Server-2022-Std`, with active qemu-guest-agent and a default local administrator without a password) |
 | Storage | at least 3 × 101 GB free for the clones (linked clones reference the template but are thin on writes → disk usage grows over their lifetime) |
-| Bridge | `vmbr0` with routing to 192.168.11.0/24 |
+| Bridge | `vmbr0` with routing to 198.51.100.0/24 |
 | Admin tools on the control host | `plink`/`pscp` (PuTTY suite) or the OpenSSH client, plus `bash` (Git Bash or similar) for the scripts. The scripts under [`scripts/`](scripts/) run on the **PVE host**, not on the control machine. |
 | Lab default password | The environment variable `LAB_ADMIN_PASSWORD` must be set when running the scripts. It replaces the previously hard-coded lab password and is not stored in the repo. |
 
@@ -61,7 +61,7 @@ hostname: tier0
 domain  : WORKGROUP
 role    : 2 (standalone server)
 adds    : Installed
-ip      : 192.168.11.100/24
+ip      : 198.51.100.100/24
 dns     : 127.0.0.1
 ```
 
@@ -95,8 +95,8 @@ After the promote on each VM: `qm shutdown` + `qm start` for a clean transition 
 Cross-forest resolution only works if every DC can resolve the other domain names. On every DC, CFs to the other two domains are added:
 
 ```powershell
-Add-DnsServerConditionalForwarderZone -Name "tier1.lab" -MasterServers "192.168.11.101" -ReplicationScope Forest
-Add-DnsServerConditionalForwarderZone -Name "tier2.lab" -MasterServers "192.168.11.102" -ReplicationScope Forest
+Add-DnsServerConditionalForwarderZone -Name "tier1.lab" -MasterServers "198.51.100.101" -ReplicationScope Forest
+Add-DnsServerConditionalForwarderZone -Name "tier2.lab" -MasterServers "198.51.100.102" -ReplicationScope Forest
 ```
 
 ### Wait time

@@ -18,13 +18,17 @@ That makes it possible to realistically check path explanations, SID resolution 
 
 ## Topology at a glance
 
+> **Anonymized:** all IP addresses in this folder are example addresses from
+> the RFC 5737 documentation range (`198.51.100.0/24`); MAC addresses and
+> domain SIDs are masked. The real lab runs in an isolated private network.
+
 ```text
-        Proxmox VE 9.1.1  (host 192.168.11.11)
+        Proxmox VE 9.1.1  (host 198.51.100.11)
         ────────────────────────────────────────
         │
-        ├── VMID 100  tier0   192.168.11.100   Forest: tier0.lab  / NetBIOS: T0LAB
-        ├── VMID 101  tier1   192.168.11.101   Forest: tier1.lab  / NetBIOS: T1LAB
-        ├── VMID 102  tier2   192.168.11.102   Forest: tier2.lab  / NetBIOS: T2LAB
+        ├── VMID 100  tier0   198.51.100.100   Forest: tier0.lab  / NetBIOS: T0LAB
+        ├── VMID 101  tier1   198.51.100.101   Forest: tier1.lab  / NetBIOS: T1LAB
+        ├── VMID 102  tier2   198.51.100.102   Forest: tier2.lab  / NetBIOS: T2LAB
         └── VMID 9000 MS-Server-2022-Std       (template, stopped)
 
 Forest trusts (all bidirectional, "Forest" trust type):
@@ -48,7 +52,7 @@ More details: [`forest-topology.md`](forest-topology.md).
 
 ## Security notes
 
-- The VMs are only meant for **local tests** in an isolated network (192.168.11.0/24).
+- The VMs are only meant for **local tests** in an isolated network (198.51.100.0/24).
 - The lab default password is **never** committed to this repository. It lives only in the maintainer's local development environment.
 - Forest trusts are deliberately configured without SID filtering / quarantine because the lab is meant to produce maximum test visibility. The opposite applies in production.
 - The test VMs must never become reachable from production networks.

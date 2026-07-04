@@ -1371,7 +1371,7 @@ mod tests {
             AccessContext::RemoteSmb
         );
         assert_eq!(
-            AccessContext::for_path(r"\\192.168.11.100\Shared"),
+            AccessContext::for_path(r"\\198.51.100.100\Shared"),
             AccessContext::RemoteSmb
         );
     }

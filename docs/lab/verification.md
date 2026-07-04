@@ -62,12 +62,12 @@ Get-DnsServerZone | Where-Object { $_.ZoneType -eq 'Forwarder' } |
 
 | DC | CF zone | Master |
 |---|---|---|
-| tier0 | tier1.lab | 192.168.11.101 |
-| tier0 | tier2.lab | 192.168.11.102 |
-| tier1 | tier0.lab | 192.168.11.100 |
-| tier1 | tier2.lab | 192.168.11.102 |
-| tier2 | tier0.lab | 192.168.11.100 |
-| tier2 | tier1.lab | 192.168.11.101 |
+| tier0 | tier1.lab | 198.51.100.101 |
+| tier0 | tier2.lab | 198.51.100.102 |
+| tier1 | tier0.lab | 198.51.100.100 |
+| tier1 | tier2.lab | 198.51.100.102 |
+| tier2 | tier0.lab | 198.51.100.100 |
+| tier2 | tier1.lab | 198.51.100.101 |
 
 Resolve check `Resolve-DnsName tier{0,1,2}.lab` from each DC → returns the matching IP of the target domain.
 

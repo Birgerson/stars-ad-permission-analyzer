@@ -543,8 +543,8 @@ mod tests {
             r"\\?\UNC\server\share\folder"
         );
         assert_eq!(
-            to_windows_api_path(r"\\192.168.11.100\Shared"),
-            r"\\?\UNC\192.168.11.100\Shared"
+            to_windows_api_path(r"\\198.51.100.100\Shared"),
+            r"\\?\UNC\198.51.100.100\Shared"
         );
     }
 
@@ -644,9 +644,9 @@ mod tests {
 
     #[test]
     fn validate_path_accepts_long_unc_ip_prefix() {
-        let np = validate_path(r"\\?\UNC\192.168.11.100\Shared\sub")
+        let np = validate_path(r"\\?\UNC\198.51.100.100\Shared\sub")
             .expect("must accept long-path UNC with IP");
-        assert_eq!(np.0, r"\\192.168.11.100\Shared\sub");
+        assert_eq!(np.0, r"\\198.51.100.100\Shared\sub");
     }
 
     #[test]
@@ -742,8 +742,8 @@ mod tests {
             Some(("server".to_string(), "share".to_string()))
         );
         assert_eq!(
-            parse_unc_components(r"\\?\UNC\192.168.11.100\Shared\sub"),
-            Some(("192.168.11.100".to_string(), "Shared".to_string()))
+            parse_unc_components(r"\\?\UNC\198.51.100.100\Shared\sub"),
+            Some(("198.51.100.100".to_string(), "Shared".to_string()))
         );
     }
 

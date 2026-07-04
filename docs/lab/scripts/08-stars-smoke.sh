@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Lab phase 8 — Stars CLI smoke tests against the lab.
 # Upload example (from the control machine with tier0's local admin):
-#   net use \\192.168.11.100\c$ /user:T0LAB\Administrator <lab-pw>
-#   mkdir \\192.168.11.100\c$\Stars
-#   copy target\release\adpa.exe \\192.168.11.100\c$\Stars\adpa.exe
-#   net use \\192.168.11.100\c$ /delete
+#   net use \\198.51.100.100\c$ /user:T0LAB\Administrator <lab-pw>
+#   mkdir \\198.51.100.100\c$\Stars
+#   copy target\release\adpa.exe \\198.51.100.100\c$\Stars\adpa.exe
+#   net use \\198.51.100.100\c$ /delete
 set -eu
 : "${LAB_ADMIN_PASSWORD:?Please export LAB_ADMIN_PASSWORD}"
 
