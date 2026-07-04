@@ -38,6 +38,12 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
     CLI and GUI; the Members direction suggests only groups; neutral
     membership-export error message; boundary tests (LDAP-required guards,
     partial-enumeration rendering).
+  - **Live-proven in a multi-domain forest** (2026-07-04): RID 513 collides
+    across three domains (2722 forest-wide via GC) yet `members "Domain Users"`
+    returns exactly the group's own domain (2012) — the domain-SID filter drops
+    the 710 cross-domain collisions; a universal group's cross-domain member is
+    invisible over a domain bind but **flagged by the marker** and visible over
+    a GC bind. See ADR 0055.
   - v1 lists **direct** members; recursive nesting (the member tree) is planned.
 
 ---

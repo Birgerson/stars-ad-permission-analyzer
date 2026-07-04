@@ -108,6 +108,23 @@ bind now carries a `UniversalGroupCrossDomainMembersNotVisible` marker
 (members from other domains live in other partitions and are not visible from
 that bind — Neutral, but an incompleteness trigger).
 
+### Live proof in a multi-domain forest (2026-07-04)
+
+Both follow-up fixes were verified live against a purpose-built **redundant
+multi-domain forest** (`res.lab` root + `emea.res.lab` child + `leg.lab` tree,
+five DCs). The single-domain lab could not exercise them; the multi-domain
+build does:
+
+- **F1 (RID collision):** RID 513 (`Domain Users`) collides across three
+  domains — res.lab 2012, leg.lab 704, emea.res.lab 6. A raw forest-wide GC
+  query `(primaryGroupID=513)` returns **2722**; `members "Domain Users"
+  [res.lab] --global-catalog` returns **exactly 2012** — the domain-SID filter
+  drops the 710 cross-domain collisions a naive tool would misattribute.
+- **F2 (universal cross-domain):** a universal group with a real cross-domain
+  member is enumerated as 1 member **plus the marker** over a domain bind (the
+  cross-domain member is flagged missing, never silently dropped), and as both
+  members over a GC bind.
+
 ## Consequences
 
 - The most-requested reverse question is answerable, correctly, including the
