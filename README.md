@@ -343,7 +343,7 @@ Actions:
 
 #### `Groups` tab
 
-![Stars Groups tab — the identity "Administrator" resolved to its recursive group memberships, with a red "member of Administrators" privileged banner, each membership labelled by how it arose, and the SAM/LSA-fallback diagnostic](docs/screenshots/stars-groups-tab.png)
+![Stars Groups tab (v1.7.7) — direction toggle "Member of", the identity "Administrator" resolved to its recursive group memberships, with a red "member of Administrators" privileged banner, each membership labelled by how it arose, and the SAM/LSA-fallback diagnostic](docs/screenshots/stars-groups-tab.png)
 
 Answers a pure identity question — **"which groups is this user (or group) in?"** — without touching a path or computing rights. A **direction toggle** flips it to the reverse question, **"who is in this group?"** (see below).
 
@@ -358,7 +358,9 @@ Output:
 - The recursive group list, each entry showing **how the membership arose** ("direct", "primary group", "local group", or the chain "via A → B").
 - The same diagnostic markers as elsewhere (SAM/LSA fallback, FSP, Global Catalog, outside-base, `sIDHistory`, resolution timeout) so an incomplete list never looks complete.
 
-Switch the **Direction** toggle to **Members** to list **who is in a group** instead — direct members plus accounts whose *primary* group it is (found via a `primaryGroupID` search and tagged, so *Domain Users* is not wrongly shown as empty). Large groups are read via a paged search, so they are not silently truncated; a member that is itself a privileged group is flagged. This direction requires LDAP and lists direct members (recursive nesting planned). To check effective rights on a path, switch to the `Analyze` or `Scan Tree` tab.
+Switch the **Direction** toggle to **Members** to list **who is in a group** instead — direct members plus accounts whose *primary* group it is (found via a `primaryGroupID` search and tagged, so *Domain Users* is not wrongly shown as empty).
+
+![Stars Groups tab, Members direction (v1.7.7) — the group "Domain Users" enumerated to 2012 members, all tagged "via primaryGroupID" (a naive member-attribute read would show zero), with the LDAP connection fields above](docs/screenshots/stars-members-view.png) Large groups are read via a paged search, so they are not silently truncated; a member that is itself a privileged group is flagged. This direction requires LDAP and lists direct members (recursive nesting planned). To check effective rights on a path, switch to the `Analyze` or `Scan Tree` tab.
 
 #### `Scan Tree` tab
 

@@ -564,8 +564,52 @@ pipeline above and stop at the resolution:
   (`-512` Domain Admins …). Pure SID matching against the already-resolved
   list; **no** extra directory query.
 
-The view is one direction only (user → groups). Group → members (downward,
-with the `primaryGroupID` caveat) is a planned later step. See ADR 0053.
+The upward view is complemented by the downward direction below. See ADR 0053.
+
+### 5.9 The members view (`members`) — the reverse direction
+
+The CLI `members` command and the Groups tab's **Members** direction answer
+*"who is in this group?"* — the reverse of §5.8, sharing its scope discipline
+(read-only, no path/ACL/rights) and its render plumbing. **LDAP is required**:
+the SAM/LSA path cannot enumerate domain-group members, so both surfaces
+reject the request with a clear error instead of returning an empty list.
+
+- `LdapResolver::enumerate_group_members(&Sid)` resolves the group's DN and
+  combines **two** sources so no member is silently missed (ADR 0055):
+  1. the **`memberOf` back-link** — `(memberOf=<escaped group DN>)` as a
+     normal *paged* search. This deliberately sidesteps `member;range=`
+     retrieval (AD truncates the `member` attribute at ~1500 values); the
+     back-link returns the same direct-member set with the standard, tested
+     paging. Tagged `MemberVia::Direct`.
+  2. the **`primaryGroupID` search** — `(primaryGroupID=<RID of G>)`.
+     Primary-group members are **not** in `member` (classically every user
+     for Domain Users), so without this a naive tool reports zero. Tagged
+     `MemberVia::PrimaryGroup`; the hits are **filtered to the group's
+     domain-SID prefix**, because a bare RID is not forest-unique — on a
+     Global Catalog bind the unfiltered forest-wide query would return users
+     of *other* domains whose group shares the RID (false positives). Proven
+     live: RID 513 collides across three lab domains (2 722 forest-wide) yet
+     the filtered result is exactly the group's own 2 012.
+- Graceful degradation: if one of the two searches fails, the other's results
+  are returned **with** `GroupMemberEnumerationIncomplete { reason }`
+  (incompleteness trigger — the count is a lower bound); if both fail, that is
+  a hard error, never a misleading "0 members".
+- A **universal group** queried over a plain domain bind additionally carries
+  `UniversalGroupCrossDomainMembersNotVisible` (Neutral, incompleteness
+  trigger): members from other domains of the forest live in other partitions
+  and are invisible to that bind — flagged, never silently dropped. Over a GC
+  bind they are enumerated.
+- `GroupMemberEnumeration::into_report(group)` assembles the shared
+  `GroupMembersReport` (sorted members, derived diagnostics — pure, so the
+  logic is unit-tested without a directory). `MemberNode.children` is reserved
+  for the planned recursive tree (v2, with cycle detection — the lab proves AD
+  *allows* membership cycles) and stays empty in v1.
+- Non-group input is rejected via the shared
+  `core::members_view_rejection(&Identity)` so CLI and GUI word it
+  identically; unresolved kinds get "could not be resolved as a group" rather
+  than a cryptic kind name.
+- The whole enumeration (DN lookup + both searches) runs under **one**
+  `--ldap-timeout` budget — size it for the sum on very large groups.
 
 ---
 

@@ -159,6 +159,9 @@ out; the report font is Arial.
 | `IdentityLookupFailed { reason }` | Concern | **yes** | LDAP identity lookup failed (bind / timeout / DC / query); analysis ran with a placeholder identity — domain-group ACEs may be missing. `reason` carries the original error. |
 | `GroupResolutionFailed { reason }` | Concern | **yes** | Recursive group resolution failed or was skipped; domain-group ACEs may be missing. `reason` carries the original error. |
 | `PersistedEvidenceDecodeFailed { detail }` | Concern | **yes** | A persisted (historical) row could not be fully decoded; the reconstructed result may be less complete than originally stored. |
+| `MembersViaPrimaryGroupIncluded { count }` | Neutral | no | *(members view)* `count` members were found via their `primaryGroupID` and included — they do not appear in the `member` attribute, so this makes the completeness of the count transparent. |
+| `UniversalGroupCrossDomainMembersNotVisible` | Neutral | **yes** | *(members view)* The group is **universal** and was queried over a plain domain bind; members from other domains of the forest are not visible — use a Global Catalog bind to see them. |
+| `GroupMemberEnumerationIncomplete { reason }` | Concern | **yes** | *(members view)* Member enumeration could not complete (one source search failed); the member list is a **lower bound**. |
 
 The "Risk `incomplete`?" column reflects `risk_engine::is_incomplete()`:
 `incomplete = true` means the risk finding is structurally incomplete and is

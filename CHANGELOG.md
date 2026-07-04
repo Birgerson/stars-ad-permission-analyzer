@@ -10,6 +10,16 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+(No unreleased changes — see v1.7.7-rc1 below for the latest pre-release.)
+
+---
+
+## [1.7.7-rc1] — 2026-07-04
+
+**Release candidate: the Group → Members reverse view.** Twice reviewed
+(seven findings fixed), validated against the real OS (ground-truth access
+checks), and live-proven in a purpose-built redundant multi-domain forest.
+
 ### Added
 
 - **Group → Members (reverse direction, v1).** The complement of the group

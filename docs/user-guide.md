@@ -229,6 +229,11 @@ Two things make this trustworthy where naive tools get it wrong:
   so a group with thousands of members is enumerated fully; if a lookup is
   interrupted, an **incompleteness marker** flags the list as a lower bound
   rather than presenting a short list as the whole group.
+- **Universal groups in a multi-domain forest are flagged.** A universal
+  group can contain members from *other* domains of the forest; over a
+  normal domain bind those are not visible, so Stars adds a marker ("cross-
+  domain members not visible") instead of showing a silently short list.
+  Bind against the **Global Catalog** mode to enumerate them.
 
 A member that is **itself a privileged group** (e.g. *Domain Admins* nested
 inside another group) is flagged just like a privileged parent is in the
