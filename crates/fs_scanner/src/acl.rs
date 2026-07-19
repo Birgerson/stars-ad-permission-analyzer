@@ -341,10 +341,15 @@ pub fn read_file_system_object_cached(
 /// Result of a single ACE parse attempt.
 enum ParseAceOutcome {
     Entry(AceEntry),
-    /// ACE type is not supported — diagnostic data saved.
+    /// ACE type is not supported (object / callback / conditional /
+    /// vendor-specific) — diagnostic data saved so the result is flagged
+    /// incomplete instead of silently missing the ACE.
     Unsupported(UnsupportedAce),
-    /// SID could not be read — ACE is skipped.
-    Skip,
+    /// A **supported** ACE type (Allow/Deny) whose trustee SID could not be
+    /// read. Recorded as unsupported-for-evaluation rather than silently
+    /// dropped (review finding F1): a dropped Deny would otherwise let the
+    /// engine over-report access with no incompleteness marker.
+    SidUnreadable(UnsupportedAce),
 }
 
 /// Reads all ACEs from a DACL.
@@ -392,7 +397,19 @@ unsafe fn parse_dacl(dacl: *const ACL) -> (Vec<AceEntry>, Vec<UnsupportedAce>) {
                 );
                 unsupported.push(u);
             }
-            ParseAceOutcome::Skip => {}
+            // F1: a supported ACE whose SID could not be read is NOT dropped
+            // silently — it joins `unsupported` so the object is flagged
+            // incomplete (a hidden Deny here could otherwise over-report
+            // access). Logged distinctly from an unsupported *type*.
+            ParseAceOutcome::SidUnreadable(u) => {
+                warn!(
+                    ace_type = u.ace_type,
+                    flags = u.flags,
+                    mask = format_args!("0x{:08X}", u.mask),
+                    "ACE trustee SID could not be read — recorded as unsupported (result flagged incomplete), not silently dropped"
+                );
+                unsupported.push(u);
+            }
         }
     }
 
@@ -423,7 +440,11 @@ unsafe fn parse_ace(ace_ptr: *mut core::ffi::c_void) -> ParseAceOutcome {
                     inheritance_flags,
                     propagation_flags,
                 }),
-                Err(_) => ParseAceOutcome::Skip,
+                Err(_) => ParseAceOutcome::SidUnreadable(UnsupportedAce {
+                    ace_type: header.AceType,
+                    flags: ace_flags,
+                    mask: ace.Mask,
+                }),
             }
         }
         ACCESS_DENIED_ACE_TYPE => {
@@ -439,7 +460,11 @@ unsafe fn parse_ace(ace_ptr: *mut core::ffi::c_void) -> ParseAceOutcome {
                     inheritance_flags,
                     propagation_flags,
                 }),
-                Err(_) => ParseAceOutcome::Skip,
+                Err(_) => ParseAceOutcome::SidUnreadable(UnsupportedAce {
+                    ace_type: header.AceType,
+                    flags: ace_flags,
+                    mask: ace.Mask,
+                }),
             }
         }
         _ => {
@@ -589,6 +614,55 @@ mod tests {
                 assert_eq!(u.mask, 0x001F_01FF, "mask must be preserved");
             }
             _ => panic!("expected ParseAceOutcome::Unsupported for type 2"),
+        }
+    }
+
+    /// Review finding F1: a **supported** Allow/Deny ACE whose trustee SID
+    /// cannot be read must be recorded as `SidUnreadable` (carrying the ACE
+    /// header info) — NOT dropped silently. A dropped Deny would otherwise
+    /// let the engine over-report access with no incompleteness marker.
+    ///
+    /// The SID at `SidStart` is given an **invalid revision (0)** so
+    /// `ConvertSidToStringSidW` fails on validation without ever reading the
+    /// (zero) sub-authorities — safe to feed as a raw pointer. Extra padding
+    /// gives headroom regardless.
+    #[test]
+    fn ace_with_unreadable_sid_is_recorded_not_dropped() {
+        // Layout matches ACCESS_DENIED_ACE: header (type|flags|size) + Mask,
+        // then the SID (revision|subauth_count|authority[6]|sub-authorities).
+        #[repr(C)]
+        struct FakeDeniedAceBadSid {
+            ace_type: u8,
+            ace_flags: u8,
+            ace_size: u16,
+            mask: u32,
+            sid_revision: u8,      // 0 → invalid SID → ConvertSidToStringSidW fails
+            sid_subauth_count: u8, // 0 → nothing beyond the header is read
+            sid_authority: [u8; 6],
+            sid_padding: [u32; 4], // headroom; never read for count 0
+        }
+        let fake = FakeDeniedAceBadSid {
+            ace_type: 1, // ACCESS_DENIED_ACE_TYPE
+            ace_flags: 0,
+            ace_size: 8,
+            mask: 0x0000_0002, // FILE_WRITE_DATA — a Deny that must not vanish
+            sid_revision: 0,
+            sid_subauth_count: 0,
+            sid_authority: [0; 6],
+            sid_padding: [0; 4],
+        };
+
+        let outcome =
+            unsafe { parse_ace(&fake as *const FakeDeniedAceBadSid as *mut core::ffi::c_void) };
+
+        match outcome {
+            ParseAceOutcome::SidUnreadable(u) => {
+                assert_eq!(u.ace_type, 1, "the Deny ACE type must be preserved");
+                assert_eq!(u.mask, 0x0000_0002, "the mask must be preserved");
+            }
+            _ => {
+                panic!("a supported ACE with an unreadable SID must be SidUnreadable, not dropped")
+            }
         }
     }
 

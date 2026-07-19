@@ -827,13 +827,17 @@ pub enum PermissionDiagnostic {
     /// the 2026-05-25 review).
     UnsupportedShareAces { count: usize },
 
-    /// The NTFS DACL parser skipped ACE types it cannot interpret
-    /// (object, callback, conditional / Dynamic Access Control, or
-    /// vendor-specific ACEs). A hidden Deny among them could materially
-    /// change the result, so the displayed effective permission is a
-    /// **lower-confidence approximation** — risk findings for this
-    /// permission carry `incomplete = true`. `count` is the number of
-    /// skipped NTFS ACEs.
+    /// The NTFS DACL parser could not fully evaluate `count` ACEs. Two
+    /// causes are counted together, because their audit effect is identical
+    /// (an un-evaluated ACE that a hidden Deny could hide behind): an ACE
+    /// **type** the parser cannot interpret (object, callback, conditional /
+    /// Dynamic Access Control, or vendor-specific), and a **supported**
+    /// Allow/Deny ACE whose trustee **SID could not be read** (review
+    /// finding F1) — the latter was previously dropped silently. A hidden
+    /// Deny among them could materially change the result, so the displayed
+    /// effective permission is a **lower-confidence approximation** — risk
+    /// findings for this permission carry `incomplete = true`. `count` is
+    /// the number of un-evaluated NTFS ACEs.
     ///
     /// This is the structured, first-class counterpart to the raw
     /// `unsupported_ace_count` on `EffectivePermission`, mirroring
@@ -1102,8 +1106,9 @@ impl PermissionDiagnostic {
                  mask is potentially incomplete."
             ),
             PermissionDiagnostic::UnsupportedNtfsAces { count } => format!(
-                "{count} NTFS ACE(s) could not be evaluated (object/callback/conditional/\
-                 vendor) — a hidden Deny among them could change the result."
+                "{count} NTFS ACE(s) could not be evaluated (unsupported type, or a \
+                 trustee SID that could not be read) — a hidden Deny among them could \
+                 change the result."
             ),
             PermissionDiagnostic::DomainGroupRecursionIncomplete => {
                 "Group resolution used the SAM/LSA fallback (no LDAP); nested domain \

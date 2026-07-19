@@ -264,12 +264,13 @@ fn write_permissions_table(
                 PermissionDiagnostic::UnsupportedNtfsAces { count } => {
                     diag_parts.push(format!(
                         "<span class=\"badge badge-medium\" \
-                         title=\"The NTFS DACL contained {count} ACE type(s) \
-                         the parser could not interpret (object/callback/\
-                         conditional/Dynamic Access Control or vendor-specific). \
-                         The displayed effective permission is a lower-confidence \
-                         approximation — a hidden Deny among them could change \
-                         the result.\">⚠ {count} unsupported NTFS ACE(s) — approximate result</span>"
+                         title=\"The NTFS DACL contained {count} ACE(s) the parser \
+                         could not evaluate — either an unsupported type \
+                         (object/callback/conditional/Dynamic Access Control or \
+                         vendor-specific) or a supported Allow/Deny ACE whose \
+                         trustee SID could not be read. The displayed effective \
+                         permission is a lower-confidence approximation — a hidden \
+                         Deny among them could change the result.\">⚠ {count} unevaluated NTFS ACE(s) — approximate result</span>"
                     ));
                 }
                 PermissionDiagnostic::DomainGroupRecursionIncomplete => {
