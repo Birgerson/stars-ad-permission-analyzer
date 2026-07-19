@@ -6,6 +6,10 @@ authors.workspace = true
 
 [dependencies]
 adpa_core = { path = "../core" }
+# Central input validation — LDAP filter-value escaping (review finding V1)
+# lives here, the crate AGENTS.md designates for it, instead of privately
+# in this crate.
+validation = { path = "../validation" }
 # RAII guard for NetApi buffers (review round 10 finding 3) — wraps
 # NetApiBufferFree and prevents leaks on `?` early returns in the
 # sam, local_groups, and enumerate modules.

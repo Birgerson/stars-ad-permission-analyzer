@@ -12,6 +12,7 @@ use std::time::Duration;
 use ldap3::adapters::{Adapter, EntriesOnly, PagedResults};
 use ldap3::{Ldap, LdapConnAsync, Scope, SearchEntry};
 use tracing::{debug, warn};
+use validation::ldap::escape_filter_value;
 
 ///
 /// Default page size for AD paged search. 1000 matches the AD default
@@ -470,25 +471,11 @@ pub async fn disconnect(mut ldap: Ldap) {
     }
 }
 
-/// Escapes special characters in LDAP filter values according to RFC 4515.
-fn escape_filter_value(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '*' => out.push_str("\\2a"),
-            '(' => out.push_str("\\28"),
-            ')' => out.push_str("\\29"),
-            '\\' => out.push_str("\\5c"),
-            '\0' => out.push_str("\\00"),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 /// Escapes special characters in DN values for LDAP filters.
 fn escape_dn_for_filter(dn: &str) -> String {
-    // In a filter, commas and equals don't need escaping, but parentheses do
+    // In a filter, commas and equals don't need escaping, but parentheses do.
+    // The RFC-4515 value escaper lives centrally in `validation::ldap`
+    // (review finding V1).
     escape_filter_value(dn)
 }
 

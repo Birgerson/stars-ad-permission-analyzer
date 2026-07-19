@@ -15,6 +15,17 @@ review (`review.md`).
 
 ### Fixed
 
+- **The LDAP filter-value escaper now lives in the `validation` crate
+  (review finding V1).** The RFC-4515 escaper (`* ( ) \ NUL` →
+  `\2a \28 \29 \5c \00`) was a private function in `ad_resolver`, while the
+  `validation` crate — the architectural home for input validation — held a
+  reject-based `validate_ldap_filter` that **nothing called**. No behaviour
+  change and no vulnerability (the escaper was and is correct and applied at
+  every filter site); this removes the "two LDAP-safety mechanisms, one
+  dead" inconsistency. `escape_filter_value` moved to `validation::ldap`
+  (with plain/escaped/injection tests); the dead validator was deleted;
+  `ad_resolver` now calls the central one.
+
 - **Share-mask resolution is now shared between CLI and GUI (review finding
   G1).** The orchestration (derive server/share, build the token identically
   to the NTFS side incl. sIDHistory, read the share DACL, produce a
