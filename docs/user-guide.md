@@ -340,40 +340,62 @@ first match.
 pointing at the Global Catalog binding workaround (port 3268) or
 `DOMAIN\user`.
 
-### GUI identity picker — what the suggestion list contains, what it does not
+### GUI identity picker — local autocomplete + live directory search
 
-When you type into the GUI "User / Group" field, a suggestion list
-appears. **This list contains local identities only** (the `[L]` tag
-on the left stands for *Local*):
+The GUI "User / Group" field offers **two** complementary ways to find
+an identity.
+
+**1. Local autocomplete (as you type).** A suggestion list appears
+containing **local identities only** (the `[L]` tag on the left stands
+for *Local*):
 
 - local users (`Administrator`, `Guest`, …) and local groups
   (`BUILTIN\Administrators`, `BUILTIN\Users`, `BUILTIN\Remote Desktop
   Users`, …)
 - well-knowns from the local LSA
 
-**Domain accounts and domain groups are intentionally not looked up live
-from LDAP** while you type. For example, typing `m` for
-`max.mustermann001` will not surface any AD suggestions — this is **not
-a bug**, it is by design (rationale below and in the technical
-documentation).
+**Domain accounts and domain groups are intentionally not looked up on
+every keystroke.** Typing `m` for `max.mustermann001` surfaces no AD
+suggestions while you type — this is **not a bug**, it is by design
+(rationale below and in the technical documentation).
 
-**How to enter a domain user that does not appear in the suggestion
-list:**
+**2. Live directory search — the "🌐 Search AD" button (Analyze tab).**
+When the local list does not contain the identity you need — typically a
+**domain** user or group — pick it straight from Active Directory:
+
+1. Select an **LDAP mode** (LDAPS / Plain / Global Catalog / Signed). The
+   **🌐 Search AD** button is disabled while the mode is *Off*.
+2. Type a name, or just part of one, into the identity field.
+3. Click **🌐 Search AD**. Stars runs a **single** LDAP query against the
+   configured directory and fills the *same* suggestion list with the
+   matching domain users (`[U]`) and groups (`[G]`); each row shows the
+   display name and the resolved SID.
+4. Click a hit. Because a directory result already carries its SID,
+   **the Resolved-SID field is filled directly** — no separate "Resolve
+   SID" step is needed.
+
+A short status line next to the button reports the match count (or "no
+matches", or an error). At most 15 rows are shown; refine the name to
+narrow a large result. Typing again switches the list back to the local
+autocomplete.
+
+**Other ways to enter a domain identity** (all still supported):
 
 | Action | Example |
 |---|---|
+| Click **🌐 Search AD** after typing part of the name | `mustermann` → pick *Max Mustermann* |
 | Type the full `DOMAIN\user` directly | `CORP\mustermann001` |
 | Or the UPN | `mustermann001@corp.local` |
 | Or the raw SID if known | `S-1-5-21-…-1128` |
-| Then click **"Resolve SID"** | Stars performs a one-shot LDAP lookup and fills the SID field |
+| Then click **"🔍 Resolve SID"** (for the typed forms above) | Stars performs a one-shot LDAP/LSA lookup and fills the SID field |
 
-**Why no live lookup on every keystroke?** Issuing an LDAP search to the
-DC for every typed character would turn each keystroke delay into a
+**Why not a live lookup on every keystroke?** Issuing an LDAP search to
+the DC for every typed character would turn each keystroke into a
 perceptible wait in directories with thousands of accounts (e. g.
 10 000 users), and would flood the DC with throwaway queries. The
-deliberate split — suggestion list local only, LDAP lookup on click —
-keeps the GUI responsive even in forests with hundreds of thousands of
-identities.
+deliberate split — local autocomplete while typing, an explicit
+**Search AD** button for the directory — keeps the GUI responsive even
+in forests with hundreds of thousands of identities.
 
 ---
 

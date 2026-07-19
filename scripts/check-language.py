@@ -198,6 +198,9 @@ DE_WORDS = [
     # the surname "Neuer" used in AD test fixtures (Markus Neuer). The
     # denylist must never flag legitimate proper names.
     "Verzeichnis", "Verzeichnisse", "Sequenz",
+    # Identity-picker work (2026-07-19): more German remnants in the GUI that
+    # leaked past the gate (short stopword-like stems in main.rs comments).
+    "reserviert", "drei", "voll", "funktional", "funktionale", "funktionalen",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -350,6 +353,9 @@ def selftest() -> int:
         "// existierende Aufrufstellen weiterlaufen.",
         "// 1 Root + 12 verschachtelte Verzeichnisse = 13 Objekte.",
         "// Code Review Finding 3: zeige zusaetzlich",
+        # Identity-picker work: the exact GUI main.rs lines the gate leaked.
+        "// drei voll funktionalen Tabs (Analyze, Scan Tree, Delta).",
+        "// Phase reserviert.",
     ]
     must_pass = [
         "Risk Findings",
@@ -373,6 +379,8 @@ def selftest() -> int:
         "// 1 root + 12 nested directories = 13 objects.",
         "dereference the pointer after the guard is dropped",
         "reconstruct the group topology on every run",
+        "three fully functional tabs (Analyze, Scan Tree, Delta)",
+        "SearchResults stays reserved for a later phase",
     ]
     failures = []
     failures += [f"MISS (should flag): {s!r}" for s in must_flag if not line_has_german(s)]
