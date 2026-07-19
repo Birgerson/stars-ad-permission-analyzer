@@ -30,6 +30,22 @@ review (`review.md`).
   design (see the technical documentation). The three dead-code allows are
   removed; the mapping from a search hit to a picker row is unit-tested.
 
+### Changed
+
+- **`PermissionEvaluationInput`'s resolution flags are grouped into one
+  `ResolutionProvenance` bundle (review finding C1).** The seven
+  identity/group-resolution provenance flags (`group_resolution_via_sam_fallback`,
+  `identity_not_in_configured_ldap_base`, `identity_disabled_status_unknown`,
+  `identity_lookup_failure_reason`, `group_resolution_failure_reason`,
+  `identity_resolved_via_fsp`, `group_resolution_via_global_catalog`) were loose
+  fields on the engine input **and** independently duplicated as
+  `ad_resolver::EngineFlags`. They now live in a single `core` type,
+  `ResolutionProvenance`, embedded as `PermissionEvaluationInput::resolution`;
+  `EngineFlags` is a re-export of it, so the resolver's output slots directly
+  into the engine input (`resolution: engine_flags`) with no field-by-field
+  copy. Pure refactor — no behaviour change, all 686 tests green. Gives L4 a
+  clean home for the upcoming trust-provenance flag.
+
 ### Fixed
 
 - **The LDAP filter-value escaper now lives in the `validation` crate

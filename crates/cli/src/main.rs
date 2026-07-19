@@ -910,13 +910,7 @@ async fn run_analyze(
         access_context,
         unsupported_share_ace_count,
         sid_names,
-        group_resolution_via_sam_fallback: engine_flags.group_resolution_via_sam_fallback,
-        identity_not_in_configured_ldap_base: engine_flags.identity_not_in_configured_ldap_base,
-        identity_disabled_status_unknown: engine_flags.identity_disabled_status_unknown,
-        identity_lookup_failure_reason: engine_flags.identity_lookup_failure_reason.clone(),
-        group_resolution_failure_reason: engine_flags.group_resolution_failure_reason.clone(),
-        identity_resolved_via_fsp: engine_flags.identity_resolved_via_fsp,
-        group_resolution_via_global_catalog: engine_flags.group_resolution_via_global_catalog,
+        resolution: engine_flags,
     };
     let result = DefaultPermissionEngine
         .evaluate(input)
@@ -1264,21 +1258,7 @@ async fn run_scan(
                     access_context: scan_access_context,
                     unsupported_share_ace_count: scan_unsupported_share_ace_count,
                     sid_names,
-                    group_resolution_via_sam_fallback: scan_engine_flags
-                        .group_resolution_via_sam_fallback,
-                    identity_not_in_configured_ldap_base: scan_engine_flags
-                        .identity_not_in_configured_ldap_base,
-                    identity_disabled_status_unknown: scan_engine_flags
-                        .identity_disabled_status_unknown,
-                    identity_lookup_failure_reason: scan_engine_flags
-                        .identity_lookup_failure_reason
-                        .clone(),
-                    group_resolution_failure_reason: scan_engine_flags
-                        .group_resolution_failure_reason
-                        .clone(),
-                    identity_resolved_via_fsp: scan_engine_flags.identity_resolved_via_fsp,
-                    group_resolution_via_global_catalog: scan_engine_flags
-                        .group_resolution_via_global_catalog,
+                    resolution: scan_engine_flags.clone(),
                 };
                 let result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
                     anyhow::anyhow!("Permission evaluation failed for '{path_display}': {e}")

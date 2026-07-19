@@ -179,10 +179,9 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         }
         // Finding 6: SAM fallback without LDAP — nested domain groups are
         // not recursively resolved.
-        if input.group_resolution_via_sam_fallback {
+        if input.resolution.group_resolution_via_sam_fallback {
             diagnostics.push(PermissionDiagnostic::DomainGroupRecursionIncomplete);
         }
-        // authentifizieren.
         // Finding 7: disabled identity — ACL-theoretical rights computed,
         // but the account normally cannot authenticate.
         if input.identity.disabled {
@@ -191,24 +190,23 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         // Review 2026-06-04 round 2 finding 1: identity resolved via LSA,
         // Review 2026-06-04 round 2 finding 1: identity resolved via LSA but
         // LDAP base does not index it (multi-domain).
-        if input.identity_not_in_configured_ldap_base {
+        if input.resolution.identity_not_in_configured_ldap_base {
             diagnostics.push(PermissionDiagnostic::IdentityNotInConfiguredLdapBase);
         }
         // Review 2026-06-04 round 2 finding 5: disabled status could not be
         // determined.
-        if input.identity_disabled_status_unknown {
+        if input.resolution.identity_disabled_status_unknown {
             diagnostics.push(PermissionDiagnostic::IdentityDisabledStatusUnknown);
         }
-        // auszusehen.
         // Review 2026-06-04 round 4 finding 1: a technical LDAP identity
         // lookup failure is incompleteness; the report must surface it
         // instead of looking clean with a placeholder identity.
-        if let Some(reason) = input.identity_lookup_failure_reason {
+        if let Some(reason) = input.resolution.identity_lookup_failure_reason {
             diagnostics.push(PermissionDiagnostic::IdentityLookupFailed { reason });
         }
         // Review 2026-06-04 round 4 finding 1: failed or skipped group
         // resolution must be visible as incomplete.
-        if let Some(reason) = input.group_resolution_failure_reason {
+        if let Some(reason) = input.resolution.group_resolution_failure_reason {
             diagnostics.push(PermissionDiagnostic::GroupResolutionFailed { reason });
         }
         // Engine review 2026-06-09 finding 1: OWNER RIGHTS (S-1-3-4)
@@ -221,13 +219,13 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         // a Foreign Security Principal object — home-domain groups are
         // in the token, trust-forest groups are unknown. Incompleteness
         // trigger for derived risk findings.
-        if input.identity_resolved_via_fsp {
+        if input.resolution.identity_resolved_via_fsp {
             diagnostics.push(PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal);
         }
         // Known-limitations L2: memberships came from a Global Catalog
         // bind — only universal group memberships replicate fully to
         // the GC. Incompleteness trigger.
-        if input.group_resolution_via_global_catalog {
+        if input.resolution.group_resolution_via_global_catalog {
             diagnostics.push(PermissionDiagnostic::GroupResolutionViaGlobalCatalog);
         }
         // ADR 0052 (L3) / ADR 0056: historical SIDs (sIDHistory). Parsed
@@ -250,7 +248,9 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         // not modeled, so actual access may be lower than shown.
         // Informational only: the FSP / outside-base markers above already
         // set incompleteness, so this deliberately adds no second trigger.
-        if input.identity_resolved_via_fsp || input.identity_not_in_configured_ldap_base {
+        if input.resolution.identity_resolved_via_fsp
+            || input.resolution.identity_not_in_configured_ldap_base
+        {
             diagnostics.push(PermissionDiagnostic::TrustBoundaryEffectsNotModeled);
         }
 
@@ -887,6 +887,7 @@ mod tests {
         AccessMask, AceEntry, AceKind, FileSystemObject, GroupMembership, Identity, IdentityKind,
         MembershipPath, MembershipPathSource, NormalizedPath, Sid,
     };
+    use adpa_core::traits::ResolutionProvenance;
 
     const USER: &str = "S-1-5-21-1000-1000-1000-1001";
     const GROUP_A: &str = "S-1-5-21-1000-1000-1000-1100";
@@ -1015,13 +1016,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap()
     }
@@ -1044,13 +1039,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap()
     }
@@ -1073,13 +1062,7 @@ mod tests {
                 access_context,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap()
     }
@@ -1102,13 +1085,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap()
     }
@@ -1941,13 +1918,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap();
         assert_eq!(
@@ -1974,13 +1945,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap();
         assert!(NormalizedRights::new(p.effective_mask.0).is_read());
@@ -2003,13 +1968,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap();
         assert_eq!(
@@ -2520,13 +2479,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 4,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap();
         assert!(
@@ -2552,13 +2505,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap();
         assert!(
@@ -2617,13 +2564,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap();
         let member_step = p
@@ -2658,13 +2599,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap();
         let ace_step = p
@@ -3187,13 +3122,10 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: true,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance {
+                    identity_not_in_configured_ldap_base: true,
+                    ..Default::default()
+                },
             })
             .unwrap();
         assert!(
@@ -3223,13 +3155,10 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: true,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance {
+                    identity_disabled_status_unknown: true,
+                    ..Default::default()
+                },
             })
             .unwrap();
         assert!(
@@ -3258,13 +3187,7 @@ mod tests {
             access_context: AccessContext::Unspecified,
             unsupported_share_ace_count: 0,
             sid_names: std::collections::BTreeMap::new(),
-            group_resolution_via_sam_fallback: false,
-            identity_not_in_configured_ldap_base: false,
-            identity_disabled_status_unknown: false,
-            identity_lookup_failure_reason: None,
-            group_resolution_failure_reason: None,
-            identity_resolved_via_fsp: false,
-            group_resolution_via_global_catalog: false,
+            resolution: ResolutionProvenance::default(),
         }
     }
 
@@ -3557,7 +3480,7 @@ mod tests {
             user(USER),
             fso(None, vec![allow_ace(USER, MASK_READ, false)]),
         );
-        input.identity_resolved_via_fsp = true;
+        input.resolution.identity_resolved_via_fsp = true;
         let result = DefaultPermissionEngine.evaluate(input).unwrap();
         assert!(
             result
@@ -3576,7 +3499,7 @@ mod tests {
             user(USER),
             fso(None, vec![allow_ace(USER, MASK_READ, false)]),
         );
-        input.identity_not_in_configured_ldap_base = true;
+        input.resolution.identity_not_in_configured_ldap_base = true;
         let result = DefaultPermissionEngine.evaluate(input).unwrap();
         assert!(
             result
@@ -3619,15 +3542,12 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: Some(
-                    "LDAP bind failed: connection refused".to_owned(),
-                ),
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance {
+                    identity_lookup_failure_reason: Some(
+                        "LDAP bind failed: connection refused".to_owned(),
+                    ),
+                    ..Default::default()
+                },
             })
             .unwrap();
         let found = result
@@ -3660,15 +3580,12 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: Some(
-                    "LDAP group query timed out after 30s".to_owned(),
-                ),
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance {
+                    group_resolution_failure_reason: Some(
+                        "LDAP group query timed out after 30s".to_owned(),
+                    ),
+                    ..Default::default()
+                },
             })
             .unwrap();
         let found = result
@@ -3701,13 +3618,10 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: true,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance {
+                    identity_resolved_via_fsp: true,
+                    ..Default::default()
+                },
             })
             .unwrap();
         assert!(
@@ -3735,13 +3649,10 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: true,
+                resolution: ResolutionProvenance {
+                    group_resolution_via_global_catalog: true,
+                    ..Default::default()
+                },
             })
             .unwrap();
         assert!(
@@ -3806,13 +3717,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap();
 
@@ -3870,13 +3775,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap();
 
@@ -3921,13 +3820,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap();
 
@@ -3975,13 +3868,7 @@ mod tests {
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap();
 
@@ -4020,13 +3907,7 @@ mod tests {
                 access_context: AccessContext::RemoteSmb,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap();
         assert_eq!(
@@ -4053,13 +3934,7 @@ mod tests {
                 access_context: AccessContext::LocalInteractive,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
-                group_resolution_via_sam_fallback: false,
-                identity_not_in_configured_ldap_base: false,
-                identity_disabled_status_unknown: false,
-                identity_lookup_failure_reason: None,
-                group_resolution_failure_reason: None,
-                identity_resolved_via_fsp: false,
-                group_resolution_via_global_catalog: false,
+                resolution: ResolutionProvenance::default(),
             })
             .unwrap();
         assert_eq!(

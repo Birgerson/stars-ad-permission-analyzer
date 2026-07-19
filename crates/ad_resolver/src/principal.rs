@@ -305,23 +305,10 @@ fn membership_rank(m: &GroupMembership) -> (bool, bool, usize, bool) {
     (m.direct, complete, resolved_names, m.group_name.is_some())
 }
 
-/// Flag bundle fed into `PermissionEvaluationInput`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EngineFlags {
-    pub identity_not_in_configured_ldap_base: bool,
-    pub identity_disabled_status_unknown: bool,
-    pub group_resolution_via_sam_fallback: bool,
-    /// Engine pushes `PermissionDiagnostic::IdentityLookupFailed`;
-    /// the risk engine marks derived findings incomplete. Default `None`.
-    pub identity_lookup_failure_reason: Option<String>,
-    pub group_resolution_failure_reason: Option<String>,
-    /// Engine pushes
-    /// `PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal`.
-    pub identity_resolved_via_fsp: bool,
-    /// Engine pushes
-    /// `PermissionDiagnostic::GroupResolutionViaGlobalCatalog`.
-    pub group_resolution_via_global_catalog: bool,
-}
+/// Flag bundle fed into `PermissionEvaluationInput`. Re-export of the shared
+/// `core` type (review finding C1) so the resolver's output slots straight
+/// into `PermissionEvaluationInput::resolution` with no field-by-field copy.
+pub use adpa_core::traits::ResolutionProvenance as EngineFlags;
 
 // ---------------------------------------------------------------------------
 // Backend traits — the abstraction layer that makes phase 2 testable.

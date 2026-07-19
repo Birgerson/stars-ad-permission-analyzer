@@ -23,6 +23,55 @@ pub struct ScanResult {
     pub errors: Vec<ScanError>,
 }
 
+/// Provenance and incompleteness flags produced by identity + group
+/// resolution and consumed by the permission engine to decide which
+/// incompleteness diagnostics to push.
+///
+/// Grouped into one bundle (review finding C1) instead of a dozen loose
+/// fields on [`PermissionEvaluationInput`]. `ad_resolver::EngineFlags` is a
+/// re-export of this type, so the resolver produces exactly what the engine
+/// reads — no field-by-field copy. Every field defaults to "complete /
+/// known", so a caller that resolved cleanly via LDAP can use
+/// `ResolutionProvenance::default()`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolutionProvenance {
+    /// `true` when group resolution ran through the SAM/LSA fallback
+    /// (`NetUserGetGroups`) instead of LDAP. Nested domain groups are then
+    /// not recursively resolved and the token SID set may be incomplete;
+    /// the engine pushes `DomainGroupRecursionIncomplete`. Closes review
+    /// finding 6.
+    pub group_resolution_via_sam_fallback: bool,
+    /// `true` when the identity was resolved via LSA but the configured LDAP
+    /// `base_dn` does not index that SID (typical in multi-domain forests).
+    /// The engine pushes `IdentityNotInConfiguredLdapBase`. Closes review
+    /// 2026-06-04 round 2 finding 1.
+    pub identity_not_in_configured_ldap_base: bool,
+    /// `true` when the `disabled` flag on the identity could not be reliably
+    /// determined (e.g. SAM path without `NetUserGetInfo`). Closes review
+    /// 2026-06-04 round 2 finding 5.
+    pub identity_disabled_status_unknown: bool,
+    /// `Some(reason)` when the LDAP identity lookup failed with a technical
+    /// error. The engine pushes `IdentityLookupFailed`; risk findings are
+    /// flagged incomplete.
+    pub identity_lookup_failure_reason: Option<String>,
+    /// `Some(reason)` when recursive group resolution failed or was
+    /// deliberately skipped while groups would have mattered. Marker +
+    /// risk-incomplete propagation.
+    pub group_resolution_failure_reason: Option<String>,
+    /// `true` when the identity was resolved through a Foreign Security
+    /// Principal object in the home domain (cross-forest trust user).
+    /// Home-domain groups were resolved via the FSP; the principal's
+    /// memberships in its own forest are unknown. The engine pushes
+    /// `IdentityResolvedViaForeignSecurityPrincipal`. Closes
+    /// known-limitations entry L1.
+    pub identity_resolved_via_fsp: bool,
+    /// `true` when group memberships were resolved through a Global Catalog
+    /// bind. Only universal group memberships replicate fully to the GC; the
+    /// engine pushes `GroupResolutionViaGlobalCatalog`. Closes
+    /// known-limitations entry L2.
+    pub group_resolution_via_global_catalog: bool,
+}
+
 pub struct PermissionEvaluationInput {
     pub identity: Identity,
     pub group_memberships: Vec<GroupMembership>,
@@ -60,48 +109,11 @@ pub struct PermissionEvaluationInput {
     /// back to showing the raw SID. Defaulting to empty keeps existing
     /// callers compatible.
     pub sid_names: BTreeMap<String, String>,
-    /// `true` when group resolution runs through the SAM/LSA fallback
-    /// (`NetUserGetGroups`) instead of LDAP. In that case **nested domain
-    /// groups are not recursively resolved** and the token SID set may be
-    /// incomplete. The engine then pushes a
-    /// `PermissionDiagnostic::DomainGroupRecursionIncomplete` into the
-    /// result so audit consumers treat the finding as incomplete.
-    /// Defaulting to `false` (LDAP path) keeps existing callers
-    /// compatible. Closes review finding 6.
-    pub group_resolution_via_sam_fallback: bool,
-    /// `true` when the identity was resolved via LSA but the configured
-    /// LDAP `base_dn` does not index that SID (typical in multi-domain
-    /// forests). The engine then pushes a
-    /// `PermissionDiagnostic::IdentityNotInConfiguredLdapBase`. Default
-    /// `false`. Closes review 2026-06-04 round 2 finding 1.
-    pub identity_not_in_configured_ldap_base: bool,
-    /// `true` when the `disabled` flag on the identity could not be
-    /// reliably determined (e.g. SAM path without `NetUserGetInfo`).
-    /// Default `false`. Closes review 2026-06-04 round 2 finding 5.
-    pub identity_disabled_status_unknown: bool,
-    /// `Some(reason)` when the LDAP identity lookup failed with a
-    /// technical error. The engine pushes an `IdentityLookupFailed`
-    /// marker; risk findings are flagged incomplete. Default `None`.
-    pub identity_lookup_failure_reason: Option<String>,
-    /// `Some(reason)` when recursive group resolution failed or was
-    /// deliberately skipped while groups would have mattered. Marker +
-    /// risk-incomplete propagation.
-    pub group_resolution_failure_reason: Option<String>,
-    /// `true` when the identity was resolved through a Foreign Security
-    /// Principal object in the home domain (cross-forest trust user).
-    /// Home-domain groups were resolved via the FSP; the principal's
-    /// memberships in its own forest are unknown. The engine pushes a
-    /// `PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal`
-    /// and risk findings are flagged incomplete. Default `false`.
-    /// Closes known-limitations entry L1.
-    pub identity_resolved_via_fsp: bool,
-    /// `true` when group memberships were resolved through a Global
-    /// Catalog bind. Only universal group memberships replicate fully
-    /// to the GC — the engine pushes a
-    /// `PermissionDiagnostic::GroupResolutionViaGlobalCatalog` and risk
-    /// findings are flagged incomplete. Default `false`.
-    /// Closes known-limitations entry L2.
-    pub group_resolution_via_global_catalog: bool,
+    /// Provenance / incompleteness flags from identity and group resolution
+    /// (review finding C1 — grouped instead of a dozen loose booleans). See
+    /// [`ResolutionProvenance`]; `ad_resolver::EngineFlags` is a re-export of
+    /// that type, so the resolver's output slots in directly.
+    pub resolution: ResolutionProvenance,
 }
 
 pub struct RiskContext {

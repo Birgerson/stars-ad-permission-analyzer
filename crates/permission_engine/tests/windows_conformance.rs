@@ -53,7 +53,7 @@ use adpa_core::model::{
     AccessContext, AccessMask, AceEntry, AceKind, FileSystemObject, Identity, IdentityKind,
     LocalGroupEvalStatus, NormalizedPath, ShareMaskStatus, Sid,
 };
-use adpa_core::traits::{PermissionEvaluationInput, PermissionEvaluator};
+use adpa_core::traits::{PermissionEvaluationInput, PermissionEvaluator, ResolutionProvenance};
 use permission_engine::mask::{MASK_FULL_CONTROL, MASK_READ, MASK_WRITE};
 use permission_engine::DefaultPermissionEngine;
 
@@ -286,13 +286,7 @@ fn stars_multigroup_mask(fixture: &[MultiAce], user_sid: &str) -> u32 {
             access_context: AccessContext::Unspecified,
             unsupported_share_ace_count: 0,
             sid_names: std::collections::BTreeMap::new(),
-            group_resolution_via_sam_fallback: false,
-            identity_not_in_configured_ldap_base: false,
-            identity_disabled_status_unknown: false,
-            identity_lookup_failure_reason: None,
-            group_resolution_failure_reason: None,
-            identity_resolved_via_fsp: false,
-            group_resolution_via_global_catalog: false,
+            resolution: ResolutionProvenance::default(),
         })
         .expect("engine evaluation must succeed");
     result.ntfs_mask.0
@@ -453,13 +447,7 @@ fn stars_effective_mask(fixture: &[FixtureAce], sid_str: &str) -> u32 {
             access_context: AccessContext::Unspecified,
             unsupported_share_ace_count: 0,
             sid_names: std::collections::BTreeMap::new(),
-            group_resolution_via_sam_fallback: false,
-            identity_not_in_configured_ldap_base: false,
-            identity_disabled_status_unknown: false,
-            identity_lookup_failure_reason: None,
-            group_resolution_failure_reason: None,
-            identity_resolved_via_fsp: false,
-            group_resolution_via_global_catalog: false,
+            resolution: ResolutionProvenance::default(),
         })
         .expect("engine evaluation must succeed");
     result.ntfs_mask.0

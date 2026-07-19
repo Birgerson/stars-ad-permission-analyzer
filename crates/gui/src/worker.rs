@@ -974,13 +974,7 @@ async fn handle_analyze(
             access_context: AccessContext::for_path_with_smb(path, smb_server, share_name),
             unsupported_share_ace_count,
             sid_names,
-            group_resolution_via_sam_fallback: engine_flags.group_resolution_via_sam_fallback,
-            identity_not_in_configured_ldap_base: engine_flags.identity_not_in_configured_ldap_base,
-            identity_disabled_status_unknown: engine_flags.identity_disabled_status_unknown,
-            identity_lookup_failure_reason: engine_flags.identity_lookup_failure_reason,
-            group_resolution_failure_reason: engine_flags.group_resolution_failure_reason,
-            identity_resolved_via_fsp: engine_flags.identity_resolved_via_fsp,
-            group_resolution_via_global_catalog: engine_flags.group_resolution_via_global_catalog,
+            resolution: engine_flags,
         })
         .map_err(|e| format!("Permission engine error: {e}"))
 }
@@ -1329,13 +1323,6 @@ async fn handle_scan(
         }
     };
     let engine_flags = res.engine_flags();
-    let sam_fallback = engine_flags.group_resolution_via_sam_fallback;
-    let identity_not_in_configured_ldap_base = engine_flags.identity_not_in_configured_ldap_base;
-    let identity_disabled_status_unknown = engine_flags.identity_disabled_status_unknown;
-    let identity_lookup_failure_reason = engine_flags.identity_lookup_failure_reason;
-    let group_resolution_failure_reason = engine_flags.group_resolution_failure_reason;
-    let identity_resolved_via_fsp = engine_flags.identity_resolved_via_fsp;
-    let group_resolution_via_global_catalog = engine_flags.group_resolution_via_global_catalog;
     let identity = res.identity;
     let memberships = res.memberships;
 
@@ -1465,13 +1452,7 @@ async fn handle_scan(
             access_context: scan_access_context,
             unsupported_share_ace_count: scan_unsupported_share_ace_count,
             sid_names: scan_sid_names.clone(),
-            group_resolution_via_sam_fallback: sam_fallback,
-            identity_not_in_configured_ldap_base,
-            identity_disabled_status_unknown,
-            identity_lookup_failure_reason: identity_lookup_failure_reason.clone(),
-            group_resolution_failure_reason: group_resolution_failure_reason.clone(),
-            identity_resolved_via_fsp,
-            group_resolution_via_global_catalog,
+            resolution: engine_flags.clone(),
         }) {
             Ok(perm) => {
                 let label = NormalizedRights::new(perm.effective_mask.0)
