@@ -113,13 +113,12 @@ fn list_users(server: Option<&str>, domain: &str) -> Result<Vec<IdentitySnapshot
     let mut resume_handle: u32 = 0;
 
     loop {
-        // RAII-Guard pro Iteration — neue Variable, neue Lifetime, neuer Free.
         // RAII guard per iteration — new variable, new lifetime, new Free.
         let mut buf: NetApiBuffer<USER_INFO_10> = NetApiBuffer::null();
         let mut entries_read: u32 = 0;
         let mut total_entries: u32 = 0;
 
-        // null-terminierte UTF-16-Sequenz. NetApiBuffer<USER_INFO_10> owns
+        // null-terminated UTF-16 sequence. NetApiBuffer<USER_INFO_10> owns
         // the allocated buffer after this call.
         // SAFETY: server_ptr is either null or points to a valid null-
         // terminated UTF-16 sequence. NetApiBuffer<USER_INFO_10> owns the
@@ -190,7 +189,6 @@ fn list_global_groups(
     let mut resume_handle: usize = 0;
 
     loop {
-        // RAII-Guard pro Iteration.
         // RAII guard per iteration.
         let mut buf: NetApiBuffer<GROUP_INFO_1> = NetApiBuffer::null();
         let mut entries_read: u32 = 0;
@@ -216,7 +214,6 @@ fn list_global_groups(
             let entries =
                 unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };
             for entry in entries {
-                // SAFETY: null-terminierte UTF-16-Strings.
                 // SAFETY: null-terminated UTF-16 strings.
                 let name = unsafe { wide_ptr_to_string(entry.grpi1_name) };
                 if name.is_empty() {
@@ -256,7 +253,6 @@ fn list_local_groups(server: Option<&str>) -> Result<Vec<IdentitySnapshot>, Core
     let mut resume_handle: usize = 0;
 
     loop {
-        // RAII-Guard pro Iteration.
         // RAII guard per iteration.
         let mut buf: NetApiBuffer<LOCALGROUP_INFO_1> = NetApiBuffer::null();
         let mut entries_read: u32 = 0;
@@ -279,7 +275,7 @@ fn list_local_groups(server: Option<&str>) -> Result<Vec<IdentitySnapshot>, Core
             let entries =
                 unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };
             for entry in entries {
-                // SAFETY: null-terminierte UTF-16-Strings.
+                // SAFETY: null-terminated UTF-16 strings.
                 let name = unsafe { wide_ptr_to_string(entry.lgrpi1_name) };
                 if name.is_empty() {
                     continue;

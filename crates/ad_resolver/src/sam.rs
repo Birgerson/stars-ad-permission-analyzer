@@ -422,9 +422,6 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
                                 // NetUserGetGroups returns the name directly;
                                 // we pass it through verbatim.
                                 group_name: Some(group_name.clone()),
-                                // SAM/NetAPI returns a flat list —
-                                // direkte Kante; verschachtelte Beziehungen
-                                // Kante.
                                 // SAM/NetAPI returns a flat list — only the
                                 // user → group direct edge is visible;
                                 // nested relationships are not exposed

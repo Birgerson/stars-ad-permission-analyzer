@@ -202,7 +202,6 @@ pub fn read_file_system_object_cached(
     let api_path = validation::path::to_windows_api_path(path);
     let wide_path = to_wide_null(&api_path);
 
-    // --- Dateiattribute (is_directory, is_reparse_point) ---
     // --- File attributes (is_directory, is_reparse_point) ---
     // SAFETY: wide_path is a valid null-terminated wide string for the duration of this call.
     let attrs = unsafe { GetFileAttributesW(wide_path.as_ptr()) };
