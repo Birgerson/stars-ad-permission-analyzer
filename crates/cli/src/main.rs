@@ -251,6 +251,37 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+
+    /// List the domain's Active Directory trusts (read-only): direction and
+    /// `trustAttributes`, including whether SID filtering / quarantine or
+    /// Selective Authentication is configured. This surfaces the trust
+    /// topology behind the L4 caveat — a cross-forest or historical SID may be
+    /// filtered at runtime even when the DACL grants it. Requires --server;
+    /// --base-dn should be the domain root. Stars never modifies a trust.
+    Trusts {
+        #[arg(short = 's', long)]
+        server: Option<String>,
+        #[arg(short = 'b', long)]
+        base_dn: Option<String>,
+        /// Bind account: `DOMAIN\user`, `user@domain` (UPN), or a full DN.
+        #[arg(long)]
+        bind_dn: Option<String>,
+        /// **DEPRECATED — insecure.** Use the `ADPA_BIND_PASSWORD` env var.
+        #[arg(long)]
+        bind_password: Option<String>,
+        /// Unencrypted LDAP (port 389) — password in plaintext. Test only.
+        #[arg(long)]
+        insecure_ldap: bool,
+        /// Bind against the Global Catalog (forest-wide).
+        #[arg(long)]
+        global_catalog: bool,
+        /// Bind with SASL GSSAPI/Kerberos sign+seal using the current logon.
+        #[arg(long)]
+        ldap_signing: bool,
+        /// LDAP operation timeout in seconds (default 10; range 1–600).
+        #[arg(long)]
+        ldap_timeout: Option<u64>,
+    },
 }
 
 #[tokio::main]
@@ -398,6 +429,30 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
+        Commands::Trusts {
+            server,
+            base_dn,
+            bind_dn,
+            bind_password,
+            insecure_ldap,
+            global_catalog,
+            ldap_signing,
+            ldap_timeout,
+        } => {
+            run_trusts(
+                server,
+                base_dn,
+                bind_dn,
+                bind_password,
+                TrustsOptions {
+                    insecure_ldap,
+                    global_catalog,
+                    ldap_signing,
+                    ldap_timeout,
+                },
+            )
+            .await?;
+        }
     }
 
     Ok(())
@@ -407,7 +462,6 @@ async fn main() -> anyhow::Result<()> {
 // Shared identity resolution
 // ---------------------------------------------------------------------------
 
-/// zusammengeschusterten Tupel-Struktur.
 /// CLI-local bundle: [`PrincipalResolution`] + the `ad_connected`
 /// flag.
 struct ResolvedIdentity {
@@ -1664,6 +1718,70 @@ async fn run_members(
     if let Some(status) = export_status {
         export_group_members(&report, &status.path().0, force)?;
     }
+    Ok(())
+}
+
+/// Options bundle for the `trusts` command (keeps `run_trusts` under the
+/// clippy argument limit, mirroring [`GroupsOptions`]).
+struct TrustsOptions {
+    insecure_ldap: bool,
+    global_catalog: bool,
+    ldap_signing: bool,
+    ldap_timeout: Option<u64>,
+}
+
+/// `trusts` command: read and print the domain's trust inventory (L4).
+///
+/// Reads the `trustedDomain` objects **read-only** and shows each trust's
+/// direction and attributes (SID filtering / quarantine, selective
+/// authentication, forest-transitive). This surfaces the trust topology
+/// behind the L4 caveat without modelling the runtime filter effect (that
+/// would need a synthetic logon — out of scope). Requires --server; --base-dn
+/// should be the domain root, where the trust objects live.
+async fn run_trusts(
+    server: Option<String>,
+    base_dn: Option<String>,
+    bind_dn: Option<String>,
+    bind_password: Option<String>,
+    opts: TrustsOptions,
+) -> anyhow::Result<()> {
+    let TrustsOptions {
+        insecure_ldap,
+        global_catalog,
+        ldap_signing,
+        ldap_timeout,
+    } = opts;
+
+    let conn = validate_connection_inputs(
+        server.as_deref(),
+        base_dn.as_deref(),
+        bind_dn.as_deref(),
+        None,
+        None,
+    )?;
+    let server = conn.server.ok_or_else(|| {
+        anyhow::anyhow!(
+            "The 'trusts' command requires --server: reading the domain's trustedDomain \
+             objects needs an LDAP connection."
+        )
+    })?;
+    let ldap_timeout = validate_optional_ldap_timeout(ldap_timeout)
+        .map_err(|e| anyhow::anyhow!("Invalid --ldap-timeout: {e}"))?
+        .map(|t| t.0);
+
+    let config = build_ldap_config(
+        &server,
+        conn.base_dn,
+        conn.bind_dn,
+        bind_password,
+        insecure_ldap,
+        global_catalog,
+        ldap_signing,
+        ldap_timeout,
+    )?;
+
+    let trusts = ad_resolver::resolve_domain_trusts(&config).await?;
+    output::print_trusts(&trusts);
     Ok(())
 }
 

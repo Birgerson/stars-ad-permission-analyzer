@@ -248,9 +248,18 @@ found outside the configured LDAP base), Stars emits the informational
 forest trust, SID filtering / quarantine and Selective Authentication may
 reduce the shown access. (For a purely intra-forest cross-domain identity
 those filters usually do not apply, so the marker is then only a
-precautionary note.) Stars still does **not** read `trustAttributes` to
-model the actual filter effect — that is deliberately left as the deeper
-follow-up.
+precautionary note.)
+
+**Status (ADR 0060 — read-only trust inventory):** Stars now **reads** the
+domain's `trustedDomain` objects and displays each trust's `trustDirection`
+and decoded `trustAttributes` — including whether **SID filtering /
+quarantine** or **Selective Authentication** is configured — via the new
+read-only `adpa trusts` command. This gives an auditor the exact facts needed
+to apply the L4 caveat by hand. Stars still does **not** *model* the runtime
+filter effect on a specific finding (that needs a synthetic logon — out of
+scope, see below), nor does it yet auto-cross-reference a token's
+foreign-forest history SIDs against a filtering trust (the M.5 per-finding
+edge). Those remain the deeper follow-ups.
 
 **Additional L4 edge since ADR 0056 (verification.md Block M.5):** an
 **in-base** identity whose evaluated `sIDHistory` SID is owned by a
@@ -266,11 +275,15 @@ trust-topology work described here.
 - Stars documentation: features-and-limitations.md should clearly
   document that Stars shows the DACL view, not the filtered runtime
   result.
-- (Optional) Read `trustAttributes` and `trustDirection` from AD and
-  display them as read-only info in the report.
+- ✅ **Done (ADR 0060):** Read `trustAttributes` and `trustDirection` from AD
+  and display them as read-only info — the `adpa trusts` command lists every
+  trust with its direction and decoded attributes (SID filtering / quarantine,
+  selective authentication, forest-transitive).
 - Real detection of the filter effect would require Stars to perform
   a synthetic logon attempt — that violates the read-only principle →
   deliberately **not** implemented.
+- Follow-up (open): cross-reference a token's foreign-forest history SIDs
+  against a filtering trust to flag the M.5 per-finding over-report.
 
 ### Test plan
 
@@ -611,7 +624,7 @@ download-and-verify step.
 | L1 — FSP | High | **yes** (IdentityResolvedViaForeignSecurityPrincipal) | **closed 2026-06-11** (trust-side groups still need L2) |
 | L2 — GC bind | High | **yes** (GroupResolutionViaGlobalCatalog) | **closed 2026-06-11** (GUI toggle shipped v1.6.4) |
 | L3 — SID History | Medium | **yes** (SidHistoryEvaluated/Present + GroupSidHistoryEvaluated/Present) | **closed 2026-07-04** (user: ADR 0056; groups: ADR 0059) |
-| L4 — Cross-forest filter | Medium | no | no (documentation only) |
+| L4 — Cross-forest filter | Medium | no | partial: read-only trust inventory (`adpa trusts`, ADR 0060); runtime effect not modelled |
 | L5 — Empty memberships | Medium | yes (incomplete) | only via L1/L2 |
 | L6 — Live tests | High | n/a | **partially** — live 3-domain run 2026-06-14 committed (verification.md Block L); automated CI suite still open |
 | L7 — Token privileges | Low | no | deliberately out of scope |
