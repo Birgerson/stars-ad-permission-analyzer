@@ -10,8 +10,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-Post-v1.7.7 hardening pass — the findings from the full per-module code
-review (`review.md`).
+_No unreleased changes yet._
+
+## [1.7.8] — 2026-07-19
+
+The complete post-v1.7.7 hardening pass. The full per-module code review
+(`review.md`) is closed out — every finding (Medium **F1/G1/V1/X2**, Low
+**R1/X1/X3**, Nit **C1/E1/P1**) fixed or delivered — plus the two features that
+grew out of it: the GUI live directory **identity picker** (finishing the
+previously dead-code `SearchIdentity` path) and a read-only Active Directory
+**trust inventory** (`adpa trusts`, ADR 0060) that closes the "read + surface"
+part of known-limitations **L4**. No permission-engine behaviour changed; the
+correctness-critical core is untouched.
 
 ### Added
 

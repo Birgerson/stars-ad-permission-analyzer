@@ -1,6 +1,6 @@
 # Stars — Technical Documentation
 
-**Version:** v1.7.7 (2026-07-04)
+**Version:** v1.7.8 (2026-07-19)
 **Audience:** Developers, code reviewers, and security engineers who
 want to understand *how* Stars works internally — not *how to use* it
 (that's the [User Guide](user-guide.md)).
