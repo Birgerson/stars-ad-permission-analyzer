@@ -493,12 +493,11 @@ impl LdapResolver {
             nodes.push(sid.clone());
             names.push(user_name.clone());
             for d in &chain_dns {
-                if let Some(s) = dn_to_sid.get(d) {
-                    nodes.push(s.clone());
-                    names.push(dn_to_name.get(d).cloned().flatten());
-                } else {
-                    return None;
-                }
+                // `?`: if any hop's DN has no known SID the chain cannot be
+                // reconstructed, so the whole path is None (clippy::question_mark).
+                let s = dn_to_sid.get(d)?;
+                nodes.push(s.clone());
+                names.push(dn_to_name.get(d).cloned().flatten());
             }
             Some((nodes, names))
         };

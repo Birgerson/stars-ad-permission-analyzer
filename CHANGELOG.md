@@ -15,6 +15,17 @@ review (`review.md`).
 
 ### Fixed
 
+- **Share-mask resolution is now shared between CLI and GUI (review finding
+  G1).** The orchestration (derive server/share, build the token identically
+  to the NTFS side incl. sIDHistory, read the share DACL, produce a
+  `ShareMaskStatus`) was copy-pasted as `resolve_scan_share_status` (CLI) and
+  `resolve_share_status` (GUI) and had to be edited in lockstep — a standing
+  risk that the two frontends diverge (the invariant "CLI and GUI never show a
+  different share mask"). It now lives once in
+  `share_scanner::resolve_share_mask_status`; both frontend functions are
+  one-line delegations. Also removed the newer-clippy (`1.97`) `question_mark`
+  lint on a pre-existing `ad_resolver` block that was blocking CI.
+
 - **No NTFS ACE is dropped silently anymore (review finding F1).** A
   supported Allow/Deny ACE whose trustee SID could not be read was
   previously discarded with no counter and no diagnostic — a dropped

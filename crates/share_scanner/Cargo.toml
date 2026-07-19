@@ -7,6 +7,10 @@ authors.workspace = true
 [dependencies]
 adpa_core = { path = "../core" }
 permission_engine = { path = "../permission_engine" }
+# SmbAuditContext::resolve — the single source of server/share derivation,
+# shared with the frontends' trustee overlay (review finding G1: the
+# share-mask orchestration now lives here, once).
+validation = { path = "../validation" }
 # RAII guard for NetApi buffers (review round 10 finding 3). Every
 # path in get_share_dacl/get_share_enum frees the buffer correctly,
 # even when `?` propagates an Err.

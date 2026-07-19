@@ -12,9 +12,12 @@ use std::os::windows::ffi::OsStrExt;
 
 use adpa_core::{
     error::CoreError,
-    model::{AccessMask, AceKind, NormalizedPath, Share, SharePermission, Sid},
+    model::{
+        AccessContext, AccessMask, AceKind, GroupMembership, NormalizedPath, Share,
+        ShareMaskStatus, SharePermission, Sid,
+    },
 };
-use permission_engine::mask::expand_generic_rights;
+use permission_engine::{build_token_sids_with_context, mask::expand_generic_rights};
 use tracing::{debug, info, warn};
 use win_safe::netapi::NetApiBuffer;
 use windows_sys::Win32::Foundation::{GetLastError, FALSE};
@@ -418,6 +421,77 @@ pub fn effective_share_mask(
     Some(AccessMask(granted))
 }
 
+/// Resolves the SMB side of an analysis into a [`ShareMaskStatus`] plus the
+/// count of unsupported share ACEs.
+///
+/// This is the **single** orchestration shared by the CLI and GUI frontends
+/// (review finding G1) — previously it was copy-pasted as
+/// `resolve_scan_share_status` (CLI) and `resolve_share_status` (GUI),
+/// which had to be edited in lockstep (e.g. the ADR 0056 sIDHistory change
+/// touched both). Keeping it here removes that drift risk: the invariant
+/// "CLI and GUI never show a different share mask" is now structural.
+///
+/// Steps: derive server/share via the same
+/// [`validation::path::SmbAuditContext::resolve`] the trustee overlay uses;
+/// build the token SID set **identically to the NTFS side** (own SID,
+/// `sIDHistory` per ADR 0056, group SIDs, local server groups, and the
+/// access-context well-knowns such as `NETWORK`/`S-1-5-2` — otherwise share
+/// ACEs on those SIDs would be silently ignored and the mask wrong); read
+/// the share DACL; combine.
+///
+/// - No SMB context (local path, or only one of server/share set) →
+///   [`ShareMaskStatus::NotApplicable`].
+/// - Share DACL read failure → [`ShareMaskStatus::ReadFailed`].
+/// - NULL share DACL → [`ShareMaskStatus::Unrestricted`] (no fabricated
+///   `0xFFFFFFFF` mask that would look like a real special-access mask).
+/// - Otherwise → [`ShareMaskStatus::Applied`].
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_share_mask_status(
+    path: &str,
+    smb_server: Option<&str>,
+    share_name: Option<&str>,
+    user_sid: &str,
+    sid_history: &[Sid],
+    memberships: &[GroupMembership],
+    local_group_sids: &[Sid],
+    access_context: AccessContext,
+) -> (ShareMaskStatus, usize) {
+    let smb_ctx = match validation::path::SmbAuditContext::resolve(path, smb_server, share_name) {
+        Some(c) => c,
+        None => return (ShareMaskStatus::NotApplicable, 0),
+    };
+    let server = smb_ctx.server;
+    let share = smb_ctx.share;
+
+    let user_sids = build_token_sids_with_context(
+        user_sid,
+        sid_history,
+        memberships,
+        local_group_sids,
+        access_context,
+    );
+
+    match get_share_dacl(&server, &share) {
+        Err(e) => {
+            warn!(server = %server, share = %share, error = %e, "Cannot read share DACL");
+            (ShareMaskStatus::ReadFailed(e.to_string()), 0)
+        }
+        Ok(scan) => {
+            let status = match effective_share_mask(&scan.dacl, &user_sids) {
+                Some(mask) => {
+                    info!(server = %server, share = %share, mask = format!("0x{:08X}", mask.0), "Share mask resolved");
+                    ShareMaskStatus::Applied(mask)
+                }
+                None => {
+                    info!(server = %server, share = %share, "Share has NULL DACL — unrestricted");
+                    ShareMaskStatus::Unrestricted
+                }
+            };
+            (status, scan.unsupported_count)
+        }
+    }
+}
+
 /// Canonical share DACL order mirroring the NTFS convention: 0 =
 /// explicit deny, 1 = explicit allow, 2 = inherited deny, 3 = inherited
 /// allow. Returns the index of the first ACE that violates phase
@@ -661,6 +735,29 @@ unsafe fn parse_share_dacl(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G1: the shared orchestration returns `NotApplicable` for a local
+    /// path with no manual SMB context (no share DACL is read). This is the
+    /// one branch of `resolve_share_mask_status` exercisable without a live
+    /// SMB share, and it is the code path both frontends now delegate to.
+    #[test]
+    fn resolve_share_mask_status_local_path_is_not_applicable() {
+        let (status, unsupported) = resolve_share_mask_status(
+            r"C:\Windows\System32",
+            None,
+            None,
+            "S-1-5-21-1-2-3-1000",
+            &[],
+            &[],
+            &[],
+            AccessContext::LocalInteractive,
+        );
+        assert!(
+            matches!(status, ShareMaskStatus::NotApplicable),
+            "a local path must yield NotApplicable, got {status:?}"
+        );
+        assert_eq!(unsupported, 0);
+    }
 
     #[test]
     fn enumerate_shares_localhost_succeeds_or_access_denied() {

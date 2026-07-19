@@ -24,12 +24,9 @@ use chrono::Utc;
 use clap::{Parser, Subcommand};
 use exporter::{CsvExporter, HtmlExporter, JsonExporter};
 use fs_scanner::{read_fso, CancellationToken, WalkConfig};
-use permission_engine::{
-    build_token_sids_with_context, engine::DefaultPermissionEngine, NormalizedRights,
-};
+use permission_engine::{engine::DefaultPermissionEngine, NormalizedRights};
 use persistence::Database;
 use risk_engine::RuleRegistry;
-use share_scanner::{effective_share_mask, get_share_dacl};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 use validation::{
@@ -1388,59 +1385,21 @@ fn resolve_scan_share_status(
     local_group_sids: &[adpa_core::model::Sid],
     access_context: AccessContext,
 ) -> (adpa_core::model::ShareMaskStatus, usize) {
-    use adpa_core::model::ShareMaskStatus;
-    // Round-10 finding 1: server/share derivation goes through
-    // `SmbAuditContext::resolve` — the same source the trustee overlay
-    // build in analyze/scan and the GUI use. Effective share mask AND
-    // trustee table now share the exact same server/share.
-    let smb_ctx = match validation::path::SmbAuditContext::resolve(path, smb_server, share_name) {
-        Some(c) => c,
-        None => return (ShareMaskStatus::NotApplicable, 0),
-    };
-    let server = smb_ctx.server;
-    let share = smb_ctx.share;
-
-    tracing::info!(server = %server, share = %share, "Resolving share mask");
-
-    match get_share_dacl(&server, &share) {
-        Err(e) => {
-            tracing::warn!(server = %server, share = %share, error = %e, "Cannot read share DACL");
-            (ShareMaskStatus::ReadFailed(e.to_string()), 0)
-        }
-        Ok(scan) => {
-            // Share ignored (review follow-up finding 1).
-            // Token set MUST contain the same SIDs as on the NTFS side, otherwise
-            // share ACEs on local server groups (e.g. local Administrators) are
-            // ignored and the share mask is wrong. The access context further
-            // ensures e.g. `NETWORK` (S-1-5-2) is in the SMB token, otherwise
-            // `Deny NETWORK` ACEs on the share are ignored (follow-up
-            // review finding 1).
-            let user_sids = build_token_sids_with_context(
-                &resolved.resolution.identity.sid.0,
-                // ADR 0056: the share token must contain the same historical
-                // SIDs as the NTFS token, otherwise the two sides diverge.
-                &resolved.resolution.identity.sid_history,
-                &resolved.resolution.memberships,
-                local_group_sids,
-                access_context,
-            );
-            // NULL share DACL: effective_share_mask returns None — surface as
-            // dedicated `Unrestricted` status instead of fabricating a fake
-            // 0xFFFFFFFF mask (which would look like a real special-access
-            // mask in reports).
-            let status = match effective_share_mask(&scan.dacl, &user_sids) {
-                Some(mask) => {
-                    tracing::info!(server = %server, share = %share, mask = format!("0x{:08X}", mask.0), "Share mask resolved");
-                    ShareMaskStatus::Applied(mask)
-                }
-                None => {
-                    tracing::info!(server = %server, share = %share, "Share has NULL DACL — unrestricted");
-                    ShareMaskStatus::Unrestricted
-                }
-            };
-            (status, scan.unsupported_count)
-        }
-    }
+    // G1: the share-mask orchestration is shared with the GUI in
+    // `share_scanner::resolve_share_mask_status` so the two frontends can
+    // never diverge. This wrapper only adapts the CLI's `ResolvedIdentity`
+    // shape to the shared function's primitive inputs.
+    let identity = &resolved.resolution.identity;
+    share_scanner::resolve_share_mask_status(
+        path,
+        smb_server,
+        share_name,
+        &identity.sid.0,
+        &identity.sid_history,
+        &resolved.resolution.memberships,
+        local_group_sids,
+        access_context,
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -35,12 +35,9 @@ use adpa_core::{
 use chrono::Utc;
 use exporter::HtmlExporter;
 use fs_scanner::{read_fso, walk_tree, CancellationToken, WalkConfig};
-use permission_engine::{
-    build_token_sids_with_context, engine::DefaultPermissionEngine, NormalizedRights,
-};
+use permission_engine::{engine::DefaultPermissionEngine, NormalizedRights};
 use persistence::Database;
 use risk_engine::RuleRegistry;
-use share_scanner::{effective_share_mask, get_share_dacl};
 use tracing::{info, warn};
 use uuid::Uuid;
 use validation::{
@@ -2160,45 +2157,21 @@ fn resolve_share_status(
     local_group_sids: &[adpa_core::model::Sid],
     access_context: AccessContext,
 ) -> (adpa_core::model::ShareMaskStatus, usize) {
-    use adpa_core::model::ShareMaskStatus;
-    // Round-10 finding 1: server and share derivation come from
-    // `SmbAuditContext::resolve` — the same source the trustee overlay
-    // build and the CLI paths use. Mask computation and trustee
-    // overlay are guaranteed to agree.
-    let smb_ctx = match validation::path::SmbAuditContext::resolve(path, smb_server, share_name) {
-        Some(c) => c,
-        None => return (ShareMaskStatus::NotApplicable, 0),
-    };
-    let server = smb_ctx.server;
-    let share = smb_ctx.share;
-
-    // ignored (review follow-up finding 1).
-    // Token SIDs must cover share and NTFS evaluation consistently. The
-    // access context further ensures e.g. NETWORK (S-1-5-2) is in the SMB
-    // token, otherwise Deny-NETWORK share ACEs are ignored (follow-up
-    // review finding 1).
-    let user_sids = build_token_sids_with_context(
+    // G1: the share-mask orchestration is shared with the CLI in
+    // `share_scanner::resolve_share_mask_status` so the two frontends can
+    // never diverge (this function and the CLI's used to be edited in
+    // lockstep, e.g. the ADR 0056 sIDHistory change). This wrapper only
+    // adapts the GUI's `&Identity` + memberships to the shared primitives.
+    share_scanner::resolve_share_mask_status(
+        path,
+        smb_server,
+        share_name,
         &identity.sid.0,
         &identity.sid_history,
         memberships,
         local_group_sids,
         access_context,
-    );
-
-    match get_share_dacl(&server, &share) {
-        Ok(scan) => {
-            // NULL share DACL → dedicated status, no fabricated 0xFFFFFFFF mask.
-            let status = match effective_share_mask(&scan.dacl, &user_sids) {
-                Some(mask) => ShareMaskStatus::Applied(mask),
-                None => ShareMaskStatus::Unrestricted,
-            };
-            (status, scan.unsupported_count)
-        }
-        Err(e) => {
-            warn!(server, share, error = %e, "Failed to get share DACL");
-            (ShareMaskStatus::ReadFailed(e.to_string()), 0)
-        }
-    }
+    )
 }
 
 // validation::path::parse_unc_components.
