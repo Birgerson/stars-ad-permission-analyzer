@@ -69,6 +69,25 @@ review (`review.md`).
   purges (a doubled `# Safety` on `from_raw`, a mismatched doc above
   `null()`, stray empty `///` lines) were also repaired.
 
+- **Review small-sweep (findings R1, X1, E1, P1).** Low/nit cleanups from the
+  per-module review, none touching engine correctness:
+  - **R1** — `user-guide.md` listed `BroadGroupWriteRule` as *Medium*, but the
+    code (`rules.rs:315`), `audit-criteria.md`, and `technical-documentation.md`
+    all rate it **Critical**. Reconciled the guide to Critical so a reader can
+    no longer mis-rank a broad-group-write finding.
+  - **X1** — added the missing `SAFETY:` note on the `NetLocalGroupEnum` FFI
+    call in `ad_resolver/enumerate.rs` (the `NetUserEnum`/`NetGroupEnum` calls
+    already carried one), and removed duplicate comment fragments left beside
+    the two existing notes. Documentation-only; the calls were already sound.
+  - **E1** — `exporter`'s `escape_html` now also escapes `'` → `&#39;`, making
+    it unconditionally safe even if a single-quoted HTML attribute is ever
+    introduced (safe already today — all template attributes are
+    double-quoted). Added a regression test covering every escaped character.
+  - **P1** — removed the deprecated, superseded, zero-caller
+    `build_token_sids_with_local` (deprecated since `0.2.0-rc1` / ADR 0019;
+    replaced by `build_token_sids_with_context`) and its `#[allow(deprecated)]`
+    re-export from `permission_engine`.
+
 ---
 
 ## [1.7.7] — 2026-07-04

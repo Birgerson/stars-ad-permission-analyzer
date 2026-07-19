@@ -282,7 +282,7 @@ finding:
 - **WriteAccessRule** (High) — user has write rights.
 - **AdminRightsRule** (High) — user carries admin-relevant rights
   (TakeOwnership, WriteDAC).
-- **BroadGroupWriteRule** (Medium) — write rights via a wide group
+- **BroadGroupWriteRule** (Critical) — write rights via a wide group
   (`Everyone`, `Authenticated Users`).
 - **DirectUserAceRule** (Low) — direct ACE on the user (not via a
   group).
