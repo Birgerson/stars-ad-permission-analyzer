@@ -639,10 +639,15 @@ fn rights_badge(r: NormalizedRights) -> String {
 }
 
 fn escape_html(s: &str) -> String {
+    // The `'` → `&#39;` step is not strictly required today (every attribute
+    // in the templates is double-quoted, so an escaped `"` already prevents
+    // breakout), but escaping it makes the function unconditionally safe even
+    // if a single-quoted attribute is ever introduced (review finding E1).
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 #[cfg(test)]
@@ -653,6 +658,20 @@ mod tests {
         NormalizedPath, PermissionDiagnostic, PermissionPath, RiskFinding, RiskSeverity,
         ShareEvalStatus, Sid,
     };
+
+    #[test]
+    fn escape_html_neutralizes_all_dangerous_chars() {
+        assert_eq!(super::escape_html("&"), "&amp;");
+        assert_eq!(super::escape_html("<script>"), "&lt;script&gt;");
+        assert_eq!(super::escape_html("\""), "&quot;");
+        // Review finding E1: the single quote must be escaped too, so the
+        // escaper stays safe even for a single-quoted HTML attribute.
+        assert_eq!(super::escape_html("'"), "&#39;");
+        assert_eq!(
+            super::escape_html("<img src=x onerror='alert(1)'>"),
+            "&lt;img src=x onerror=&#39;alert(1)&#39;&gt;"
+        );
+    }
 
     fn finding(rule_id: &str, sev: RiskSeverity, incomplete: bool) -> RiskFinding {
         RiskFinding {

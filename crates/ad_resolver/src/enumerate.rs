@@ -118,8 +118,6 @@ fn list_users(server: Option<&str>, domain: &str) -> Result<Vec<IdentitySnapshot
         let mut entries_read: u32 = 0;
         let mut total_entries: u32 = 0;
 
-        // null-terminated UTF-16 sequence. NetApiBuffer<USER_INFO_10> owns
-        // the allocated buffer after this call.
         // SAFETY: server_ptr is either null or points to a valid null-
         // terminated UTF-16 sequence. NetApiBuffer<USER_INFO_10> owns the
         // allocated buffer after this call.
@@ -194,9 +192,9 @@ fn list_global_groups(
         let mut entries_read: u32 = 0;
         let mut total_entries: u32 = 0;
 
-        // NetApiBuffer<GROUP_INFO_1> owns the allocated buffer.
-        // SAFETY: as above. resume_handle is updated in-place by NetAPI.
-        // NetApiBuffer<GROUP_INFO_1> owns the allocated buffer.
+        // SAFETY: server_ptr is either null or a valid null-terminated
+        // UTF-16 string. NetApiBuffer<GROUP_INFO_1> owns the allocated
+        // buffer after this call; resume_handle is updated in-place by NetApi.
         let status = unsafe {
             NetGroupEnum(
                 server_ptr,
@@ -258,6 +256,9 @@ fn list_local_groups(server: Option<&str>) -> Result<Vec<IdentitySnapshot>, Core
         let mut entries_read: u32 = 0;
         let mut total_entries: u32 = 0;
 
+        // SAFETY: server_ptr is either null or a valid null-terminated
+        // UTF-16 string. NetApiBuffer<LOCALGROUP_INFO_1> owns the allocated
+        // buffer after this call; resume_handle is updated in-place by NetApi.
         let status = unsafe {
             NetLocalGroupEnum(
                 server_ptr,

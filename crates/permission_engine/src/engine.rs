@@ -295,35 +295,6 @@ pub fn build_token_sids(user_sid: &str, memberships: &[GroupMembership]) -> Hash
     build_token_sids_with_context(user_sid, &[], memberships, &[], AccessContext::Unspecified)
 }
 
-/// Like [`build_token_sids`], plus additional SIDs of local groups on the target
-/// server (e.g. `BUILTIN\Administrators`) in which the user is a member.
-///
-/// **Deprecated:** implicitly uses `AccessContext::Unspecified` and therefore
-/// adds no context-specific well-knowns — for SMB paths e.g. `NETWORK` is
-/// missing from the token, making share ACEs targeting `NETWORK` invisible
-/// (see ADR 0019). Use `build_token_sids_with_context` with an explicit
-/// `AccessContext::for_path(path)` instead.
-#[deprecated(
-    since = "0.2.0-rc1",
-    note = "Use build_token_sids_with_context with an explicit AccessContext \
-            (e.g. AccessContext::for_path(path)) — see ADR 0019. \
-            build_token_sids_with_local implicitly uses Unspecified and \
-            misses NETWORK / INTERACTIVE / LOCAL in the token."
-)]
-pub fn build_token_sids_with_local(
-    user_sid: &str,
-    memberships: &[GroupMembership],
-    local_group_sids: &[Sid],
-) -> HashSet<String> {
-    build_token_sids_with_context(
-        user_sid,
-        &[],
-        memberships,
-        local_group_sids,
-        AccessContext::Unspecified,
-    )
-}
-
 /// Full token construction: own SID, the user's historical SIDs
 /// (`sIDHistory` — Windows includes them in the logon token
 /// unconditionally within the account's forest, ADR 0056), AD groups,
