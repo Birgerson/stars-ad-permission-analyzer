@@ -93,6 +93,18 @@ const MEMBERSHIP_ATTRS: &[&str] = &[
     "sIDHistory",
 ];
 
+/// Attributes read from `trustedDomain` objects for the read-only trust
+/// inventory (L4). All are ordinary directory attributes — reading them
+/// changes nothing.
+const TRUST_ATTRS: &[&str] = &[
+    "trustPartner",
+    "flatName",
+    "trustDirection",
+    "trustAttributes",
+    "trustType",
+    "securityIdentifier",
+];
+
 /// Raw LDAP entry after a search.
 #[derive(Debug)]
 pub struct RawEntry {
@@ -261,6 +273,27 @@ pub async fn search_by_dn(
         .map_err(|e| CoreError::LdapQuery(format!("DN search result error: {e}")))?;
 
     Ok(rs.into_iter().next().map(RawEntry::from_search_entry))
+}
+
+/// Reads the domain's `trustedDomain` objects for the read-only trust
+/// inventory (L4). Trust objects live under `CN=System,<domain DN>`, so a
+/// subtree search from the domain-root `base_dn` finds them. Returns the raw
+/// entries for the caller to parse. Read-only: Stars never writes a trust.
+pub async fn search_domain_trusts(
+    ldap: &mut Ldap,
+    base_dn: &str,
+) -> Result<Vec<RawEntry>, CoreError> {
+    let filter = "(objectClass=trustedDomain)";
+    debug!("LDAP search for domain trusts: base={base_dn}");
+
+    let (rs, _res) = ldap
+        .search(base_dn, Scope::Subtree, filter, TRUST_ATTRS)
+        .await
+        .map_err(|e| CoreError::LdapQuery(format!("trust search failed: {e}")))?
+        .success()
+        .map_err(|e| CoreError::LdapQuery(format!("trust search result error: {e}")))?;
+
+    Ok(rs.into_iter().map(RawEntry::from_search_entry).collect())
 }
 
 /// Searches for group members by sAMAccountName. Returns only the first hit —

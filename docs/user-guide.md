@@ -789,6 +789,38 @@ rather than returning an empty list. A nested **privileged** group member
 is flagged, and `--output` writes `.json` or `.csv`. This lists **direct**
 members; recursive nesting is planned.
 
+### List the domain's trusts (read-only)
+
+*Which forests/domains does this domain trust, and how are those trusts
+configured?* Some trust settings decide at **runtime** whether a cross-forest
+or migrated (`sIDHistory`) SID actually grants access — so a Stars finding
+that relies on such a SID can read *higher* than the real result. The
+`trusts` command surfaces that configuration:
+
+```powershell
+adpa trusts `
+    --server "dc01.corp.local" --base-dn "DC=corp,DC=local" `
+    --bind-dn "CN=stars-svc,CN=Users,DC=corp,DC=local" --ldap-timeout 30
+```
+
+Each trust is listed with its **direction** (inbound / outbound /
+bidirectional) and decoded **`trustAttributes`**. Two are called out
+explicitly because they can make a finding *over*-report:
+
+- **SID filtering / quarantine** — historical and foreign SIDs presented
+  across the trust are dropped at runtime.
+- **Selective Authentication** — trust principals need an explicit "allowed
+  to authenticate" right on the target, so a DACL grant alone does not imply
+  access.
+
+**`trusts` requires `--server`** (it reads the `trustedDomain` objects over
+LDAP), and `--base-dn` should be the **domain root** (e.g.
+`DC=corp,DC=local`), where those objects live. This is **read-only**: Stars
+never changes a trust, and it deliberately does *not* model the runtime filter
+effect (that would need a synthetic logon). It gives you the facts to apply
+the cross-forest caveat yourself — see
+[known-limitations.md](known-limitations.md) **L4**.
+
 ### More options
 
 `adpa --help` lists everything.

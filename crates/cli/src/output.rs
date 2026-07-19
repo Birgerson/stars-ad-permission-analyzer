@@ -4,9 +4,9 @@
 //! Formatted console output for the analyze command.
 
 use adpa_core::model::{
-    privileged_group_role, AceKind, EffectivePermission, FileSystemObject, GroupMembersReport,
-    GroupMembership, IdentityKind, MembershipReport, PermissionDiagnostic, RiskFinding,
-    RiskSeverity,
+    privileged_group_role, AceKind, DomainTrust, EffectivePermission, FileSystemObject,
+    GroupMembersReport, GroupMembership, IdentityKind, MembershipReport, PermissionDiagnostic,
+    RiskFinding, RiskSeverity,
 };
 use permission_engine::NormalizedRights;
 
@@ -552,6 +552,59 @@ pub fn print_risk_findings(findings: &[RiskFinding]) {
         );
         println!("              {path}");
     }
+}
+
+/// Prints the read-only domain trust inventory (L4). One block per trust with
+/// its direction and decoded `trustAttributes`; SID filtering and Selective
+/// Authentication get an explicit callout because those are the settings that
+/// can make a Stars finding *over*-report (the DACL grants, the runtime
+/// filters).
+pub fn print_trusts(trusts: &[DomainTrust]) {
+    header("Active Directory Trusts (read-only)");
+    if trusts.is_empty() {
+        println!();
+        println!("  No trustedDomain objects found under the configured base DN.");
+        println!("  (Ensure --base-dn is the domain root, e.g. DC=corp,DC=local.)");
+        println!();
+        println!("{}", heavy_line());
+        return;
+    }
+    for t in trusts {
+        section(&t.partner);
+        if let Some(flat) = &t.flat_name {
+            println!("    NetBIOS name : {flat}");
+        }
+        println!("    Direction    : {}", t.direction.label());
+        let labels = t.attributes.labels();
+        let attrs = if labels.is_empty() {
+            "(none)".to_string()
+        } else {
+            labels.join(", ")
+        };
+        println!(
+            "    Attributes   : {attrs}  [raw 0x{:08X}]",
+            t.attributes.raw
+        );
+        if let Some(sid) = &t.sid {
+            println!("    Domain SID   : {}", sid.0);
+        }
+        if t.attributes.sid_filtering_enabled() {
+            println!("    ! SID filtering (quarantine) is ON — historical / foreign SIDs across");
+            println!("      this trust are dropped at runtime, so a finding that relies on such a");
+            println!("      SID may over-report. Stars shows the DACL view, not the filtered one.");
+        }
+        if t.attributes.selective_authentication() {
+            println!("    ! Selective Authentication is ON — trust principals need an explicit");
+            println!("      'allowed to authenticate' right on the target, so a DACL grant alone");
+            println!("      does not imply real access.");
+        }
+    }
+    println!();
+    println!("  Note: Stars reads these attributes read-only and does not model the runtime");
+    println!("  filter effect (that would need a synthetic logon — out of scope). See the L4");
+    println!("  section of known-limitations.md.");
+    println!();
+    println!("{}", heavy_line());
 }
 
 #[cfg(test)]

@@ -30,6 +30,22 @@ review (`review.md`).
   design (see the technical documentation). The three dead-code allows are
   removed; the mapping from a search hit to a picker row is unit-tested.
 
+- **Read-only Active Directory trust inventory — the `adpa trusts` command
+  (known-limitations L4, ADR 0060).** Stars now reads the domain's
+  `trustedDomain` objects and displays each trust's `trustDirection` and
+  decoded `trustAttributes`, explicitly calling out **SID filtering /
+  quarantine** and **Selective Authentication** — the two settings that can
+  make a finding *over*-report (the DACL grants, the runtime filters). New
+  `core` model (`DomainTrust`, `TrustDirection`, `TrustAttributes` with named
+  accessors and full bitmask preservation), an `ad_resolver` LDAP reader +
+  pure `parse_trust` (unit-tested), and the `adpa trusts` CLI command
+  (requires `--server`; `--base-dn` = domain root). Strictly read-only: Stars
+  never modifies a trust, and it deliberately does **not** model the runtime
+  filter effect (that would need a synthetic logon — out of scope). This moves
+  L4 from "documented only" to "trust configuration is readable and
+  displayed"; the per-finding M.5 cross-reference remains a documented
+  follow-up.
+
 ### Changed
 
 - **`PermissionEvaluationInput`'s resolution flags are grouped into one

@@ -1390,9 +1390,207 @@ pub enum RiskSeverity {
     Critical,
 }
 
+/// Direction of an Active Directory domain/forest trust (`trustDirection`,
+/// MS-ADTS 6.1.6.7.12). Read-only inventory data (L4); Stars never changes a
+/// trust.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustDirection {
+    /// The trust object exists but is disabled (0).
+    Disabled,
+    /// Inbound only (1): the *other* domain trusts this one.
+    Inbound,
+    /// Outbound only (2): this domain trusts the other.
+    Outbound,
+    /// Two-way (3).
+    Bidirectional,
+    /// A value outside the documented 0–3 range; the raw code is preserved.
+    Unknown(u32),
+}
+
+impl TrustDirection {
+    /// Maps the raw `trustDirection` code to the enum.
+    pub fn from_code(code: u32) -> Self {
+        match code {
+            0 => Self::Disabled,
+            1 => Self::Inbound,
+            2 => Self::Outbound,
+            3 => Self::Bidirectional,
+            other => Self::Unknown(other),
+        }
+    }
+
+    /// Short human-readable label for the read-only report.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Disabled => "disabled".to_string(),
+            Self::Inbound => "inbound".to_string(),
+            Self::Outbound => "outbound".to_string(),
+            Self::Bidirectional => "bidirectional".to_string(),
+            Self::Unknown(c) => format!("unknown ({c})"),
+        }
+    }
+}
+
+/// Parsed `trustAttributes` bitmask (MS-ADTS 6.1.6.7.9). Read-only inventory
+/// data (L4): Stars surfaces these so an auditor can see whether a trust is
+/// configured to filter SIDs or gate authentication, but it deliberately does
+/// **not** model the runtime effect — that would require a synthetic logon,
+/// which violates the read-only principle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TrustAttributes {
+    /// The raw bitmask, preserved so nothing is lost.
+    pub raw: u32,
+}
+
+impl TrustAttributes {
+    // MS-ADTS trustAttributes flag values.
+    pub const NON_TRANSITIVE: u32 = 0x0000_0001;
+    pub const UPLEVEL_ONLY: u32 = 0x0000_0002;
+    /// SID filtering / quarantine enabled.
+    pub const QUARANTINED_DOMAIN: u32 = 0x0000_0004;
+    pub const FOREST_TRANSITIVE: u32 = 0x0000_0008;
+    /// Selective Authentication enabled.
+    pub const CROSS_ORGANIZATION: u32 = 0x0000_0010;
+    pub const WITHIN_FOREST: u32 = 0x0000_0020;
+    pub const TREAT_AS_EXTERNAL: u32 = 0x0000_0040;
+    pub const USES_RC4_ENCRYPTION: u32 = 0x0000_0080;
+    pub const CROSS_ORGANIZATION_NO_TGT_DELEGATION: u32 = 0x0000_0200;
+    pub const PIM_TRUST: u32 = 0x0000_0400;
+
+    /// Wraps a raw `trustAttributes` value.
+    pub fn from_bits(raw: u32) -> Self {
+        Self { raw }
+    }
+
+    fn has(&self, flag: u32) -> bool {
+        self.raw & flag != 0
+    }
+
+    /// `true` when SID filtering / quarantine is enabled — historical and
+    /// foreign SIDs presented across this trust are dropped at runtime. This
+    /// is the attribute most likely to make a Stars finding *over*-report
+    /// (see known-limitations L4 / verification.md M.5).
+    pub fn sid_filtering_enabled(&self) -> bool {
+        self.has(Self::QUARANTINED_DOMAIN)
+    }
+
+    /// `true` when Selective Authentication is enabled — trust principals must
+    /// be explicitly allowed to authenticate on a target, so a DACL grant
+    /// alone does not imply real access.
+    pub fn selective_authentication(&self) -> bool {
+        self.has(Self::CROSS_ORGANIZATION)
+    }
+
+    /// `true` for a forest trust (transitive across the whole forest).
+    pub fn forest_transitive(&self) -> bool {
+        self.has(Self::FOREST_TRANSITIVE)
+    }
+
+    /// `true` for an intra-forest trust (between domains of the same forest).
+    pub fn within_forest(&self) -> bool {
+        self.has(Self::WITHIN_FOREST)
+    }
+
+    /// Human-readable names of the set flags, for the read-only report.
+    pub fn labels(&self) -> Vec<&'static str> {
+        let mut v = Vec::new();
+        if self.has(Self::NON_TRANSITIVE) {
+            v.push("non-transitive");
+        }
+        if self.has(Self::UPLEVEL_ONLY) {
+            v.push("uplevel-only");
+        }
+        if self.has(Self::QUARANTINED_DOMAIN) {
+            v.push("SID-filtering (quarantined)");
+        }
+        if self.has(Self::FOREST_TRANSITIVE) {
+            v.push("forest-transitive");
+        }
+        if self.has(Self::CROSS_ORGANIZATION) {
+            v.push("selective-authentication");
+        }
+        if self.has(Self::WITHIN_FOREST) {
+            v.push("within-forest");
+        }
+        if self.has(Self::TREAT_AS_EXTERNAL) {
+            v.push("treat-as-external");
+        }
+        if self.has(Self::USES_RC4_ENCRYPTION) {
+            v.push("uses-RC4");
+        }
+        if self.has(Self::CROSS_ORGANIZATION_NO_TGT_DELEGATION) {
+            v.push("no-TGT-delegation");
+        }
+        if self.has(Self::PIM_TRUST) {
+            v.push("PIM-trust");
+        }
+        v
+    }
+}
+
+/// One Active Directory trust relationship, read from a `trustedDomain`
+/// object (read-only inventory, L4). Stars never modifies trusts — this type
+/// exists so an auditor can see the trust topology that governs whether
+/// cross-forest / historical SIDs are honored at runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DomainTrust {
+    /// DNS name of the trusted domain/forest (`trustPartner`).
+    pub partner: String,
+    /// NetBIOS / flat name (`flatName`), when present.
+    pub flat_name: Option<String>,
+    /// Trust direction (`trustDirection`).
+    pub direction: TrustDirection,
+    /// Parsed `trustAttributes`.
+    pub attributes: TrustAttributes,
+    /// Domain SID of the trusted domain (`securityIdentifier`), when present.
+    pub sid: Option<Sid>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trust_direction_from_code_maps_known_and_preserves_unknown() {
+        assert_eq!(TrustDirection::from_code(0), TrustDirection::Disabled);
+        assert_eq!(TrustDirection::from_code(1), TrustDirection::Inbound);
+        assert_eq!(TrustDirection::from_code(2), TrustDirection::Outbound);
+        assert_eq!(TrustDirection::from_code(3), TrustDirection::Bidirectional);
+        assert_eq!(TrustDirection::from_code(9), TrustDirection::Unknown(9));
+        assert_eq!(TrustDirection::from_code(9).label(), "unknown (9)");
+    }
+
+    #[test]
+    fn trust_attributes_decode_named_flags() {
+        // A forest trust with SID filtering AND selective authentication.
+        let a = TrustAttributes::from_bits(
+            TrustAttributes::FOREST_TRANSITIVE
+                | TrustAttributes::QUARANTINED_DOMAIN
+                | TrustAttributes::CROSS_ORGANIZATION,
+        );
+        assert!(a.forest_transitive());
+        assert!(a.sid_filtering_enabled());
+        assert!(a.selective_authentication());
+        assert!(!a.within_forest());
+        let labels = a.labels();
+        assert!(labels.contains(&"forest-transitive"));
+        assert!(labels.contains(&"SID-filtering (quarantined)"));
+        assert!(labels.contains(&"selective-authentication"));
+
+        // The raw value is preserved even with unknown high bits set.
+        let raw = 0x8000_0004;
+        let b = TrustAttributes::from_bits(raw);
+        assert_eq!(b.raw, raw);
+        assert!(b.sid_filtering_enabled());
+    }
+
+    #[test]
+    fn trust_attributes_empty_has_no_flags() {
+        let a = TrustAttributes::default();
+        assert!(!a.sid_filtering_enabled());
+        assert!(!a.selective_authentication());
+        assert!(a.labels().is_empty());
+    }
 
     // --- Diagnostic summaries (engine review 2026-06-13 finding 2) ---
     //

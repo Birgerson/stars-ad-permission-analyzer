@@ -14,6 +14,7 @@ pub mod resolver;
 #[cfg(windows)]
 pub mod sam;
 pub mod sid_util;
+pub mod trusts;
 
 pub use config::{LdapConfig, TlsMode};
 #[cfg(windows)]
@@ -40,3 +41,4 @@ pub use sam::{
     build_sid_name_map, lookup_account_for_sid, lookup_sid_for_account, resolve_identity_via_sam,
     user_account_disabled, user_global_group_names, AccountInfo, SamResolution, SidNameResolver,
 };
+pub use trusts::{parse_trust, resolve_domain_trusts};
