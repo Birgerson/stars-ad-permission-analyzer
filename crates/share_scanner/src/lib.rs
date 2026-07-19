@@ -6,6 +6,7 @@
 pub mod scanner;
 
 pub use scanner::{
-    effective_share_mask, enumerate_shares, get_share_dacl, get_share_permissions, scan_shares,
-    ShareDacl, ShareDaclScan, ShareScanError, ShareScanResult,
+    effective_share_mask, enumerate_shares, get_share_dacl, get_share_permissions,
+    resolve_share_mask_status, scan_shares, ShareDacl, ShareDaclScan, ShareScanError,
+    ShareScanResult,
 };
