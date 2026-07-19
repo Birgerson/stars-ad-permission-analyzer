@@ -257,8 +257,8 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      flagged 'incomplete' for this path.");
             }
             PermissionDiagnostic::UnsupportedNtfsAces { count } => {
-                println!("  [!] {count} NTFS ACE(s) could not be evaluated (object / callback /");
-                println!("      conditional / vendor-specific). The displayed effective");
+                println!("  [!] {count} NTFS ACE(s) could not be evaluated (unsupported type,");
+                println!("      or a trustee SID that could not be read). The displayed effective");
                 println!("      permission is a LOWER-CONFIDENCE APPROXIMATION — a hidden Deny");
                 println!("      among them could change the result. Risk findings are flagged");
                 println!("      'incomplete' for this path.");

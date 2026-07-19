@@ -10,7 +10,23 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-(No unreleased changes — see 1.7.7 below for the latest release.)
+Post-v1.7.7 hardening pass — the findings from the full per-module code
+review (`review.md`).
+
+### Fixed
+
+- **No NTFS ACE is dropped silently anymore (review finding F1).** A
+  supported Allow/Deny ACE whose trustee SID could not be read was
+  previously discarded with no counter and no diagnostic — a dropped
+  **Deny** could make the engine **over-report** access (show more than
+  Windows grants). Such an ACE is now recorded (a new
+  `ParseAceOutcome::SidUnreadable` carrying the ACE header) and counted
+  into `unsupported_ace_count`, so the result is flagged
+  `incomplete = true` and the `UnsupportedNtfsAces` diagnostic fires,
+  exactly like an unsupported ACE type. The `Skip` variant is removed, so
+  "no silent skips" is now structural. Logged distinctly from an
+  unsupported *type*; CLI/HTML wording broadened; unit-tested with a
+  malformed-SID ACE.
 
 ---
 
