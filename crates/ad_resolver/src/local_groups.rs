@@ -262,7 +262,6 @@ pub fn resolve_local_groups(
     let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let account_w = to_wide_null(account);
 
-    // RAII-Guard analog zu resolve_local_group_sids.
     // RAII guard analogous to resolve_local_group_sids.
     let mut buf: NetApiBuffer<LOCALGROUP_USERS_INFO_0> = NetApiBuffer::null();
     let mut entries_read: u32 = 0;

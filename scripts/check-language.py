@@ -188,6 +188,16 @@ DE_WORDS = [
     "denen", "Einzelrechte",
     "Mitgliedschaft", "Mitgliedschaften",
     "Lese", "lesen", "liest",
+    # Post-v1.7.7 review finding X2: more umlaut-free German the gate still
+    # leaked (orphaned RAII-guard/SAFETY half-lines, comment fragments).
+    "Kante", "Kanten", "Beziehung", "Beziehungen",
+    "zusaetzlich", "freizugeben", "leakte", "entfaellt",
+    "existierende", "existierenden", "Aufrufstellen", "Aufrufstelle",
+    "weiterlaufen", "zeige",
+    # NOTE: "neuer"/"neue" are deliberately NOT listed — they collide with
+    # the surname "Neuer" used in AD test fixtures (Markus Neuer). The
+    # denylist must never flag legitimate proper names.
+    "Verzeichnis", "Verzeichnisse", "Sequenz",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -215,6 +225,13 @@ DE_SUBSTRINGS = [
     "berechtigung",  # Berechtigungspfad and other compounds
     "risiko",        # Risiko, Risikobefund
     "mitglied",      # Mitglied(schaften), Gruppenmitglied — no EN collision
+    # Post-v1.7.7 review finding X2 (compound stems):
+    "terminiert",    # null-terminierte (EN "terminated" is "terminat", no ie)
+    "dateiattribut", # Dateiattribute (EN: "file attributes")
+    "verschachtel",  # verschachtelte (EN: "nested")
+    "aufrufstell",   # Aufrufstelle(n) (EN: "call site")
+    "dereferenzier", # dereferenzieren (EN "dereference" ends "enc", not "enzier")
+    "topologie",     # Topologie (EN "topology" has no "ie")
 ]
 
 DE_SUBSTR_RE = re.compile(
@@ -319,6 +336,20 @@ def selftest() -> int:
         "in denen `NullDacl` vs. `Acl(vec![])` unterscheidbar bleiben",
         "AdminRightsRule: destruktive/administrative Einzelrechte",
         'ui.set_a_status("Lese DACL...".into());',
+        # Post-v1.7.7 review finding X2: the exact umlaut-free lines the
+        # gate still leaked (orphaned RAII-guard/SAFETY half-lines and
+        # comment fragments across win_safe/ad_resolver/fs_scanner).
+        "// null-terminierte UTF-16-Sequenz",
+        "// direkte Kante; verschachtelte Beziehungen zwischen Gruppen.",
+        "// --- Dateiattribute (is_directory, is_reparse_point) ---",
+        "//! freizugeben.",
+        "//! leakte.",
+        "//! entfaellt.",
+        "/// dereferenzieren.",
+        "// Topologie ab.",
+        "// existierende Aufrufstellen weiterlaufen.",
+        "// 1 Root + 12 verschachtelte Verzeichnisse = 13 Objekte.",
+        "// Code Review Finding 3: zeige zusaetzlich",
     ]
     must_pass = [
         "Risk Findings",
@@ -332,6 +363,16 @@ def selftest() -> int:
         "restart the scan and compare results",
         "group membership path reconstruction",
         "actions remain enabled while scanning",
+        # Guards against false positives from the X2 stem additions.
+        "// RAII guard per iteration — new variable, new lifetime.",
+        'Display = "Markus Neuer"',  # surname must not be flagged as German
+        "// null-terminated UTF-16 sequence",
+        "// direct edge; nested relationships between groups.",
+        "// --- file attributes (is_directory, is_reparse_point) ---",
+        "// existing call sites keep working unchanged.",
+        "// 1 root + 12 nested directories = 13 objects.",
+        "dereference the pointer after the guard is dropped",
+        "reconstruct the group topology on every run",
     ]
     failures = []
     failures += [f"MISS (should flag): {s!r}" for s in must_flag if not line_has_german(s)]

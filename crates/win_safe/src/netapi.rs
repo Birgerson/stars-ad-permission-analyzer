@@ -2,13 +2,6 @@
 // Copyright (c) 2026 Birger Labinsch
 
 //!
-//! [`NetShareEnum`], [`NetShareGetInfo`], [`NetUserEnum`],
-//! freizugeben.
-//!
-//! leakte.
-//!
-//! entfaellt.
-//!
 //! RAII guard for buffers allocated by `NetApi*` functions.
 //!
 //! Background: many `NetApi*` functions (for example [`NetShareEnum`],
@@ -36,8 +29,6 @@ use std::marker::PhantomData;
 use std::ptr;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetApiBufferFree;
 
-///
-///
 /// RAII guard for a buffer allocated by a `NetApi*` function. The
 /// type parameter `T` is the concrete struct type that the
 /// out-pointer addresses (for example `SHARE_INFO_502`).
@@ -52,13 +43,6 @@ pub struct NetApiBuffer<T> {
 }
 
 impl<T> NetApiBuffer<T> {
-    /// Wraps a buffer pointer returned by a `NetApi*` function.
-    ///
-    /// # Safety
-    ///
-    ///
-    ///   (a double free would be UB).
-    ///
     /// Takes ownership of a buffer pointer returned by a `NetApi*`
     /// function.
     ///
@@ -67,9 +51,9 @@ impl<T> NetApiBuffer<T> {
     /// `ptr` must be either
     ///
     /// * `null`, or
-    /// * a pointer that a `NetApi*` function successfully allocated
-    ///   and whose free responsibility is transferred to
-    ///   be freed elsewhere (a "double free" would be UB).
+    /// * a pointer that a `NetApi*` function successfully allocated,
+    ///   whose free responsibility is transferred to this guard and
+    ///   that is not also freed elsewhere (a double free would be UB).
     pub unsafe fn from_raw(ptr: *mut T) -> Self {
         Self {
             ptr,
@@ -77,11 +61,10 @@ impl<T> NetApiBuffer<T> {
         }
     }
 
-    ///
-    /// Convenience constructor via out-pointer slot: returns a
-    /// `*mut *mut T` that a `NetApi*` function can write its buffer
-    /// into. Once the function returns, the stored pointer is treated
-    /// as owned.
+    /// Creates an empty guard that owns no buffer. Use together with
+    /// [`out_ptr`](Self::out_ptr) to obtain a writable slot that a
+    /// `NetApi*` function can fill; the stored pointer is then treated
+    /// as owned and freed on drop.
     pub fn null() -> Self {
         Self {
             ptr: ptr::null_mut(),
@@ -89,8 +72,6 @@ impl<T> NetApiBuffer<T> {
         }
     }
 
-    /// dereferenzieren.
-    ///
     /// Returns the raw pointer. Valid only as long as the guard
     /// lives. When the guard is dropped the buffer is freed and the
     /// caller must not dereference the pointer afterwards.
@@ -98,7 +79,6 @@ impl<T> NetApiBuffer<T> {
         self.ptr
     }
 
-    ///
     /// Returns an out-pointer slot for direct use in a `NetApi*`
     /// signature: `&mut buf.out_ptr()`. The pointer in the slot is
     /// freed when the guard is dropped.
@@ -136,7 +116,6 @@ impl<T> Drop for NetApiBuffer<T> {
 mod tests {
     use super::*;
 
-    /// `ptr != null`.
     /// Sanity test: a null pointer leads to no Free call (Drop is a
     /// no-op). Verifies the NetApiBufferFree precondition `ptr != null`.
     #[test]

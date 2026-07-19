@@ -1826,9 +1826,6 @@ fn analyze_trustees(
     ))
 }
 
-// build_path_trustees, build_path_trustees_with_share) liegt seit
-// Review round 9 finding 1 in `crates/exporter/src/trustees.rs` —
-// existierende Aufrufstellen ohne Anpassung weiterlaufen.
 // The raw trustee-build logic (read_share_overlay, build_path_trustees,
 // build_path_trustees_with_share) was moved to
 // `crates/exporter/src/trustees.rs` in round-9 finding 1 so CLI and
@@ -1959,7 +1956,6 @@ fn compute_delta(
                     new_mask,
                     reasons,
                 } => {
-                    // Code Review 2026-06-07 Finding 3: zeige zusaetzlich
                     // Code review 2026-06-07 finding 3: in addition to the
                     // effective mask, show the concrete change reasons
                     // ("NTFS mask + share status") so audit-relevant

@@ -50,6 +50,25 @@ review (`review.md`).
   unsupported *type*; CLI/HTML wording broadened; unit-tested with a
   malformed-SID ACE.
 
+- **Remaining umlaut-free German comment fragments purged and the language
+  gate hardened (review finding X2).** The DE→EN migration's blind spot —
+  German that carries no umlaut slips past the CI language gate — had left
+  orphaned half-lines behind several English translations (RAII-guard/SAFETY
+  fragments in `win_safe`/`ad_resolver`, comment remnants in
+  `fs_scanner`/`persistence`/`gui`) plus one bilingual error string in
+  `sid_util`. All are now English-only. `scripts/check-language.py` gained
+  the leaked stems (`terminiert`, `dateiattribut`, `verschachtel`, `Kante`,
+  `Beziehung`, `Aufrufstelle`, `dereferenzier`, `topologie`, `freizugeben`,
+  `zusaetzlich`, `Verzeichnis`, `Sequenz`, …) to its denylist and the exact
+  previously-missed lines to its `--selftest` regression set, so these
+  specific leaks can never recur. Stems that would collide with legitimate
+  content (e.g. `neuer` vs. the test-fixture surname *Neuer*) are
+  deliberately excluded and guarded by a `must_pass` case. Documentation-only
+  and gate-only change — no runtime behaviour is affected. While in
+  `win_safe/netapi.rs`, three scrambled English doc blocks left by earlier
+  purges (a doubled `# Safety` on `from_raw`, a mismatched doc above
+  `null()`, stray empty `///` lines) were also repaired.
+
 ---
 
 ## [1.7.7] — 2026-07-04

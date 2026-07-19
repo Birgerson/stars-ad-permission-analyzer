@@ -76,7 +76,7 @@ pub fn sid_str_to_bytes(sid: &str) -> Result<Vec<u8>, CoreError> {
 pub fn bytes_to_sid_str(bytes: &[u8]) -> Result<String, CoreError> {
     if bytes.len() < 8 {
         return Err(CoreError::SidResolution(
-            "SID-Byte-Sequenz zu kurz / SID byte sequence too short".into(),
+            "SID byte sequence too short".into(),
         ));
     }
 

@@ -640,7 +640,7 @@ mod tests {
                 .map(|e| format!("{}: {}", e.path, e.error))
                 .collect::<Vec<_>>()
         );
-        // 1 Root + 12 verschachtelte Verzeichnisse = 13 Objekte.
+        // 1 root + 12 nested directories = 13 objects.
         assert_eq!(
             result.objects.len(),
             13,

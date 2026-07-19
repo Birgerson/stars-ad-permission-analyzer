@@ -88,7 +88,6 @@ impl<'a> IdentityCache<'a> {
                     member_sid: Sid(row.get(0)?),
                     group_sid: Sid(row.get(1)?),
                     direct: row.get::<_, i32>(2)? != 0,
-                    // Topologie ab.
                     // The cache deliberately does not store names — they
                     // come from the live resolver (LDAP/SAM) at the next
                     // evaluation; the cache only carries the membership
