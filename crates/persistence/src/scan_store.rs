@@ -1101,7 +1101,6 @@ mod tests {
         let run = make_run("target");
         store.insert_scan_run(&run).unwrap();
 
-        // Drei Varianten: NotQueried (Default), Applied, NotAvailable(msg).
         // Three variants: NotQueried (default), Applied, NotAvailable(msg).
         let mut p1 = make_perm("S-1-5-21-9-9-9-1", "C:\\A", 0x1, None, 0x1);
         p1.local_group_status = LocalGroupEvalStatus::NotQueried;

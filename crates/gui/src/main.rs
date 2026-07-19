@@ -23,11 +23,10 @@ use fs_scanner::CancellationToken;
 use permission_engine::NormalizedRights;
 
 use crate::worker::{
-    spawn_worker, DeltaRow, GroupsViewData, IdentitySuggestion, LdapParams, NotifyFn, ScanRow,
-    ScanRunSummary, TrusteeRow, WorkerEvent, WorkerRequest,
+    spawn_worker, DeltaRow, GroupsViewData, IdentitySearchResult, IdentitySuggestion, LdapParams,
+    NotifyFn, ScanRow, ScanRunSummary, TrusteeRow, WorkerEvent, WorkerRequest,
 };
 
-// drei voll funktionalen Tabs (Analyze, Scan Tree, Delta).
 // Slint UI inline. Defines view models for scan rows, scan errors, risk
 // findings, scan runs and delta rows, plus the MainWindow with three
 // fully functional tabs (Analyze, Scan Tree, Delta).
@@ -448,6 +447,9 @@ slint::slint! {
         qualified: string,
         kind_icon: string,
         description: string,
+        // Resolved SID for a live directory hit (empty for a local
+        // autocomplete entry, which is resolved on pick via LSA instead).
+        sid: string,
     }
 
     export component MainWindow inherits Window {
@@ -492,6 +494,10 @@ slint::slint! {
         in-out property <string> a-name;
         in property <string> a-name-error;
         in property <[IdentitySuggestionVm]> a-suggestions;
+        // Feedback line for the "Search AD" directory picker (match count,
+        // "searching…", or an error). Separate from a-status so a directory
+        // search never overwrites the analysis status.
+        in property <string> a-search-status;
         in-out property <string> a-sid;
 
         // LDAP mode: 0 = off (SAM/LSA, recommended on DC),
@@ -525,7 +531,12 @@ slint::slint! {
         callback analyze-trustees-clicked();
         callback resolve-name-clicked();
         callback analyze-name-edited(string);
-        callback pick-analyze-suggestion(string);
+        // (name, sid) — sid is non-empty only for a live directory hit, which
+        // is filled directly; a local entry (empty sid) is resolved via LSA.
+        callback pick-analyze-suggestion(string, string);
+        // Runs a live LDAP directory search using the current identity text
+        // and the Analyze tab's LDAP settings.
+        callback search-directory-clicked();
 
         // ============================================================
         // Scan-Tab Properties / Scan tab properties
@@ -727,6 +738,17 @@ slint::slint! {
                                                     text: "🔍 Resolve SID";
                                                     clicked => { root.resolve-name-clicked(); }
                                                 }
+                                                Button {
+                                                    text: "🌐 Search AD";
+                                                    enabled: root.a-ldap-mode > 0;
+                                                    clicked => { root.search-directory-clicked(); }
+                                                }
+                                                Text {
+                                                    text: root.a-search-status;
+                                                    color: Theme.text-muted;
+                                                    vertical-alignment: center;
+                                                    wrap: word-wrap;
+                                                }
                                             }
                                         }
                                         Row {
@@ -746,7 +768,7 @@ slint::slint! {
                                                     }
                                                     for sug[i] in root.a-suggestions: TouchArea {
                                                         height: 24px;
-                                                        clicked => { root.pick-analyze-suggestion(sug.name); }
+                                                        clicked => { root.pick-analyze-suggestion(sug.name, sug.sid); }
                                                         HorizontalLayout {
                                                             padding-left: 6px;
                                                             padding-right: 6px;
@@ -2349,6 +2371,9 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         ui.on_analyze_name_edited(move |query| {
             let Some(ui) = weak.upgrade() else { return };
             ui.set_a_suggestions(filter_suggestions_model(query.as_str()));
+            // Typing switches back to the local autocomplete; drop any
+            // lingering directory-search feedback.
+            ui.set_a_search_status("".into());
         });
     }
 
@@ -2356,16 +2381,64 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
     // resolve the SID — saves the user a second click.
     {
         let weak = ui.as_weak();
-        ui.on_pick_analyze_suggestion(move |name| {
+        ui.on_pick_analyze_suggestion(move |name, sid| {
             let Some(ui) = weak.upgrade() else { return };
             ui.set_a_name(name.clone());
             ui.set_a_suggestions(empty_suggestion_model());
+            ui.set_a_search_status("".into());
+            // A live directory hit already carries its SID — fill it directly
+            // and skip the LSA lookup, which cannot resolve a remote-domain
+            // sAMAccountName from the local host. A local entry has an empty
+            // sid and falls back to the LSA resolve below.
+            if !sid.is_empty() {
+                ui.set_a_sid(sid);
+                ui.set_a_name_error("".into());
+                return;
+            }
             let name_str = name.to_string();
             resolve_name_to_sid(
                 &name_str,
                 |sid| ui.set_a_sid(sid.into()),
                 |err| ui.set_a_name_error(err.into()),
             );
+        });
+    }
+
+    // "Search AD": run a live LDAP directory search for the current identity
+    // text and show the hits in the same picker list. Needs an LDAP mode; the
+    // button is disabled otherwise, so this branch is the guard for the empty
+    // query and for programmatic callers.
+    {
+        let search_tx = req_tx.clone();
+        let weak = ui.as_weak();
+        ui.on_search_directory_clicked(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let query = ui.get_a_name().to_string();
+            if query.trim().is_empty() {
+                ui.set_a_search_status(
+                    "Enter a name (or part of one) to search the directory.".into(),
+                );
+                return;
+            }
+            let Some(ldap) = LdapParams::from_mode(
+                ui.get_a_ldap_mode(),
+                ui.get_a_ldap_server().to_string(),
+                ui.get_a_ldap_base_dn().to_string(),
+                ui.get_a_ldap_bind_dn().to_string(),
+                ui.get_a_ldap_password().to_string(),
+                ui.get_a_ldap_timeout(),
+            ) else {
+                ui.set_a_search_status(
+                    "Directory search needs an LDAP mode (LDAPS / LDAP / Global Catalog / Signed). Select one above."
+                        .into(),
+                );
+                return;
+            };
+            ui.set_a_name_error("".into());
+            ui.set_a_search_status("Searching the directory…".into());
+            if let Err(e) = search_tx.send(WorkerRequest::SearchIdentity { query, ldap }) {
+                ui.set_a_search_status(format!("Worker not reachable: {e}").into());
+            }
         });
     }
 
@@ -3411,10 +3484,7 @@ fn pump_worker_events(ui: &MainWindow) {
                 WorkerEvent::IdentitiesLoaded(result) => handle_identities_loaded(ui, result),
                 WorkerEvent::TrusteesDone(result) => handle_trustees_done(ui, result),
                 WorkerEvent::GroupsDone(result) => handle_groups_done(ui, *result),
-                // Phase reserviert.
-                // SearchResults (identity picker) stays reserved for a
-                // later phase.
-                WorkerEvent::SearchResults(_) => {}
+                WorkerEvent::SearchResults(result) => handle_search_results(ui, result),
             }
         }
     });
@@ -3485,10 +3555,62 @@ fn filter_suggestions_model_kinds(
                 qualified: s.qualified.clone().into(),
                 kind_icon: s.kind_icon.clone().into(),
                 description: s.description.clone().into(),
+                // Local entries have no pre-resolved SID; picking one runs an
+                // LSA lookup (see on_pick_analyze_suggestion).
+                sid: slint::SharedString::new(),
             })
             .collect()
     });
     slint::ModelRc::new(slint::VecModel::from(suggestions))
+}
+
+/// Builds the picker model from live directory-search hits, reusing the same
+/// `IdentitySuggestionVm` rows the local autocomplete uses. Capped at
+/// `MAX_SUGGESTIONS` so the list stays scannable. The SID travels in the row
+/// so picking a hit fills the SID field directly (no LSA round-trip).
+fn suggestions_model_from_search(
+    results: &[IdentitySearchResult],
+) -> slint::ModelRc<IdentitySuggestionVm> {
+    let vms: Vec<IdentitySuggestionVm> = results
+        .iter()
+        .take(MAX_SUGGESTIONS)
+        .map(|r| IdentitySuggestionVm {
+            name: r.pick_name().into(),
+            qualified: r.display_label().into(),
+            kind_icon: r.kind_icon().into(),
+            description: r.sid.clone().into(),
+            sid: r.sid.clone().into(),
+        })
+        .collect();
+    slint::ModelRc::new(slint::VecModel::from(vms))
+}
+
+/// Consumes a live directory search: fills the picker list with the hits and
+/// reports the outcome in the `a-search-status` line (match count, empty
+/// result, or error). A failed search clears the list but never the fields.
+fn handle_search_results(ui: &MainWindow, result: Result<Vec<IdentitySearchResult>, String>) {
+    match result {
+        Ok(list) => {
+            let total = list.len();
+            ui.set_a_suggestions(suggestions_model_from_search(&list));
+            let msg = if total == 0 {
+                "No directory matches. Try a different name or check the LDAP settings.".to_string()
+            } else if total > MAX_SUGGESTIONS {
+                format!(
+                    "Showing the first {MAX_SUGGESTIONS} of {total} matches — refine the name to narrow it down."
+                )
+            } else if total == 1 {
+                "1 directory match.".to_string()
+            } else {
+                format!("{total} directory matches.")
+            };
+            ui.set_a_search_status(msg.into());
+        }
+        Err(e) => {
+            ui.set_a_suggestions(empty_suggestion_model());
+            ui.set_a_search_status(format!("Directory search failed: {e}").into());
+        }
+    }
 }
 
 fn handle_identities_loaded(_ui: &MainWindow, result: Result<Vec<IdentitySuggestion>, String>) {

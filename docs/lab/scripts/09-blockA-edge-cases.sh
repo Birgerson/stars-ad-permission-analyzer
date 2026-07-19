@@ -67,7 +67,7 @@ New-SmbShare -Name $shareName -Path $base `
 PSEOF
 run_ps 100 /tmp/blockA-setup.ps1 "Block A — setup edge-case fixtures on tier0" 120
 
-# -------- Stars-CLI Smoke gegen alle drei Konstellationen --------
+# -------- Stars CLI smoke test against all three constellations --------
 write_stars_test() {
     local user="$1"
     local path="$2"

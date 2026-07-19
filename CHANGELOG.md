@@ -13,6 +13,23 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 Post-v1.7.7 hardening pass — the findings from the full per-module code
 review (`review.md`).
 
+### Added
+
+- **GUI directory search — the "🌐 Search AD" button (review finding X3).**
+  The `SearchIdentity` worker path (a live LDAP identity search) existed and
+  was fully implemented but was unreachable from the UI — dead code behind
+  three `#[allow(dead_code)]`. It is now wired into the Analyze tab: with an
+  LDAP mode selected, typing a name (or part of one) and clicking **🌐 Search
+  AD** runs a single LDAP query against the configured directory and fills the
+  existing suggestion list with the matching domain users (`[U]`) and groups
+  (`[G]`). Because each directory hit already carries its SID, picking one
+  fills the Resolved-SID field directly (no separate "Resolve SID" step). A
+  status line reports the match count / empty result / error; at most 15 rows
+  are shown. This complements — does not replace — the per-keystroke local
+  autocomplete, keeping the deliberate "no LDAP query on every keystroke"
+  design (see the technical documentation). The three dead-code allows are
+  removed; the mapping from a search hit to a picker row is unit-tested.
+
 ### Fixed
 
 - **The LDAP filter-value escaper now lives in the `validation` crate

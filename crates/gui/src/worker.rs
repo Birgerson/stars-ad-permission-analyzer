@@ -5,11 +5,9 @@
 //!
 //! Runs in a dedicated thread with a Tokio runtime for optional LDAP calls.
 //!
-//!
 //! Wired up: `Analyze`, `Scan`, `ExportHtml`, `ListScanRuns`,
-//! `ComputeDelta`. `SearchIdentity` is reserved for a later phase (GUI
-//! identity picker) — the definition stays so a future addition does not
-//! cause API breaks.
+//! `ComputeDelta`, `ListIdentities`, and `SearchIdentity` (the Analyze
+//! tab's live directory picker — see `handle_search`).
 
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -211,16 +209,50 @@ impl LdapParams {
     }
 }
 
-/// Search result for the identity search.
-// Reserved for the future GUI identity picker (see `SearchIdentity` /
-// `SearchResults`); constructed but not consumed yet.
-#[allow(dead_code)]
+/// Search result for the identity search — one directory hit returned by
+/// [`handle_search`] and rendered in the Analyze tab's picker list.
 #[derive(Clone)]
 pub struct IdentitySearchResult {
     pub sid: String,
     pub sam_account_name: String,
     pub display_name: Option<String>,
     pub kind: adpa_core::model::IdentityKind,
+}
+
+impl IdentitySearchResult {
+    /// One-letter kind marker for the picker (`G` group, `U` user),
+    /// matching the local autocomplete's icon scheme.
+    pub fn kind_icon(&self) -> &'static str {
+        match self.kind {
+            adpa_core::model::IdentityKind::Group => "G",
+            _ => "U",
+        }
+    }
+
+    /// Human-friendly label for the picker's main column: the display name
+    /// if present, else the sAMAccountName, else the raw SID.
+    pub fn display_label(&self) -> String {
+        if let Some(dn) = self.display_name.as_deref() {
+            if !dn.trim().is_empty() {
+                return dn.to_string();
+            }
+        }
+        if !self.sam_account_name.trim().is_empty() {
+            return self.sam_account_name.clone();
+        }
+        self.sid.clone()
+    }
+
+    /// Value written into the identity *name* field when the row is picked:
+    /// the sAMAccountName when known, otherwise the SID (which the analyze
+    /// pipeline also accepts directly).
+    pub fn pick_name(&self) -> String {
+        if !self.sam_account_name.trim().is_empty() {
+            self.sam_account_name.clone()
+        } else {
+            self.sid.clone()
+        }
+    }
 }
 
 /// Request to the worker thread.
@@ -243,9 +275,8 @@ pub enum WorkerRequest {
         share_name: Option<String>,
         ldap: Option<LdapParams>,
     },
-    /// Searches for users and groups in Active Directory.
-    /// Reserved for the future GUI identity picker; not constructed yet.
-    #[allow(dead_code)]
+    /// Searches Active Directory for users and groups via a live LDAP
+    /// query (the Analyze tab's directory picker).
     SearchIdentity { query: String, ldap: LdapParams },
     /// Exports the last scan as an HTML report.
     ExportHtml { output_path: String },
@@ -432,9 +463,7 @@ pub enum WorkerEvent {
     RiskFindings(Vec<RiskFinding>),
     /// Result of an HTML export.
     ExportDone(Result<(), String>),
-    /// Search results for the identity search.
-    /// Reserved for the future GUI identity picker; not consumed yet.
-    #[allow(dead_code)]
+    /// Results of a live directory identity search.
     SearchResults(Result<Vec<IdentitySearchResult>, String>),
     /// Persisted scan runs for the Delta tab.
     ScanRunsLoaded(Result<Vec<ScanRunSummary>, String>),
@@ -2179,6 +2208,46 @@ fn resolve_share_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identity_search_result_maps_to_picker_fields() {
+        use adpa_core::model::IdentityKind;
+
+        // A user with a display name: label uses the display name, icon "U",
+        // pick fills the sAMAccountName, and the SID travels in the row.
+        let user = IdentitySearchResult {
+            sid: "S-1-5-21-1-2-3-1001".to_owned(),
+            sam_account_name: "alice".to_owned(),
+            display_name: Some("Alice Anderson".to_owned()),
+            kind: IdentityKind::User,
+        };
+        assert_eq!(user.kind_icon(), "U");
+        assert_eq!(user.display_label(), "Alice Anderson");
+        assert_eq!(user.pick_name(), "alice");
+
+        // A group without a display name: label falls back to the sAM name,
+        // icon "G".
+        let group = IdentitySearchResult {
+            sid: "S-1-5-21-1-2-3-512".to_owned(),
+            sam_account_name: "Domain Admins".to_owned(),
+            display_name: None,
+            kind: IdentityKind::Group,
+        };
+        assert_eq!(group.kind_icon(), "G");
+        assert_eq!(group.display_label(), "Domain Admins");
+        assert_eq!(group.pick_name(), "Domain Admins");
+
+        // Neither a usable display name nor a sAM name: both label and pick
+        // fall back to the SID (never an empty string).
+        let bare = IdentitySearchResult {
+            sid: "S-1-5-21-1-2-3-9999".to_owned(),
+            sam_account_name: "  ".to_owned(),
+            display_name: Some("   ".to_owned()),
+            kind: IdentityKind::User,
+        };
+        assert_eq!(bare.display_label(), "S-1-5-21-1-2-3-9999");
+        assert_eq!(bare.pick_name(), "S-1-5-21-1-2-3-9999");
+    }
 
     // F1 (review 2026-07-01): the worker takes the RAW identity and dispatches
     // it, instead of requiring a pre-resolved SID. The LDAP name→SID path
