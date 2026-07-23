@@ -10,7 +10,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-_No unreleased changes yet._
+### Documentation
+
+- **Scale-lab live verification recorded (verification.md Block O).** Built a
+  fresh two-forest lab (`corp.test` + `ext.test`, external trust with SID
+  filtering) and populated `corp.test` with **10,000 users and 5,000 groups**
+  (49-deep nesting, 200-way fan-out, random DAG). Every core surface was
+  verified live against v1.7.8: the L4 `adpa trusts` inventory (SID-filtering
+  over-report warning on a real external trust), deep transitive group
+  resolution with explanation paths (118 memberships, 9.4 s), privileged
+  detection, reverse membership, effective rights with deny precedence
+  (NTFS ∩ Share), and the disabled-account marker. known-limitations L4 and
+  the README "tested platforms" note updated accordingly.
 
 ## [1.7.8] — 2026-07-19
 

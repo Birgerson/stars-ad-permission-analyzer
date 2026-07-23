@@ -1424,3 +1424,100 @@ lab is back to its prior state. No half-built fixture is left behind.
 live group fixture is deferred future lab work (enable source-domain audit
 on `emea.res.lab`, then repeat steps 2–3 and set an ACE on the migrated
 group's old SID for a member to reach).
+
+## Block O — New scale / multi-forest lab (10k users, 5k groups) + live verification of v1.7.8 (2026-07-23)
+
+**Stars version:** v1.7.8 (release binary), `main` at `41d99bf`.
+
+Two fresh Server 2022 forests were built from bare installs and one was
+populated at scale, then every core Stars surface was verified live against
+it — including the new v1.7.8 read-only trust inventory (L4, ADR 0060).
+
+### O.1 — Lab build
+
+- **`corp.test`** — DC-01, `192.168.11.147`, own forest.
+- **`ext.test`** — DC-02, `192.168.11.148`, own forest.
+- **External trust** `corp.test ↔ ext.test`, bidirectional, with **SID
+  filtering / quarantine enabled** (`trustAttributes = 0x4`), plus two-way
+  DNS conditional forwarders.
+- **Population of `corp.test`** (scheduled task, ~11 min): **10,000 users**
+  `u00001..u10000` (every 20th disabled), **5,000 global groups**
+  `g00001..g05000`, with deliberately varied nesting — one **49-deep linear
+  chain** `g00050 → … → g00001`, one **200-way fan-out**
+  `g00100 ← g00101..g00300`, and a random acyclic DAG (1–3 parents per
+  group) — plus distributed memberships (group sizes 0..~600). Anchors:
+  `u00001` at the bottom of the 49-deep chain; `u00003` in Domain Admins.
+
+### O.2 — L4 `adpa trusts` (read-only trust inventory) — LIVE ✓
+
+`adpa trusts --server 192.168.11.147 --base-dn DC=corp,DC=test …` read the
+real `trustedDomain` object and decoded it correctly:
+
+```text
+ext.test
+  NetBIOS name : EXT
+  Direction    : bidirectional
+  Attributes   : SID-filtering (quarantined)  [raw 0x00000004]
+  Domain SID   : S-1-5-21-1667335488-272840759-1416816776
+  ! SID filtering (quarantine) is ON — … a finding that relies on such a
+    SID may over-report. Stars shows the DACL view, not the filtered one.
+```
+
+This is the first **live** proof of the L4 feature: Stars reads
+`trustDirection` / `trustAttributes` from a real external trust and fires the
+SID-filtering over-report warning.
+
+### O.3 — Deep transitive resolution `adpa groups -u u00001` — LIVE ✓
+
+118 group memberships (22 direct) resolved in **9.4 s**. The 49-deep chain is
+fully traced with a complete explanation path, e.g.
+`g00001  via u00001 → g00540 → g00007 → … → g00002 → g00001`. Primary group
+and Active status correct — nested-group resolution and the explanation path
+hold at 10k/5k scale.
+
+### O.4 — Privileged membership `adpa groups -u u00003` — LIVE ✓
+
+The dedicated **Privileged memberships** section fired:
+`[!] member of Domain Admins (…-512)`, flagged inline in the list too, with
+built-in transitive groups (Denied RODC Password Replication Group) resolved.
+
+### O.5 — Reverse enumeration `adpa members -g g00100` — LIVE ✓
+
+211 members (211 direct, 0 via primaryGroupID) — the 200-group fan-out plus
+extras — enumerated and typed correctly.
+
+### O.6 — Effective rights with deny precedence `adpa analyze` — LIVE ✓
+
+`u00001` reaches **both** `g00001` (Allow Modify) and `g00002` (Deny Write)
+through the 49-deep chain. On `\\192.168.11.147\LabShare` (NTFS:
+g00001 = Modify, g00002 = Deny Write; share: Everyone Full):
+
+```text
+Effective Rights
+  NTFS    : Read & Execute (0x001300A9)
+  Share   : Full Control (0x001F01FF)
+  Result  : Read & Execute (0x001300A9)
+Deny aggregation: Special (0x116) decided by Deny ACEs before any Allow
+  could grant them — removed from the effective NTFS mask
+```
+
+The Allow Modify was correctly **reduced to Read & Execute** because the Deny
+Write (reached through the deep chain) takes precedence, with a full
+explanation path and the NTFS ∩ Share combination — textbook-correct ACL
+semantics at scale.
+
+### O.7 — Disabled-account marker — LIVE ✓
+
+`adpa groups -u u00020` (every 20th user is disabled) → `Status: DISABLED`.
+
+### Status
+
+Every core Stars surface is now **live-verified at scale on a real
+multi-forest AD**: the L4 trust inventory (O.2), deep nested-group resolution
+and explanation paths (O.3), privileged detection (O.4), reverse membership
+(O.5), effective-rights with deny precedence and NTFS ∩ Share (O.6), and the
+disabled marker (O.7). The GUI identity picker ("Search AD") was not
+exercised interactively, but its LDAP search path is the same one the green
+`groups` / `members` runs prove. The lab is left running and reusable; the
+`corp.test` fixture (`C:\LabShare`, SMB share `LabShare`) stays for future
+runs (GUI screenshots, or an M.5 cross-forest history fixture).
