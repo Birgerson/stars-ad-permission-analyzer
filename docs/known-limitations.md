@@ -255,7 +255,10 @@ domain's `trustedDomain` objects and displays each trust's `trustDirection`
 and decoded `trustAttributes` — including whether **SID filtering /
 quarantine** or **Selective Authentication** is configured — via the new
 read-only `adpa trusts` command. This gives an auditor the exact facts needed
-to apply the L4 caveat by hand. Stars still does **not** *model* the runtime
+to apply the L4 caveat by hand. **Live-verified 2026-07-23** (verification.md
+Block O.2): against a real external trust with SID filtering enabled
+(`trustAttributes = 0x4`), `adpa trusts` read the trust and fired the
+SID-filtering over-report warning. Stars still does **not** *model* the runtime
 filter effect on a specific finding (that needs a synthetic logon — out of
 scope, see below), nor does it yet auto-cross-reference a token's
 foreign-forest history SIDs against a filtering trust (the M.5 per-finding

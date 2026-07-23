@@ -137,7 +137,7 @@ On WSL / Linux / macOS, `sha256sum -c Stars-v1.7.8-Setup.exe.sha256` works direc
 
 > **What the hash file gives you — and what it doesn't:** The hash protects against tampered downloads (mirror modification, MITM). It does **not** replace code signing — you verify the authenticity of the source through the GitHub repo itself, not through the hash. Code signing is planned; see [`docs/codesigning.md`](docs/codesigning.md) for status.
 
-> **Tested platforms:** Stars is verified against **Windows Server 2022 Standard** and **Windows Server 2025 Standard** (3-forest lab, 1000 test users, 5000 directories).
+> **Tested platforms:** Stars is verified against **Windows Server 2022 Standard** and **Windows Server 2025 Standard** — in a 3-forest lab (1000 test users, 5000 directories) and a dedicated scale lab of **10,000 users and 5,000 groups** with 49-deep group nesting (see [`docs/lab/verification.md`](docs/lab/verification.md) Block O).
 >
 > **Use at your own risk. Make a full backup before any production use.** → [Full disclaimer](#disclaimer)
 
@@ -147,7 +147,7 @@ On WSL / Linux / macOS, `sha256sum -c Stars-v1.7.8-Setup.exe.sha256` works direc
 
 Stars was built by a certified IT Specialist for Application Development who delegated the implementation to Claude (Anthropic) as a tool — under full control of every architecture decision, every review, and every correction.
 
-The result: a production-grade audit tool, verified in a 3-forest lab against 1000 test users and 5000 paths.
+The result: a production-grade audit tool, verified in a 3-forest lab (1000 test users, 5000 paths) and a 10,000-user / 5,000-group scale lab with deep nested groups — effective rights, deny precedence, privileged detection, and the read-only trust inventory all confirmed live.
 
 Treating AI as an amplifier of your own craft, not a replacement, gets you to software that holds its promises faster.
 
