@@ -1,6 +1,6 @@
 # Stars — User Guide
 
-**Version:** v1.7.8 (2026-07-19)
+**Version:** v1.7.8+ — documents `main` including unreleased changes (see [CHANGELOG](../CHANGELOG.md))
 **Audience:** Windows / AD administrators who want to audit NTFS and
 SMB permissions **without changing anything**.
 

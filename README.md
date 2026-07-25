@@ -281,6 +281,20 @@ adpa.exe analyze --path "C:\Data\Department" --user S-1-5-21-...
 adpa.exe scan --path "C:\Data" --user S-1-5-21-... --max-depth 8
 ```
 
+**CLI — all commands at a glance** (each supports `--help`):
+
+| Command | Answers |
+|---|---|
+| `adpa analyze` | *What may this user do on this path?* — effective rights with the full explanation chain |
+| `adpa scan` | The same, recursively over a directory tree, stored in the scan history |
+| `adpa groups` | *Which groups is this identity in?* — recursive memberships, privileged ones flagged |
+| `adpa members` | The reverse: *who is in this group?* — including `primaryGroupID` members |
+| `adpa shares` | *Which SMB shares does this server publish, and who passes the share layer?* (administrative shares hidden unless `--include-admin`) |
+| `adpa trusts` | *Which AD trusts exist, and are they configured to filter SIDs or gate authentication?* (read-only) |
+
+All of them are read-only. See the [user guide](docs/user-guide.md) for each
+command in detail.
+
 **CLI — with LDAP for full group resolution:**
 ```
 set ADPA_BIND_PASSWORD=YourSecretPassword
