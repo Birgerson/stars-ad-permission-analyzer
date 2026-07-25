@@ -199,6 +199,29 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Documentation
 
+- **Full documentation pass over the post-v1.7.8 state.**
+  - `technical-documentation.md`: the crate table and layering diagram were
+    stale — they claimed **12 crates**, omitted `win_safe` entirely, and named
+    four files that do not exist (`dacl.rs` ×2, `token.rs`, `normalized.rs`,
+    `ui.slint`) while missing `trusts.rs`, `sid_util.rs`, `enumerate.rs`,
+    `delta.rs`, `trustees.rs` and the `update_manager` modules. It now matches
+    the 13 crates and their real files, including the note that the GUI is
+    still declared inline via `slint!{}`.
+  - `features-and-limitations.md`: documents the share inventory and the
+    read-only trust inventory; the `UnsupportedNtfsAces` /
+    `UnsupportedShareAces` marker rows now name **all** causes, including the
+    two just closed (an unreadable trustee SID on the share side, and a DACL
+    that could not be read at all).
+  - `README.md`: added an at-a-glance table of all six CLI commands — only
+    `analyze` and `scan` were shown before.
+  - `can-stars-help-you.md`: added the newer questions Stars answers
+    (`members`, `shares`, `trusts`) and corrected a claim that had become
+    inaccurate — trusts were listed purely as "ADRecon territory" although
+    Stars now carries a focused read-only trust inventory.
+  - The guides' version headers now state honestly that they document `main`
+    **including unreleased changes**, instead of naming a released version
+    that no longer matches.
+
 - **Scale-lab live verification recorded (verification.md Block O).** Built a
   fresh two-forest lab (`corp.test` + `ext.test`, external trust with SID
   filtering) and populated `corp.test` with **10,000 users and 5,000 groups**

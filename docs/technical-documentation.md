@@ -1,6 +1,6 @@
 # Stars — Technical Documentation
 
-**Version:** v1.7.8 (2026-07-19)
+**Version:** v1.7.8+ — documents `main` including unreleased changes (see [CHANGELOG](../CHANGELOG.md))
 **Audience:** Developers, code reviewers, and security engineers who
 want to understand *how* Stars works internally — not *how to use* it
 (that's the [User Guide](user-guide.md)).
@@ -89,7 +89,7 @@ That makes findings auditable and falsifiable.
 
 ## 2. Workspace and crate layering
 
-Stars is a Rust workspace with 12 crates. Layering is strictly
+Stars is a Rust workspace with 13 crates. Layering is strictly
 directed — higher layers depend on lower ones, never the reverse:
 
 ```text
@@ -119,13 +119,15 @@ directed — higher layers depend on lower ones, never the reverse:
 ┌──────────────────────────────────────────────────────────┐
 │  fs_scanner       share_scanner     ad_resolver          │
 │  (NTFS walk +     (Share DACL,      (LDAP, LSA, SAM,     │
-│   DACL read)       NetShareEnum)     Principal pipeline) │
+│   DACL read)       NetShareEnum)     Principal pipeline, │
+│                                      trust inventory)    │
 └──────────────────────────────────────────────────────────┘
                │
                ▼
 ┌──────────────────────────────────────────────────────────┐
 │  core (data model, traits, CoreError)                    │
 │  validation (wrapper types for all user inputs)          │
+│  win_safe (RAII guards for Windows API resources)        │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -133,18 +135,19 @@ directed — higher layers depend on lower ones, never the reverse:
 
 | Crate | Role | Key modules |
 | --- | --- | --- |
-| `core` | Domain types (`Identity`, `Sid`, `FileSystemObject`, `EffectivePermission`, `PermissionDiagnostic`) + traits + `CoreError` | `model.rs`, `traits.rs`, `error.rs` |
-| `validation` | Typed wrappers for every user input (`ValidatedSid`, `ValidatedDn`, `ValidatedServerName`, …) plus validation functions | `sid.rs`, `net.rs`, `path.rs`, `numbers.rs`, `export_path.rs`, `db_path.rs` |
-| `ad_resolver` | AD / LSA / SAM access; **central Principal pipeline** lives here | `principal.rs`, `resolver.rs`, `sam.rs`, `local_groups.rs`, `ldap_client.rs` |
-| `fs_scanner` | NTFS DACL read + walker with reparse-point loop detection | `walker.rs`, `dacl.rs` |
-| `share_scanner` | SMB enumeration + share DACL read via Windows API | `scanner.rs`, `dacl.rs` |
-| `permission_engine` | AccessCheck reproduction, token SID assembly, permission path generation | `engine.rs`, `token.rs`, `mask.rs`, `normalized.rs` |
-| `risk_engine` | Six risk rules + `is_incomplete()` | `rules.rs` |
-| `persistence` | SQLite schema + migrations + `ScanStore` | `scan_store.rs`, `migrations.rs` |
-| `exporter` | CSV / JSON / HTML renderers | `csv.rs`, `json.rs`, `html.rs` |
-| `update_manager` | Skeleton for signature-checked updates | `lib.rs` |
-| `cli` | Command-line front-end (`adpa.exe`) | `main.rs`, `output.rs` |
-| `gui` | Slint-based GUI (`adpa-gui.exe`) | `main.rs`, `worker.rs`, `ui.slint` |
+| `core` | Domain types (`Identity`, `Sid`, `FileSystemObject`, `EffectivePermission`, `PermissionDiagnostic`, `DomainTrust`) + the five architectural traits + `CoreError` | `model.rs`, `traits.rs`, `error.rs` |
+| `validation` | Typed wrappers for every user input (`ValidatedSid`, `ValidatedDn`, `ValidatedServerName`, …), path/UNC handling, and the central RFC-4515 LDAP filter escaper | `sid.rs`, `net.rs`, `path.rs`, `numbers.rs`, `ldap.rs`, `export_path.rs`, `db_path.rs` |
+| `win_safe` | RAII guards so native allocations are always released (`NetApiBuffer`, `LocalFreeGuard`) plus the shared guard-based SID→string conversion | `netapi.rs`, `localalloc.rs`, `sid.rs` |
+| `ad_resolver` | AD / LSA / SAM access; **central Principal pipeline** lives here; read-only trust inventory | `principal.rs`, `resolver.rs`, `ldap_client.rs`, `sam.rs`, `local_groups.rs`, `enumerate.rs`, `trusts.rs`, `sid_util.rs`, `config.rs` |
+| `fs_scanner` | NTFS DACL read + walker with reparse cycle/duplicate detection, cancellation, per-scan SD cache | `acl.rs`, `walker.rs`, `cancel.rs`, `scanner.rs` (dormant `Scanner` seam) |
+| `share_scanner` | SMB share enumeration + share DACL read via Windows API; the shared CLI/GUI share-mask orchestration | `scanner.rs` |
+| `permission_engine` | AccessCheck reproduction, token SID assembly, permission path generation, mask normalization | `engine.rs`, `mask.rs` |
+| `risk_engine` | Six risk rules + `is_incomplete()` delegation | `rules.rs` |
+| `persistence` | SQLite schema + migrations + `ScanStore`, identity cache, delta comparison | `scan_store.rs`, `migrations.rs`, `delta.rs`, `identity_cache.rs`, `db.rs` |
+| `exporter` | CSV / JSON / HTML renderers + the shared path-centric trustee view | `csv.rs`, `json.rs`, `html.rs`, `trustees.rs` |
+| `update_manager` | Fail-closed seam for signature-checked updates (see known-limitations L12) | `manager.rs`, `manifest.rs`, `verifier.rs`, `version.rs` |
+| `cli` | Command-line front-end (`adpa.exe`): `analyze`, `scan`, `groups`, `members`, `shares`, `trusts` | `main.rs`, `output.rs` |
+| `gui` | Slint-based GUI (`adpa-gui.exe`); the UI is currently declared inline via `slint!{}` in `main.rs` (extraction to external `.slint` files is planned) | `main.rs`, `worker.rs` |
 
 ### Workspace configuration
 

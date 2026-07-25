@@ -79,6 +79,25 @@ that applies.
   rejected as a configuration error — otherwise an incomplete SMB
   context silently contaminates local-group resolution. Closes
   review 2026-06-04 round 2, finding 2.
+- **Share inventory** (`adpa shares --server <S>`): lists a server's
+  shares with their share-level permissions. The three states that
+  mean opposite things stay distinct — **NULL DACL** (no share-level
+  restriction, NTFS alone decides), **empty DACL** (no access), and an
+  explicit ACE list. Administrative shares are hidden unless
+  `--include-admin` is passed; a share whose DACL could not be read is
+  listed *with its reason* rather than dropped.
+
+### Active Directory trust inventory (read-only)
+
+- **`adpa trusts`** reads the domain's `trustedDomain` objects and shows
+  each trust's direction and decoded `trustAttributes` — including
+  whether **SID filtering / quarantine** or **Selective Authentication**
+  is configured. Those are the settings that decide at runtime whether a
+  cross-forest or migrated (`sIDHistory`) SID actually grants access, so
+  a finding relying on such a SID can read *higher* than reality.
+- Strictly read-only: Stars never modifies a trust, and it deliberately
+  does **not** model the runtime filter effect — that would require a
+  synthetic logon (ADR 0060, known-limitations L4).
 
 ### Permission-path explanation
 
@@ -153,8 +172,8 @@ out; the report font is Arial.
 | `IdentityNotInConfiguredLdapBase` | Neutral | **yes** | LSA resolved the SID but the configured base DN does not index it (multi-domain forest / trust); cross-domain memberships may be missing. |
 | `IdentityResolvedViaForeignSecurityPrincipal` | Neutral | **yes** | A trust-forest principal resolved via an FSP object; its memberships in its own forest are unknown. |
 | `GroupResolutionViaGlobalCatalog` | Neutral | **yes** | Memberships came from a Global Catalog bind; only universal groups replicate fully to the GC. |
-| `UnsupportedShareAces { count }` | Notice | **yes** | The share DACL contained ACE types the parser could not evaluate; the share mask is potentially incomplete. |
-| `UnsupportedNtfsAces { count }` | Notice | **yes** | The NTFS DACL contained ACE types the parser could not evaluate; a hidden Deny among them could change the result. |
+| `UnsupportedShareAces { count }` | Notice | **yes** | Share ACEs that could not be evaluated: an unsupported ACE type, or a supported Allow/Deny ACE whose trustee SID could not be read, or an ACE the OS refused to hand out. The share mask is potentially incomplete. |
+| `UnsupportedNtfsAces { count }` | Notice | **yes** | NTFS ACEs that could not be evaluated: an unsupported ACE type, an unreadable trustee SID, an ACE the OS refused to hand out, **or a DACL that could not be read at all**. A hidden Deny among them could change the result. |
 | `SidHistoryPresent { count }` | Concern | **yes** | The account carries `count` historical SIDs (`sIDHistory`) that were **not** evaluated into the token (value unreadable, or the row predates evaluation) — the effective right may be **understated** (ADR 0052 / ADR 0056). |
 | `SidHistoryEvaluated { count }` | Neutral | no | `count` historical SIDs (`sIDHistory`) **were evaluated** into the token — ACEs on an old SID match like in the real logon token; the explanation path names each one (ADR 0056). |
 | `GroupSidHistoryEvaluated { groups, count }` | Neutral | no | `count` historical SIDs carried by `groups` token **groups** were evaluated into the token — ACEs on a migrated group's old SID match like at runtime; the membership steps name each one (ADR 0059). |
