@@ -17,7 +17,6 @@ const MAX_QUERY_LEN: usize = 256;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedServerName(pub String);
 
-/// Validierter SMB-Freigabename.
 /// Validated SMB share name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedShareName(pub String);
@@ -32,6 +31,12 @@ pub struct ValidatedIdentityQuery(pub String);
 
 /// Checks a host name: non-empty, length-bounded, no control/path characters,
 /// only letters, digits, '.', '-', and '_'.
+///
+/// **IPv6 literals are not accepted** (the `:` fails the character check) —
+/// a deliberate, documented limitation (known-limitations L13): supporting
+/// them would need bracket handling for LDAP URLs and the Windows
+/// `ipv6-literal.net` transformation for UNC/NetAPI paths, none of which is
+/// implemented or lab-verified yet. Use the host's DNS name or IPv4 address.
 fn check_hostname(trimmed: &str, label: &str) -> Result<(), CoreError> {
     if trimmed.is_empty() {
         return Err(CoreError::Validation(format!("{label} must not be empty")));
@@ -49,6 +54,15 @@ fn check_hostname(trimmed: &str, label: &str) -> Result<(), CoreError> {
     if trimmed.contains('\\') || trimmed.contains('/') {
         return Err(CoreError::Validation(format!(
             "{label} must be a host name without path separators: {trimmed}"
+        )));
+    }
+    if trimmed.contains(':') {
+        // Explicit message for the most likely cause instead of a generic
+        // invalid-character error (validation review 2026-07-25, VA-4).
+        return Err(CoreError::Validation(format!(
+            "{label} must not contain ':' — IPv6 literals are not supported \
+             (known-limitations L13); use the host's DNS name or IPv4 \
+             address: {trimmed}"
         )));
     }
     if let Some(bad) = trimmed
@@ -128,7 +142,6 @@ pub fn validate_dn(input: &str) -> Result<ValidatedDn, CoreError> {
             "Distinguished name must not contain control characters".into(),
         ));
     }
-    // A DN is composed of 'attribute=value' parts; at least one '=' is mandatory.
     // A DN consists of 'attribute=value' components; at least one '=' is required.
     if !trimmed.contains('=') {
         return Err(CoreError::Validation(format!(
@@ -331,6 +344,24 @@ mod tests {
     #[test]
     fn ldap_endpoint_with_control_char_rejected() {
         assert!(validate_ldap_endpoint("dc01\ncorp").is_err());
+    }
+
+    /// Documented limitation L13 (validation review 2026-07-25, VA-4):
+    /// IPv6 literals are rejected — and the error must say so explicitly
+    /// instead of a generic invalid-character message.
+    #[test]
+    fn ipv6_literal_rejected_with_explicit_message() {
+        for input in ["::1", "fe80::1", "2001:db8::10"] {
+            for result in [validate_ldap_endpoint(input), validate_smb_server(input)] {
+                let err = result
+                    .expect_err("IPv6 literal must be rejected")
+                    .to_string();
+                assert!(
+                    err.contains("IPv6") && err.contains("L13"),
+                    "error must name the IPv6 limitation, got: {err}"
+                );
+            }
+        }
     }
 
     // --- DN ---

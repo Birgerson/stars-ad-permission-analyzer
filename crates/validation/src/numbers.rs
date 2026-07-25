@@ -7,17 +7,18 @@ use adpa_core::error::CoreError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScanDepth(pub u32);
 
-/// Thread limit with defined minimum and maximum values
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ThreadLimit(pub u16);
-
 /// LDAP operation timeout in seconds, with defined minimum and maximum values
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LdapTimeout(pub u64);
 
+// NOTE: a `ThreadLimit` validator existed here until the validation review
+// 2026-07-25 (VA-2). It was removed because the product has no thread-count
+// input anywhere (no CLI flag, no GUI field, no config value) — a validator
+// without an input is speculative code (same class as the closed V1). If a
+// parallel-scan option is ever added, re-add the validator together with
+// the feature (AGENTS.md lists `ThreadLimit` as the recommended shape).
+
 const MAX_SCAN_DEPTH: u32 = 512;
-const MAX_THREAD_LIMIT: u16 = 256;
-const MIN_THREAD_LIMIT: u16 = 1;
 const MIN_LDAP_TIMEOUT_SECS: u64 = 1;
 const MAX_LDAP_TIMEOUT_SECS: u64 = 600;
 
@@ -30,29 +31,12 @@ pub fn validate_scan_depth(value: u32) -> Result<ScanDepth, CoreError> {
     Ok(ScanDepth(value))
 }
 
-///
-/// 11: Eingaben validieren).
-///
 /// Like [`validate_scan_depth`], but for `Option<u32>` — `None` stays
 /// `None` (= unbounded depth), `Some(d)` goes through the validator. Used
 /// at the CLI/GUI input boundary so scan depth does not flow into
 /// `WalkConfig` unchecked (AGENTS.md DoD point 11: validate inputs).
 pub fn validate_optional_scan_depth(value: Option<u32>) -> Result<Option<ScanDepth>, CoreError> {
     value.map(validate_scan_depth).transpose()
-}
-
-pub fn validate_thread_limit(value: u16) -> Result<ThreadLimit, CoreError> {
-    if value < MIN_THREAD_LIMIT {
-        return Err(CoreError::Validation(format!(
-            "Thread limit {value} is below minimum of {MIN_THREAD_LIMIT}"
-        )));
-    }
-    if value > MAX_THREAD_LIMIT {
-        return Err(CoreError::Validation(format!(
-            "Thread limit {value} exceeds maximum of {MAX_THREAD_LIMIT}"
-        )));
-    }
-    Ok(ThreadLimit(value))
 }
 
 /// Validates an LDAP operation timeout in seconds.
@@ -103,21 +87,6 @@ mod tests {
     #[test]
     fn excessive_scan_depth_rejected() {
         assert!(validate_scan_depth(MAX_SCAN_DEPTH + 1).is_err());
-    }
-
-    #[test]
-    fn zero_threads_rejected() {
-        assert!(validate_thread_limit(0).is_err());
-    }
-
-    #[test]
-    fn valid_thread_limit_accepted() {
-        assert!(validate_thread_limit(8).is_ok());
-    }
-
-    #[test]
-    fn excessive_threads_rejected() {
-        assert!(validate_thread_limit(MAX_THREAD_LIMIT + 1).is_err());
     }
 
     // --- validate_optional_scan_depth (Finding 3) ---

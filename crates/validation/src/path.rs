@@ -162,7 +162,6 @@ pub fn validate_local_path(input: &str) -> Result<ValidatedLocalPath, CoreError>
     Ok(ValidatedLocalPath(trimmed.to_string()))
 }
 
-///
 /// Validates a user-supplied path and returns the canonical display form.
 ///
 /// Accepts:
@@ -203,39 +202,13 @@ impl From<ValidatedUncPath> for NormalizedPath {
     }
 }
 
-///
-///
-/// Long-path-prefixed Windows API path. Win32 ANSI/Wide APIs such as
-/// `GetFileAttributesW` and `GetNamedSecurityInfoW` are limited to
-/// `MAX_PATH` (260 characters) without the `\\?\` prefix. With the
-/// prefix Windows accepts up to 32,767 characters — matching our
-/// validation upper bound.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WindowsApiPath(pub String);
+// NOTE: a `WindowsApiPath` wrapper type (plus `From` impls from the
+// validated path types) existed here until the validation review 2026-07-25
+// (VA-3). It was removed because every call site uses the plain
+// [`to_windows_api_path`] function — the wrapper had zero users. If a typed
+// long-path guarantee is ever needed at an API boundary, re-introduce it
+// together with the code that consumes it.
 
-impl WindowsApiPath {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<&ValidatedLocalPath> for WindowsApiPath {
-    fn from(v: &ValidatedLocalPath) -> Self {
-        WindowsApiPath(to_windows_api_path(&v.0))
-    }
-}
-
-impl From<&ValidatedUncPath> for WindowsApiPath {
-    fn from(v: &ValidatedUncPath) -> Self {
-        WindowsApiPath(to_windows_api_path(&v.0))
-    }
-}
-
-///
-/// - `//server/share/…` (POSIX-Variante)
-/// - `\\?\UNC\server\share\…` (Long-Path-UNC)
-///
-///
 /// Splits a UNC path into `(server, share)`. Local paths (`C:\…`),
 /// `\\?\C:\…` long paths and single-prefix paths return `None` — so no
 /// share lookup is started with a drive letter as the server name.
@@ -255,7 +228,6 @@ pub fn parse_unc_components(path: &str) -> Option<(String, String)> {
     let normalized = if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{rest}")
     } else if path.starts_with(r"\\?\") || path.starts_with("//?/") {
-        // Lokaler Long-Path — niemals UNC.
         // Local long-path — never UNC.
         return None;
     } else {
@@ -275,9 +247,6 @@ pub fn parse_unc_components(path: &str) -> Option<(String, String)> {
     Some((server, share))
 }
 
-/// Share-DACL-Abfragen. Ein explizit gesetzter `smb_server` hat
-/// override server is given (review finding 2: token mismatch).
-///
 /// Returns the effective SMB target server for local-group and share-DACL
 /// lookups. An explicit `smb_server` takes precedence over the server
 /// derived from the path's UNC components — otherwise local groups would
@@ -290,10 +259,6 @@ pub fn effective_smb_target(path: &str, explicit_smb_server: Option<&str>) -> Op
     parse_unc_components(path).map(|(server, _share)| server)
 }
 
-/// Typisierter SMB-Audit-Kontext: enthaelt **beide** Bausteine
-/// without explicit SMB flags returns `None`.
-///
-///
 /// Typed SMB audit context: holds **both** building blocks (`server`,
 /// `share`) needed to read a share DACL or build a share overlay. A
 /// UNC path like `\\fs01\data\foo\bar` yields `("fs01", "data")`; a
@@ -312,9 +277,6 @@ pub struct SmbAuditContext {
 }
 
 impl SmbAuditContext {
-    ///
-    /// Important property (cf. review round 10 finding 1): returns
-    ///
     /// Derives the effective SMB context from path and optional
     /// explicit flags. Per-field priority: **explicit > UNC**.
     ///
@@ -341,8 +303,6 @@ impl SmbAuditContext {
     }
 }
 
-/// Pfaden arbeitet.
-///
 /// Strips the long-path prefix (`\\?\` or `\\?\UNC\`) and returns the
 /// human-readable form as an owned string. Inverse of
 /// [`to_windows_api_path`]; used to keep `FileSystemObject.path`
@@ -358,7 +318,6 @@ pub fn strip_long_path_prefix(path: &str) -> String {
     path.to_string()
 }
 
-///
 /// Converts a path into the long-path form required by Win32 wide APIs
 /// for paths exceeding `MAX_PATH`:
 ///
@@ -570,20 +529,6 @@ mod tests {
     }
 
     #[test]
-    fn windows_api_path_from_validated_local_adds_prefix() {
-        let v = validate_local_path(r"C:\Users\test").unwrap();
-        let api: WindowsApiPath = (&v).into();
-        assert_eq!(api.as_str(), r"\\?\C:\Users\test");
-    }
-
-    #[test]
-    fn windows_api_path_from_validated_unc_adds_unc_prefix() {
-        let v = validate_unc_path(r"\\dc\share\folder").unwrap();
-        let api: WindowsApiPath = (&v).into();
-        assert_eq!(api.as_str(), r"\\?\UNC\dc\share\folder");
-    }
-
-    #[test]
     fn to_windows_api_path_leaves_unrecognized_input_untouched() {
         assert_eq!(to_windows_api_path("relative/path"), "relative/path");
         assert_eq!(to_windows_api_path(""), "");
@@ -627,7 +572,7 @@ mod tests {
         assert_eq!(strip_long_path_prefix(&api), original);
     }
 
-    // --- Finding 2: Long-Path-Eingaben an validate_path / long-path inputs at validate_path ---
+    // --- Finding 2: long-path inputs at validate_path ---
 
     #[test]
     fn validate_path_accepts_long_local_prefix() {

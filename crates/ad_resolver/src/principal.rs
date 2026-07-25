@@ -1036,8 +1036,7 @@ mod tests {
     }
 
     /// 2) `DOMAIN\user` with LDAP miss + LSA hit (multi-domain forest):
-    ///    ScopeStatus = OutsideConfiguredLdapBase, beide Marker gesetzt.
-    /// 2) `DOMAIN\user` LDAP miss + LSA hit: Outside, markers set.
+    ///    ScopeStatus = OutsideConfiguredLdapBase, both markers set.
     #[tokio::test]
     async fn domain_user_ldap_miss_with_lsa_hit_is_outside_base() {
         let sid = Sid("S-1-5-21-9-9-9-1001".to_owned());
