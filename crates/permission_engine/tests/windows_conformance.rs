@@ -88,12 +88,17 @@ fn file_generic_mapping() -> GENERIC_MAPPING {
     }
 }
 
-/// Which token principal an ACE in a multi-group fixture targets.
+/// Which principal an ACE in a multi-group fixture targets — and, for the
+/// owner-related fixtures, which principal owns the object.
 #[derive(Clone, Copy)]
 enum Principal {
     User,
     Everyone,
     AuthenticatedUsers,
+    /// Well-known `OWNER RIGHTS` (Windows Server 2008+). An ACE for this
+    /// SID governs the *owner's* rights and replaces the implicit
+    /// `READ_CONTROL | WRITE_DAC` grant.
+    OwnerRights,
 }
 
 impl Principal {
@@ -102,6 +107,7 @@ impl Principal {
             Principal::User => user_sid.to_string(),
             Principal::Everyone => "S-1-1-0".to_string(),
             Principal::AuthenticatedUsers => "S-1-5-11".to_string(),
+            Principal::OwnerRights => "S-1-3-4".to_string(),
         }
     }
 }
@@ -144,17 +150,12 @@ unsafe fn windows_accesscheck_mask(
     fixture: &[MultiAce],
     user_sid: &str,
     user_bytes: &mut [u8],
+    owner: Principal,
 ) -> u32 {
     // Build one owned PSID buffer per distinct principal.
     let mut everyone = sid_bytes_from_string("S-1-1-0");
     let mut auth = sid_bytes_from_string("S-1-5-11");
-    let mut psid_for = |p: Principal| -> *mut core::ffi::c_void {
-        match p {
-            Principal::User => user_bytes.as_mut_ptr().cast(),
-            Principal::Everyone => everyone.as_mut_ptr().cast(),
-            Principal::AuthenticatedUsers => auth.as_mut_ptr().cast(),
-        }
-    };
+    let mut owner_rights = sid_bytes_from_string("S-1-3-4");
 
     // DWORD-aligned ACL buffer.
     let mut acl_buf = vec![0u32; 256];
@@ -163,17 +164,31 @@ unsafe fn windows_accesscheck_mask(
         InitializeAcl(pacl, (acl_buf.len() * 4) as u32, ACL_REVISION) != 0,
         "InitializeAcl failed"
     );
-    for ace in fixture {
-        let psid = psid_for(ace.principal);
-        let ok = match ace.kind {
-            AceKind::Allow => AddAccessAllowedAce(pacl, ACL_REVISION, ace.mask, psid),
-            AceKind::Deny => AddAccessDeniedAce(pacl, ACL_REVISION, ace.mask, psid),
+    {
+        // Scoped so the mutable borrows of the SID buffers end before the
+        // owner pointer below is taken.
+        let mut psid_for = |p: Principal| -> *mut core::ffi::c_void {
+            match p {
+                Principal::User => user_bytes.as_mut_ptr().cast(),
+                Principal::Everyone => everyone.as_mut_ptr().cast(),
+                Principal::AuthenticatedUsers => auth.as_mut_ptr().cast(),
+                Principal::OwnerRights => owner_rights.as_mut_ptr().cast(),
+            }
         };
-        assert!(ok != 0, "AddAccess*Ace failed");
+        for ace in fixture {
+            let psid = psid_for(ace.principal);
+            let ok = match ace.kind {
+                AceKind::Allow => AddAccessAllowedAce(pacl, ACL_REVISION, ace.mask, psid),
+                AceKind::Deny => AddAccessDeniedAce(pacl, ACL_REVISION, ace.mask, psid),
+            };
+            assert!(ok != 0, "AddAccess*Ace failed");
+        }
     }
 
-    // Absolute security descriptor: owner+group = the user (so the owner
-    // rights are added on both sides), DACL = the fixture.
+    // Absolute security descriptor. The owner is the fixture's `owner`
+    // principal — normally the user, but the owner-semantics fixtures set a
+    // *group* SID here to ask Windows whether the implicit owner grant
+    // applies in that case. The group stays the user throughout.
     let mut sd: SECURITY_DESCRIPTOR = std::mem::zeroed();
     let psd: *mut core::ffi::c_void = (&mut sd as *mut SECURITY_DESCRIPTOR).cast();
     // 1 == SECURITY_DESCRIPTOR_REVISION
@@ -181,13 +196,19 @@ unsafe fn windows_accesscheck_mask(
         InitializeSecurityDescriptor(psd, 1) != 0,
         "InitializeSecurityDescriptor failed"
     );
-    let user_psid = user_bytes.as_mut_ptr().cast();
+    let owner_psid: *mut core::ffi::c_void = match owner {
+        Principal::User => user_bytes.as_mut_ptr().cast(),
+        Principal::Everyone => everyone.as_mut_ptr().cast(),
+        Principal::AuthenticatedUsers => auth.as_mut_ptr().cast(),
+        Principal::OwnerRights => owner_rights.as_mut_ptr().cast(),
+    };
     assert!(
-        SetSecurityDescriptorOwner(psd, user_psid, 0) != 0,
+        SetSecurityDescriptorOwner(psd, owner_psid, 0) != 0,
         "SetSecurityDescriptorOwner failed"
     );
+    let group_psid: *mut core::ffi::c_void = user_bytes.as_mut_ptr().cast();
     assert!(
-        SetSecurityDescriptorGroup(psd, user_psid, 0) != 0,
+        SetSecurityDescriptorGroup(psd, group_psid, 0) != 0,
         "SetSecurityDescriptorGroup failed"
     );
     assert!(
@@ -239,7 +260,7 @@ unsafe fn windows_accesscheck_mask(
 /// AccessCheck SD), and the engine's token implicitly contains Everyone
 /// and Authenticated Users — the same principals the real process token
 /// holds.
-fn stars_multigroup_mask(fixture: &[MultiAce], user_sid: &str) -> u32 {
+fn stars_multigroup_mask(fixture: &[MultiAce], user_sid: &str, owner: Principal) -> u32 {
     let dacl: Vec<AceEntry> = fixture
         .iter()
         .map(|a| AceEntry {
@@ -255,7 +276,7 @@ fn stars_multigroup_mask(fixture: &[MultiAce], user_sid: &str) -> u32 {
     let fso = FileSystemObject {
         path: NormalizedPath(r"C:\conformance\multigroup".to_string()),
         is_directory: true,
-        owner_sid: Some(Sid(user_sid.to_string())),
+        owner_sid: Some(Sid(owner.sid_string(user_sid))),
         dacl,
         inheritance_disabled: true,
         is_reparse_point: false,
@@ -295,10 +316,19 @@ fn stars_multigroup_mask(fixture: &[MultiAce], user_sid: &str) -> u32 {
 /// Compares Windows `AccessCheck` (token-based, multi-principal) against
 /// the Stars engine for one multi-group fixture.
 fn assert_multigroup_conformance(label: &str, fixture: &[MultiAce]) {
+    assert_multigroup_conformance_owned_by(label, fixture, Principal::User);
+}
+
+/// Like [`assert_multigroup_conformance`], but lets the fixture choose which
+/// principal **owns** the object. Used by the owner-semantics fixtures: the
+/// implicit `READ_CONTROL | WRITE_DAC` owner grant and its suppression by an
+/// `OWNER RIGHTS` ACE were previously only unit-tested, never confirmed
+/// against the real OS.
+fn assert_multigroup_conformance_owned_by(label: &str, fixture: &[MultiAce], owner: Principal) {
     // SAFETY: all calls operate on locally owned buffers / handles.
     let (sid_str, mut user_bytes) = unsafe { current_user_sid() };
-    let win = unsafe { windows_accesscheck_mask(fixture, &sid_str, &mut user_bytes) };
-    let stars = stars_multigroup_mask(fixture, &sid_str);
+    let win = unsafe { windows_accesscheck_mask(fixture, &sid_str, &mut user_bytes, owner) };
+    let stars = stars_multigroup_mask(fixture, &sid_str, owner);
     assert_eq!(
         win, stars,
         "{label}: Windows AccessCheck (0x{win:08X}) != Stars engine (0x{stars:08X})"
@@ -580,6 +610,84 @@ fn conformance_multigroup_deny_one_group_over_allow_another() {
                 principal: Principal::Everyone,
             },
         ],
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Owner semantics and mask expansion.
+//
+// These close the gap the 2026-07-25 review identified: the owner special
+// rule, the OWNER RIGHTS (S-1-3-4) suppression and generic-rights expansion
+// were covered by unit tests only — the conformance net stopped at the
+// stored-order algorithm. Windows is the ground truth for all three.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires a Windows session; run with --ignored"]
+fn conformance_owner_implicit_read_control_and_write_dac() {
+    // The object is owned by the user, and the DACL grants only Read. The
+    // owner nevertheless holds READ_CONTROL + WRITE_DAC implicitly, so the
+    // effective mask must exceed the DACL. Pins the implicit owner grant
+    // against the OS instead of against our own assumption.
+    assert_multigroup_conformance_owned_by(
+        "owner (user) with Allow user Read",
+        &[MultiAce {
+            kind: AceKind::Allow,
+            mask: MASK_READ,
+            principal: Principal::User,
+        }],
+        Principal::User,
+    );
+}
+
+#[test]
+#[ignore = "requires a Windows session; run with --ignored"]
+fn conformance_owner_rights_ace_replaces_implicit_grant() {
+    // OWNER RIGHTS (S-1-3-4) present: per Windows Server 2008+ semantics the
+    // ACE governs the owner's rights and the implicit READ_CONTROL +
+    // WRITE_DAC bonus is suppressed. Stars implements exactly that — this
+    // asks the OS whether the implementation matches.
+    assert_multigroup_conformance_owned_by(
+        "owner (user) with an OWNER RIGHTS Allow Read ACE",
+        &[MultiAce {
+            kind: AceKind::Allow,
+            mask: MASK_READ,
+            principal: Principal::OwnerRights,
+        }],
+        Principal::User,
+    );
+}
+
+// NOTE — why there is no generic-rights conformance fixture (2026-07-25):
+// an ACE carrying a raw `GENERIC_*` bit was measured against `AccessCheck`
+// and the two deliberately disagree: Windows returned the generic bit
+// **unmapped** (`0x8000_0000` still set) while Stars expands it into the
+// specific `FILE_GENERIC_READ` bits. That is not an engine defect —
+// `AccessCheck` maps generic bits only in the *DesiredAccess* argument, not
+// inside ACE masks (mapping ACE masks is the job of whoever creates the
+// ACL, and `SetNamedSecurityInfo` does it). A fixture built with
+// `AddAccessAllowedAce` therefore constructs a descriptor Windows itself
+// would never store on disk, so the comparison measures the fixture, not
+// the engine. `expand_generic_rights` stays defensive for the rare
+// hand-crafted ACL and is covered by unit tests in `mask.rs`.
+
+#[test]
+#[ignore = "requires a Windows session; run with --ignored"]
+fn conformance_owner_is_a_group_in_the_token() {
+    // The decisive experiment for the open review question: the object is
+    // owned by a *group* that is in the token (Everyone), not by the user's
+    // own SID. Stars treats "owner SID is anywhere in the token" as
+    // ownership and adds the implicit grant; Windows only honours a group
+    // owner when the group carries SE_GROUP_OWNER in the token. If the two
+    // disagree, Stars over-reports READ_CONTROL | WRITE_DAC here.
+    assert_multigroup_conformance_owned_by(
+        "owner is Everyone (a token group), DACL grants user Read",
+        &[MultiAce {
+            kind: AceKind::Allow,
+            mask: MASK_READ,
+            principal: Principal::User,
+        }],
+        Principal::Everyone,
     );
 }
 
