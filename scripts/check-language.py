@@ -201,6 +201,13 @@ DE_WORDS = [
     # Identity-picker work (2026-07-19): more German remnants in the GUI that
     # leaked past the gate (short stopword-like stems in main.rs comments).
     "reserviert", "drei", "voll", "funktional", "funktionale", "funktionalen",
+    # Core review 2026-07-25 (C-1): seven German doc remnants in the core
+    # crate that the gate reported as clean. NOTE: the standalone word
+    # "Fall" (from the leaked line "Fall `false`.") is deliberately NOT
+    # listed — it collides with English "fall"; the line was deleted
+    # instead and cannot be guarded by the denylist.
+    "Rohwert", "eindeutig", "Begruendung", "Konstruktionen",
+    "interpretieren", "vorsichtig", "Auditoren", "lesbare",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -356,6 +363,14 @@ def selftest() -> int:
         # Identity-picker work: the exact GUI main.rs lines the gate leaked.
         "// drei voll funktionalen Tabs (Analyze, Scan Tree, Delta).",
         "// Phase reserviert.",
+        # Core review 2026-07-25 C-1: the exact core-crate doc lines the
+        # gate reported as clean. ("Fall `false`." is untestable here —
+        # see the denylist note on the English collision with "fall".)
+        "/// Rohwert von ACE_HEADER.AceType.",
+        "/// Auditoren lesbare Begruendung.",
+        "/// vorsichtig interpretieren.",
+        "/// Konstruktionen.",
+        '/// `"kind": "diagnostic"`) eindeutig.',
     ]
     must_pass = [
         "Risk Findings",
@@ -381,6 +396,9 @@ def selftest() -> int:
         "reconstruct the group topology on every run",
         "three fully functional tabs (Analyze, Scan Tree, Delta)",
         "SearchResults stays reserved for a later phase",
+        # Guards against false positives from the C-1 stem additions.
+        "a SID without an entry falls back to showing the raw SID",
+        "control falls through to the default arm",
     ]
     failures = []
     failures += [f"MISS (should flag): {s!r}" for s in must_flag if not line_has_german(s)]

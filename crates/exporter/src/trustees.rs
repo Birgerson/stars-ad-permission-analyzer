@@ -431,7 +431,6 @@ mod tests {
         assert!(sids.contains(&"S-1-1-0".to_owned()));
     }
 
-    /// Round-10 Finding 4: JSON-Serialisierung trennt eindeutig
     /// Round-10 finding 4: JSON serialization unambiguously separates
     /// `kind: "ace"` and `kind: "diagnostic"`. JSON consumers can no
     /// longer confuse the two.
