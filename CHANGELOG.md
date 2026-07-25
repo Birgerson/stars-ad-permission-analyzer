@@ -10,6 +10,29 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Fixed
+
+- **An unreadable NTFS DACL is no longer reported as "deny all"
+  (fs_scanner review 2026-07-25, FS-1/FS-2).** The F1 fix closed one
+  silent-drop path; this closes the two sibling paths it did not cover:
+  - When `GetAclInformation` failed, the parser returned **empty ACE
+    lists** — indistinguishable from a genuinely empty DACL, which the model
+    defines as *deny all*. A failed read was therefore presented as an
+    authoritative "no access", with no diagnostic and not even a log line.
+  - When `GetAce` failed for an index inside `AceCount`, that ACE was
+    skipped with `continue` — a lost **Deny** over-reports access.
+
+  Both now record a synthetic `UnsupportedAce` (`ACE_TYPE_ACL_UNREADABLE` /
+  `ACE_TYPE_ACE_UNREADABLE`, kept distinct from every real Windows ACE type
+  by a compile-time assertion) plus a `warn!`, so `unsupported_ace_count > 0`,
+  the object is flagged **incomplete** and the `UnsupportedNtfsAces`
+  diagnostic fires. The marker wording in `core`, the CLI and the HTML report
+  now names the new cause ("or a DACL that could not be read at all").
+- **An unreadable owner SID is no longer silent (FS-3).** A non-null owner
+  pointer that fails to convert now logs a warning naming the consequence
+  (the owner's implicit `READ_CONTROL`+`WRITE_DAC` rights are missing from
+  the result) instead of quietly yielding an ownerless object.
+
 ### Changed
 
 - **`ad_resolver` review fixes (ad_resolver review 2026-07-25, AD-1…AD-5).**
