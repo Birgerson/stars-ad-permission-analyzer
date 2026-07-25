@@ -23,7 +23,7 @@ use win_safe::netapi::NetApiBuffer;
 use windows_sys::Win32::Foundation::{GetLastError, FALSE};
 use windows_sys::Win32::Security::{
     GetAce, GetAclInformation, GetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACCESS_DENIED_ACE,
-    ACE_HEADER, ACL, ACL_SIZE_INFORMATION, INHERITED_ACE,
+    ACE_HEADER, ACL, ACL_SIZE_INFORMATION,
 };
 use windows_sys::Win32::Storage::FileSystem::{NetShareEnum, NetShareGetInfo, SHARE_INFO_502};
 
@@ -46,8 +46,6 @@ const ACCESS_DENIED_ACE_TYPE: u8 = 1;
 // ───────────────────────────────────────────────────────────────────────────
 
 /// DACL status of a share.
-/// DACL status of a share.
-///
 ///
 /// `NullDacl` and `Acl(vec![])` have opposite real-world meaning: NULL
 /// means "no access restriction" (full access for everyone), while a
@@ -396,7 +394,6 @@ pub fn effective_share_mask(
         );
     }
 
-    // ACEs. Symmetrisch zu permission_engine::engine::evaluate_dacl_ordered.
     // Stored-order walk: per bit the first matching decision wins; bits
     // already decided are "immune" to later ACEs. Symmetric to
     // permission_engine::engine::evaluate_dacl_ordered.
@@ -565,13 +562,9 @@ unsafe fn sid_to_string(sid: *const core::ffi::c_void) -> Result<String, CoreErr
 ///
 /// # Safety
 /// `sd` must be a valid security descriptor pointer.
-/// Share-DACL-Auswertung isoliert testbar.
-///
 /// Pure classification of a security descriptor's DACL state, independent
 /// of Win32 pointers. Lets the bug-prone part of share DACL evaluation be
 /// unit-tested in isolation.
-///
-/// Semantik (`GetSecurityDescriptorDacl` per MSDN):
 ///
 /// Semantics (`GetSecurityDescriptorDacl` per MSDN):
 ///   `present` is `lpbDaclPresent`, `ptr_is_null` whether `pDacl == NULL`.
@@ -593,10 +586,8 @@ unsafe fn sid_to_string(sid: *const core::ffi::c_void) -> Result<String, CoreErr
 enum DaclClassification {
     /// NULL DACL — no DACL-level access restriction.
     Null,
-    /// Vorhandene DACL ohne ACEs — deny all.
     /// Present DACL with zero ACEs — deny all.
     Empty,
-    /// Normal DACL with at least one ACE.
     /// Normal DACL with at least one ACE.
     Normal,
 }
@@ -671,6 +662,18 @@ unsafe fn parse_share_dacl(
         let mut ace_ptr: *mut core::ffi::c_void = std::ptr::null_mut();
         // SAFETY: dacl_ptr is valid; i is within bounds (0..AceCount).
         if GetAce(dacl_ptr, i, &mut ace_ptr) == FALSE || ace_ptr.is_null() {
+            // SH-2: do not skip silently — a lost Deny ACE would make the
+            // share mask look more permissive than it is. Counting it makes
+            // the result surface as incomplete (`UnsupportedShareAces`).
+            unsupported_count += 1;
+            let err = GetLastError();
+            warn!(
+                share = share_name,
+                index = i,
+                error = err,
+                "GetAce failed for an index inside AceCount — share ACE recorded as \
+                 unsupported (share mask flagged incomplete), not silently skipped"
+            );
             continue;
         }
 
@@ -705,12 +708,22 @@ unsafe fn parse_share_dacl(
         let sid_str = match sid_to_string(sid_ptr) {
             Ok(s) => s,
             Err(e) => {
-                warn!(share = share_name, error = %e, "Cannot convert SID in share ACE");
+                // SH-1: this is finding F1's share-side twin. A *supported*
+                // Allow/Deny ACE whose trustee SID cannot be read must be
+                // counted, not merely logged — otherwise the share mask is
+                // presented as a complete evaluation while an ACE (possibly
+                // a Deny) was dropped, over-reporting SMB access.
+                unsupported_count += 1;
+                warn!(
+                    share = share_name,
+                    error = %e,
+                    "Share ACE trustee SID could not be read — recorded as unsupported \
+                     (share mask flagged incomplete), not silently dropped"
+                );
                 continue;
             }
         };
 
-        let _ = INHERITED_ACE; // suppress unused import warning
         permissions.push(SharePermission {
             share_name: share_name.to_owned(),
             sid: Sid(sid_str),

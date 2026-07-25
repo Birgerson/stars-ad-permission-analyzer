@@ -10,8 +10,40 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Added
+
+- **SMB share inventory — the `adpa shares` command (share_scanner review
+  2026-07-25, SH-3).** The share-enumeration half of `share_scanner` was
+  fully implemented but had **no consumer**: no CLI command, no GUI view,
+  nothing in the user guide, while its module doc called `scan_shares` "the
+  combined entry point". It is now wired up:
+  `adpa shares --server <SERVER> [--include-admin]` lists each share with its
+  UNC path, local target and share-level permissions, distinguishing the
+  three states that mean opposite things — **NULL DACL** (no share-level
+  restriction), **empty DACL** (no access) and an explicit ACE list.
+  Administrative shares (`C$`, `ADMIN$`, `IPC$`) are hidden by default per
+  AGENTS.md and shown with `--include-admin`; a share whose DACL could not be
+  read is listed **with its reason** instead of being dropped, and a share
+  with unevaluated ACEs is explicitly marked as having an incomplete mask.
+  The server name is validated through `validation::net::validate_smb_server`
+  before it reaches the NetAPI (rejects empty values, path separators,
+  control characters, over-length names and IPv6 literals per L13); an
+  enumeration that yields no shares but errors fails loudly rather than
+  looking like an empty success.
+
 ### Fixed
 
+- **Share ACEs are no longer dropped without a trace (share_scanner review
+  2026-07-25, SH-1/SH-2).** Finding F1 ("a supported ACE whose trustee SID
+  cannot be read must be *counted*, not just logged") had been applied to the
+  NTFS side only — its share-side twin still skipped such ACEs without
+  incrementing `unsupported_count`, so the share mask was presented as a
+  complete evaluation while an ACE, possibly a **Deny**, had been dropped:
+  the reported SMB permission could be too high. A failing `GetAce` was
+  likewise skipped with no counter and no log at all. Both now increment the
+  count and warn, so `UnsupportedShareAces` fires and the result is flagged
+  incomplete. (The `GetAclInformation` trap that FS-1 fixed for NTFS does
+  **not** exist here — this crate already propagated it as an error.)
 - **An unreadable NTFS DACL is no longer reported as "deny all"
   (fs_scanner review 2026-07-25, FS-1/FS-2).** The F1 fix closed one
   silent-drop path; this closes the two sibling paths it did not cover:

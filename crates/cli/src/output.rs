@@ -6,9 +6,10 @@
 use adpa_core::model::{
     privileged_group_role, AceKind, DomainTrust, EffectivePermission, FileSystemObject,
     GroupMembersReport, GroupMembership, IdentityKind, MembershipReport, PermissionDiagnostic,
-    RiskFinding, RiskSeverity,
+    RiskFinding, RiskSeverity, Share,
 };
 use permission_engine::NormalizedRights;
+use share_scanner::{ShareDacl, ShareScanResult};
 
 const W: usize = 65;
 const HEAVY: char = '═';
@@ -553,6 +554,119 @@ pub fn print_risk_findings(findings: &[RiskFinding]) {
         );
         println!("              {path}");
     }
+}
+
+/// Prints the SMB share inventory of a server (read-only). One block per
+/// share with its UNC path, local target and share-level permissions.
+///
+/// Administrative shares (`C$`, `ADMIN$`, `IPC$`, …) are omitted unless
+/// `include_admin` is set — AGENTS.md requires them to be hideable, and they
+/// are noise in a normal audit. A share whose DACL could not be read is
+/// listed with the failure reason instead of being dropped, and unevaluated
+/// ACEs are called out per share so a mask is never presented as complete
+/// when it is not.
+pub fn print_shares(result: &ShareScanResult, include_admin: bool) {
+    header("SMB Shares (read-only)");
+
+    let visible: Vec<&Share> = result
+        .shares
+        .iter()
+        .filter(|s| include_admin || !s.is_admin_share)
+        .collect();
+    let hidden = result.shares.len() - visible.len();
+
+    if visible.is_empty() {
+        println!();
+        if hidden > 0 {
+            println!("  No non-administrative shares found ({hidden} administrative share(s)");
+            println!("  hidden — pass --include-admin to show them).");
+        } else {
+            println!("  No shares found on this server.");
+        }
+    }
+
+    for share in &visible {
+        section(&share.name);
+        println!("    UNC path     : {}", share.unc_path);
+        match &share.local_path {
+            Some(p) if !p.0.is_empty() => println!("    Local path   : {}", p.0),
+            // A share without a resolvable local target must stay visible
+            // (AGENTS.md: shares without a valid target path are marked).
+            _ => println!("    Local path   : (none reported — e.g. IPC$ or a special share)"),
+        }
+        if share.is_admin_share {
+            println!("    Type         : administrative / hidden share");
+        }
+
+        match result.share_dacls.iter().find(|(n, _)| n == &share.name) {
+            None => {
+                println!("    Permissions  : (not read)");
+            }
+            Some((_, scan)) => {
+                match &scan.dacl {
+                    ShareDacl::NullDacl => {
+                        println!("    Permissions  : NULL DACL — no share-level restriction");
+                        println!("                   (every principal passes the share layer;");
+                        println!("                    NTFS alone decides the effective right)");
+                    }
+                    ShareDacl::Acl(perms) if perms.is_empty() => {
+                        println!("    Permissions  : empty DACL — no access via this share");
+                    }
+                    ShareDacl::Acl(perms) => {
+                        println!("    Permissions  :");
+                        for p in perms {
+                            let kind = match p.kind {
+                                AceKind::Allow => "Allow",
+                                AceKind::Deny => "Deny ",
+                            };
+                            let label = NormalizedRights::new(p.mask.0).label();
+                            println!(
+                                "      {kind}  {:<46}  {label} (0x{:08X})",
+                                p.sid.0, p.mask.0
+                            );
+                        }
+                    }
+                }
+                if scan.unsupported_count > 0 {
+                    println!(
+                        "    [!] {} share ACE(s) could not be evaluated — this share's mask is",
+                        scan.unsupported_count
+                    );
+                    println!(
+                        "        INCOMPLETE (a hidden Deny among them could change the result)."
+                    );
+                }
+            }
+        }
+    }
+
+    if !result.errors.is_empty() {
+        section("Shares that could not be read");
+        for e in &result.errors {
+            let which = if e.share_name.is_empty() {
+                "(enumeration)"
+            } else {
+                e.share_name.as_str()
+            };
+            println!("    {which}: {}", e.error);
+        }
+    }
+
+    println!();
+    println!(
+        "  {} share(s) shown{}.",
+        visible.len(),
+        if hidden > 0 {
+            format!(", {hidden} administrative share(s) hidden (--include-admin shows them)")
+        } else {
+            String::new()
+        }
+    );
+    println!("  Note: these are the SHARE-level rights only. The effective right a user");
+    println!("  actually has is the more restrictive combination of share and NTFS —");
+    println!("  use `adpa analyze --path \\\\server\\share\\... --user <identity>` for that.");
+    println!();
+    println!("{}", heavy_line());
 }
 
 /// Prints the read-only domain trust inventory (L4). One block per trust with
