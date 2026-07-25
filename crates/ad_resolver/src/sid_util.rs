@@ -54,7 +54,6 @@ pub fn sid_str_to_bytes(sid: &str) -> Result<Vec<u8>, CoreError> {
     bytes.push(revision);
     bytes.push(sub_authorities.len() as u8);
 
-    // Identifier Authority: 6 Bytes big-endian
     // Identifier Authority: 6 bytes big-endian
     bytes.push(((authority >> 40) & 0xFF) as u8);
     bytes.push(((authority >> 32) & 0xFF) as u8);
@@ -154,15 +153,13 @@ mod tests {
     fn local_system_ldap_filter_not_empty() {
         let filter = sid_str_to_ldap_filter("S-1-5-18").unwrap();
         assert!(!filter.is_empty());
-        // S-1-5-18: 1 Revision + 1 SubAuthCount + 6 Authority + 1*4 SubAuth = 12 Bytes
         // S-1-5-18: 1 revision + 1 sub-auth count + 6 authority + 1*4 sub-auth = 12 bytes
-        // 12 Bytes * 3 Zeichen (\xx) = 36 Zeichen / chars
+        // 12 bytes * 3 chars (\xx) = 36 chars
         assert_eq!(filter.len(), 12 * 3);
     }
 
     #[test]
     fn domain_sid_ldap_filter_length() {
-        // S-1-5-21-...-rid hat 28 Bytes = 28 * 3 = 84 Zeichen
         // S-1-5-21-...-rid has 28 bytes = 28 * 3 = 84 chars
         let sid = "S-1-5-21-3623811015-3361044348-30300820-1013";
         let filter = sid_str_to_ldap_filter(sid).unwrap();

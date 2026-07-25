@@ -43,10 +43,10 @@ use windows_sys::Win32::Security::{
     SidTypeGroup, SidTypeInvalid, SidTypeUnknown, SidTypeUser, SidTypeWellKnownGroup,
 };
 
-// resolve_local_group_sids stays in the public API for external callers
-// (e.g. the GUI worker). The SAM resolver now uses the richer
-// resolve_local_group_chains variant; the pure-SID fallback is no longer
-// needed here.
+// The SAM resolver uses the richer resolve_local_group_chains variant,
+// which also yields group names and membership paths for the explanation.
+// (The lossy pure-SID wrapper was removed in the ad_resolver review
+// 2026-07-25 — see the note in local_groups.rs, AD-1.)
 
 /// NERR_UserNotFound status code from lmerr.h.
 const NERR_USER_NOT_FOUND: u32 = 2221;

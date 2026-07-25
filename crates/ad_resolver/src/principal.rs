@@ -79,7 +79,6 @@ impl PrincipalInput {
     }
 }
 
-///
 /// Classifies the identity resolution outcome relative to the
 /// configured LDAP scope. Replaces the former overloaded
 /// [`IdentityKind::Orphaned`] variant which conflated two
@@ -87,7 +86,6 @@ impl PrincipalInput {
 /// a trust domain outside the configured `base_dn`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityScopeStatus {
-    /// `IdentityKind` classification).
     /// LDAP hit inside the configured `base_dn`.
     InsideConfiguredLdapBase,
     /// LDAP miss, but LSA resolved the SID — typical in multi-domain
@@ -99,12 +97,10 @@ pub enum IdentityScopeStatus {
     LookupFailed { reason: String },
 }
 
-/// `group_resolution_via_sam_fallback`.
 /// Status of the group resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupResolutionStatus {
-    /// `LDAP_MATCHING_RULE_IN_CHAIN`. Komplett.
-    /// Recursive LDAP resolution. Complete.
+    /// Recursive LDAP resolution via `LDAP_MATCHING_RULE_IN_CHAIN`. Complete.
     LdapRecursive,
     /// SAM/NetAPI path: only direct domain groups + local group chains.
     SamFlat,
@@ -114,7 +110,6 @@ pub enum GroupResolutionStatus {
     NotAttempted,
 }
 
-/// zusammenfallen.
 /// Tri-state for the `disabled` flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisabledStatus {
@@ -129,7 +124,6 @@ impl DisabledStatus {
     }
 }
 
-/// `PermissionEvaluationInput`-Konstruktion teilen.
 /// Complete principal resolution outcome.
 #[derive(Debug, Clone)]
 pub struct PrincipalResolution {
@@ -362,7 +356,6 @@ pub struct LsaAccountInfo {
 }
 
 // ---------------------------------------------------------------------------
-// Adapter: bestehender LdapResolver als IdentityBackend.
 // Adapter: existing LdapResolver as IdentityBackend.
 // ---------------------------------------------------------------------------
 

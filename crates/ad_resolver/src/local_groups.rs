@@ -94,23 +94,21 @@ pub enum LocalGroupLookupOutcome {
     UserNotFoundOnServer,
 }
 
-///
-///
-/// Returns the SIDs of all local groups on `server` in which `account` is a
-/// direct or transitive member (`LG_INCLUDE_INDIRECT`).
-///
-/// `account`: typically `DOMAIN\username` or `username@domain`.
-pub fn resolve_local_group_sids(
-    server: Option<&str>,
-    account: &str,
-) -> Result<Vec<Sid>, CoreError> {
-    match resolve_local_group_sids_strict(server, account)? {
-        LocalGroupLookupOutcome::WithGroups(v) => Ok(v),
-        LocalGroupLookupOutcome::UserNotFoundOnServer => Ok(Vec::new()),
-    }
-}
+// NOTE: a lossy `resolve_local_group_sids` wrapper existed here until the
+// ad_resolver review 2026-07-25 (AD-1). It returned `Vec<Sid>` and mapped
+// `UserNotFoundOnServer` to an empty vector — silently conflating "the
+// account is unknown on this server" with "the account has no local
+// groups". That is exactly the silent-omission class this project rejects,
+// and it had no production caller (a stale comment claimed the GUI used
+// it; the GUI uses `resolve_local_group_chains_for_identity`).
+//
+// Use instead:
+//   * `resolve_local_group_sids_strict` — same lookup, but the
+//     not-found case stays visible via `LocalGroupLookupOutcome`.
+//   * `resolve_local_group_chains_for_identity` — the richer variant that
+//     also yields group names and membership paths for the explanation,
+//     and derives the account name form from the `Identity` itself.
 
-/// Skips.
 /// Strict variant — distinguishes "not found" from "found, no groups".
 pub fn resolve_local_group_sids_strict(
     server: Option<&str>,
@@ -500,11 +498,6 @@ pub fn resolve_local_group_chains(
     Ok(out)
 }
 
-/// Kandidaten-Loop analog zu [`resolve_local_group_sids_for_identity`].
-/// Returns `Vec<GroupMembership>` with `MembershipPathSource::LocalGroup`,
-/// `Member of BUILTIN\\Administrators [source: LocalGroup]` ausweisen
-///
-///
 /// Identity-aware variant of [`resolve_local_group_chains`] using the
 /// same candidate-list loop as [`resolve_local_group_sids_for_identity`].
 /// Returns `Vec<GroupMembership>` with
@@ -562,7 +555,6 @@ pub fn resolve_local_group_chains_for_identity(
                     }
                     Err(e) => {
                         last_err = Some(e);
-                        // Kandidaten technisch gescheitert (z. B.
                         // chains call failed for this candidate (e.g.
                         // NetLocalGroupGetMembers error); try next.
                         continue;
@@ -689,8 +681,14 @@ mod tests {
     #[test]
     #[ignore = "depends on local Administrator being enabled — fails on GitHub windows-latest"]
     fn administrator_is_in_local_administrators() {
-        let sids = resolve_local_group_sids(None, "Administrator")
+        let outcome = resolve_local_group_sids_strict(None, "Administrator")
             .expect("NetUserGetLocalGroups for local Administrator must succeed");
+        let sids = match outcome {
+            LocalGroupLookupOutcome::WithGroups(v) => v,
+            LocalGroupLookupOutcome::UserNotFoundOnServer => {
+                panic!("local Administrator must be known on this machine")
+            }
+        };
         assert!(
             sids.iter().any(|s| s.0 == "S-1-5-32-544"),
             "Administrator must be in BUILTIN\\Administrators (S-1-5-32-544); got: {:?}",
@@ -698,12 +696,17 @@ mod tests {
         );
     }
 
-    /// Unknown user returns an empty list without an error.
+    /// An unknown account must surface as `UserNotFoundOnServer` — **not** as
+    /// an empty group list. The removed lossy wrapper conflated the two
+    /// (ad_resolver review 2026-07-25, AD-1); this pins the distinction.
     #[test]
-    fn unknown_user_returns_empty() {
-        let sids = resolve_local_group_sids(None, "definitely_not_a_real_user_zz_9f3a8b")
+    fn unknown_user_is_reported_as_not_found_not_as_empty() {
+        let outcome = resolve_local_group_sids_strict(None, "definitely_not_a_real_user_zz_9f3a8b")
             .expect("call must succeed even for unknown users");
-        assert!(sids.is_empty());
+        assert!(
+            matches!(outcome, LocalGroupLookupOutcome::UserNotFoundOnServer),
+            "unknown account must be distinguishable from 'no groups'; got: {outcome:?}"
+        );
     }
 
     use adpa_core::model::IdentityKind;
