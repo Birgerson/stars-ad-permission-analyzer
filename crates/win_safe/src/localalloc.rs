@@ -46,6 +46,10 @@ impl LocalFreeGuard {
     }
 }
 
+// `LocalFreeGuard` holds a raw pointer — deliberately neither `Send` nor
+// `Sync` (same posture as `NetApiBuffer`): callers drop the guard on the
+// thread that constructed it.
+
 impl Drop for LocalFreeGuard {
     fn drop(&mut self) {
         if !self.ptr.is_null() {

@@ -5,8 +5,6 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-# eine fachliche Crate zu verwaessern.
-#
 # Concept: this crate wraps Windows API resources in RAII guards so
 # every success path AND every early-return path (especially `?`)
 # returns the resource correctly. Introduced for review round 10

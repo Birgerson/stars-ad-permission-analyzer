@@ -208,6 +208,9 @@ DE_WORDS = [
     # instead and cannot be guarded by the denylist.
     "Rohwert", "eindeutig", "Begruendung", "Konstruktionen",
     "interpretieren", "vorsichtig", "Auditoren", "lesbare",
+    # win_safe review 2026-07-25 (W-5): German remnant in a Cargo.toml
+    # comment the gate missed.
+    "verwaessern", "fachliche", "fachlichen",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -371,6 +374,9 @@ def selftest() -> int:
         "/// vorsichtig interpretieren.",
         "/// Konstruktionen.",
         '/// `"kind": "diagnostic"`) eindeutig.',
+        # win_safe review 2026-07-25 W-5: the exact Cargo.toml line the
+        # gate reported as clean.
+        "# eine fachliche Crate zu verwaessern.",
     ]
     must_pass = [
         "Risk Findings",

@@ -12,6 +12,34 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Changed
 
+- **`win_safe` review fixes (win_safe review 2026-07-25, W-1…W-5).** A
+  dedicated review of the RAII-guard crate found the guards sound and
+  `NetApiBuffer` adoption total, but `LocalFreeGuard` adoption partial:
+  - **W-1/W-2** — the five-fold duplicated SID→string conversion
+    (`ConvertSidToStringSidW` + hand-rolled UTF-16 length loop + manual
+    `LocalFree`) is now a single shared helper,
+    `win_safe::sid::sid_to_string_lossy`, whose OS string is owned by a
+    `LocalFreeGuard` on every path. All six raw `LocalFree` sites (verified
+    leak-free today, but exactly the fragile pattern the guard was built to
+    kill) now go through the guard — the sixth (`ConvertStringSidToSidW` in
+    `sam.rs`) wraps its pointer in `LocalFreeGuard` directly. Zero raw
+    `LocalFree` calls remain outside `win_safe`. Two real-API tests pin the
+    helper (well-known round-trip, invalid-SID error).
+  - **W-3** — `NetApiBuffer::out_ptr()` now documents its fresh-guard
+    constraint and carries a `debug_assert!` so reusing a filled guard's slot
+    (which would leak the first buffer) is caught in debug builds. All 11
+    call sites verified single-use.
+  - **W-4** — 4 unresolved intra-doc links fixed (`cargo doc` is
+    warning-free for the crate again).
+  - **W-5** — doc residue removed (orphaned `//!` lines, a German comment in
+    `win_safe/Cargo.toml` the language gate missed — gate hardened with the
+    `verwaessern`/`fachliche` stems and the exact line as a selftest case),
+    Send/Sync posture note added to `localalloc.rs`, SAFETY notes added to
+    the netapi tests.
+  - **W-6** (free-return-value logging) is deliberately **not** done: it
+    would add a `tracing` dependency to an otherwise dependency-light
+    soundness crate for a debug-only nicety.
+
 - **Core-crate review fixes (core review 2026-07-25, C-1…C-7).** A dedicated
   review of `adpa_core` found no High issues; the findings are closed:
   - **C-2** — `PermissionDiagnostic::is_incompleteness_trigger()` is now an

@@ -21,7 +21,6 @@ use permission_engine::{build_token_sids_with_context, mask::expand_generic_righ
 use tracing::{debug, info, warn};
 use win_safe::netapi::NetApiBuffer;
 use windows_sys::Win32::Foundation::{GetLastError, FALSE};
-use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::{
     GetAce, GetAclInformation, GetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACCESS_DENIED_ACE,
     ACE_HEADER, ACL, ACL_SIZE_INFORMATION, INHERITED_ACE,
@@ -548,19 +547,14 @@ unsafe fn wide_ptr_to_string(ptr: *const u16) -> String {
 /// # Safety
 /// `sid` must be a valid PSID pointer valid for the duration of this call.
 unsafe fn sid_to_string(sid: *const core::ffi::c_void) -> Result<String, CoreError> {
-    let mut str_ptr: *mut u16 = std::ptr::null_mut();
-    // SAFETY: sid is a valid PSID. The OS allocates str_ptr; we must free it with LocalFree.
-    if ConvertSidToStringSidW(sid as *mut _, &mut str_ptr) == FALSE {
-        return Err(CoreError::InvalidSecurityDescriptor(
-            "ConvertSidToStringSidW failed in share ACE".into(),
-        ));
-    }
-    // SAFETY: str_ptr is a valid null-terminated UTF-16 string allocated by LocalAlloc.
-    let len = (0usize..).take_while(|&i| *str_ptr.add(i) != 0).count();
-    let s = String::from_utf16_lossy(std::slice::from_raw_parts(str_ptr, len));
-    // SAFETY: str_ptr was allocated by LocalAlloc inside ConvertSidToStringSidW.
-    windows_sys::Win32::Foundation::LocalFree(str_ptr as *mut core::ffi::c_void);
-    Ok(s)
+    // SAFETY (caller contract): `sid` is a valid PSID. The shared helper
+    // owns the OS-allocated string via LocalFreeGuard on every path
+    // (win_safe review 2026-07-25, W-1/W-2).
+    win_safe::sid::sid_to_string_lossy(sid).map_err(|code| {
+        CoreError::InvalidSecurityDescriptor(format!(
+            "ConvertSidToStringSidW failed in share ACE: error {code}"
+        ))
+    })
 }
 
 /// Parses the DACL from a share security descriptor into SharePermission entries.
