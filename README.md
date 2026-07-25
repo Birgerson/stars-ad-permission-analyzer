@@ -16,7 +16,7 @@ For every user, the tool shows the effective access rights that actually apply t
 
 > **Stars is exclusively a read-and-analyze tool. It does not modify any permissions, groups, or AD objects.**
 
-![Stars Analyze tab (v1.7.8) — target path, identity, resolution mode, SMB share fields, and the two action buttons "Analyze" and "Who has access?"](docs/screenshots/stars-analyze-tab.png)
+![Stars Analyze tab (v1.7.8) — target path, identity, resolution mode, SMB share fields, and the action buttons "Resolve SID", "Search AD" (live directory identity picker), "Analyze" and "Who has access?"](docs/screenshots/stars-analyze-tab.png)
 
 ## Contents
 

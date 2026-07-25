@@ -10,6 +10,22 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Fixed
+
+- **The GUI directory identity picker ("Search AD") no longer fails on broad
+  searches (found live in lab Block P).** `search_by_query` runs a paged
+  search capped at 50 results (`search_paged_with_limit`); when a query
+  matched more than the cap, the client stopped early and ldap3 abandoned the
+  still-open paged search, which the DC reports as `rc=88` ("cancelled").
+  Stars treated that *expected* abandon as an error and discarded the results,
+  so any query matching more than 50 identities failed with "Directory search
+  failed: … rc=88 (abandoned)". The paged search now returns the entries it
+  collected when it stops at the client limit, and only validates the final
+  status when it consumed the whole result set (a mid-stream server error is
+  still caught). Live-confirmed against the 10k-user lab: a broad query now
+  returns "Showing the first 15 of 50 matches". Only the picker was affected —
+  the CLI `groups`/`members` paths use no limit and never hit the abandon.
+
 ### Documentation
 
 - **Scale-lab live verification recorded (verification.md Block O).** Built a

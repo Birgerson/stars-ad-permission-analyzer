@@ -470,12 +470,14 @@ async fn search_paged_with_limit(
         .map_err(|e| CoreError::LdapQuery(format!("paged search failed: {e}")))?;
 
     let mut entries = Vec::new();
+    let mut stopped_at_limit = false;
     loop {
         match stream.next().await {
             Ok(Some(entry)) => {
                 entries.push(RawEntry::from_search_entry(entry));
                 if let Some(limit) = client_limit {
                     if entries.len() >= limit {
+                        stopped_at_limit = true;
                         break;
                     }
                 }
@@ -489,11 +491,20 @@ async fn search_paged_with_limit(
             }
         }
     }
-    // finish() consumes the stream — still check the result.
+    // finish() consumes the stream. When we deliberately stopped early at the
+    // client limit, ldap3 abandons the still-open paged search, which the
+    // server reports as a non-success final status (`rc=88`, "cancelled").
+    // That abandon is *expected* — treating it as an error would discard the
+    // entries we already collected (identity-picker bug found in lab Block P:
+    // any query matching more than the limit failed). So we only validate the
+    // final status when we consumed the whole result set; a mid-stream server
+    // error is still caught by the `Err` arm above.
     let result = stream.finish().await;
-    result
-        .success()
-        .map_err(|e| CoreError::LdapQuery(format!("paged search final status: {e}")))?;
+    if !stopped_at_limit {
+        result
+            .success()
+            .map_err(|e| CoreError::LdapQuery(format!("paged search final status: {e}")))?;
+    }
     Ok(entries)
 }
 

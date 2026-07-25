@@ -1521,3 +1521,48 @@ exercised interactively, but its LDAP search path is the same one the green
 `groups` / `members` runs prove. The lab is left running and reusable; the
 `corp.test` fixture (`C:\LabShare`, SMB share `LabShare`) stays for future
 runs (GUI screenshots, or an M.5 cross-forest history fixture).
+
+## Block P — GUI directory identity picker ("Search AD") live test + rc=88 fix (2026-07-23)
+
+**Stars version:** v1.7.8 GUI (release), driven against the Block O
+`corp.test` DC (`192.168.11.147`, 10,000 users).
+
+The one v1.7.8 surface not yet exercised interactively was the GUI **identity
+picker** — the "🌐 Search AD" button (review finding X3). Driven live:
+
+### P.1 — Picker works (narrow query)
+
+Mode "Plain LDAP", server `192.168.11.147`, base `DC=corp,DC=test`. Identity
+`u00042` → **"1 directory match."** with the picker row
+`[U] u00042  S-1-5-21-…-1144`. A directory hit carries its SID, so picking a
+row fills the Resolved-SID field directly. Screenshot:
+`docs/screenshots/stars-search-ad.png`.
+
+### P.2 — Bug found: broad queries failed with rc=88
+
+A broad query (`u000`, ~99 matches) failed: **"Directory search failed: …
+paged search final status: … rc=88 (abandoned), text: 'user cancelled'"**.
+Root cause: `search_by_query` runs a paged search capped at 50
+(`search_paged_with_limit(..., Some(50))`); when the match set exceeds the
+cap the client stops early, ldap3 abandons the still-open paged search, and
+the DC returns `rc=88`. Stars treated that *expected* abandon as an error and
+discarded the collected results — so any query matching more than 50
+identities failed. Only the picker was affected (the CLI `groups` / `members`
+paths use no limit). Exactly the class of defect only a live run surfaces.
+
+### P.3 — Fix + live confirmation
+
+`search_paged_with_limit` now returns the entries it collected when it stops
+at the client limit, and validates the final status only when it read the
+whole result set (a mid-stream server error is still caught by the stream's
+`Err` arm). After the fix the same broad `u000` query returns **"Showing the
+first 15 of 50 matches — refine the name to narrow it down."** with 15 domain
+users (`u00001..u00015`, each with SID). Gates green (fmt / clippy / test 692;
+language gate clean).
+
+### Status
+
+The GUI identity picker is now live-verified end to end (narrow **and** broad
+queries), and the rc=88 paged-limit-abandon bug it surfaced is fixed. The
+refreshed `stars-analyze-tab.png` shows the new Search AD button. This closes
+the last unexercised v1.7.8 surface.
