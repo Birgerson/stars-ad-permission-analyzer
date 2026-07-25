@@ -137,7 +137,6 @@ pub struct Identity {
     pub kind: IdentityKind,
     pub disabled: bool,
     /// userPrincipalName from AD (e.g. `max.mustermann@testdomain.local`).
-    /// userPrincipalName from AD (e.g. `max.mustermann@testdomain.local`).
     /// Preferred for Windows NetAPI calls like `NetUserGetLocalGroups`,
     /// since the `DOMAIN\sAMAccountName` form strictly requires the NetBIOS
     /// name which we cannot reliably derive from the DN.
@@ -194,7 +193,6 @@ impl Identity {
 
 /// Access context for permission evaluation.
 ///
-///
 /// Windows adds different well-known SIDs to the access token depending
 /// on logon type. For a faithful AccessCheck reproduction the engine
 /// needs to know whether to simulate a local or remote (SMB) access:
@@ -231,7 +229,6 @@ impl AccessContext {
         Self::LocalInteractive
     }
 
-    ///
     /// Like [`Self::for_path`], but forces `RemoteSmb` as soon as an explicit
     /// SMB context is supplied (`--smb-server` / `--share-name` on the CLI,
     /// the corresponding GUI fields). This fixes round-7 finding 1: a local
@@ -262,9 +259,9 @@ pub struct GroupMembership {
     /// Human-readable group name when the resolver was able to provide
     /// one (e.g. `Domain Admins` from LDAP/NetUserGetGroups or
     /// `BUILTIN\Administrators` from LookupAccountSidW). `None` does not
-    /// mean "no name exists" — it means "this resolver did not supply
-    /// `#[serde(default)]` keeps older cache entries lacking this field
-    /// compatible.
+    /// mean "no name exists" — it means "this resolver did not supply a
+    /// name". `#[serde(default)]` keeps older cache entries lacking this
+    /// field compatible.
     #[serde(default)]
     pub group_name: Option<String>,
     /// Concrete membership path from `member_sid` to `group_sid` (see
@@ -331,10 +328,6 @@ pub fn group_sid_history_diagnostics(memberships: &[GroupMembership]) -> Vec<Per
     d
 }
 
-///
-///
-///
-///
 /// Concrete membership chain from an identity to a group.
 ///
 /// `nodes[0]` is the starting SID (user, computer or group), `nodes[n-1]`
@@ -350,6 +343,8 @@ pub fn group_sid_history_diagnostics(memberships: &[GroupMembership]) -> Vec<Per
 /// membership is established (e.g. via `LDAP_MATCHING_RULE_IN_CHAIN`)
 /// but the exact intermediate sequence is not — typical when the
 /// `memberOf` of an intermediate group entry was truncated by the
+/// server, so the chain could not be walked further. Renderers then
+/// label the path "chain not fully reconstructed".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MembershipPath {
     pub nodes: Vec<Sid>,
@@ -369,11 +364,9 @@ pub enum MembershipPathSource {
     /// Direct or nested domain group membership reconstructed via
     /// concrete `member` edges.
     DomainGroup,
-    /// NetLocalGroupGetMembers).
     /// Local group on the target server (NetUserGetLocalGroups or
     /// NetLocalGroupGetMembers).
     LocalGroup,
-    /// Fall `false`.
     /// Transitive membership is certain (e.g. via
     /// `LDAP_MATCHING_RULE_IN_CHAIN`) but the concrete path could not
     /// be fully reconstructed. `complete` is `false` in this case.
@@ -596,10 +589,8 @@ pub struct AceEntry {
 /// Occurs with object, callback, or vendor-specific ACE types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnsupportedAce {
-    /// Rohwert von ACE_HEADER.AceType.
     /// Raw value from ACE_HEADER.AceType.
     pub ace_type: u8,
-    /// Rohwert von ACE_HEADER.AceFlags.
     /// Raw value from ACE_HEADER.AceFlags.
     pub flags: u8,
     /// Access mask — for standard ACE types (0–15) Mask is immediately after the header.
@@ -644,7 +635,6 @@ pub struct FileSystemObject {
 }
 
 /// SMB share
-/// SMB share
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Share {
     pub name: String,
@@ -678,7 +668,6 @@ pub enum ShareEvalStatus {
     ReadFailed(String),
 }
 
-///
 /// Input state of the share side for a permission evaluation. Carries both
 /// status and mask in the `Applied` case — prevents the ambiguous separation
 /// between "no SMB context" and "share read failed", which both previously
@@ -700,8 +689,6 @@ pub enum ShareMaskStatus {
     ReadFailed(String),
 }
 
-///
-///
 /// Evaluation status of the local server group resolution for a result.
 ///
 /// The target server's local-group SIDs belong to the Windows access token and
@@ -798,7 +785,6 @@ impl EffectivePermission {
     }
 }
 
-///
 /// Structured diagnostic marker attached to an effective permission.
 /// Variant-tagged JSON serialization so future markers can be added without
 /// breaking persisted data.
@@ -812,9 +798,6 @@ pub enum PermissionDiagnostic {
     /// `at_index` is the index of the first ACE that breaks the order.
     NonCanonicalDaclOrder { at_index: usize },
 
-    ///
-    /// (follow-up finding 2 from the 2026-05-25 review).
-    ///
     /// The share-side DACL parser skipped ACE types (e.g. object,
     /// callback or vendor-specific ACEs). The share mask is therefore
     /// potentially incomplete — risk findings for this permission must
@@ -1203,23 +1186,37 @@ impl PermissionDiagnostic {
     /// `EffectivePermission::is_incomplete` and the risk engine. Deliberately
     /// **independent** of [`Self::severity`]: an expected caveat (e.g. the
     /// SAM/LSA fallback) is an incompleteness trigger yet visually `Neutral`.
+    ///
+    /// Exhaustive `match` on purpose, exactly like [`Self::severity`]
+    /// (core review 2026-07-25, C-2): a new variant must be classified
+    /// deliberately — with a `matches!` list it would silently default to
+    /// "complete", the looks-safe-isn't-safe failure mode.
     pub fn is_incompleteness_trigger(&self) -> bool {
-        matches!(
-            self,
+        match self {
+            // The computed rights may be wrong or understated.
             PermissionDiagnostic::UnsupportedShareAces { .. }
-                | PermissionDiagnostic::UnsupportedNtfsAces { .. }
-                | PermissionDiagnostic::DomainGroupRecursionIncomplete
-                | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
-                | PermissionDiagnostic::IdentityLookupFailed { .. }
-                | PermissionDiagnostic::GroupResolutionFailed { .. }
-                | PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
-                | PermissionDiagnostic::GroupResolutionViaGlobalCatalog
-                | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
-                | PermissionDiagnostic::SidHistoryPresent { .. }
-                | PermissionDiagnostic::GroupSidHistoryPresent { .. }
-                | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
-                | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible
-        )
+            | PermissionDiagnostic::UnsupportedNtfsAces { .. }
+            | PermissionDiagnostic::DomainGroupRecursionIncomplete
+            | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
+            | PermissionDiagnostic::IdentityLookupFailed { .. }
+            | PermissionDiagnostic::GroupResolutionFailed { .. }
+            | PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal
+            | PermissionDiagnostic::GroupResolutionViaGlobalCatalog
+            | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
+            | PermissionDiagnostic::SidHistoryPresent { .. }
+            | PermissionDiagnostic::GroupSidHistoryPresent { .. }
+            | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
+            | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible => true,
+            // Informational — the result itself is exact.
+            PermissionDiagnostic::NonCanonicalDaclOrder { .. }
+            | PermissionDiagnostic::IdentityDisabled
+            | PermissionDiagnostic::IdentityDisabledStatusUnknown
+            | PermissionDiagnostic::OwnerRightsAceApplied
+            | PermissionDiagnostic::TrustBoundaryEffectsNotModeled
+            | PermissionDiagnostic::SidHistoryEvaluated { .. }
+            | PermissionDiagnostic::GroupSidHistoryEvaluated { .. }
+            | PermissionDiagnostic::MembersViaPrimaryGroupIncluded { .. } => false,
+        }
     }
 
     /// Visual attention — the single source of truth for marker colour (GUI /
@@ -1290,7 +1287,6 @@ pub enum TrusteeCategory {
     Share,
 }
 
-///
 /// A path-centric ACE entry with raw data — no display formatting. Render
 /// code (GUI / HTML / CSV) derives its own representation from this.
 /// Answers the audit question "who can access X at all?" identity-free.
@@ -1311,8 +1307,6 @@ pub struct PathTrustee {
     pub category: TrusteeCategory,
 }
 
-/// `"kind": "diagnostic"`) eindeutig.
-///
 /// Entry in the path-centric trustee list — either a real ACE or a
 /// diagnostic hint (for example "share DACL could not be read",
 /// "NULL DACL detected"). Before review round 10 diagnostic hints
@@ -1331,7 +1325,6 @@ pub struct PathTrustee {
 pub enum PathTrusteeEntry {
     /// A real ACE from the DACL.
     Ace(PathTrustee),
-    /// Auditoren lesbare Begruendung.
     /// A diagnostic hint. `category` says which layer (NTFS or share)
     /// it refers to; `message` carries the auditor-readable reason.
     Diagnostic {
@@ -1374,7 +1367,6 @@ pub struct RiskFinding {
     pub description: String,
     pub affected_path: Option<NormalizedPath>,
     pub affected_identity: Option<Sid>,
-    /// vorsichtig interpretieren.
     /// `true` if the underlying permission evaluation was incomplete (e.g.
     /// share DACL not readable). Consumers should treat the finding cautiously.
     #[serde(default)]
@@ -1393,7 +1385,7 @@ pub enum RiskSeverity {
 /// Direction of an Active Directory domain/forest trust (`trustDirection`,
 /// MS-ADTS 6.1.6.7.12). Read-only inventory data (L4); Stars never changes a
 /// trust.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrustDirection {
     /// The trust object exists but is disabled (0).
     Disabled,
@@ -1436,7 +1428,7 @@ impl TrustDirection {
 /// configured to filter SIDs or gate authentication, but it deliberately does
 /// **not** model the runtime effect — that would require a synthetic logon,
 /// which violates the read-only principle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct TrustAttributes {
     /// The raw bitmask, preserved so nothing is lost.
     pub raw: u32,
@@ -1532,7 +1524,7 @@ impl TrustAttributes {
 /// object (read-only inventory, L4). Stars never modifies trusts — this type
 /// exists so an auditor can see the trust topology that governs whether
 /// cross-forest / historical SIDs are honored at runtime.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DomainTrust {
     /// DNS name of the trusted domain/forest (`trustPartner`).
     pub partner: String,
@@ -1549,6 +1541,147 @@ pub struct DomainTrust {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Core review 2026-07-25 C-3: the trust inventory must be exportable and
+    /// persistable like every other model type — the serde round-trip must be
+    /// lossless, including the raw bitmask (unknown high bits) and an
+    /// out-of-range direction code.
+    #[test]
+    fn domain_trust_serde_roundtrip_is_lossless() {
+        let t = DomainTrust {
+            partner: "ext.test".to_owned(),
+            flat_name: Some("EXT".to_owned()),
+            direction: TrustDirection::Unknown(9),
+            attributes: TrustAttributes::from_bits(0x8000_001C),
+            sid: Some(Sid("S-1-5-21-1-2-3".to_owned())),
+        };
+        let json = serde_json::to_string(&t).unwrap();
+        let back: DomainTrust = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, t);
+    }
+
+    /// Test helper: an identity carrying `count` historical SIDs of which
+    /// `parsed` could be read as values (core review 2026-07-25, C-6).
+    fn identity_with_history(count: usize, parsed: usize) -> Identity {
+        Identity {
+            sid: Sid("S-1-5-21-1-2-3-1000".to_owned()),
+            name: Some("u1".to_owned()),
+            domain: Some("CORP".to_owned()),
+            kind: IdentityKind::User,
+            disabled: false,
+            user_principal_name: None,
+            sid_history_count: count,
+            sid_history: (0..parsed)
+                .map(|i| Sid(format!("S-1-5-21-9-9-9-{}", 1100 + i)))
+                .collect(),
+        }
+    }
+
+    /// ADR 0056 split on the user side: parsed values are evaluated
+    /// (informational), the remainder stays an incompleteness trigger —
+    /// the under-report path must never get lost.
+    #[test]
+    fn identity_sid_history_diagnostics_splits_evaluated_and_remainder() {
+        let d = identity_with_history(3, 2).sid_history_diagnostics();
+        assert_eq!(
+            d,
+            vec![
+                PermissionDiagnostic::SidHistoryEvaluated { count: 2 },
+                PermissionDiagnostic::SidHistoryPresent { count: 1 },
+            ]
+        );
+    }
+
+    #[test]
+    fn identity_sid_history_diagnostics_edge_cases() {
+        // All values parsed -> informational marker only.
+        let d = identity_with_history(2, 2).sid_history_diagnostics();
+        assert_eq!(
+            d,
+            vec![PermissionDiagnostic::SidHistoryEvaluated { count: 2 }]
+        );
+        // No history -> no markers (no false positive).
+        assert!(identity_with_history(0, 0)
+            .sid_history_diagnostics()
+            .is_empty());
+        // Count-only rows (persisted under ADR 0052, values never fetched)
+        // -> everything stays visible as un-evaluated.
+        let d = identity_with_history(2, 0).sid_history_diagnostics();
+        assert_eq!(
+            d,
+            vec![PermissionDiagnostic::SidHistoryPresent { count: 2 }]
+        );
+    }
+
+    /// Core review 2026-07-25 C-5: `origin_label` is user-visible wording
+    /// shared by CLI and GUI — pin all five outcomes.
+    #[test]
+    fn origin_label_covers_all_five_wordings() {
+        let base = GroupMembership {
+            member_sid: Sid("S-1-5-21-1-2-3-1000".to_owned()),
+            group_sid: Sid("S-1-5-21-1-2-3-512".to_owned()),
+            direct: false,
+            group_name: None,
+            path: None,
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
+        };
+        let with_path =
+            |source, complete, nodes: Vec<&str>, names: Vec<Option<&str>>| GroupMembership {
+                path: Some(MembershipPath {
+                    nodes: nodes.into_iter().map(|s| Sid(s.to_owned())).collect(),
+                    names: names.into_iter().map(|n| n.map(str::to_owned)).collect(),
+                    source,
+                    complete,
+                }),
+                ..base.clone()
+            };
+
+        // 1) primary group and 2) local group win over everything else.
+        let primary = with_path(
+            MembershipPathSource::PrimaryGroup,
+            true,
+            vec!["S-1", "S-2"],
+            vec![None, None],
+        );
+        assert_eq!(primary.origin_label(), "primary group");
+        let local = with_path(
+            MembershipPathSource::LocalGroup,
+            true,
+            vec!["S-1", "S-2"],
+            vec![None, None],
+        );
+        assert_eq!(local.origin_label(), "local group");
+
+        // 3) direct membership.
+        let direct = GroupMembership {
+            direct: true,
+            ..base.clone()
+        };
+        assert_eq!(direct.origin_label(), "direct");
+
+        // 4) complete chain: names where known, raw-SID fallback otherwise.
+        let chain = with_path(
+            MembershipPathSource::DomainGroup,
+            true,
+            vec!["S-1", "S-2", "S-3"],
+            vec![Some("u1"), None, Some("G")],
+        );
+        assert_eq!(chain.origin_label(), "via u1 \u{2192} S-2 \u{2192} G");
+
+        // 5) incomplete chain carries the caveat; no path at all -> "nested".
+        let incomplete = with_path(
+            MembershipPathSource::LdapMatchingRule,
+            false,
+            vec!["S-1", "S-3"],
+            vec![None, None],
+        );
+        assert_eq!(
+            incomplete.origin_label(),
+            "via S-1 \u{2192} S-3 (chain not fully reconstructed)"
+        );
+        assert_eq!(base.origin_label(), "nested");
+    }
 
     #[test]
     fn trust_direction_from_code_maps_known_and_preserves_unknown() {

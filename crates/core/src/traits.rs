@@ -106,8 +106,8 @@ pub struct PermissionEvaluationInput {
     /// the display name (e.g. `Domain Admins` or
     /// `BUILTIN\Administrators`). The engine consults this table for every
     /// SID that appears in `PermissionPath::steps` (user, groups, ACE
-    /// back to showing the raw SID. Defaulting to empty keeps existing
-    /// callers compatible.
+    /// trustees); a SID without an entry falls back to showing the raw
+    /// SID. Defaulting to empty keeps existing callers compatible.
     pub sid_names: BTreeMap<String, String>,
     /// Provenance / incompleteness flags from identity and group resolution
     /// (review finding C1 — grouped instead of a dozen loose booleans). See
@@ -120,8 +120,6 @@ pub struct RiskContext {
     pub findings: Vec<EffectivePermission>,
 }
 
-///
-///
 /// Export call target. Round-8 follow-up finding 1: the `Exporter`
 /// trait now carries the overwrite policy itself so direct trait
 /// consumers cannot accidentally truncate existing audit reports.
@@ -141,7 +139,6 @@ pub enum ExportTarget {
 pub struct AnalysisResult {
     pub permissions: Vec<EffectivePermission>,
     pub risk_findings: Vec<RiskFinding>,
-    /// Konstruktionen.
     /// Path-centric trustee listing (ACEs without an identity context).
     /// Used by the exporter to render the second audit question "who has
     /// any access?" per path. Empty when the caller does not need it —

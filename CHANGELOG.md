@@ -10,6 +10,35 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Changed
+
+- **Core-crate review fixes (core review 2026-07-25, C-1…C-7).** A dedicated
+  review of `adpa_core` found no High issues; the findings are closed:
+  - **C-2** — `PermissionDiagnostic::is_incompleteness_trigger()` is now an
+    **exhaustive `match`** like `severity()`: a future diagnostic variant can
+    no longer silently default to "complete" (the looks-safe-isn't-safe seam);
+    the compiler now forces a deliberate classification. No behaviour change
+    for existing variants.
+  - **C-3** — the trust types (`DomainTrust`, `TrustDirection`,
+    `TrustAttributes`) now derive `Serialize`/`Deserialize` like every other
+    model type, unblocking trust export/persistence follow-ups; lossless
+    round-trip is pinned by a test (raw bitmask + out-of-range direction).
+  - **C-1** — seven German doc remnants in `model.rs`/`traits.rs` removed —
+    all seven were **missed by the CI language gate**; the gate's denylist
+    gained the leaked stems (`Rohwert`, `eindeutig`, `Begruendung`,
+    `Konstruktionen`, `interpretieren`, `vorsichtig`, `Auditoren`, `lesbare`)
+    and the exact lines are now `--selftest` must-flag cases. The new
+    `eindeutig` stem immediately surfaced one more remnant in
+    `exporter/trustees.rs` — also fixed. (`Fall` is deliberately not listed:
+    it collides with English "fall"; the line was deleted instead.)
+  - **C-5/C-6** — two test gaps closed: `origin_label()` (all five user-visible
+    wordings, CLI+GUI shared) and the user-side
+    `Identity::sid_history_diagnostics()` ADR-0056 split including the
+    count-only under-report path.
+  - **C-4/C-7** — documentation repaired: the truncated `MembershipPath`
+    sentence completed ("truncated by the server"), duplicated lines, orphaned
+    `///` blocks, and two mangled sentences fixed.
+
 ### Fixed
 
 - **The GUI directory identity picker ("Search AD") no longer fails on broad
