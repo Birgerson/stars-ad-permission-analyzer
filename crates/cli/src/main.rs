@@ -252,6 +252,23 @@ enum Commands {
         force: bool,
     },
 
+    /// List the SMB shares of a server (read-only) with their share-level
+    /// permissions. Administrative shares (`C$`, `ADMIN$`, `IPC$`, …) are
+    /// hidden unless `--include-admin` is given. This shows the SHARE layer
+    /// only — for a user's effective right use `analyze`, which combines
+    /// share and NTFS. Reading shares requires administrative rights on the
+    /// target server. Stars never modifies a share.
+    Shares {
+        /// Server whose shares are listed (NetBIOS or DNS name, or an IPv4
+        /// address). Empty/omitted is not accepted — name the target
+        /// explicitly.
+        #[arg(short = 's', long)]
+        server: String,
+        /// Also list administrative / hidden shares (`C$`, `ADMIN$`, `IPC$`).
+        #[arg(long)]
+        include_admin: bool,
+    },
+
     /// List the domain's Active Directory trusts (read-only): direction and
     /// `trustAttributes`, including whether SID filtering / quarantine or
     /// Selective Authentication is configured. This surfaces the trust
@@ -428,6 +445,12 @@ async fn main() -> anyhow::Result<()> {
                 },
             )
             .await?;
+        }
+        Commands::Shares {
+            server,
+            include_admin,
+        } => {
+            run_shares(&server, include_admin)?;
         }
         Commands::Trusts {
             server,
@@ -1718,6 +1741,42 @@ async fn run_members(
     if let Some(status) = export_status {
         export_group_members(&report, &status.path().0, force)?;
     }
+    Ok(())
+}
+
+/// `shares` command: list a server's SMB shares with their share-level
+/// permissions (read-only).
+///
+/// The server name is validated through [`validate_smb_server`] **before**
+/// it reaches the NetAPI (AGENTS.md DoD 11: every input is validated in the
+/// core layer, not only in the frontend) — that check rejects empty values,
+/// path separators, control characters, over-length names and IPv6 literals
+/// (known-limitations L13) with a precise message.
+fn run_shares(server: &str, include_admin: bool) -> anyhow::Result<()> {
+    let server = validate_smb_server(server)
+        .map_err(|e| anyhow::anyhow!("Invalid --server: {e}"))?
+        .0;
+
+    let result = share_scanner::scan_shares(&server);
+
+    // An enumeration that failed outright (no shares, only errors) is a hard
+    // error for the operator rather than an empty-looking success: reading
+    // shares needs administrative rights, and a silent empty list would look
+    // like "this server has no shares".
+    if result.shares.is_empty() && !result.errors.is_empty() {
+        let reasons = result
+            .errors
+            .iter()
+            .map(|e| e.error.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(anyhow::anyhow!(
+            "Could not enumerate shares on '{server}': {reasons}. \
+             Reading share information requires administrative rights on the target."
+        ));
+    }
+
+    output::print_shares(&result, include_admin);
     Ok(())
 }
 

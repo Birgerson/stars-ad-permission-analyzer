@@ -789,6 +789,38 @@ rather than returning an empty list. A nested **privileged** group member
 is flagged, and `--output` writes `.json` or `.csv`. This lists **direct**
 members; recursive nesting is planned.
 
+### List a server's SMB shares (read-only)
+
+*Which shares does this server publish, and who may pass the share layer?*
+
+```powershell
+adpa shares --server "fileserver.corp.local"
+adpa shares --server "fileserver.corp.local" --include-admin
+```
+
+Each share is listed with its **UNC path**, its **local target path** and the
+**share-level permissions**. Three states are shown distinctly, because they
+mean opposite things:
+
+- **NULL DACL** — no share-level restriction; everyone passes the share layer
+  and NTFS alone decides. (Typical for the administrative shares.)
+- **empty DACL** — no access at all through this share.
+- a list of Allow/Deny entries with their rights.
+
+**Administrative shares** (`C$`, `ADMIN$`, `IPC$`, …) are **hidden by
+default** — they are noise in a normal audit; `--include-admin` shows them.
+A share whose DACL could not be read is listed with the reason instead of
+being dropped, and if individual ACEs could not be evaluated the share is
+explicitly marked as having an **incomplete** mask.
+
+Reading share information requires **administrative rights** on the target
+server; without them the command fails with a clear message rather than
+returning an empty list that would look like "this server has no shares".
+
+> **This is the share layer only.** A user's real permission is the more
+> restrictive combination of share and NTFS rights — use
+> `adpa analyze --path "\\server\share\folder" --user "CORP\alice"` for that.
+
 ### List the domain's trusts (read-only)
 
 *Which forests/domains does this domain trust, and how are those trusts
