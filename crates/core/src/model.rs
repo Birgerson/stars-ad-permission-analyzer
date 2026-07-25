@@ -816,7 +816,9 @@ pub enum PermissionDiagnostic {
     /// **type** the parser cannot interpret (object, callback, conditional /
     /// Dynamic Access Control, or vendor-specific), and a **supported**
     /// Allow/Deny ACE whose trustee **SID could not be read** (review
-    /// finding F1) — the latter was previously dropped silently. A hidden
+    /// finding F1), an ACE that **could not be retrieved** at all, or a
+    /// **DACL that could not be read** (fs_scanner review FS-1/FS-2) — each
+    /// was previously dropped silently. A hidden
     /// Deny among them could materially change the result, so the displayed
     /// effective permission is a **lower-confidence approximation** — risk
     /// findings for this permission carry `incomplete = true`. `count` is
@@ -1089,9 +1091,9 @@ impl PermissionDiagnostic {
                  mask is potentially incomplete."
             ),
             PermissionDiagnostic::UnsupportedNtfsAces { count } => format!(
-                "{count} NTFS ACE(s) could not be evaluated (unsupported type, or a \
-                 trustee SID that could not be read) — a hidden Deny among them could \
-                 change the result."
+                "{count} NTFS ACE(s) could not be evaluated (unsupported type, an \
+                 unreadable trustee SID, or a DACL that could not be read at all) — a \
+                 hidden Deny among them could change the result."
             ),
             PermissionDiagnostic::DomainGroupRecursionIncomplete => {
                 "Group resolution used the SAM/LSA fallback (no LDAP); nested domain \

@@ -127,10 +127,25 @@ unsafe fn parse_security(
     p_sd: *mut core::ffi::c_void,
     sd_bytes: Vec<u8>,
 ) -> ParsedSecurity {
+    // A null owner pointer is legitimate ("descriptor carries no owner").
+    // A *non-null* pointer that fails to convert is an anomaly: the object
+    // then looks ownerless although it has an owner, and the owner's
+    // implicit READ_CONTROL + WRITE_DAC grant is lost from the result. That
+    // must not pass unremarked (fs_scanner review 2026-07-25, FS-3).
     let owner_sid = if psid_owner.is_null() {
         None
     } else {
-        sid_ptr_to_string(psid_owner).ok().map(Sid)
+        match sid_ptr_to_string(psid_owner) {
+            Ok(s) => Some(Sid(s)),
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "Owner SID present but unreadable — object is reported without an \
+                     owner; the owner's implicit rights are missing from the result"
+                );
+                None
+            }
+        }
     };
 
     // Distinguish NULL DACL from empty DACL:
@@ -262,15 +277,19 @@ pub fn read_file_system_object_cached(
     // Dedup by raw-SD hash (finding 2). Copy the descriptor bytes, hash
     // them, and reuse a cached parse only after a full byte comparison
     // confirms the match — a hash collision must never yield a wrong DACL.
-    // SAFETY: p_sd points to a valid SD of `sd_len` bytes until LocalFree.
     let sd_len = if p_sd.is_null() {
         0usize
     } else {
+        // SAFETY: p_sd is a valid self-relative security descriptor owned by
+        // `_sd_guard` until it drops at the end of this function.
         unsafe { GetSecurityDescriptorLength(p_sd) as usize }
     };
     let sd_bytes: Vec<u8> = if p_sd.is_null() || sd_len == 0 {
         Vec::new()
     } else {
+        // SAFETY: p_sd points to `sd_len` contiguous, initialized bytes (the
+        // length just reported by GetSecurityDescriptorLength) and stays
+        // valid while `_sd_guard` is alive.
         unsafe { std::slice::from_raw_parts(p_sd as *const u8, sd_len) }.to_vec()
     };
     let sd_hash = fnv1a_64(&sd_bytes);
@@ -326,6 +345,31 @@ pub fn read_file_system_object_cached(
     })
 }
 
+/// Synthetic `ace_type` marking **"the ACL itself could not be read"** —
+/// `GetAclInformation` failed, so not a single ACE could be enumerated
+/// (fs_scanner review 2026-07-25, FS-1).
+///
+/// Recorded as one `UnsupportedAce` so the object is flagged incomplete
+/// instead of presenting an unread ACL as a legitimately empty DACL (which
+/// the model defines as "deny all" — an authoritative-looking wrong answer).
+/// `0xFF` is not a valid Windows ACE type, so it cannot collide with a real
+/// one.
+pub const ACE_TYPE_ACL_UNREADABLE: u8 = 0xFF;
+
+/// Synthetic `ace_type` marking **"this single ACE could not be retrieved"**
+/// — `GetAce` failed or returned null for an index inside `AceCount`
+/// (fs_scanner review 2026-07-25, FS-2). Same rationale as
+/// [`ACE_TYPE_ACL_UNREADABLE`]: a silently skipped Deny would over-report
+/// access. `0xFE` is not a valid Windows ACE type.
+pub const ACE_TYPE_ACE_UNREADABLE: u8 = 0xFE;
+
+// Compile-time guarantee that the two synthetic markers stay distinct from
+// each other and from every real Windows ACE type (those are small values,
+// far below 0x40) — a read failure must never be reportable as a genuine
+// unsupported ACE type. Enforced at build time rather than by a test.
+const _: () = assert!(ACE_TYPE_ACL_UNREADABLE != ACE_TYPE_ACE_UNREADABLE);
+const _: () = assert!(ACE_TYPE_ACL_UNREADABLE > 0x40 && ACE_TYPE_ACE_UNREADABLE > 0x40);
+
 /// Result of a single ACE parse attempt.
 enum ParseAceOutcome {
     Entry(AceEntry),
@@ -362,7 +406,26 @@ unsafe fn parse_dacl(dacl: *const ACL) -> (Vec<AceEntry>, Vec<UnsupportedAce>) {
     );
 
     if ok == FALSE {
-        return (Vec::new(), Vec::new());
+        // FS-1: the ACL could not be read at all. Returning empty lists here
+        // would make this indistinguishable from a genuinely empty DACL —
+        // which the model defines as "deny all" — so an unread ACL would be
+        // reported as an authoritative "no access". Record one synthetic
+        // unsupported entry instead: the object is then flagged incomplete
+        // and the `UnsupportedNtfsAces` diagnostic fires.
+        let err = get_last_error();
+        warn!(
+            error = err,
+            "GetAclInformation failed — DACL could not be read; recorded as \
+             unsupported (result flagged incomplete), NOT reported as an empty DACL"
+        );
+        return (
+            Vec::new(),
+            vec![UnsupportedAce {
+                ace_type: ACE_TYPE_ACL_UNREADABLE,
+                flags: 0,
+                mask: 0,
+            }],
+        );
     }
 
     let mut entries = Vec::with_capacity(acl_info.AceCount as usize);
@@ -372,6 +435,21 @@ unsafe fn parse_dacl(dacl: *const ACL) -> (Vec<AceEntry>, Vec<UnsupportedAce>) {
         let mut ace_ptr: *mut core::ffi::c_void = std::ptr::null_mut();
         // SAFETY: dacl is valid; i is within bounds (0..AceCount).
         if GetAce(dacl, i, &mut ace_ptr) == FALSE || ace_ptr.is_null() {
+            // FS-2: do not `continue` silently — a skipped Deny ACE would
+            // over-report access with nothing marking the result incomplete
+            // (the same failure mode F1 fixed for unreadable trustee SIDs).
+            let err = get_last_error();
+            warn!(
+                index = i,
+                error = err,
+                "GetAce failed for an index inside AceCount — ACE recorded as \
+                 unsupported (result flagged incomplete), not silently skipped"
+            );
+            unsupported.push(UnsupportedAce {
+                ace_type: ACE_TYPE_ACE_UNREADABLE,
+                flags: 0,
+                mask: 0,
+            });
             continue;
         }
         match parse_ace(ace_ptr) {
@@ -477,6 +555,53 @@ unsafe fn get_last_error() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FS-1: an unreadable DACL must reach the engine as *incompleteness*,
+    /// never as an empty DACL (which the model defines as "deny all").
+    /// This pins the contract the synthetic marker exists for: one
+    /// unsupported entry ⇒ `unsupported_ace_count > 0` ⇒ the object is
+    /// flagged incomplete and `UnsupportedNtfsAces` fires.
+    #[test]
+    fn acl_unreadable_marker_flags_the_result_incomplete() {
+        use adpa_core::model::{
+            AccessMask, EffectivePermission, Identity, IdentityKind, NormalizedPath,
+            PermissionDiagnostic, PermissionPath, Sid,
+        };
+        let marker = UnsupportedAce {
+            ace_type: ACE_TYPE_ACL_UNREADABLE,
+            flags: 0,
+            mask: 0,
+        };
+        let perm = EffectivePermission {
+            identity: Identity {
+                sid: Sid("S-1-5-21-1-2-3-1000".to_owned()),
+                name: None,
+                domain: None,
+                kind: IdentityKind::User,
+                disabled: false,
+                user_principal_name: None,
+                sid_history_count: 0,
+                sid_history: Vec::new(),
+            },
+            path: NormalizedPath("C:\\X".to_owned()),
+            ntfs_mask: AccessMask(0),
+            share_mask: None,
+            effective_mask: AccessMask(0),
+            path_explanation: PermissionPath { steps: vec![] },
+            share_status: Default::default(),
+            local_group_status: Default::default(),
+            contributing_sids: vec![],
+            // This is what the scanner's marker turns into downstream.
+            unsupported_ace_count: 1,
+            matched_aces: vec![],
+            diagnostics: vec![PermissionDiagnostic::UnsupportedNtfsAces { count: 1 }],
+        };
+        assert!(
+            perm.is_incomplete(),
+            "an unreadable DACL must never look like a definitive 'no access'"
+        );
+        assert_eq!(marker.ace_type, ACE_TYPE_ACL_UNREADABLE);
+    }
     use adpa_core::model::AceKind;
 
     #[test]

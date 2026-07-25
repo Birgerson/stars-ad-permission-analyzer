@@ -265,10 +265,11 @@ fn write_permissions_table(
                     diag_parts.push(format!(
                         "<span class=\"badge badge-medium\" \
                          title=\"The NTFS DACL contained {count} ACE(s) the parser \
-                         could not evaluate — either an unsupported type \
+                         could not evaluate — an unsupported type \
                          (object/callback/conditional/Dynamic Access Control or \
-                         vendor-specific) or a supported Allow/Deny ACE whose \
-                         trustee SID could not be read. The displayed effective \
+                         vendor-specific), a supported Allow/Deny ACE whose \
+                         trustee SID could not be read, or a DACL that could not \
+                         be read at all. The displayed effective \
                          permission is a lower-confidence approximation — a hidden \
                          Deny among them could change the result.\">⚠ {count} unevaluated NTFS ACE(s) — approximate result</span>"
                     ));

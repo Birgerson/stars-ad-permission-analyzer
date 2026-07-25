@@ -258,7 +258,8 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
             }
             PermissionDiagnostic::UnsupportedNtfsAces { count } => {
                 println!("  [!] {count} NTFS ACE(s) could not be evaluated (unsupported type,");
-                println!("      or a trustee SID that could not be read). The displayed effective");
+                println!("      an unreadable trustee SID, or a DACL that could not be read at");
+                println!("      all). The displayed effective");
                 println!("      permission is a LOWER-CONFIDENCE APPROXIMATION — a hidden Deny");
                 println!("      among them could change the result. Risk findings are flagged");
                 println!("      'incomplete' for this path.");
