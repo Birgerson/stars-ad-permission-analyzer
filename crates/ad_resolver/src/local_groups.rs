@@ -20,12 +20,11 @@ use adpa_core::{
 };
 use tracing::{debug, warn};
 use win_safe::netapi::NetApiBuffer;
-use windows_sys::Win32::Foundation::{LocalFree, ERROR_ACCESS_DENIED, FALSE, NO_ERROR};
+use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, FALSE, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
     NetLocalGroupGetMembers, NetUserGetLocalGroups, LG_INCLUDE_INDIRECT, LOCALGROUP_MEMBERS_INFO_2,
     LOCALGROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH,
 };
-use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::LookupAccountNameW;
 
 /// NERR_UserNotFound status code from lmerr.h.
@@ -373,21 +372,12 @@ pub fn get_local_group_members(
             let sid = if e.lgrmi2_sid.is_null() {
                 None
             } else {
-                let mut sid_str_ptr: *mut u16 = std::ptr::null_mut();
-                // SAFETY: lgrmi2_sid is a valid PSID from the NetApi buffer.
-                let ok = unsafe { ConvertSidToStringSidW(e.lgrmi2_sid, &mut sid_str_ptr) };
-                if ok == FALSE || sid_str_ptr.is_null() {
-                    None
-                } else {
-                    // SAFETY: sid_str_ptr is a null-terminated UTF-16 sequence allocated
-                    // via LocalAlloc; freed below with LocalFree.
-                    let s = unsafe { wide_ptr_to_string(sid_str_ptr) };
-                    unsafe { LocalFree(sid_str_ptr.cast()) };
-                    if s.is_empty() {
-                        None
-                    } else {
-                        Some(Sid(s))
-                    }
+                // SAFETY: lgrmi2_sid is a valid PSID inside the NetApi
+                // buffer; the shared helper owns the OS string via
+                // LocalFreeGuard (win_safe review 2026-07-25, W-1/W-2).
+                match unsafe { win_safe::sid::sid_to_string_lossy(e.lgrmi2_sid) } {
+                    Ok(s) if !s.is_empty() => Some(Sid(s)),
+                    _ => None,
                 }
             };
             // SAFETY: lgrmi2_domainandname is a null-terminated UTF-16
@@ -674,16 +664,11 @@ fn lookup_account_sid(system: Option<&str>, name: &str) -> Option<String> {
         return None;
     }
 
-    let mut sid_str: *mut u16 = std::ptr::null_mut();
-    // SAFETY: sid_buf contains a valid SID written by LookupAccountNameW.
-    let ok = unsafe { ConvertSidToStringSidW(sid_buf.as_ptr() as *mut _, &mut sid_str) };
-    if ok == FALSE {
-        return None;
-    }
-    // SAFETY: sid_str was allocated by Windows via LocalAlloc; we free it below.
-    let s = unsafe { wide_ptr_to_string(sid_str) };
-    unsafe { LocalFree(sid_str as *mut _) };
-    Some(s)
+    // SAFETY: sid_buf contains a valid SID written by LookupAccountNameW;
+    // the shared helper owns the OS string via LocalFreeGuard and also
+    // covers the null double-check this site previously missed
+    // (win_safe review 2026-07-25, W-1/W-2).
+    unsafe { win_safe::sid::sid_to_string_lossy(sid_buf.as_ptr().cast()) }.ok()
 }
 
 #[cfg(test)]

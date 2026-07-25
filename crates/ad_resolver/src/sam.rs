@@ -32,12 +32,12 @@ use adpa_core::model::{
 };
 use tracing::{debug, warn};
 use win_safe::netapi::NetApiBuffer;
-use windows_sys::Win32::Foundation::{LocalFree, ERROR_ACCESS_DENIED, FALSE, NO_ERROR};
+use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, FALSE, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
     NetUserGetGroups, NetUserGetInfo, GROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH, UF_ACCOUNTDISABLE,
     USER_INFO_1,
 };
-use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
+use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::{
     LookupAccountNameW, LookupAccountSidW, SidTypeAlias, SidTypeComputer, SidTypeDeletedAccount,
     SidTypeGroup, SidTypeInvalid, SidTypeUnknown, SidTypeUser, SidTypeWellKnownGroup,
@@ -80,12 +80,12 @@ pub fn lookup_account_for_sid(sid_str: &str) -> Result<AccountInfo, CoreError> {
         )));
     }
 
-    let result = lookup_account_for_sid_ptr(sid_ptr);
+    // SAFETY: sid_ptr was allocated by ConvertStringSidToSidW; the guard
+    // owns the LocalFree on every path — including any future `?` between
+    // conversion and use (win_safe review 2026-07-25, W-1).
+    let _sid_guard = unsafe { win_safe::localalloc::LocalFreeGuard::new(sid_ptr) };
 
-    // SAFETY: sid_ptr was allocated by ConvertStringSidToSidW; LocalFree
-    // is the documented release call.
-    unsafe { LocalFree(sid_ptr) };
-    result
+    lookup_account_for_sid_ptr(sid_ptr)
 }
 
 fn lookup_account_for_sid_ptr(sid_ptr: *mut std::ffi::c_void) -> Result<AccountInfo, CoreError> {
@@ -260,18 +260,15 @@ pub fn lookup_sid_for_account(system: Option<&str>, name: &str) -> Result<Sid, C
         )));
     }
 
-    let mut sid_str: *mut u16 = std::ptr::null_mut();
-    // SAFETY: sid_buf contains a valid SID written by LookupAccountNameW.
-    let ok = unsafe { ConvertSidToStringSidW(sid_buf.as_ptr() as *mut _, &mut sid_str) };
-    if ok == FALSE || sid_str.is_null() {
-        return Err(CoreError::SidResolution(format!(
-            "ConvertSidToStringSidW failed for '{name}'"
-        )));
-    }
-    // SAFETY: sid_str was allocated by Windows via LocalAlloc.
-    let s = unsafe { wide_ptr_to_string(sid_str) };
-    // SAFETY: sid_str must be released with LocalFree per the API contract.
-    unsafe { LocalFree(sid_str as *mut _) };
+    // SAFETY: sid_buf contains a valid SID written by LookupAccountNameW;
+    // the shared helper owns the OS string via LocalFreeGuard on every
+    // path (win_safe review 2026-07-25, W-1/W-2).
+    let s =
+        unsafe { win_safe::sid::sid_to_string_lossy(sid_buf.as_ptr().cast()) }.map_err(|code| {
+            CoreError::SidResolution(format!(
+                "ConvertSidToStringSidW failed for '{name}': error {code}"
+            ))
+        })?;
     Ok(Sid(s))
 }
 

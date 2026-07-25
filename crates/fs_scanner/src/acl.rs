@@ -16,7 +16,7 @@ use tracing::{debug, warn};
 
 use std::collections::HashMap;
 
-use windows_sys::Win32::Foundation::{LocalFree, ERROR_ACCESS_DENIED, ERROR_SUCCESS, FALSE};
+use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_SUCCESS, FALSE};
 use windows_sys::Win32::Security::{
     AclSizeInformation, GetAce, GetAclInformation, GetSecurityDescriptorControl,
     GetSecurityDescriptorLength, ACCESS_ALLOWED_ACE, ACCESS_DENIED_ACE, ACE_HEADER, ACL,
@@ -27,9 +27,7 @@ use windows_sys::Win32::Security::{
 // Not exported as constants in windows-sys 0.59 — raw values from WinNT.h
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const ACCESS_DENIED_ACE_TYPE: u8 = 1;
-use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
-};
+use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
 use windows_sys::Win32::Storage::FileSystem::{
     GetFileAttributesW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
     INVALID_FILE_ATTRIBUTES,
@@ -64,21 +62,12 @@ fn split_ace_flags(ace_flags: u8) -> (u32, u32) {
 /// # Safety
 /// `sid` must be a valid PSID pointer that remains valid for the duration of the call.
 unsafe fn sid_ptr_to_string(sid: *const core::ffi::c_void) -> Result<String, CoreError> {
-    let mut str_ptr: *mut u16 = std::ptr::null_mut();
-    // SAFETY: sid is a valid PSID pointer provided by the Windows API (GetNamedSecurityInfoW
-    // or GetAce). The OS allocates str_ptr via LocalAlloc; we must free it with LocalFree.
-    if ConvertSidToStringSidW(sid as *mut _, &mut str_ptr) == FALSE {
-        let err = get_last_error();
-        return Err(CoreError::InvalidSecurityDescriptor(format!(
-            "ConvertSidToStringSidW failed: error {err}"
-        )));
-    }
-    // SAFETY: ConvertSidToStringSidW allocated a null-terminated wide string at str_ptr.
-    let len = (0usize..).take_while(|&i| *str_ptr.add(i) != 0).count();
-    let sid_string = String::from_utf16_lossy(std::slice::from_raw_parts(str_ptr, len));
-    // SAFETY: str_ptr was allocated by LocalAlloc inside ConvertSidToStringSidW.
-    LocalFree(str_ptr as *mut core::ffi::c_void);
-    Ok(sid_string)
+    // SAFETY (caller contract): `sid` is a valid PSID. The shared helper
+    // owns the OS-allocated string via LocalFreeGuard on every path
+    // (win_safe review 2026-07-25, W-1/W-2).
+    win_safe::sid::sid_to_string_lossy(sid).map_err(|err| {
+        CoreError::InvalidSecurityDescriptor(format!("ConvertSidToStringSidW failed: error {err}"))
+    })
 }
 
 /// Parsed, owned result of reading a security descriptor — cacheable by

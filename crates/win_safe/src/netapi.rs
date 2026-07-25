@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-//!
 //! RAII guard for buffers allocated by `NetApi*` functions.
 //!
-//! Background: many `NetApi*` functions (for example [`NetShareEnum`],
-//! [`NetShareGetInfo`], [`NetUserEnum`], [`NetLocalGroupGetMembers`])
+//! Background: many `NetApi*` functions (for example `NetShareEnum`,
+//! `NetShareGetInfo`, `NetUserEnum`, `NetLocalGroupGetMembers`)
 //! allocate a buffer internally on success and hand the caller an
 //! out-pointer. The caller must release that buffer with
 //! [`NetApiBufferFree`].
@@ -82,7 +81,17 @@ impl<T> NetApiBuffer<T> {
     /// Returns an out-pointer slot for direct use in a `NetApi*`
     /// signature: `&mut buf.out_ptr()`. The pointer in the slot is
     /// freed when the guard is dropped.
+    ///
+    /// Intended for a **fresh** guard ([`NetApiBuffer::null`]): if the
+    /// guard already owned a buffer, whatever the API writes into the
+    /// slot would replace that pointer *without freeing it* — the debug
+    /// assertion pins this constraint (win_safe review 2026-07-25, W-3).
+    /// Every workspace call site creates a fresh guard per call.
     pub fn out_ptr(&mut self) -> *mut *mut T {
+        debug_assert!(
+            self.ptr.is_null(),
+            "out_ptr() on a NetApiBuffer that already owns a buffer would leak it"
+        );
         &mut self.ptr
     }
 
@@ -133,14 +142,19 @@ mod tests {
         let slot = guard.out_ptr();
         // We don't write a real NetApi pointer here because we can't
         // free it without the real allocator. We only verify `slot`
-        // is writable — and reset it to null before drop.
+        // is writable — and reset it to null before drop. The reset goes
+        // through the *same* slot (not a second `out_ptr()` call), which
+        // also respects the fresh-guard debug assertion (W-3).
+        // SAFETY: `slot` points at the guard's own pointer field; writing
+        // a dummy value is fine as long as it is nulled before drop.
         unsafe {
             *slot = 0xDEAD_BEEF as *mut u8;
         }
         assert!(!guard.is_null());
-        // Reset to null before drop to avoid invalid free.
+        // SAFETY: same slot as above — reset to null so drop never frees
+        // the dummy value.
         unsafe {
-            *guard.out_ptr() = std::ptr::null_mut();
+            *slot = std::ptr::null_mut();
         }
     }
 }
