@@ -620,6 +620,36 @@ download-and-verify step.
 
 ---
 
+## L13 — IPv6 literals are not accepted as server addresses
+
+**Priority:** Low — DNS names and IPv4 addresses work; IPv6-only
+environments are rare for AD DCs today.
+
+### Problem
+
+The hostname validator (`validation::net::check_hostname`) accepts only
+letters, digits, `.`, `-`, and `_`. An IPv6 literal (`::1`, `fe80::…`,
+`2001:db8::…`) contains `:` and is rejected — for **both** the LDAP
+endpoint (`--server`, GUI Server field) and the SMB server
+(`--smb-server`). The error message names the limitation explicitly.
+
+### Effect
+
+In an IPv6-only (or IPv6-preferred, no-DNS) environment, Stars cannot be
+pointed at a DC or file server by address. With a resolvable DNS name or
+an IPv4 address there is no restriction.
+
+### Resolution
+
+Deliberately documented instead of implemented (validation review
+2026-07-25, VA-4): real support needs bracket handling for LDAP URLs
+(`ldaps://[fe80::1]:636`) and the Windows `ipv6-literal.net`
+transformation for UNC/NetAPI paths — neither is implemented or
+lab-verified (the lab is IPv4). If IPv6 support is added, both paths must
+be built and live-tested together, plus user-guide examples.
+
+---
+
 ## Status overview
 
 | Limit | Priority | Marker present? | Resolvable? |
@@ -636,6 +666,7 @@ download-and-verify step.
 | L10 — SD dedup scan-local only | Low | n/a | yes, with a descriptor table + migration |
 | L11 — Engine module size | Low | n/a | optional refactor (readability only, not a defect) |
 | L12 — Manual updates / `update_manager` extension point | Low | n/a | by design; fail-closed seam, implement a real verifier only if in-app updates are required |
+| L13 — IPv6 literals rejected as server addresses | Low | n/a (explicit validation error) | yes — bracket handling (LDAP) + `ipv6-literal.net` (UNC/NetAPI), must be built and lab-verified together |
 
 ## Contribution policy
 

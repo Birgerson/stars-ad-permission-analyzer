@@ -211,6 +211,12 @@ DE_WORDS = [
     # win_safe review 2026-07-25 (W-5): German remnant in a Cargo.toml
     # comment the gate missed.
     "verwaessern", "fachliche", "fachlichen",
+    # validation review 2026-07-25 (VA-1): ten German doc remnants across
+    # six files, all reported clean by the gate.
+    "bekannte", "Endung", "Zielverzeichnis", "existiert",
+    "Eingaben", "validieren", "Validierter", "Variante",
+    "niemals", "explizit", "gesetzter", "Typisierter",
+    "enthaelt", "beide", "Bausteine", "Pfaden", "arbeitet", "Abfragen",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -377,6 +383,17 @@ def selftest() -> int:
         # win_safe review 2026-07-25 W-5: the exact Cargo.toml line the
         # gate reported as clean.
         "# eine fachliche Crate zu verwaessern.",
+        # validation review 2026-07-25 VA-1: the exact lines the gate
+        # reported as clean.
+        "/// - bekannte Endung (.db, .sqlite, .sqlite3) / recognized extension",
+        "/// - Zielverzeichnis existiert / parent directory exists",
+        "/// 11: Eingaben validieren).",
+        "/// Validierter Export-Zielpfad.",
+        "/// Validierter SMB-Freigabename.",
+        "// Lokaler Long-Path — niemals UNC.",
+        "/// Share-DACL-Abfragen. Ein explizit gesetzter `smb_server` hat",
+        "/// Typisierter SMB-Audit-Kontext: enthaelt **beide** Bausteine",
+        "/// Pfaden arbeitet.",
     ]
     must_pass = [
         "Risk Findings",
@@ -405,6 +422,9 @@ def selftest() -> int:
         # Guards against false positives from the C-1 stem additions.
         "a SID without an entry falls back to showing the raw SID",
         "control falls through to the default arm",
+        # Guards against false positives from the VA-1 stem additions.
+        "the two variants stay distinguishable for audits",
+        "the share DACL queries run against the effective server",
     ]
     failures = []
     failures += [f"MISS (should flag): {s!r}" for s in must_flag if not line_has_german(s)]

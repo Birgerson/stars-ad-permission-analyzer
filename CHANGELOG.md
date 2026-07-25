@@ -12,6 +12,37 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Changed
 
+- **`validation` review fixes (validation review 2026-07-25, VA-1…VA-6).**
+  A dedicated review of the boundary crate found no High issues (131 tests,
+  systematic error-path coverage, CLI and GUI provably share the same
+  boundary functions); the findings are closed:
+  - **VA-2** — removed the dead `validate_thread_limit`/`ThreadLimit`
+    validator: the product has no thread-count input anywhere (no CLI flag,
+    no GUI field, no config value) — a validator without an input is
+    speculative code (same class as the closed V1). A note marks where it
+    returns if a parallel-scan option is ever added.
+  - **VA-3** — removed the dead `WindowsApiPath` wrapper type (+ its `From`
+    impls and tests): every call site uses the plain `to_windows_api_path`
+    function; the wrapper had zero users.
+  - **VA-4** — IPv6 limitation made honest: server-address validation now
+    rejects `:` with an **explicit** "IPv6 literals are not supported
+    (known-limitations L13)" message instead of a generic invalid-character
+    error; new **known-limitations L13** documents why (bracket handling for
+    LDAP URLs + `ipv6-literal.net` for UNC/NetAPI would have to be built and
+    lab-verified together). Pinned by a test asserting the message names the
+    limitation.
+  - **VA-5** — the deliberate policy difference between export paths
+    (relative allowed — one-shot session artifact, documented CLI examples
+    use `--output report.csv`) and the database path (absolute required —
+    persistent store) is now documented at both validators instead of
+    looking like an accident.
+  - **VA-1/VA-6** — ten German doc remnants across six files removed (all
+    were reported clean by the language gate); gate hardened with 18 new
+    stems and the exact lines as selftest must-flag cases (now 45/25). The
+    new stems immediately surfaced **four more remnants** in
+    `ad_resolver`/`persistence`/`update_manager`/`validation` — also fixed.
+    Plus orphaned `///` blocks and a duplicated English sentence cleaned up.
+
 - **`win_safe` review fixes (win_safe review 2026-07-25, W-1…W-5).** A
   dedicated review of the RAII-guard crate found the guards sound and
   `NetApiBuffer` adoption total, but `LocalFreeGuard` adoption partial:

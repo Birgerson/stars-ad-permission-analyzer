@@ -19,8 +19,11 @@ const ALLOWED_EXTENSIONS: &[&str] = &["db", "sqlite", "sqlite3"];
 
 /// Validates a user-supplied database path.
 ///
-/// - bekannte Endung (.db, .sqlite, .sqlite3) / recognized extension
-/// - Zielverzeichnis existiert / parent directory exists
+/// - absolute path (drive letter or UNC) — unlike an export path, the
+///   database is a persistent store reused across sessions, so it must
+///   not silently depend on the current working directory
+/// - recognized extension (.db, .sqlite, .sqlite3)
+/// - parent directory exists
 pub fn validate_db_path(input: &str) -> Result<ValidatedDbPath, CoreError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {

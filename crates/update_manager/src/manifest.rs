@@ -20,7 +20,6 @@ use crate::UpdateChannel;
 /// than user-supplied paths.
 const FORBIDDEN_PATH_CHARS: &[char] = &['<', '>', '"', '|', '?', '*'];
 
-/// Endung.
 /// Reserved Windows device names (case-insensitive). A segment whose stem
 /// matches one of these is invalid regardless of its extension.
 const RESERVED_DEVICE_NAMES: &[&str] = &[

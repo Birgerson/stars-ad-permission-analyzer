@@ -4,7 +4,6 @@
 use adpa_core::error::CoreError;
 use std::path::{Path, PathBuf};
 
-/// Validierter Export-Zielpfad.
 /// Validated export target path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedExportPath(pub PathBuf);
@@ -37,6 +36,13 @@ impl ExportPathStatus {
 ///
 /// Returns `ExportPathStatus::Exists` when the target file is already present
 /// so the caller can ask the user for confirmation before overwriting.
+///
+/// Deliberately accepts **relative** paths (resolved against the current
+/// working directory) — an export is a one-shot artifact of the invoking
+/// session, and the documented CLI examples use forms like
+/// `--output report.csv`. This differs from [`crate::db_path`], which
+/// requires an absolute path because the database is a persistent store
+/// reused across sessions (validation review 2026-07-25, VA-5).
 pub fn validate_export_path(input: &str) -> Result<ExportPathStatus, CoreError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {

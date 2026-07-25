@@ -319,7 +319,6 @@ mod tests {
         {
             assert_eq!(old_mask.0, MASK_READ);
             assert_eq!(new_mask.0, MASK_MODIFY);
-            // beide Trigger gleichzeitig an.
             // mk_perm sets ntfs_mask = effective_mask, so both
             // triggers fire at the same time.
             assert!(reasons.contains(&DeltaReason::EffectiveMaskChanged));
