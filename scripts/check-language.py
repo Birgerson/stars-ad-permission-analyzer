@@ -217,6 +217,10 @@ DE_WORDS = [
     "Eingaben", "validieren", "Validierter", "Variante",
     "niemals", "explizit", "gesetzter", "Typisierter",
     "enthaelt", "beide", "Bausteine", "Pfaden", "arbeitet", "Abfragen",
+    # ad_resolver review 2026-07-25 (AD-3): German doc remnants across four
+    # modules, all reported clean by the gate.
+    "Kandidaten", "gescheitert", "bestehender", "Komplett",
+    "zusammenfallen", "Konstruktion", "teilen", "ausweisen", "analog",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -394,6 +398,18 @@ def selftest() -> int:
         "/// Share-DACL-Abfragen. Ein explizit gesetzter `smb_server` hat",
         "/// Typisierter SMB-Audit-Kontext: enthaelt **beide** Bausteine",
         "/// Pfaden arbeitet.",
+        # ad_resolver review 2026-07-25 AD-3: the exact lines the gate
+        # reported as clean.
+        "/// Kandidaten-Loop analog zu [`resolve_local_group_sids_for_identity`].",
+        "// Kandidaten technisch gescheitert (z. B.",
+        "// Adapter: bestehender LdapResolver als IdentityBackend.",
+        "/// `LDAP_MATCHING_RULE_IN_CHAIN`. Komplett.",
+        "/// `PermissionEvaluationInput`-Konstruktion teilen.",
+        # NOTE: the sid_util remnant "// Identifier Authority: 6 Bytes
+        # big-endian" is deliberately NOT listed — apart from the
+        # German-style capitalised "Bytes" it consists of English words, so
+        # no denylist entry can catch it without flagging legitimate English
+        # (same situation as "Fall `false`."). It was deleted at the source.
     ]
     must_pass = [
         "Risk Findings",

@@ -2,6 +2,13 @@
 // Copyright (c) 2026 Birger Labinsch
 
 //! ad_resolver — Active Directory access, SID resolution, and group resolution via LDAP.
+//!
+//! The re-exports below are the crate's **convenience surface**: they cover
+//! what the frontends actually consume. Building blocks used only inside the
+//! crate are deliberately *not* re-exported (ad_resolver review 2026-07-25,
+//! AD-4) — every re-export is a maintenance promise. They remain reachable
+//! through their module path (e.g. `ad_resolver::sam::lookup_account_for_sid`)
+//! if a caller ever needs them.
 
 pub mod config;
 #[cfg(windows)]
@@ -21,10 +28,8 @@ pub use config::{LdapConfig, TlsMode};
 pub use enumerate::{enumerate_all, IdentitySnapshot};
 #[cfg(windows)]
 pub use local_groups::{
-    format_account_candidates_for_local_groups, format_account_for_local_groups,
-    resolve_local_group_chains_for_identity, resolve_local_group_sids,
-    resolve_local_group_sids_for_identity, resolve_local_group_sids_strict,
-    LocalGroupLookupOutcome,
+    resolve_local_group_chains_for_identity, resolve_local_group_sids_for_identity,
+    resolve_local_group_sids_strict, LocalGroupLookupOutcome,
 };
 #[cfg(not(windows))]
 pub use principal::NoLsaBackend;
@@ -38,7 +43,7 @@ pub use principal::{
 pub use resolver::LdapResolver;
 #[cfg(windows)]
 pub use sam::{
-    build_sid_name_map, lookup_account_for_sid, lookup_sid_for_account, resolve_identity_via_sam,
-    user_account_disabled, user_global_group_names, AccountInfo, SamResolution, SidNameResolver,
+    build_sid_name_map, lookup_sid_for_account, resolve_identity_via_sam, SamResolution,
+    SidNameResolver,
 };
-pub use trusts::{parse_trust, resolve_domain_trusts};
+pub use trusts::resolve_domain_trusts;

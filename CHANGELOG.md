@@ -12,6 +12,34 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Changed
 
+- **`ad_resolver` review fixes (ad_resolver review 2026-07-25, AD-1…AD-5).**
+  A dedicated review of the largest crate (6.6k lines) confirmed the
+  security-critical parts sound — **all nine LDAP filter sites escape their
+  input**, credentials never reach a log (hand-written masking `Debug`, no
+  `Serialize`, verified per `tracing` call), and zero
+  `unwrap`/`panic`/`TODO` in production. Findings closed:
+  - **AD-1** — removed the lossy `resolve_local_group_sids` wrapper. It
+    mapped "account unknown on this server" to an **empty group list**,
+    silently conflating "not found" with "has no local groups" — the
+    silent-omission class this project rejects. It had no production caller,
+    while a stale comment claimed the GUI used it (the GUI uses
+    `resolve_local_group_chains_for_identity`). Both its tests were ported to
+    `resolve_local_group_sids_strict`; the unknown-account test now **pins
+    the distinction** instead of asserting the conflated behaviour.
+  - **AD-2** — added the four missing `SAFETY:` notes in `enumerate.rs`
+    (sibling `wide_ptr_to_string` calls on the same NetApi buffer). Sound
+    before, documented now.
+  - **AD-4** — trimmed the `lib.rs` convenience re-exports to what the
+    frontends actually consume; internal building blocks stay reachable via
+    their module path. Deliberately minimal: re-exports needed to *name* a
+    public function's return type were kept.
+  - **AD-3/AD-5** — nine German doc remnants across four modules removed (all
+    reported clean by the language gate); gate hardened with nine new stems
+    and the exact lines as selftest cases (now 50/25). One remnant is
+    documented as un-guardable (it contains no unambiguously German word,
+    like the earlier `Fall` case) and was deleted at the source. Orphaned
+    `///` blocks cleaned up.
+
 - **`validation` review fixes (validation review 2026-07-25, VA-1…VA-6).**
   A dedicated review of the boundary crate found no High issues (131 tests,
   systematic error-path coverage, CLI and GUI provably share the same

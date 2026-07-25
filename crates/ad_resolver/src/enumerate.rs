@@ -146,7 +146,11 @@ fn list_users(server: Option<&str>, domain: &str) -> Result<Vec<IdentitySnapshot
                 if name.is_empty() {
                     continue;
                 }
+                // SAFETY: same contract as `usri10_name` above — both fields
+                // are null-terminated UTF-16 strings (or null) inside the
+                // same NetApi buffer, valid while `buf` owns it.
                 let comment = unsafe { wide_ptr_to_string(entry.usri10_comment) };
+                // SAFETY: as above, for the full-name field.
                 let full = unsafe { wide_ptr_to_string(entry.usri10_full_name) };
                 let description = if !comment.is_empty() { comment } else { full };
                 out.push(IdentitySnapshot {
@@ -217,6 +221,9 @@ fn list_global_groups(
                 if name.is_empty() {
                     continue;
                 }
+                // SAFETY: same contract as `grpi1_name` above — a
+                // null-terminated UTF-16 string (or null) inside the same
+                // NetApi buffer, valid while `buf` owns it.
                 let description = unsafe { wide_ptr_to_string(entry.grpi1_comment) };
                 out.push(IdentitySnapshot {
                     name,
@@ -281,6 +288,9 @@ fn list_local_groups(server: Option<&str>) -> Result<Vec<IdentitySnapshot>, Core
                 if name.is_empty() {
                     continue;
                 }
+                // SAFETY: same contract as `lgrpi1_name` above — a
+                // null-terminated UTF-16 string (or null) inside the same
+                // NetApi buffer, valid while `buf` owns it.
                 let description = unsafe { wide_ptr_to_string(entry.lgrpi1_comment) };
                 out.push(IdentitySnapshot {
                     name,
