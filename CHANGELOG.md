@@ -199,6 +199,32 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Documentation
 
+- **Windows conformance net extended to the owner rules (permission_engine
+  review 2026-07-25).** The harness that checks the engine against the real
+  OS covered the stored-order algorithm but stopped short of the owner
+  special rule. Three fixtures were added (harness owner is now
+  parameterisable, plus an `OWNER RIGHTS` principal) and **all 10 fixtures
+  pass** against the live Windows API:
+  - the implicit `READ_CONTROL | WRITE_DAC` owner grant,
+  - its suppression by an `OWNER RIGHTS` (S-1-3-4) ACE — Stars' Server-2008+
+    semantics are now OS-confirmed rather than asserted,
+  - **an object owned by a *group* in the token.** This settled an open
+    question from the code review: Stars treats "owner SID anywhere in the
+    token" as ownership, and Windows was suspected to be stricter
+    (`SE_GROUP_OWNER`). Measured, Windows grants exactly the same mask
+    (`0x00160089` on both sides, `WRITE_DAC` set) — **the suspected
+    over-report does not exist** and no engine change was made.
+
+  A generic-rights fixture was deliberately **not** added: measured against
+  `AccessCheck`, Windows returns an ACE's `GENERIC_*` bit unmapped
+  (`0x80060000`) while the engine expands it. That is a property of
+  `AccessCheck` (it maps generic bits only in *DesiredAccess*, not inside
+  ACE masks), so such a fixture would test an ACL Windows never stores and
+  fail for the wrong reason. The measurement is recorded in the test file.
+
+  **No production code was changed in this review** — the engine is analysed
+  and better fenced, not modified.
+
 - **Full documentation pass over the post-v1.7.8 state.**
   - `technical-documentation.md`: the crate table and layering diagram were
     stale — they claimed **12 crates**, omitted `win_safe` entirely, and named
