@@ -269,6 +269,28 @@ enum Commands {
         include_admin: bool,
     },
 
+    /// List the scan runs stored in a Stars database (read-only): id,
+    /// start/finish time, target, and how many paths and errors each run
+    /// recorded. Use `errors` for a run's error list.
+    Runs {
+        /// SQLite database file written by `scan --db` (or by the GUI).
+        #[arg(long)]
+        db: String,
+    },
+
+    /// Show the stored scan errors of one run (read-only) — every path the
+    /// scan could NOT read, with the reason. These paths are missing from
+    /// the run's results; without this list a historical run looks more
+    /// complete than it was.
+    Errors {
+        /// SQLite database file written by `scan --db` (or by the GUI).
+        #[arg(long)]
+        db: String,
+        /// Scan run id (UUID) as shown by `runs`.
+        #[arg(long)]
+        run_id: String,
+    },
+
     /// List the domain's Active Directory trusts (read-only): direction and
     /// `trustAttributes`, including whether SID filtering / quarantine or
     /// Selective Authentication is configured. This surfaces the trust
@@ -451,6 +473,12 @@ async fn main() -> anyhow::Result<()> {
             include_admin,
         } => {
             run_shares(&server, include_admin)?;
+        }
+        Commands::Runs { db } => {
+            run_runs(&db)?;
+        }
+        Commands::Errors { db, run_id } => {
+            run_errors(&db, &run_id)?;
         }
         Commands::Trusts {
             server,
@@ -1777,6 +1805,71 @@ fn run_shares(server: &str, include_admin: bool) -> anyhow::Result<()> {
     }
 
     output::print_shares(&result, include_admin);
+    Ok(())
+}
+
+/// Opens an existing Stars database for the read-only history commands.
+///
+/// Validates the path first, then refuses a file that does not exist —
+/// `Connection::open` would otherwise CREATE an empty database, a write
+/// side effect a read-only listing command must not have
+/// (persistence review 2026-07-26, PS-1).
+fn open_existing_db(path: &str) -> anyhow::Result<Database> {
+    validate_db_path(path).map_err(|e| anyhow::anyhow!("Invalid --db: {e}"))?;
+    if !std::path::Path::new(path).is_file() {
+        return Err(anyhow::anyhow!(
+            "Database file '{path}' does not exist. `runs` and `errors` only read \
+             existing databases (created by `adpa scan --db` or by the GUI)."
+        ));
+    }
+    Database::open(path).map_err(|e| anyhow::anyhow!("Cannot open database: {e}"))
+}
+
+/// `runs` command: list the stored scan runs with per-run path and error
+/// counts (read-only; persistence review 2026-07-26, PS-1).
+fn run_runs(db: &str) -> anyhow::Result<()> {
+    let db = open_existing_db(db)?;
+    let store = db.scan_store();
+    let runs = store
+        .list_scan_runs()
+        .map_err(|e| anyhow::anyhow!("Cannot list scan runs: {e}"))?;
+    let mut summaries = Vec::with_capacity(runs.len());
+    for run in runs {
+        let paths = store
+            .count_permissions_for(&run.id)
+            .map_err(|e| anyhow::anyhow!("Cannot count permissions: {e}"))?;
+        let errors = store
+            .count_errors_for(&run.id)
+            .map_err(|e| anyhow::anyhow!("Cannot count errors: {e}"))?;
+        summaries.push((run, paths, errors));
+    }
+    output::print_runs(&summaries);
+    Ok(())
+}
+
+/// `errors` command: show one run's stored scan errors — the paths missing
+/// from that run's results (read-only; persistence review 2026-07-26, PS-1).
+fn run_errors(db: &str, run_id: &str) -> anyhow::Result<()> {
+    let run_id = Uuid::parse_str(run_id.trim()).map_err(|e| {
+        anyhow::anyhow!("Invalid --run-id (expected a UUID as shown by `adpa runs`): {e}")
+    })?;
+    let db = open_existing_db(db)?;
+    let store = db.scan_store();
+    let run = store
+        .list_scan_runs()
+        .map_err(|e| anyhow::anyhow!("Cannot list scan runs: {e}"))?
+        .into_iter()
+        .find(|r| r.id == run_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No scan run with id '{run_id}' in this database — \
+                 `adpa runs` lists the stored runs."
+            )
+        })?;
+    let errors = store
+        .list_errors_for(&run_id)
+        .map_err(|e| anyhow::anyhow!("Cannot read scan errors: {e}"))?;
+    output::print_run_errors(&run, &errors);
     Ok(())
 }
 

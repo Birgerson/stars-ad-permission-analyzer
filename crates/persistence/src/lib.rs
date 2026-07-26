@@ -5,7 +5,6 @@
 
 pub mod db;
 pub mod delta;
-pub mod identity_cache;
 pub mod migrations;
 pub mod scan_store;
 
@@ -14,5 +13,4 @@ pub use delta::{
     compare_scans, diff_permission_lists, DeltaEntry, DeltaKind, DeltaReason, LocalGroupStatusTag,
     PermissionSignature, ShareStatusTag,
 };
-pub use identity_cache::IdentityCache;
 pub use scan_store::ScanStore;

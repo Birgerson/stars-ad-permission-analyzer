@@ -24,7 +24,7 @@ use permission_engine::NormalizedRights;
 
 use crate::worker::{
     spawn_worker, DeltaRow, GroupsViewData, IdentitySearchResult, IdentitySuggestion, LdapParams,
-    NotifyFn, ScanRow, ScanRunSummary, TrusteeRow, WorkerEvent, WorkerRequest,
+    NotifyFn, RunErrorRow, ScanRow, ScanRunSummary, TrusteeRow, WorkerEvent, WorkerRequest,
 };
 
 // Slint UI inline. Defines view models for scan rows, scan errors, risk
@@ -430,6 +430,15 @@ slint::slint! {
         label: string,
         selected_as_old: bool,
         selected_as_new: bool,
+        // Stored scan errors of this run — drives the per-run error view
+        // (persistence review 2026-07-26, PS-1).
+        error_count: int,
+    }
+
+    // One stored scan error of a historical run (Delta tab error view).
+    export struct RunErrorVm {
+        path: string,
+        message: string,
     }
 
     // A delta row (Added / Removed / Changed).
@@ -604,6 +613,14 @@ slint::slint! {
         in property <int>    d-removed-count;
         in property <int>    d-changed-count;
 
+        // Stored scan errors of one historical run — the paths that run
+        // could not read. Filled via the per-run warning button
+        // (persistence review 2026-07-26, PS-1).
+        in property <[RunErrorVm]> d-run-errors;
+        // Label of the run whose errors are shown; empty = panel hidden.
+        // in-out so the panel's Close button can clear it.
+        in-out property <string> d-errors-title;
+
         callback delta-load-runs-clicked();
         callback delta-pick-old(string);
         callback delta-pick-new(string);
@@ -612,6 +629,8 @@ slint::slint! {
         // d-pending-delete dialog first; the worker only sees the request
         // after confirmation.
         callback delta-delete-confirmed(string);
+        // Load the stored scan errors of a run (id, label).
+        callback delta-show-errors(string, string);
 
         // ID of the scan run for which the confirmation dialog should be
         // visible. Empty = no dialog open.
@@ -1898,6 +1917,19 @@ slint::slint! {
                                             overflow: elide;
                                             wrap: no-wrap;
                                         }
+                                        // Error-evidence button — shows the
+                                        // stored scan errors of this run
+                                        // (the paths it could not read).
+                                        // Disabled when the run recorded
+                                        // none.
+                                        Button {
+                                            text: "⚠ " + run.error_count;
+                                            width: 52px;
+                                            enabled: run.error_count > 0;
+                                            clicked => {
+                                                root.delta-show-errors(run.id, run.label);
+                                            }
+                                        }
                                         // Trash button — opens the
                                         // confirmation dialog, no instant
                                         // delete. The actual action runs
@@ -1920,6 +1952,49 @@ slint::slint! {
                                 PrimaryButton {
                                     text: "⟳  Compare";
                                     clicked => { root.delta-compare-clicked(); }
+                                }
+                            }
+
+                            // Stored scan errors of one run — the paths that
+                            // run could NOT read, i.e. what is missing from
+                            // its results. Before this panel the persisted
+                            // error evidence was write-only (persistence
+                            // review 2026-07-26, PS-1).
+                            if root.d-errors-title != "": GroupBox {
+                                title: "Scan errors — " + root.d-errors-title;
+                                VerticalBox {
+                                    spacing: 2px;
+                                    Text {
+                                        text: "These paths could not be read during the scan — they are missing from the run's results.";
+                                        color: Theme.text-secondary;
+                                        wrap: word-wrap;
+                                        font-size: 12px;
+                                    }
+                                    if root.d-run-errors.length == 0: Text {
+                                        text: "Loading…";
+                                        color: Theme.text-secondary;
+                                    }
+                                    for err[i] in root.d-run-errors: VerticalBox {
+                                        spacing: 0px;
+                                        Text {
+                                            text: "⚠ " + err.path;
+                                            font-weight: 700;
+                                            wrap: word-wrap;
+                                        }
+                                        Text {
+                                            text: err.message;
+                                            color: Theme.text-secondary;
+                                            wrap: word-wrap;
+                                            font-size: 12px;
+                                        }
+                                    }
+                                    HorizontalBox {
+                                        alignment: start;
+                                        Button {
+                                            text: "Close";
+                                            clicked => { root.d-errors-title = ""; }
+                                        }
+                                    }
                                 }
                             }
 
@@ -2286,6 +2361,7 @@ struct DeltaUiState {
 struct ScanRunSummaryUi {
     id: String,
     label: String,
+    error_count: usize,
 }
 
 thread_local! {
@@ -3295,6 +3371,29 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
             }
         });
     }
+
+    // Per-run error view (persistence review 2026-07-26, PS-1): show the
+    // stored scan errors of a historical run. The panel opens immediately
+    // with the run's label; the rows arrive via
+    // WorkerEvent::RunErrorsLoaded.
+    {
+        let weak = ui.as_weak();
+        let req_tx = req_tx.clone();
+        ui.on_delta_show_errors(move |run_id, label| {
+            let Some(ui) = weak.upgrade() else { return };
+            let id_str = run_id.to_string();
+            if id_str.is_empty() {
+                return;
+            }
+            ui.set_d_run_errors(slint::ModelRc::new(slint::VecModel::<RunErrorVm>::default()));
+            ui.set_d_errors_title(label);
+            if let Err(e) = req_tx.send(WorkerRequest::ListRunErrors { run_id: id_str }) {
+                ui.set_d_errors_title("".into());
+                ui.set_d_status(format!("Worker not reachable: {e}").into());
+                ui.set_d_status_is_error(true);
+            }
+        });
+    }
 }
 
 fn refresh_delta_runs(ui: &MainWindow) {
@@ -3307,6 +3406,7 @@ fn refresh_delta_runs(ui: &MainWindow) {
                 label: r.label.clone().into(),
                 selected_as_old: s.selected_old.as_deref() == Some(r.id.as_str()),
                 selected_as_new: s.selected_new.as_deref() == Some(r.id.as_str()),
+                error_count: r.error_count.min(i32::MAX as usize) as i32,
             })
             .collect()
     });
@@ -3338,6 +3438,7 @@ fn handle_scan_runs_loaded(ui: &MainWindow, result: Result<Vec<ScanRunSummary>, 
                             "{}  —  {}  ({} errors)",
                             r.started_at, r.target, r.error_count
                         ),
+                        error_count: r.error_count,
                     })
                     .collect();
                 // Drop selections that point at runs which no longer exist.
@@ -3382,10 +3483,11 @@ fn handle_scan_run_deleted(ui: &MainWindow, run_id: &str, result: Result<(), Str
             refresh_delta_runs(ui);
             ui.set_d_status("Scan run removed.".into());
             ui.set_d_status_is_error(false);
-            // ausblenden.
             // If a delta result was still visible in the frame, it might
-            // refer to the just-deleted run — hide it to be safe.
+            // refer to the just-deleted run — hide it to be safe. Same for
+            // the per-run error panel.
             ui.set_d_has_result(false);
+            ui.set_d_errors_title("".into());
             // Reload the list in background so the GUI state is guaranteed
             // to match the DB.
             REQ_TX.with(|cell| {
@@ -3396,6 +3498,30 @@ fn handle_scan_run_deleted(ui: &MainWindow, run_id: &str, result: Result<(), Str
         }
         Err(e) => {
             ui.set_d_status(format!("Delete failed: {e}").into());
+            ui.set_d_status_is_error(true);
+        }
+    }
+}
+
+/// Fills the Delta tab's per-run error panel (persistence review
+/// 2026-07-26, PS-1). The panel title was already set by the click
+/// handler; a load failure closes the panel and surfaces the reason in
+/// the tab status instead of leaving a silent "Loading…".
+fn handle_run_errors_loaded(ui: &MainWindow, result: Result<Vec<RunErrorRow>, String>) {
+    match result {
+        Ok(rows) => {
+            let vms: Vec<RunErrorVm> = rows
+                .into_iter()
+                .map(|r| RunErrorVm {
+                    path: r.path.into(),
+                    message: r.message.into(),
+                })
+                .collect();
+            ui.set_d_run_errors(slint::ModelRc::new(slint::VecModel::from(vms)));
+        }
+        Err(e) => {
+            ui.set_d_errors_title("".into());
+            ui.set_d_status(format!("Scan errors could not be loaded: {e}").into());
             ui.set_d_status_is_error(true);
         }
     }
@@ -3481,6 +3607,7 @@ fn pump_worker_events(ui: &MainWindow) {
                 WorkerEvent::ScanRunDeleted { run_id, result } => {
                     handle_scan_run_deleted(ui, &run_id, result)
                 }
+                WorkerEvent::RunErrorsLoaded(result) => handle_run_errors_loaded(ui, result),
                 WorkerEvent::IdentitiesLoaded(result) => handle_identities_loaded(ui, result),
                 WorkerEvent::TrusteesDone(result) => handle_trustees_done(ui, result),
                 WorkerEvent::GroupsDone(result) => handle_groups_done(ui, *result),

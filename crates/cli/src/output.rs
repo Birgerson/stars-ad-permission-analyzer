@@ -6,7 +6,7 @@
 use adpa_core::model::{
     privileged_group_role, AceKind, DomainTrust, EffectivePermission, FileSystemObject,
     GroupMembersReport, GroupMembership, IdentityKind, MembershipReport, PermissionDiagnostic,
-    RiskFinding, RiskSeverity, Share,
+    RiskFinding, RiskSeverity, ScanError, ScanRun, Share,
 };
 use permission_engine::NormalizedRights;
 use share_scanner::{ShareDacl, ShareScanResult};
@@ -718,6 +718,71 @@ pub fn print_trusts(trusts: &[DomainTrust]) {
     println!("  Note: Stars reads these attributes read-only and does not model the runtime");
     println!("  filter effect (that would need a synthetic logon — out of scope). See the L4");
     println!("  section of known-limitations.md.");
+    println!();
+    println!("{}", heavy_line());
+}
+
+/// Prints the stored scan runs with per-run path and error counts
+/// (`adpa runs`; persistence review 2026-07-26, PS-1).
+pub fn print_runs(runs: &[(ScanRun, usize, usize)]) {
+    header(&format!("Stored scan runs ({})", runs.len()));
+    if runs.is_empty() {
+        println!();
+        println!("  No scan runs stored in this database.");
+        println!();
+        println!("{}", heavy_line());
+        return;
+    }
+    for (run, paths, errors) in runs {
+        section(&run.id.to_string());
+        println!("  Target   : {}", run.target);
+        println!(
+            "  Started  : {}",
+            run.started_at.format("%Y-%m-%d %H:%M:%S UTC")
+        );
+        match &run.finished_at {
+            Some(f) => println!("  Finished : {}", f.format("%Y-%m-%d %H:%M:%S UTC")),
+            None => println!("  Finished : (not recorded)"),
+        }
+        println!("  Paths    : {paths}");
+        if *errors > 0 {
+            println!("  [!] Errors : {errors} — paths this run could not read;");
+            println!("      see: adpa errors --db <DB> --run-id {}", run.id);
+        } else {
+            println!("  Errors   : 0");
+        }
+    }
+    println!();
+    println!("{}", heavy_line());
+}
+
+/// Prints one run's stored scan errors — every path the scan could not
+/// read, with the reason. These paths are missing from the run's results
+/// (`adpa errors`; persistence review 2026-07-26, PS-1).
+pub fn print_run_errors(run: &ScanRun, errors: &[ScanError]) {
+    header(&format!("Scan errors — run {}", run.id));
+    println!();
+    println!("  Target  : {}", run.target);
+    println!(
+        "  Started : {}",
+        run.started_at.format("%Y-%m-%d %H:%M:%S UTC")
+    );
+    if errors.is_empty() {
+        println!();
+        println!("  No scan errors recorded for this run.");
+    } else {
+        section(&format!(
+            "{} error(s) — these paths are MISSING from the run's results",
+            errors.len()
+        ));
+        for e in errors {
+            match &e.path {
+                Some(p) => println!("  [!] {}", p.0),
+                None => println!("  [!] (no path recorded)"),
+            }
+            println!("      {}", e.message);
+        }
+    }
     println!();
     println!("{}", heavy_line());
 }

@@ -7,10 +7,7 @@ use adpa_core::{error::CoreError, model::ScanRun};
 use rusqlite::Connection;
 use uuid::Uuid;
 
-use crate::{
-    delta::DeltaEntry, identity_cache::IdentityCache, migrations::run_migrations,
-    scan_store::ScanStore,
-};
+use crate::{delta::DeltaEntry, migrations::run_migrations, scan_store::ScanStore};
 
 pub struct Database {
     conn: Connection,
@@ -43,11 +40,6 @@ impl Database {
     /// Returns a ScanStore backed by this database's connection.
     pub fn scan_store(&self) -> ScanStore<'_> {
         ScanStore::new(&self.conn)
-    }
-
-    /// Returns an IdentityCache backed by this database's connection.
-    pub fn identity_cache(&self) -> IdentityCache<'_> {
-        IdentityCache::new(&self.conn)
     }
 
     /// Lists all stored scan runs (newest first).
@@ -86,16 +78,5 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         let runs = db.scan_store().list_scan_runs().unwrap();
         assert!(runs.is_empty());
-    }
-
-    #[test]
-    fn identity_cache_accessible() {
-        use adpa_core::model::Sid;
-        let db = Database::open_in_memory().unwrap();
-        let result = db
-            .identity_cache()
-            .lookup(&Sid("S-1-5-21-1-2-3-1000".to_owned()))
-            .unwrap();
-        assert!(result.is_none());
     }
 }

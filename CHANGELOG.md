@@ -12,6 +12,36 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Added
 
+- **Per-run error evidence is finally reviewable — `adpa runs`, `adpa
+  errors`, and the Delta tab's ⚠ button (persistence review 2026-07-26,
+  PS-1).** Every stored scan run keeps the list of paths it could **not**
+  read — those paths are missing from the run's results, which makes the
+  list audit evidence. But it was write-only: no CLI command and no GUI
+  view ever read it back. Now `adpa runs --db <DB>` lists the stored runs
+  with true path/error counts, `adpa errors --db <DB> --run-id <ID>`
+  prints one run's error list (path + reason), and the GUI's Delta tab
+  shows a per-run ⚠ button opening the same list. All strictly read-only;
+  the CLI validates the database path and refuses to open a file that
+  does not exist (opening would otherwise silently CREATE an empty
+  database — a write side effect a read command must not have).
+
+- **Schema v8: run-scoped indexes (PS-3).** Neither
+  `effective_permissions(scan_run_id)` nor `scan_errors(scan_run_id)` was
+  indexed, so loading or deleting one run scanned the entire history
+  table. Two indexes fix that; the migration is transactional and
+  idempotent like all others.
+
+### Removed
+
+- **The dead persistent identity cache (PS-2).** `IdentityCache` (307
+  lines, 7 tests, its own `group_memberships` table) had **zero
+  production callers** — identity/group caching happens in ad_resolver's
+  in-memory maps, and historical reports read the per-row identity
+  snapshot (schema v7). Module and `Database::identity_cache()` accessor
+  removed; the `identities` table stays in active use by `ScanStore`, and
+  `group_memberships` stays because migrations are append-only. ADR 0007
+  carries the supersession note.
+
 - **Partial content write is no longer invisible — new `PARTIAL_WRITE` risk
   finding (risk_engine review 2026-07-25, RK-1).** `WriteAccessRule` demanded
   the *full* Modify/Write composite, so an effective mask carrying
@@ -44,6 +74,28 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   looking like an empty success.
 
 ### Fixed
+
+- **The Delta tab no longer claims "(0 errors)" for every run (persistence
+  review 2026-07-26, PS-1).** The run label read the in-memory
+  `ScanRun.errors` field, which the history loader always returns empty —
+  so every stored run displayed "(0 errors)", including runs with recorded
+  errors. A factually wrong display, not just a missing one; the count now
+  comes from the database.
+
+- **The delta comparison refuses meaningless pairings (PS-4).** Comparing
+  two runs with different targets produced a plausible-looking but
+  meaningless "everything changed" report, and an unknown run id silently
+  read as "everything was removed". Both are now clear errors; diff rows
+  are keyed by (identity, path) so two identities on the same path can
+  never silently collapse into one row.
+
+- **Corrupt stored masks fail loudly on reload (PS-5).** A persisted mask
+  outside the u32 range (hand-edited or corrupt row) was silently
+  truncated by an `as u32` cast; it now aborts the read naming the corrupt
+  field, consistent with the loud-decode policy for broken JSON evidence.
+  Plus: full identity-kind round-trip coverage including
+  `ForeignSecurityPrincipal` (PS-9), German comment fragments purged and
+  the language gate hardened with their stems (PS-7, selftest 62/25).
 
 - **`DIRECT_USER_ACE` no longer scolds correct AGDLP practice (risk_engine
   review 2026-07-25, RK-2).** The rule had no identity-kind guard: analyzing

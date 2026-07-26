@@ -2,6 +2,13 @@
 // Copyright (c) 2026 Birger Labinsch
 
 //! Versioned schema migrations using PRAGMA user_version.
+//!
+//! Note on the `group_memberships` table: the persistent identity cache
+//! that wrote it was removed in the persistence review 2026-07-26 (PS-2,
+//! zero production callers). The table itself stays — migrations are
+//! append-only, and existing databases must keep opening cleanly. The
+//! `identities` table is unaffected: `scan_store::insert_permission`
+//! still upserts it as the SID lookup cache.
 
 use adpa_core::error::CoreError;
 use rusqlite::Connection;
@@ -15,6 +22,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (5, include_str!("schema_v5.sql")),
     (6, include_str!("schema_v6.sql")),
     (7, include_str!("schema_v7.sql")),
+    (8, include_str!("schema_v8.sql")),
 ];
 
 /// Applies all pending migrations in ascending order.
@@ -54,7 +62,29 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 7);
+        assert_eq!(v, 8);
+    }
+
+    /// PS-3 (persistence review 2026-07-26): both run-scoped indexes must
+    /// exist after migration — without them every run-scoped read/delete
+    /// scans the whole history table.
+    #[test]
+    fn v8_indexes_exist_after_migration() {
+        let conn = in_memory();
+        run_migrations(&conn).unwrap();
+        for index in &[
+            "idx_effective_permissions_scan_run_id",
+            "idx_scan_errors_scan_run_id",
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    [index],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "index '{index}' must exist after migration");
+        }
     }
 
     #[test]
@@ -107,28 +137,26 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 7);
+        assert_eq!(v, 8);
     }
 
-    ///
-    /// Step-wise migration: v1 data survives the upgrade to v7 and all new
-    /// columns receive their default values. Without this test, an in-place
-    /// upgrade of an old database is not guaranteed to survive without data
-    /// loss.
+    /// Step-wise migration: v1 data survives the upgrade to the latest
+    /// version and all new columns receive their default values. Without
+    /// this test, an in-place upgrade of an old database is not guaranteed
+    /// to survive without data loss.
     #[test]
-    fn v1_data_survives_full_migration_to_v7() {
+    fn v1_data_survives_full_migration_to_latest() {
         let conn = in_memory();
 
         // Step 1: apply v1 schema only and set PRAGMA user_version=1 so that
-        // the subsequent run_migrations loop walks exactly the v2..v6 path a
-        // production upgrade would take.
+        // the subsequent run_migrations loop walks exactly the upgrade path
+        // a production database would take.
         conn.execute_batch(&format!(
             "BEGIN; {} PRAGMA user_version = 1; COMMIT;",
             include_str!("schema.sql")
         ))
         .unwrap();
 
-        // v1 existieren.
         // Step 2: insert v1-typical rows — only columns that exist in v1.
         conn.execute(
             "INSERT INTO scan_runs (id, started_at, finished_at, target) \
@@ -156,7 +184,7 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 7, "migration must end at v7");
+        assert_eq!(v, 8, "migration must end at the latest version");
 
         // Step 4: v1 values survive unchanged.
         let v1_row: (String, String, i64, i64) = conn

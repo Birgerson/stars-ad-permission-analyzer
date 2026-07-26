@@ -294,6 +294,10 @@ pub enum WorkerRequest {
     /// Removes a single scan run including all dependent data from the
     /// SQLite history. Keeps the DB from growing monotonically.
     DeleteScanRun { run_id: String },
+    /// Loads the stored scan errors of one historical run — the paths that
+    /// run could not read (persistence review 2026-07-26, PS-1; before
+    /// this request the persisted error evidence was write-only).
+    ListRunErrors { run_id: String },
     /// Lists all trustees with their rights on a path — path-centric
     /// audit view without a fixed identity. Answers the question "Who
     /// has any access to X?" rather than "What can user Y do on X?".
@@ -478,6 +482,8 @@ pub enum WorkerEvent {
         run_id: String,
         result: Result<(), String>,
     },
+    /// Stored scan errors of one historical run, ready for display.
+    RunErrorsLoaded(Result<Vec<RunErrorRow>, String>),
     /// Result of a per-path trustee listing.
     TrusteesDone(Result<Vec<TrusteeRow>, String>),
     /// Result of a Groups-tab membership resolution. Boxed because
@@ -516,6 +522,15 @@ pub struct ScanRunSummary {
     pub started_at: String,
     pub target: String,
     pub error_count: usize,
+}
+
+/// One stored scan error of a historical run, for GUI display.
+#[derive(Clone)]
+pub struct RunErrorRow {
+    /// The path the scan could not read, or a placeholder when the error
+    /// carried no path (e.g. a cancellation).
+    pub path: String,
+    pub message: String,
 }
 
 /// One suggestion in the name fields' live search.
@@ -754,6 +769,16 @@ pub fn spawn_worker(
                             .unwrap_or_else(|| "Database not open".to_string())),
                     };
                     let _ = evt_tx.send(WorkerEvent::ScanRunDeleted { run_id, result });
+                    notify();
+                }
+                WorkerRequest::ListRunErrors { run_id } => {
+                    let result = match &db {
+                        Some(d) => list_run_errors(d, &run_id),
+                        None => Err(db_open_error
+                            .clone()
+                            .unwrap_or_else(|| "Database not open".to_string())),
+                    };
+                    let _ = evt_tx.send(WorkerEvent::RunErrorsLoaded(result));
                     notify();
                 }
                 WorkerRequest::AnalyzeTrustees {
@@ -1688,18 +1713,50 @@ fn export_html(
 
 /// Returns persisted scan runs in a compact form for the Delta tab
 /// (newest first). The sort order comes from `Database::list_scan_runs`.
+///
+/// PS-1 (persistence review 2026-07-26): the error count comes from
+/// `count_errors_for`. The previous `r.errors.len()` read the in-memory
+/// `ScanRun.errors` field, which `list_scan_runs` always returns empty —
+/// so the GUI label claimed "(0 errors)" for every run, including runs
+/// that had recorded errors. A factually wrong display, not just a
+/// missing one.
 fn list_scan_run_summaries(db: &Database) -> Result<Vec<ScanRunSummary>, String> {
+    let store = db.scan_store();
     let runs = db
         .list_scan_runs()
         .map_err(|e| format!("scan history could not be loaded: {e}"))?;
-    Ok(runs
-        .into_iter()
-        .map(|r| ScanRunSummary {
+    let mut summaries = Vec::with_capacity(runs.len());
+    for r in runs {
+        let error_count = store
+            .count_errors_for(&r.id)
+            .map_err(|e| format!("error count could not be loaded: {e}"))?;
+        summaries.push(ScanRunSummary {
             id: r.id.to_string(),
             // Format without sub-second fractions, locally readable.
             started_at: r.started_at.format("%Y-%m-%d %H:%M:%S").to_string(),
             target: r.target,
-            error_count: r.errors.len(),
+            error_count,
+        });
+    }
+    Ok(summaries)
+}
+
+/// Loads the stored scan errors of one historical run for the Delta tab's
+/// error view (persistence review 2026-07-26, PS-1).
+fn list_run_errors(db: &Database, run_id: &str) -> Result<Vec<RunErrorRow>, String> {
+    let id = uuid::Uuid::parse_str(run_id).map_err(|e| format!("Invalid run id: {e}"))?;
+    let errors = db
+        .scan_store()
+        .list_errors_for(&id)
+        .map_err(|e| format!("scan errors could not be loaded: {e}"))?;
+    Ok(errors
+        .into_iter()
+        .map(|e| RunErrorRow {
+            path: e
+                .path
+                .map(|p| p.0)
+                .unwrap_or_else(|| "(no path recorded)".to_string()),
+            message: e.message,
         })
         .collect())
 }
