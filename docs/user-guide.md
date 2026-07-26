@@ -157,7 +157,12 @@ user can effectively do there.
 - **Who has access?** — runs the **path-centric trustee table**
   instead: all trustees with their ACEs, NTFS and share separated.
   A share-DACL read failure appears as a typed diagnostic entry
-  (`entry_kind: "diagnostic"`), never silently dropped.
+  (`entry_kind: "diagnostic"`), never silently dropped. Since the
+  exporter review 2026-07-26 the NTFS side is just as honest: an
+  unreadable NTFS ACL says "who has access is UNKNOWN", partially
+  unevaluated ACEs say "this list is incomplete", and an empty DACL
+  says "no access for anyone" — a path never silently vanishes from
+  this view anymore.
 
 **Result of "Analyze":**
 

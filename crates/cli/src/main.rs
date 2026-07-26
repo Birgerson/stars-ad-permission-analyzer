@@ -2072,12 +2072,16 @@ fn membership_csv(report: &adpa_core::model::MembershipReport) -> String {
     s
 }
 
-/// Minimal RFC-4180 CSV field escaping.
+/// Minimal RFC-4180 CSV field escaping, with spreadsheet-formula
+/// neutralization first (exporter review 2026-07-26, EX-2): group and
+/// display names are attacker-influenceable, and this export gets opened
+/// in Excel — a leading `=`/`+`/`-`/`@` would execute as a formula.
 fn csv_field(v: &str) -> String {
+    let v = exporter::neutralize_spreadsheet_formula(v);
     if v.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", v.replace('"', "\"\""))
     } else {
-        v.to_string()
+        v
     }
 }
 
@@ -2257,6 +2261,17 @@ mod tests {
         assert_eq!(csv_field("Sales, EMEA"), "\"Sales, EMEA\"");
         assert_eq!(csv_field("a\"b"), "\"a\"\"b\"");
         assert_eq!(csv_field("line1\nline2"), "\"line1\nline2\"");
+    }
+
+    /// EX-2 (exporter review 2026-07-26): a group name shaped like a
+    /// formula must be neutralized before quoting — Excel executes
+    /// leading `=`/`+`/`-`/`@` cells.
+    #[test]
+    fn csv_field_neutralizes_spreadsheet_formulas() {
+        assert_eq!(csv_field("=2+5"), "'=2+5");
+        assert_eq!(csv_field("@evil"), "'@evil");
+        // Neutralization composes with RFC-4180 quoting.
+        assert_eq!(csv_field("=a,b"), "\"'=a,b\"");
     }
 
     // --- Groups export overwrite policy (deep review 2026-07-01 finding 2) ---

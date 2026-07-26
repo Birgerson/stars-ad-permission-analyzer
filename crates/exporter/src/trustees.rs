@@ -6,7 +6,6 @@
 //! DACL at all?" without an identity context and is the counterpart to
 //! the identity-bound `EffectivePermission` computation.
 //!
-//!
 //! Extracted from `crates/gui/src/worker.rs` for round-9 finding 1: the
 //! GUI has been building trustees correctly since ADR 0038, but the CLI
 //! lacked access to that logic and sent empty `path_trustees` to the
@@ -16,7 +15,6 @@
 use adpa_core::model::{PathTrustee, PathTrusteeEntry, TrusteeCategory};
 use share_scanner::get_share_dacl;
 
-///
 /// Optional share overlay, read once per share and attached to every
 /// path below that share. Closes round-3 finding 3 (no silent skips of
 /// the share DACL). Since round-10 finding 4 entries are
@@ -68,13 +66,11 @@ pub fn read_share_overlay(server: &str, share_name: &str) -> ShareTrusteeOverlay
     ShareTrusteeOverlay { trustees }
 }
 
-///
 /// Builds the raw trustee list from an already-loaded `FileSystemObject`.
 /// If an SMB context is given the share DACL is read once per call —
 /// scans with many paths per share should instead read the overlay once
 /// via [`read_share_overlay`] and pass it via
 /// [`build_path_trustees_with_share`].
-///
 ///
 /// This variant performs SID→name resolution **itself** per call —
 /// appropriate for the analyze path (exactly one object). Scan paths
@@ -92,7 +88,6 @@ pub fn build_path_trustees(
     build_path_trustees_with_share(fso, share_overlay.as_ref())
 }
 
-///
 /// Like [`build_path_trustees`] but with a pre-read share overlay.
 /// Performs SID→name resolution itself — see
 /// [`build_path_trustees_with_share_and_names`] for the scan variant
@@ -118,7 +113,6 @@ pub fn build_path_trustees_with_share(
     build_path_trustees_with_share_and_names(fso, share_overlay, &sid_names)
 }
 
-///
 /// Collects all ACE SIDs from FSO DACL and share overlay that need an
 /// LSA lookup. Diagnostic entries carry no SID and are skipped. Empty
 /// SIDs (e.g. from historical diagnostic pseudo-rows) likewise. Public
@@ -163,6 +157,8 @@ pub fn build_path_trustees_with_share_and_names(
     share_overlay: Option<&ShareTrusteeOverlay>,
     sid_names: &std::collections::BTreeMap<String, String>,
 ) -> Vec<PathTrusteeEntry> {
+    use adpa_core::model::ACE_TYPE_ACL_UNREADABLE;
+
     let mut out: Vec<PathTrusteeEntry> = Vec::new();
 
     // NTFS-DACL
@@ -185,6 +181,37 @@ pub fn build_path_trustees_with_share_and_names(
                 propagation_flags: ace.propagation_flags,
                 category: TrusteeCategory::Ntfs,
             }));
+        }
+        // Exporter review 2026-07-26, EX-1: the trustee view must not
+        // silently omit what it could not read. Before these diagnostics,
+        // a DACL with unevaluated ACEs showed a shorter list with no hint,
+        // the "whole ACL unreadable" sentinel (FS-1) produced an EMPTY
+        // list, and an empty (non-NULL) DACL — "no access for anyone" —
+        // rendered nothing at all. The NTFS side hereby gets the same
+        // diagnostics the share side has had since round 3.
+        if fso
+            .unsupported_aces
+            .iter()
+            .any(|u| u.ace_type == ACE_TYPE_ACL_UNREADABLE)
+        {
+            out.push(PathTrusteeEntry::diagnostic(
+                TrusteeCategory::Ntfs,
+                "NTFS ACL could not be read — who has access to this path is UNKNOWN",
+            ));
+        } else if !fso.unsupported_aces.is_empty() {
+            out.push(PathTrusteeEntry::diagnostic(
+                TrusteeCategory::Ntfs,
+                format!(
+                    "{} NTFS ACE(s) could not be evaluated (unsupported type or \
+                     unreadable entry) — this trustee list is incomplete",
+                    fso.unsupported_aces.len()
+                ),
+            ));
+        } else if fso.dacl.is_empty() {
+            out.push(PathTrusteeEntry::diagnostic(
+                TrusteeCategory::Ntfs,
+                "NTFS empty DACL — no access for anyone",
+            ));
         }
     }
 
@@ -301,7 +328,6 @@ mod tests {
     }
 
     /// With share overlay: NTFS trustees + share trustees, both
-    /// With share overlay: NTFS trustees + share trustees, both
     /// categories visible separately.
     #[test]
     fn share_overlay_is_appended_to_ntfs_trustees() {
@@ -329,7 +355,6 @@ mod tests {
         }
     }
 
-    /// Plattform-unabhaengig testbar.
     /// Round-10 finding 2: the caller-owned-map variant applies the
     /// supplied display names AND performs no LSA lookup of its own.
     /// Platform-independent.
@@ -429,6 +454,104 @@ mod tests {
         assert!(sids.contains(&"S-1-5-32-544".to_owned()));
         assert!(sids.contains(&"S-1-5-21-1-2-3-1000".to_owned()));
         assert!(sids.contains(&"S-1-1-0".to_owned()));
+    }
+
+    // --- EX-1 (exporter review 2026-07-26): no silent omissions ---
+
+    /// EX-1: unevaluated ACEs must surface as a diagnostic — before this,
+    /// a DACL with unsupported entries showed a shorter trustee list with
+    /// no hint that it is incomplete.
+    #[test]
+    fn unsupported_aces_yield_incomplete_diagnostic() {
+        use adpa_core::model::UnsupportedAce;
+        let mut f = fso(vec![ace("S-1-5-32-544", AceKind::Allow, 0x001F01FF, true)]);
+        f.unsupported_aces = vec![
+            UnsupportedAce {
+                ace_type: 0x09, // object ACE — a real unsupported type
+                flags: 0,
+                mask: 0x0012_0089,
+            },
+            UnsupportedAce {
+                ace_type: 0x0B, // callback ACE
+                flags: 0,
+                mask: 0x0001_0000,
+            },
+        ];
+        let trustees = build_path_trustees_with_share(&f, None);
+        assert_eq!(trustees.len(), 2, "one ACE row + one diagnostic");
+        let diag = trustees
+            .iter()
+            .find_map(|t| match t {
+                PathTrusteeEntry::Diagnostic { category, message } => Some((category, message)),
+                _ => None,
+            })
+            .expect("unsupported ACEs must produce a diagnostic entry");
+        assert_eq!(*diag.0, TrusteeCategory::Ntfs);
+        assert!(
+            diag.1.contains("2") && diag.1.contains("incomplete"),
+            "diagnostic must state the count and that the list is incomplete, got: {}",
+            diag.1
+        );
+    }
+
+    /// EX-1: the FS-1 sentinel "whole ACL unreadable" previously produced
+    /// an EMPTY trustee list — and the HTML renderer then skipped the path
+    /// entirely, making "ACL unreadable" indistinguishable from "never
+    /// scanned". It must say clearly that who has access is unknown.
+    #[test]
+    fn acl_unreadable_sentinel_yields_unknown_diagnostic() {
+        use adpa_core::model::{UnsupportedAce, ACE_TYPE_ACL_UNREADABLE};
+        let mut f = fso(vec![]);
+        f.unsupported_aces = vec![UnsupportedAce {
+            ace_type: ACE_TYPE_ACL_UNREADABLE,
+            flags: 0,
+            mask: 0,
+        }];
+        let trustees = build_path_trustees_with_share(&f, None);
+        assert_eq!(trustees.len(), 1);
+        match &trustees[0] {
+            PathTrusteeEntry::Diagnostic { category, message } => {
+                assert_eq!(*category, TrusteeCategory::Ntfs);
+                assert!(
+                    message.contains("could not be read") && message.contains("UNKNOWN"),
+                    "must state that who has access is unknown, got: {message}"
+                );
+            }
+            PathTrusteeEntry::Ace(_) => panic!("ACL-unreadable must be a diagnostic"),
+        }
+    }
+
+    /// EX-1: an empty (non-NULL) DACL means "no access for anyone" —
+    /// audit-relevant, and previously rendered as nothing at all.
+    #[test]
+    fn empty_dacl_yields_no_access_diagnostic() {
+        let f = fso(vec![]);
+        let trustees = build_path_trustees_with_share(&f, None);
+        assert_eq!(trustees.len(), 1);
+        match &trustees[0] {
+            PathTrusteeEntry::Diagnostic { category, message } => {
+                assert_eq!(*category, TrusteeCategory::Ntfs);
+                assert!(
+                    message.contains("empty DACL") && message.contains("no access"),
+                    "must state the empty-DACL meaning, got: {message}"
+                );
+            }
+            PathTrusteeEntry::Ace(_) => panic!("empty DACL must be a diagnostic"),
+        }
+    }
+
+    /// EX-1 boundary: a fully readable DACL with entries gets NO new
+    /// diagnostics — the transparency net must not add noise to clean
+    /// paths.
+    #[test]
+    fn clean_dacl_gets_no_extra_diagnostics() {
+        let f = fso(vec![ace("S-1-5-32-544", AceKind::Allow, 0x001F01FF, true)]);
+        let trustees = build_path_trustees_with_share(&f, None);
+        assert_eq!(trustees.len(), 1);
+        assert!(
+            matches!(trustees[0], PathTrusteeEntry::Ace(_)),
+            "clean DACL must yield only ACE rows"
+        );
     }
 
     /// Round-10 finding 4: JSON serialization unambiguously separates

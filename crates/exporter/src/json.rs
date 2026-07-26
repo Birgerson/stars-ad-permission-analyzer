@@ -3,7 +3,6 @@
 
 //! JSON report export — stable, structured, machine-readable output format.
 //!
-//!
 //! Writes a top-level object with `version`, `permissions`,
 //! `risk_findings`, and `path_trustees`. Both identity-oriented lists
 //! mirror the `Serialize` implementations of `EffectivePermission` and
@@ -11,6 +10,7 @@
 //! like `share_status`, `local_group_status`, `incomplete`, and
 //! `matched_aces`. The path-oriented `path_trustees` list was added in
 //! round-8 follow-up finding 2 so the second audit question "who has any
+//! access to this path?" is answered in the same machine-readable file.
 
 use adpa_core::{
     error::CoreError,
@@ -200,7 +200,6 @@ mod tests {
         );
     }
 
-    /// als tagged Union (`{"kind":"ace",...}` / `{"kind":"diagnostic",...}`),
     /// Round-10 finding 4: the JSON schema carries `path_trustees` as a
     /// tagged union (`{"kind":"ace",...}` / `{"kind":"diagnostic",...}`),
     /// the schema version is bumped to 3, and the former synthetic Allow ACE
@@ -258,7 +257,6 @@ mod tests {
         // The inner Allow/Deny value stays under `kind`.
         assert_eq!(entries[0]["kind"], "Allow");
 
-        // TrusteeCategory-Schema seit v2.
         // `entry_kind` is snake_case (from the enum rename_all),
         // `category` stays PascalCase ("Ntfs"/"Share") as in the
         // existing TrusteeCategory schema since v2.

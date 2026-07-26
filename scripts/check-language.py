@@ -230,6 +230,10 @@ DE_WORDS = [
     "existieren", "geschuetzt", "vergleicht", "zerlegen",
     "spaeter", "deaktiviert", "gleiche", "Zugriff", "Effektiver",
     "aktiv", "Signatur", "ausblenden",
+    # exporter review 2026-07-26 (EX-5): German half-lines in csv/json/
+    # trustees, all reported clean by the gate.
+    "vollen", "nutzen", "wollen", "seit",
+    "Plattform", "unabhaengig", "testbar",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -440,6 +444,14 @@ def selftest() -> int:
         "// Added + Changed via Signatur-Diff (Finding 3).",
         "/// NTFS=Read, Share=Full, Effective=Read. Effektiver Zugriff",
         "// ausblenden.",
+        # exporter review 2026-07-26 EX-5: the exact lines the gate
+        # reported as clean. NOTE: the json.rs line "/// als tagged Union
+        # (`{\"kind\":\"ace\",...}`)" is un-guardable — its only German
+        # word "als" collides with the ALS acronym, everything else is
+        # English. Deleted at the source instead.
+        "// vollen JSON-Export nutzen wollen.",
+        "/// Plattform-unabhaengig testbar.",
+        "// TrusteeCategory-Schema seit v2.",
     ]
     must_pass = [
         "Risk Findings",

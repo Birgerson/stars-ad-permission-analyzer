@@ -9,8 +9,8 @@ use std::io::Write;
 use adpa_core::{
     error::CoreError,
     model::{
-        AceKind, EffectivePermission, LocalGroupEvalStatus, PathTrusteeEntry, PathTrustees,
-        PermissionDiagnostic, RiskFinding, RiskSeverity, ShareEvalStatus, TrusteeCategory,
+        AceKind, LocalGroupEvalStatus, PathTrusteeEntry, PathTrustees, PermissionDiagnostic,
+        RiskFinding, RiskSeverity, ShareEvalStatus, TrusteeCategory,
     },
     traits::{AnalysisResult, ExportTarget, Exporter},
 };
@@ -50,10 +50,16 @@ pub fn render_html(result: &AnalysisResult) -> Result<String, CoreError> {
         .iter()
         .filter(|f| f.severity == RiskSeverity::Medium)
         .count();
-    let diagnostics_count = result
+    // EX-3 (exporter review 2026-07-26): count paths whose evaluation had
+    // real gaps (`is_incomplete` — the same single source of truth the risk
+    // findings and the GUI warning rows use). Informational markers
+    // (SidHistoryEvaluated, OwnerRightsAceApplied, …) no longer inflate the
+    // number an auditor reads as "needs a second look"; every marker stays
+    // fully visible in the per-row diagnostics column.
+    let incomplete_count = result
         .permissions
         .iter()
-        .filter(|p| has_diagnostics(p))
+        .filter(|p| p.is_incomplete())
         .count();
 
     write_html_head(&mut s, now.to_string().as_str());
@@ -64,7 +70,7 @@ pub fn render_html(result: &AnalysisResult) -> Result<String, CoreError> {
         critical,
         high,
         medium,
-        diagnostics_count,
+        incomplete_count,
     );
     write_risk_table(&mut s, &result.risk_findings)?;
     write_permissions_table(&mut s, &result.permissions)?;
@@ -136,7 +142,7 @@ fn write_summary(
     critical: usize,
     high: usize,
     medium: usize,
-    diagnostics: usize,
+    incomplete: usize,
 ) {
     s.push_str("<h2>Summary</h2>\n<div class=\"summary\">\n");
     card(s, total, "Paths analyzed", "info-card");
@@ -144,21 +150,12 @@ fn write_summary(
     card(s, critical, "Critical", "critical");
     card(s, high, "High", "high");
     card(s, medium, "Medium", "medium");
-    //
-    // Diagnostics card: number of paths with at least one incompleteness
-    // marker (parser gap, unreadable share DACL, missing local groups,
-    // non-canonical DACL, unsupported share ACEs). An audit reader can
-    // immediately see whether findings rest on solid evaluation data.
-    card(s, diagnostics, "Diagnostics", "medium");
+    // Incomplete-evaluations card: number of paths whose evaluation had at
+    // least one real gap (parser gap, unreadable share DACL, missing local
+    // groups, incompleteness-trigger diagnostic). An audit reader can
+    // immediately see how many results must be read cautiously.
+    card(s, incomplete, "Incomplete evaluations", "medium");
     s.push_str("</div>\n");
-}
-
-/// True if the entry carries at least one incompleteness source.
-fn has_diagnostics(p: &EffectivePermission) -> bool {
-    p.unsupported_ace_count > 0
-        || matches!(p.share_status, ShareEvalStatus::ReadFailed(_))
-        || matches!(p.local_group_status, LocalGroupEvalStatus::NotAvailable(_))
-        || !p.diagnostics.is_empty()
 }
 
 fn card(s: &mut String, n: usize, label: &str, class: &str) {
@@ -371,7 +368,13 @@ fn write_permissions_table(
                 }
                 PermissionDiagnostic::GroupResolutionViaGlobalCatalog => {
                     diag_parts.push(
-                        "<span class=\"badge badge-neutral\"                          title=\"Group memberships were resolved through                          a Global Catalog bind. Only universal group                          memberships replicate fully to the GC — global                          and domain-local memberships of foreign domains                          can be missing. Treat the finding as                          incomplete.\">ℹ groups via Global Catalog — may be partial</span>"
+                        "<span class=\"badge badge-neutral\" \
+                         title=\"Group memberships were resolved through \
+                         a Global Catalog bind. Only universal group \
+                         memberships replicate fully to the GC — global \
+                         and domain-local memberships of foreign domains \
+                         can be missing. Treat the finding as \
+                         incomplete.\">ℹ groups via Global Catalog — may be partial</span>"
                             .to_string(),
                     );
                 }
@@ -511,7 +514,18 @@ fn write_html_foot(s: &mut String) {
 fn write_trustees_table(s: &mut String, entries: &[PathTrustees]) -> Result<(), CoreError> {
     s.push_str("<h2>Who has access (trustees per path)</h2>\n");
     for entry in entries {
+        // EX-1 (exporter review 2026-07-26): an empty trustee list must not
+        // make the path vanish from this section — absence would read as
+        // "never scanned". The builder now always emits at least a
+        // diagnostic entry; this branch stays as a defensive net for
+        // entries from other sources (e.g. persisted data).
         if entry.trustees.is_empty() {
+            writeln!(
+                s,
+                "<details><summary><strong>{}</strong> &nbsp;<span style=\"color:#6c7a89\">(no entries — nothing could be listed for this path)</span></summary></details>",
+                escape_html(&entry.path.0)
+            )
+            .map_err(|e| CoreError::Export(e.to_string()))?;
             continue;
         }
         writeln!(
@@ -812,36 +826,56 @@ mod tests {
         assert!(s.contains("5 unsupported share ACE(s)"));
     }
 
+    /// The summary header must include an Incomplete-evaluations card
+    /// showing how many paths had real evaluation gaps. Without it an
+    /// auditor would have to scan every row's diagnostic column to assess
+    /// the evaluation basis.
     ///
-    /// The summary header must include a Diagnostics card showing how many
-    /// paths carry incompleteness markers. Without it an auditor would have
-    /// to scan every row's diagnostic column to assess the evaluation basis.
+    /// EX-3 (exporter review 2026-07-26): the card counts via
+    /// `is_incomplete()` — informational markers (NonCanonicalDaclOrder,
+    /// SidHistoryEvaluated, …) must NOT inflate the number; they stay
+    /// visible in the per-row diagnostics column.
     #[test]
-    fn html_summary_includes_diagnostics_card() {
+    fn html_summary_counts_only_incomplete_evaluations() {
         use adpa_core::traits::AnalysisResult;
 
         let mut clean = perm();
         clean.path = NormalizedPath("C:\\Clean".to_owned());
 
-        let mut flagged = perm();
-        flagged.path = NormalizedPath("C:\\Flagged".to_owned());
-        flagged.diagnostics = vec![PermissionDiagnostic::NonCanonicalDaclOrder { at_index: 0 }];
+        // Informational marker only — result is exact, must NOT count.
+        let mut informational = perm();
+        informational.path = NormalizedPath("C:\\Informational".to_owned());
+        informational.diagnostics =
+            vec![PermissionDiagnostic::NonCanonicalDaclOrder { at_index: 0 }];
+
+        // Real evaluation gap — must count.
+        let mut incomplete = perm();
+        incomplete.path = NormalizedPath("C:\\Incomplete".to_owned());
+        incomplete.share_status = ShareEvalStatus::ReadFailed("access denied".to_owned());
 
         let result = AnalysisResult {
-            permissions: vec![clean, flagged],
+            permissions: vec![clean, informational, incomplete],
             risk_findings: vec![],
             ..Default::default()
         };
 
         let html = super::render_html(&result).expect("render_html must succeed");
         assert!(
-            html.contains(">Diagnostics<"),
-            "summary must contain a Diagnostics card label, got: {html}"
+            html.contains(">Incomplete evaluations<"),
+            "summary must contain the Incomplete-evaluations card label, got: {html}"
         );
-        // Exactly one path carries a marker → the card count must read "1".
+        // Exactly one path has a real gap → the card must read "1"; the
+        // informational-only path must not inflate the count.
         assert!(
-            html.contains("<div class=\"num\">1</div><div class=\"lbl\">Diagnostics</div>"),
-            "Diagnostics card must report count 1, got: {html}"
+            html.contains(
+                "<div class=\"num\">1</div><div class=\"lbl\">Incomplete evaluations</div>"
+            ),
+            "card must report count 1 (informational markers excluded), got: {html}"
+        );
+        // The informational marker itself stays visible in the table.
+        assert!(
+            html.contains("non-canonical DACL"),
+            "informational marker must still render as a row badge"
         );
     }
 
