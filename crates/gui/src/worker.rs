@@ -46,7 +46,7 @@ use validation::{
     },
     numbers::validate_optional_scan_depth,
     path::validate_path,
-    sid::validate_sid,
+    sid::{looks_like_sid, validate_sid},
 };
 
 /// Returns the default database path in %APPDATA%\Stars\.
@@ -278,8 +278,10 @@ pub enum WorkerRequest {
     /// Searches Active Directory for users and groups via a live LDAP
     /// query (the Analyze tab's directory picker).
     SearchIdentity { query: String, ldap: LdapParams },
-    /// Exports the last scan as an HTML report.
-    ExportHtml { output_path: String },
+    /// Exports the last scan as a report. The format follows the target
+    /// file's extension (.html / .json / .csv) — see `export_report`
+    /// (gui review 2026-07-26, GUI-2).
+    ExportReport { output_path: String },
     /// Loads the list of all persisted scan runs for the Delta tab.
     ListScanRuns,
     /// Collects a flat identity list (users, groups, well-knowns) for the
@@ -340,6 +342,15 @@ pub struct DiagnosticRow {
     pub level: i32,
 }
 
+/// Public wrapper around [`diag_level`] for the UI layer (`main.rs`), which
+/// maps a marker's severity for the Analyze tab's diagnostics block
+/// (gui review 2026-07-26, GUI-1). Keeping one mapping means the Analyze
+/// tab, the scan rows and the Groups view colour identical markers
+/// identically.
+pub fn diag_level_for_ui(sev: adpa_core::model::DiagnosticSeverity) -> i32 {
+    diag_level(sev)
+}
+
 /// Maps a marker's visual attention to the GUI level: `0` = neutral,
 /// `1` = notice (amber), `2` = concern (orange-red).
 fn diag_level(sev: adpa_core::model::DiagnosticSeverity) -> i32 {
@@ -386,10 +397,15 @@ pub struct ScanRow {
     /// path carries no diagnostics. Each entry carries its severity so the GUI
     /// can show a warning marker differently from a purely informational one.
     pub diagnostics: Vec<DiagnosticRow>,
-    /// Row presentation level: `0` = correct/complete, `1` = info-only, `2` =
-    /// warning (incomplete), `3` = high (an under-report marker is present).
-    /// Derived from `EffectivePermission::is_incomplete` + the marker
-    /// severities — the single source of truth.
+    /// Row presentation level: `0` = neutral, `1` = notice (amber), `2` =
+    /// concern (orange-red). Derived from the marker severities via
+    /// [`row_severity`] — deliberately NOT from
+    /// `EffectivePermission::is_incomplete`: this answers "do I need to
+    /// look?", so an expected caveat (e.g. the SAM fallback) stays neutral
+    /// even though the result is technically incomplete. The incompleteness
+    /// itself is carried by the individual markers in `diagnostics`.
+    /// (Doc corrected in the gui review 2026-07-26, GUI-3 — it previously
+    /// described a four-level scale the code never implemented.)
     pub row_severity: i32,
     /// Path-centric trustee view — every ACE in the DACL resolved, with
     /// "Applies to" labels and Allow/Deny. Empty when the scan runs
@@ -581,11 +597,9 @@ pub struct DeltaRow {
 
 /// Starts the worker thread and returns the sender, receiver, and cancellation token.
 ///
-/// The cancellation token is held by the GUI: `cancel()` acts directly on a running
-/// scan without needing the request channel (which is blocked during a scan).
 /// Callback the worker uses to wake the GUI thread once a new
 /// `WorkerEvent` is sitting in the receiver. With Slint this is typically
-/// receiver.
+/// an event-loop invoke that drains the receiver.
 pub type NotifyFn = std::sync::Arc<dyn Fn() + Send + Sync>;
 
 pub fn spawn_worker(
@@ -740,8 +754,8 @@ pub fn spawn_worker(
                     let _ = evt_tx.send(WorkerEvent::SearchResults(result));
                     notify();
                 }
-                WorkerRequest::ExportHtml { output_path } => {
-                    let result = export_html(
+                WorkerRequest::ExportReport { output_path } => {
+                    let result = export_report(
                         &last_permissions,
                         &last_risk_findings,
                         &last_path_trustees,
@@ -837,7 +851,6 @@ pub fn spawn_worker(
 
 struct ScanSummary {
     permissions: Vec<EffectivePermission>,
-    /// Path-centric trustee listing (raw model — without display-
     /// Path-centric trustee listing (raw model — no display formatting).
     /// Used by the HTML exporter; the GUI separately receives display-
     /// formatted `TrusteeRow` data inside each `ScanRow`.
@@ -851,9 +864,8 @@ struct ScanSummary {
     cancelled: bool,
 }
 
-/// Centrally validates optional SMB and LDAP connection inputs before they are
-/// passed to NetAPI or LDAP calls.
-/// Normalized connection inputs in the GUI worker.
+/// Normalized connection inputs in the GUI worker — the trimmed, validated
+/// values produced by [`validate_connection_inputs`].
 pub struct NormalizedConnectionInputs {
     pub smb_server: Option<String>,
     pub share_name: Option<String>,
@@ -1135,7 +1147,10 @@ async fn handle_resolve_group_members(
 ) -> Result<GroupsViewData, String> {
     info!(identity, "ResolveGroupMembers request");
     let trimmed = identity.trim();
-    if trimmed.starts_with("S-1-") {
+    // GUI-4 (gui review 2026-07-26): case-insensitive classification via the
+    // shared helper, so a lowercase SID gets the precise invalid-SID message
+    // instead of a misleading name-lookup failure.
+    if looks_like_sid(trimmed) {
         validate_sid(trimmed).map_err(|e| format!("Invalid SID: {e}"))?;
     } else {
         validate_identity_query(trimmed).map_err(|e| format!("Invalid group name: {e}"))?;
@@ -1318,7 +1333,6 @@ async fn handle_scan(
 ) -> ScanSummary {
     info!(root, identity, "Scan request");
 
-    // persist_scan in `scan_errors` landet.
     // Helper: emit a validation/setup error to the UI AND structurally
     // record it in the summary so persist_scan can write it to `scan_errors`.
     let make_early_summary = |message: String| -> ScanSummary {
@@ -1452,8 +1466,8 @@ async fn handle_scan(
 
     // Build the SID→name table once for the entire scan. Trustee SIDs
     // repeat across all paths — we collect the unique SIDs from every
-    // DACL up front and avoid N×M LSA round-trips.
-    // handed to the trustee build function so it makes NO per-path LSA
+    // DACL up front and avoid N×M LSA round-trips. The map is handed to
+    // the trustee build function, which therefore makes NO per-path LSA
     // call.
     #[cfg(windows)]
     let scan_sid_names = {
@@ -1477,10 +1491,9 @@ async fn handle_scan(
 
     for fso in walk.objects {
         let path = fso.path.0.clone();
-        // vorab gelesenen Overlay (Single Read pro Share). Round-10
         // Per-path trustees — NTFS from FSO, share from the pre-read
-        // overlay. Round-10 finding 2: scan-wide SID→name map avoids
-        // per-path LSA.
+        // overlay (single read per share). Round-10 finding 2: the
+        // scan-wide SID→name map avoids per-path LSA calls.
         let raw_trustees =
             build_path_trustees_with_share_and_names(&fso, share_overlay.as_ref(), &scan_sid_names);
         let trustees_for_row: Vec<TrusteeRow> =
@@ -1558,8 +1571,8 @@ async fn handle_search(
 ) -> Result<Vec<IdentitySearchResult>, String> {
     use adpa_core::model::IdentityKind;
 
-    // Review 2026-06-04 round 3 finding 2: trimmed wrapper values
-    // the raw `ldap` fields.
+    // Review 2026-06-04 round 3 finding 2: use the trimmed, validated
+    // wrapper values below — never the raw `ldap` fields.
     let query = validate_identity_query(query)
         .map_err(|e| format!("Invalid search query: {e}"))?
         .0;
@@ -1596,10 +1609,10 @@ async fn handle_search(
     .to_config();
 
     // Review 2026-06-04 round 2, finding 3: the GUI identity search used to
-    // bypass the LDAP timeout. connect() is internally guarded; the paged
-    // longer than `LdapConfig::timeout_secs` promised. We wrap connect +
-    // search + disconnect in a single timeout so the whole operation is
-    // observable.
+    // bypass the LDAP timeout. connect() is internally guarded, but the
+    // paged search could still run longer than `LdapConfig::timeout_secs`
+    // promised. We wrap connect + search + disconnect in a single timeout
+    // so the whole operation is bounded and observable.
     let entries = ldap_client::with_timeout(
         "identity_search",
         ldap_client::ldap_timeout(&config),
@@ -1642,7 +1655,6 @@ async fn handle_search(
 }
 
 // ---------------------------------------------------------------------------
-// Persistierung
 // Persistence
 // ---------------------------------------------------------------------------
 
@@ -1695,11 +1707,20 @@ fn persist_scan(
 }
 
 // ---------------------------------------------------------------------------
-// HTML-Export
-// HTML export
+// Report export
 // ---------------------------------------------------------------------------
 
-fn export_html(
+/// Exports the last scan/analysis, choosing the format from the target
+/// file's extension.
+///
+/// GUI-2 (gui review 2026-07-26): this used to hardcode `HtmlExporter`
+/// while `validate_export_path` accepts `.csv`, `.html` **and** `.json` —
+/// so a target named `report.json` received an HTML document. The file
+/// then lied about its content to every downstream consumer. Now the
+/// extension decides, exactly like the CLI's `export_analysis`, which also
+/// gives GUI users the CSV and JSON formats they previously could not
+/// produce at all.
+fn export_report(
     permissions: &[EffectivePermission],
     risk_findings: &[RiskFinding],
     path_trustees: &[adpa_core::model::PathTrustees],
@@ -1719,14 +1740,63 @@ fn export_html(
         ));
     }
     let validated_path = status.path().0.clone();
+    let format = ReportFormat::from_path(&validated_path)?;
     let result = AnalysisResult {
         permissions: permissions.to_vec(),
         risk_findings: risk_findings.to_vec(),
         path_trustees: path_trustees.to_vec(),
     };
-    HtmlExporter
-        .export(&result, ExportTarget::File(validated_path))
-        .map_err(|e| format!("Export failed: {e}"))
+    // `ExportTarget::File` (not FileOverwrite): the exporter refuses an
+    // existing file itself, which also covers a file created between the
+    // check above and this write.
+    let target = ExportTarget::File(validated_path);
+    match format {
+        ReportFormat::Html => HtmlExporter.export(&result, target),
+        ReportFormat::Json => exporter::JsonExporter.export(&result, target),
+        ReportFormat::Csv => exporter::CsvExporter.export(&result, target),
+    }
+    .map_err(|e| format!("Export failed: {e}"))
+}
+
+/// Report format selected by the export target's extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportFormat {
+    Html,
+    Json,
+    Csv,
+}
+
+impl ReportFormat {
+    /// Classifies an already-validated export path. `validate_export_path`
+    /// has narrowed the extension to csv/html/json, so the fallback arm is
+    /// unreachable in practice — but it errors rather than guessing a
+    /// format, because writing the wrong content into a named file is
+    /// exactly the bug GUI-2 fixed.
+    pub fn from_path(path: &std::path::Path) -> Result<Self, String> {
+        match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("html") => Ok(Self::Html),
+            Some("json") => Ok(Self::Json),
+            Some("csv") => Ok(Self::Csv),
+            other => Err(format!(
+                "Unsupported export extension {other:?} — use .html, .json or .csv"
+            )),
+        }
+    }
+
+    /// One-line hint shown next to the export field so the user knows what
+    /// the chosen extension will produce.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Html => "readable report with risk findings, diagnostics and trustees",
+            Self::Json => "full structured report (schema v3) for audit pipelines",
+            Self::Csv => "permission rows only — risk findings are not included",
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1902,15 +1972,12 @@ fn analyze_trustees(
         "AnalyzeTrustees request"
     );
     // Review 2026-06-04 round 2, finding 6: propagate the normalized form.
-    // Review 2026-06-04 round 2, finding 6: propagate the normal form.
     let normalized_path = validate_path(path)
         .map_err(|e| format!("Invalid path: {e}"))?
         .0;
     let path = normalized_path.as_str();
     // Round 3 finding 2 + round 4 finding 3: trim + enforce pairing.
     let (smb_server, share_name) = normalize_smb_pair(smb_server, share_name)?;
-    // `SmbAuditContext::resolve` (Round-10 Finding 1) — `analyze_trustees`
-    // Scan-Tab.
     // Code review 2026-06-07 finding 2: previously this passed the
     // normalized pair straight to `build_trustee_rows` — a bare UNC path
     // without explicit `--smb-server`/`--share-name` left the pair as
@@ -2119,7 +2186,8 @@ async fn resolve_identity_sids(
     // use) — a raw SID syntactically, a name/UPN via the identity-query
     // validator. Covers both the LDAP and the SAM/LSA branch below.
     let trimmed = identity.trim();
-    let is_sid = trimmed.starts_with("S-1-");
+    // GUI-4: shared, case-insensitive classifier (see `validation::sid`).
+    let is_sid = looks_like_sid(trimmed);
     if is_sid {
         validate_sid(trimmed).map_err(|e| format!("Invalid SID: {e}"))?;
     } else {
@@ -2195,7 +2263,6 @@ async fn resolve_identity_sids(
     })
 }
 
-/// `IdentityResolution::disabled_status_unknown = true`.
 /// Returns `(Identity, memberships, disabled_known)`. The third value
 /// flags whether `Identity.disabled` was confirmed via
 /// `NetUserGetInfo`. When `false` the caller sets
@@ -2276,7 +2343,6 @@ fn resolve_share_status(
     )
 }
 
-// validation::path::parse_unc_components.
 // UNC parsing now lives centrally in validation::path::parse_unc_components.
 // Long-path UNC (\\?\UNC\…) is handled correctly there — review finding 4
 // applied to the GUI-local variant that used to live here. The original
@@ -2285,6 +2351,49 @@ fn resolve_share_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- GUI-2 (gui review 2026-07-26): format-aware export ---
+
+    /// The extension decides the format — this is the whole point of
+    /// GUI-2: before the fix a `.json` target received an HTML document.
+    #[test]
+    fn report_format_follows_the_extension() {
+        use std::path::Path;
+        assert_eq!(
+            ReportFormat::from_path(Path::new(r"C:\r\scan.html")).unwrap(),
+            ReportFormat::Html
+        );
+        assert_eq!(
+            ReportFormat::from_path(Path::new(r"C:\r\scan.json")).unwrap(),
+            ReportFormat::Json
+        );
+        assert_eq!(
+            ReportFormat::from_path(Path::new(r"C:\r\scan.csv")).unwrap(),
+            ReportFormat::Csv
+        );
+        // Case-insensitive, like the path validator.
+        assert_eq!(
+            ReportFormat::from_path(Path::new(r"C:\r\scan.HTML")).unwrap(),
+            ReportFormat::Html
+        );
+    }
+
+    /// An unknown or missing extension must error, never guess — writing
+    /// the wrong content into a named file is exactly the GUI-2 bug.
+    #[test]
+    fn report_format_refuses_unknown_extension() {
+        use std::path::Path;
+        assert!(ReportFormat::from_path(Path::new(r"C:\r\scan.txt")).is_err());
+        assert!(ReportFormat::from_path(Path::new(r"C:\r\scan")).is_err());
+    }
+
+    /// The CSV description must warn that risk findings are missing —
+    /// the CLI prints the same caveat.
+    #[test]
+    fn csv_description_warns_about_missing_risk_findings() {
+        assert!(ReportFormat::Csv.description().contains("risk findings"));
+        assert!(ReportFormat::Json.description().contains("structured"));
+    }
 
     #[test]
     fn identity_search_result_maps_to_picker_fields() {
@@ -2791,12 +2900,12 @@ mod tests {
         );
     }
 
-    /// Round-7 finding 2: GUI HTML export must refuse to overwrite an
-    /// existing target file instead of silently truncating it. CLI
+    /// Round-7 finding 2: the GUI report export must refuse to overwrite
+    /// an existing target file instead of silently truncating it. CLI
     /// already enforces this via `check_overwrite_policy`; the GUI worker
-    /// now enforces the same policy directly inside `export_html`.
+    /// now enforces the same policy directly inside `export_report`.
     #[test]
-    fn export_html_refuses_to_overwrite_existing_file() {
+    fn export_report_refuses_to_overwrite_existing_file() {
         use std::io::Write;
         // Unique file name placed directly in std::env::temp_dir() so
         // we do not need an external tempfile dependency.
@@ -2810,7 +2919,7 @@ mod tests {
                 .expect("write sentinel");
         }
 
-        let result = export_html(&[], &[], &[], path.to_str().expect("valid utf-8 path"));
+        let result = export_report(&[], &[], &[], path.to_str().expect("valid utf-8 path"));
 
         // Cleanup BEFORE asserting so a failure does not leak the file.
         let sentinel_before_cleanup = std::fs::read(&path).ok();

@@ -108,6 +108,37 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **The Analyze tab shows its diagnostic markers (gui review 2026-07-26,
+  GUI-1).** The GUI's single-path view — the one an admin reaches for
+  first — rendered rights, mask, share line and explanation but dropped
+  `diagnostics` entirely: an understated right (unevaluated
+  `sIDHistory`), a failed group resolution, a flat SAM fallback or
+  unevaluable NTFS ACEs all looked like a clean, confident "Analysis
+  complete." The CLI printed them, the scan rows showed them, HTML and
+  JSON carried them — only this view was blind. It now renders the same
+  `Diagnostics` block as the Groups tab, with the shared wording and
+  severity colours, and clears it when an analysis fails.
+
+- **The GUI export honours the file extension (GUI-2).** The export
+  button always wrote HTML while the path validator accepts `.csv`,
+  `.html` and `.json` — so a target named `report.json` received an HTML
+  document with no warning. The format now follows the extension exactly
+  like the CLI (unknown extensions are refused, not guessed), which also
+  gives GUI users the CSV and JSON exports they previously could not
+  produce at all. The Scan tab states what each extension yields, and
+  the CSV caveat ("risk findings are not included") is shown before the
+  write.
+
+- **The lowercase-SID dispatch is fixed in the GUI too (GUI-4).** The
+  case-insensitive classifier introduced for the CLI now lives in
+  `validation::sid` and is used by both frontends, so `s-1-5-21-…` gets
+  the precise invalid-SID message everywhere instead of a misleading
+  "LSA name lookup failed". Also: `row_severity`'s documentation
+  corrected to the three levels the code actually implements (GUI-3),
+  German comment fragments purged with the language gate hardened
+  (GUI-5), and `main.rs` got its first tests — the user-facing share-line
+  formatter and the severity labels (GUI-6).
+
 - **The CLI compiles on non-Windows again (cli review 2026-07-26,
   CLI-1).** The `cfg(not(windows))` branch of the identity resolution had
   fallen two struct fields behind (`resolved_via_fsp`,
