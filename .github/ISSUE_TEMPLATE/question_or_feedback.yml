@@ -1,0 +1,47 @@
+name: Question or feedback
+description: Ask how something works, report that it worked, or suggest an improvement.
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reports that Stars **worked** are as welcome as bug reports —
+        the tool has so far been exercised in one lab by one person, so
+        every real environment it survives is genuinely useful
+        information.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is this about?
+      options:
+        - It worked — here is where and how
+        - A question about how Stars behaves
+        - A suggestion / feature idea
+        - Documentation is unclear or wrong
+    validations:
+      required: true
+
+  - type: textarea
+    id: body
+    attributes:
+      label: Details
+      description: |
+        For "it worked": which environment (Windows version, roughly how
+        large the AD, single or multi-domain), and what you used it for.
+        No host names needed.
+
+        For a suggestion: please describe the audit question you are
+        trying to answer, not only the feature — that usually leads to a
+        better solution than the one first imagined.
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        **Please note what Stars will never do**, so a suggestion does not
+        run into a wall: it does not change NTFS, SMB or AD permissions,
+        it installs no agents on target systems, and it performs no
+        automatic remediation. Those are permanent project boundaries, not
+        a backlog item.

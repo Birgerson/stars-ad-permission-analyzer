@@ -1,0 +1,14 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Is Stars the right tool for my problem?
+    url: https://github.com/Birgerson/stars-ad-permission-analyzer/blob/main/docs/can-stars-help-you.md
+    about: Decision matrix — including when another tool fits better.
+  - name: Known limitations
+    url: https://github.com/Birgerson/stars-ad-permission-analyzer/blob/main/docs/known-limitations.md
+    about: What Stars deliberately does not model (trust filtering, DAC/conditional ACEs, token privileges, ...) — please check before reporting a wrong result.
+  - name: User guide
+    url: https://github.com/Birgerson/stars-ad-permission-analyzer/blob/main/docs/user-guide.md
+    about: Every tab and every CLI command in detail.
+  - name: Report a security issue
+    url: https://github.com/Birgerson/stars-ad-permission-analyzer/blob/main/SECURITY.md
+    about: Please do not open a public issue for security reports.

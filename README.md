@@ -544,7 +544,13 @@ Stars persists its scan history in `%APPDATA%\Stars\stars_data.db` (SQLite, sepa
 
 1. **Read the last log** — open `%LOCALAPPDATA%\Stars\logs\` and pick the newest file. Most problems explain themselves from the last 20 lines.
 2. **Pay attention to diagnostic markers** — Stars explicitly marks uncertain results as `incomplete` with a reason. See [`docs/features-and-limitations.md`](docs/features-and-limitations.md) for the full marker list.
-3. **File an issue on GitHub** — [Issues](https://github.com/Birgerson/stars-ad-permission-analyzer/issues). Please include Stars version, Windows version, the affected path (anonymized if needed), and a log excerpt. For security issues see [SECURITY.md](SECURITY.md).
+3. **File an issue on GitHub** — [Issues](https://github.com/Birgerson/stars-ad-permission-analyzer/issues). The bug-report template asks for exactly what makes a report actionable; the most valuable field is the **diagnostic markers** Stars showed, because they reveal whether it already knew its answer was incomplete. Anonymize paths and account names as needed — the shape matters, not the values. For security issues see [SECURITY.md](SECURITY.md); please do not open a public issue for those.
+
+### Did it work? That is worth reporting too
+
+Stars has so far been exercised **in one lab, by one person**, against Windows Server 2022 — 10,000 users and 5,000 nested groups, but a synthetic directory nonetheless. Its correctness core is verified against the Windows authorization APIs on every push, yet no amount of testing substitutes for a real environment with twenty years of history in it.
+
+So if you ran Stars against a production domain and it held up, that is genuinely useful information — please say so via the *Question or feedback* issue template. Rough environment shape is enough (Windows version, single or multi-domain, approximate size); no host names, no domain names, nothing confidential. Reports that something worked are as welcome as reports that something broke.
 
 ### About the project
 

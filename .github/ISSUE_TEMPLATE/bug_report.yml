@@ -1,0 +1,118 @@
+name: Bug report
+description: Stars showed something wrong, confusing, or unexpected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Stars is maintained by one person in
+        their spare time — a report that answers the questions below is
+        usually enough to find the cause without further round-trips.
+
+        **Never paste real credentials.** Passwords are not needed to
+        reproduce anything, and Stars never logs them.
+
+  - type: input
+    id: version
+    attributes:
+      label: Stars version
+      description: "GUI: the badge next to the title, or the Info tab. CLI: `adpa --version`."
+      placeholder: "v1.8.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did it happen?
+      options:
+        - GUI — Analyze tab
+        - GUI — Scan Tree tab
+        - GUI — Groups tab
+        - GUI — Delta tab
+        - GUI — Info tab / update check
+        - CLI
+        - Installer / startup
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened, and what did you expect instead?
+      description: |
+        If it is about a permission result: what did Stars report, and
+        what do you believe the effective right actually is? The Windows
+        "Effective Access" tab is a useful comparison.
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostic markers shown
+      description: |
+        **This is the most useful field.** Stars flags every result whose
+        evaluation had gaps. Please copy the markers it displayed:
+
+        - GUI Analyze/Groups tab: the **Diagnostics** block under the result
+        - GUI Scan Tree: expand the row — the Diagnostics lines
+        - CLI: the `Diagnostics (structured)` section
+
+        If there were none, write "none" — that is informative too.
+      placeholder: |
+        e.g.
+        [i] Group resolution used the SAM/LSA fallback (no LDAP); nested domain groups are not resolved recursively.
+        [!] 3 NTFS ACE(s) could not be evaluated ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: resolution_mode
+    attributes:
+      label: Identity resolution mode
+      options:
+        - "Off — SAM/LSA"
+        - "LDAPS (636)"
+        - "Plain LDAP (389)"
+        - "Global Catalog"
+        - "Signed LDAP (Kerberos)"
+        - "Not applicable"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        Windows version of the machine running Stars, and of the target if
+        different. If Active Directory is involved: domain/forest
+        functional level, single or multi-domain, any trusts. **No real
+        host names or domain names needed** — "a 2019 DC, single domain"
+        is enough.
+      placeholder: |
+        Stars runs on: Windows Server 2022
+        Target path: UNC to a Server 2016 file server
+        AD: single domain, functional level 2016
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Redact paths and account names as needed — the shape matters, not the values.
+      placeholder: |
+        1. Analyze tab, path \\fileserver\share\dept, identity DOMAIN\someuser
+        2. Mode LDAPS against a DC
+        3. Result shows ... but the user actually has ...
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log excerpt (optional)
+      description: |
+        `%LOCALAPPDATA%\Stars\logs\`. Please skim it before pasting —
+        it contains paths and account names from your environment.
+      render: text
