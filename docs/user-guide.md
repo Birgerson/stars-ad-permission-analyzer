@@ -170,7 +170,13 @@ user can effectively do there.
 - NTFS and share rights separately,
 - explainable permission path
   (`User → Group → … → ACE → normalized right`),
-- all diagnostic markers.
+- **all diagnostic markers of this result**, listed under
+  *Diagnostics* with the same wording the CLI and the reports use —
+  informational ones with `ℹ`, warnings with `⚠` in the attention
+  colour. Since the gui review 2026-07-26 this block exists; before
+  that the Analyze tab silently dropped every marker, so an
+  understated right (unevaluated `sIDHistory`) or a flat SAM-fallback
+  group resolution looked like a clean, complete answer.
 
 ### `Groups` tab — which groups is a user in?
 
@@ -688,6 +694,14 @@ Via the **Export** menu (or `--output` flag in the CLI):
     (`⚠`, likely a real gap). See the colour legend in
     [features-and-limitations.md](features-and-limitations.md).
   - scan errors in their own section.
+
+**The file extension picks the format** — in the CLI (`--output
+report.json`) and, since the gui review 2026-07-26, in the GUI too: the
+Scan tab's export field accepts `.html`, `.json` and `.csv` and writes
+the matching format. Before that the GUI always wrote HTML regardless of
+the name, so a target called `report.json` received an HTML document
+that lied about its content to every downstream consumer. An unknown
+extension is refused with a clear message instead of being guessed.
 
 Existing export files are **not overwritten** without `--force` (CLI)
 or explicit confirmation (GUI).

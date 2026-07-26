@@ -527,18 +527,10 @@ async fn main() -> anyhow::Result<()> {
 // Shared identity resolution
 // ---------------------------------------------------------------------------
 
-/// True when the input is meant as a SID — case-insensitive `S-1-` prefix.
-///
-/// Classification only: `validate_sid` / `Sid::try_new` still enforce the
-/// canonical uppercase form and produce the precise rejection. Before this
-/// helper the dispatch was case-sensitive, so `s-1-5-21-…` ran into *name*
-/// resolution and failed with a misleading "LSA name lookup failed" instead
-/// of a clear "invalid SID" message (cli review 2026-07-26, CLI-2).
-fn looks_like_sid(input: &str) -> bool {
-    input
-        .get(..4)
-        .is_some_and(|p| p.eq_ignore_ascii_case("S-1-"))
-}
+// The SID-vs-name classifier lives in `validation::sid` since the gui
+// review 2026-07-26 (GUI-4): CLI and GUI both dispatch this question and
+// must answer it identically.
+use validation::sid::looks_like_sid;
 
 /// CLI-local bundle: [`PrincipalResolution`] + the `ad_connected`
 /// flag.
@@ -2291,34 +2283,8 @@ mod tests {
     use std::path::PathBuf;
     use validation::export_path::{ExportPathStatus, ValidatedExportPath};
 
-    // --- CLI-2 (cli review 2026-07-26): SID-vs-name dispatch ---
-
-    #[test]
-    fn looks_like_sid_is_case_insensitive() {
-        use super::looks_like_sid;
-        assert!(looks_like_sid("S-1-5-21-1-2-3-1000"));
-        assert!(looks_like_sid("s-1-5-21-1-2-3-1000"));
-        assert!(looks_like_sid("S-1-5-18"));
-        assert!(!looks_like_sid("alice"));
-        assert!(!looks_like_sid("S-2-anything"));
-        assert!(!looks_like_sid("S-1"));
-        assert!(!looks_like_sid(""));
-        // Multi-byte character straddling the prefix window must not panic.
-        assert!(!looks_like_sid("S€-1"));
-    }
-
-    /// The point of CLI-2: a lowercase SID now reaches the SID validator,
-    /// which rejects it precisely — instead of running into name
-    /// resolution with a misleading "LSA name lookup failed".
-    #[test]
-    fn lowercase_sid_is_rejected_by_the_sid_validator_with_a_precise_message() {
-        let err = validation::sid::validate_sid("s-1-5-21-1-2-3-1000").unwrap_err();
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("S-1-"),
-            "rejection must name the canonical prefix, got: {msg}"
-        );
-    }
+    // CLI-2's dispatch tests moved to `validation::sid` together with the
+    // helper itself (gui review 2026-07-26, GUI-4) — one home, one test set.
 
     // --- CSV escaping for the groups export ---
 

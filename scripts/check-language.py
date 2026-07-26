@@ -244,6 +244,10 @@ DE_WORDS = [
     # clean by the gate.
     "ausgeben", "scannen", "Zusammenfassung", "Optionaler",
     "mitliefern", "pfadzentrische", "ableiten", "daraus",
+    # gui review 2026-07-26 (GUI-5): German half-lines in worker.rs and
+    # main.rs, all reported clean by the gate.
+    "landet", "Persistierung", "Schaltflaeche", "klickbare",
+    "Pflichtangaben", "gelesenen",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -486,6 +490,15 @@ def selftest() -> int:
         "// 9. Optionaler Export / optional export",
         "/// Status-Feldern ableiten.",
         "// daraus IdentityLookupFailed / GroupResolutionFailed-Marker.",
+        # gui review 2026-07-26 GUI-5: the exact lines the gate reported
+        # as clean. NOTE: "// ohne Cache." and "// Scan-Tab." are
+        # un-guardable — "Cache"/"Tab" are English and the German is only
+        # the two-word shape; both deleted at the source.
+        "// persist_scan in `scan_errors` landet.",
+        "// Persistierung",
+        "// klickbare Schaltflaeche.",
+        "// Tab: Info / Pflichtangaben",
+        "// vorab gelesenen Overlay (Single Read pro Share). Round-10",
     ]
     must_pass = [
         "Risk Findings",

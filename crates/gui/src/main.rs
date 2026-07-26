@@ -24,8 +24,8 @@ use permission_engine::NormalizedRights;
 
 use crate::worker::{
     spawn_worker, DeltaRow, GroupsViewData, IdentitySearchResult, IdentitySuggestion, LdapParams,
-    NotifyFn, RunErrorRow, ScanRow, ScanRunSummary, TrusteeRow, UpdateCheckRow, WorkerEvent,
-    WorkerRequest,
+    NotifyFn, ReportFormat, RunErrorRow, ScanRow, ScanRunSummary, TrusteeRow, UpdateCheckRow,
+    WorkerEvent, WorkerRequest,
 };
 
 // Slint UI inline. Defines view models for scan rows, scan errors, risk
@@ -199,9 +199,8 @@ slint::slint! {
         }
     }
 
-    // ThemeToggle — sun/moon switcher for light/dark.
-    // klickbare Schaltflaeche.
-    // Theme toggle — deliberately uses a text label instead of a sole
+    // ThemeToggle — sun/moon switcher for light/dark, rendered as a
+    // clearly clickable button. Deliberately uses a text label instead of a sole
     // Unicode glyph, because Slint's software backend on Windows Server
     // (default font) does not reliably render U+263E (☾) / U+2600 (☀).
     // With border + background + text the toggle is clearly visible.
@@ -399,8 +398,8 @@ slint::slint! {
         trustees: [TrusteeRowVm],
         expanded: bool,
         has_diagnostic: bool,
-        // Row presentation level: 0 = correct/complete, 1 = info-only,
-        // 2 = warning (incomplete), 3 = high (under-report marker present).
+        // Row presentation level: 0 = neutral, 1 = notice (amber),
+        // 2 = concern (orange-red) — see worker::row_severity.
         row_severity: int,
         // Per-diagnostic reasons for this row (engine review 2026-06-13
         // finding 2), each with its severity. Shown in the expanded detail so
@@ -539,6 +538,9 @@ slint::slint! {
         in property <string> a-mask-hex;
         in property <string> a-share-line;
         in property <[string]> a-explanation;
+        // Structured diagnostic markers of the analyzed permission
+        // (gui review 2026-07-26, GUI-1). Empty = nothing to report.
+        in property <[DiagnosticVm]> a-diagnostics;
         // Trustee view: path-centric listing of all ACEs without a fixed
         // identity.
         in property <[TrusteeRowVm]> a-trustees;
@@ -1010,6 +1012,32 @@ slint::slint! {
                                     for step[i] in root.a-explanation: Text {
                                         text: (i + 1) + ". " + step;
                                         wrap: word-wrap;
+                                    }
+
+                                    // GUI-1 (gui review 2026-07-26): the
+                                    // structured diagnostic markers of THIS
+                                    // result. Previously the Analyze tab
+                                    // dropped them entirely, so an
+                                    // understated right (unevaluated
+                                    // sIDHistory) or a flat SAM fallback
+                                    // looked like a clean, complete answer.
+                                    // Same widget shape and wording as the
+                                    // Groups tab and the scan rows.
+                                    if root.a-diagnostics.length > 0: VerticalBox {
+                                        padding: 0px;
+                                        spacing: 2px;
+                                        Text {
+                                            text: "Diagnostics (" + root.a-diagnostics.length + "):";
+                                            font-weight: 700;
+                                            color: Theme.text-primary;
+                                        }
+                                        for d in root.a-diagnostics: Text {
+                                            text: (d.level == 0 ? "ℹ " : "⚠ ") + d.text;
+                                            color: d.level == 2 ? Theme.danger
+                                                 : d.level == 1 ? Theme.warning
+                                                 : Theme.text-secondary;
+                                            wrap: word-wrap;
+                                        }
                                     }
                                 }
                             }
@@ -1823,9 +1851,18 @@ slint::slint! {
                             }
 
                             if root.s-done: GroupBox {
-                                title: "Export HTML report";
+                                // GUI-2: the export follows the file
+                                // extension, so the title and hint must not
+                                // promise HTML only.
+                                title: "Export report";
                                 VerticalBox {
                                     spacing: Theme.spacing-sm;
+                                    Text {
+                                        text: "The file extension picks the format: .html = readable report, .json = full structured report, .csv = permission rows only (no risk findings).";
+                                        color: Theme.text-secondary;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
                                     HorizontalBox {
                                         spacing: Theme.spacing-sm;
                                         Text { text: "Target file:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
@@ -2126,7 +2163,7 @@ slint::slint! {
                 }
 
                 // ============================================================
-                // Tab: Info / Pflichtangaben
+                // Tab: Info / legal notices
                 // ============================================================
                 Tab {
                     title: "Info";
@@ -2457,7 +2494,6 @@ fn run_ui(_log_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>>
     wire_scan_tab(&ui, req_tx.clone(), cancel);
     wire_delta_tab(&ui, req_tx.clone());
 
-    // ohne Cache.
     // Pre-load the identity list once so the live search can show
     // suggestions from the first keystroke. If the call fails the GUI
     // keeps running without suggestions — SID input and the
@@ -2879,8 +2915,25 @@ fn apply_analyze_result(
                 .map(|s| slint::SharedString::from(s.as_str()))
                 .collect();
             ui.set_a_explanation(slint::ModelRc::new(slint::VecModel::from(steps)));
-            // the scan history — required for it to be comparable in the
-            // Delta tab.
+            // GUI-1 (gui review 2026-07-26): surface the structured
+            // diagnostics of this very result. Before this, the Analyze tab
+            // — the single-path view an admin reaches for first — dropped
+            // every marker: an understated right (unevaluated sIDHistory),
+            // a failed group resolution or a flat SAM fallback all rendered
+            // as a confident, clean "Analysis complete." The wording and the
+            // severity mapping are the shared ones (`summary()` /
+            // `diag_level`), so CLI, GUI and reports say the same thing.
+            let diagnostics: Vec<DiagnosticVm> = perm
+                .diagnostics
+                .iter()
+                .map(|d| DiagnosticVm {
+                    text: d.summary().into(),
+                    level: crate::worker::diag_level_for_ui(d.severity()),
+                })
+                .collect();
+            ui.set_a_diagnostics(slint::ModelRc::new(slint::VecModel::from(diagnostics)));
+            // Analyze results are written to the scan history — required for
+            // them to be comparable in the Delta tab.
             let (status, is_error) = match (scan_run_id, persistence_error) {
                 (Some(_), _) => (
                     "Analysis complete — saved to scan history.".to_string(),
@@ -2896,6 +2949,11 @@ fn apply_analyze_result(
             ui.set_a_status_is_error(is_error);
         }
         Err(e) => {
+            // Clear stale markers from a previous run — a failed analysis
+            // must not leave the last result's diagnostics on screen.
+            ui.set_a_diagnostics(slint::ModelRc::new(
+                slint::VecModel::<DiagnosticVm>::default(),
+            ));
             ui.set_a_status(format!("Analysis failed: {e}").into());
             ui.set_a_status_is_error(true);
         }
@@ -3119,9 +3177,23 @@ fn wire_scan_tab(
                 ui.set_s_export_is_error(true);
                 return;
             }
-            ui.set_s_export_message("Export running...".into());
-            ui.set_s_export_is_error(false);
-            if let Err(e) = req_tx.send(WorkerRequest::ExportHtml { output_path }) {
+            // GUI-2: tell the user which format the extension selects
+            // BEFORE the write — the export is format-aware now, so a
+            // .csv target must not silently look like the HTML report.
+            match ReportFormat::from_path(std::path::Path::new(output_path.trim())) {
+                Ok(fmt) => {
+                    ui.set_s_export_message(
+                        format!("Export running... ({})", fmt.description()).into(),
+                    );
+                    ui.set_s_export_is_error(false);
+                }
+                Err(e) => {
+                    ui.set_s_export_message(e.into());
+                    ui.set_s_export_is_error(true);
+                    return;
+                }
+            }
+            if let Err(e) = req_tx.send(WorkerRequest::ExportReport { output_path }) {
                 ui.set_s_export_message(format!("Worker not reachable: {e}").into());
                 ui.set_s_export_is_error(true);
             }
@@ -3923,4 +3995,107 @@ fn show_fatal_dialog(title: &str, message: &str) {
 #[cfg(not(windows))]
 fn show_fatal_dialog(title: &str, message: &str) {
     eprintln!("{title}\n\n{message}");
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+//
+// GUI-6 (gui review 2026-07-26): `main.rs` had no tests at all. Most of it
+// is the Slint macro and callback wiring, but the pure output formatters
+// produce user-facing audit text and are worth pinning — a wrong share
+// line is a wrong statement about permissions.
+
+#[cfg(test)]
+mod tests {
+    use super::{format_share_line, severity_visual};
+    use adpa_core::model::{
+        AccessMask, EffectivePermission, Identity, IdentityKind, LocalGroupEvalStatus,
+        NormalizedPath, PermissionPath, RiskSeverity, ShareEvalStatus, Sid,
+    };
+
+    fn perm(share_status: ShareEvalStatus, share_mask: Option<u32>) -> EffectivePermission {
+        EffectivePermission {
+            identity: Identity {
+                sid: Sid("S-1-5-21-1-2-3-1000".to_owned()),
+                name: Some("test.user".to_owned()),
+                domain: None,
+                kind: IdentityKind::User,
+                disabled: false,
+                user_principal_name: None,
+                sid_history_count: 0,
+                sid_history: Vec::new(),
+            },
+            path: NormalizedPath(r"C:\data".to_owned()),
+            ntfs_mask: AccessMask(0x0012_0089),
+            share_mask: share_mask.map(AccessMask),
+            effective_mask: AccessMask(0x0012_0089),
+            path_explanation: PermissionPath { steps: vec![] },
+            share_status,
+            local_group_status: LocalGroupEvalStatus::NotQueried,
+            contributing_sids: vec![],
+            unsupported_ace_count: 0,
+            matched_aces: vec![],
+            diagnostics: vec![],
+        }
+    }
+
+    /// No SMB context → no share line at all (the GUI hides the row).
+    #[test]
+    fn share_line_is_empty_without_smb_context() {
+        assert!(format_share_line(&perm(ShareEvalStatus::NotApplicable, None)).is_empty());
+    }
+
+    /// The applied case must name BOTH layers and the combination rule —
+    /// that is the sentence an auditor quotes.
+    #[test]
+    fn share_line_names_both_layers_when_applied() {
+        let line = format_share_line(&perm(ShareEvalStatus::Applied, Some(0x0012_0089)));
+        assert!(line.contains("NTFS = "), "must name the NTFS side: {line}");
+        assert!(
+            line.contains("Share = "),
+            "must name the share side: {line}"
+        );
+        assert!(
+            line.contains('∩'),
+            "must state the restrictive combination: {line}"
+        );
+    }
+
+    /// NULL DACL means "no SMB restriction" — the opposite of an empty
+    /// DACL. The wording must not blur that.
+    #[test]
+    fn share_line_explains_null_dacl_as_unrestricted() {
+        let line = format_share_line(&perm(ShareEvalStatus::Unrestricted, None));
+        assert!(line.contains("NULL DACL"), "got: {line}");
+        assert!(line.contains("no SMB restriction"), "got: {line}");
+    }
+
+    /// A failed share read must say so AND carry the reason — the result
+    /// is then an NTFS-only lower bound.
+    #[test]
+    fn share_line_surfaces_read_failure_with_reason() {
+        let line = format_share_line(&perm(
+            ShareEvalStatus::ReadFailed("access denied (5)".to_owned()),
+            None,
+        ));
+        assert!(line.contains("access denied (5)"), "got: {line}");
+        assert!(line.contains("incomplete"), "got: {line}");
+    }
+
+    /// Every severity maps to its own label; nothing falls back silently.
+    #[test]
+    fn severity_visual_labels_are_distinct_and_complete() {
+        let labels: Vec<&str> = [
+            RiskSeverity::Info,
+            RiskSeverity::Low,
+            RiskSeverity::Medium,
+            RiskSeverity::High,
+            RiskSeverity::Critical,
+        ]
+        .iter()
+        .map(|s| severity_visual(s).0)
+        .collect();
+        assert_eq!(labels, ["Info", "Low", "Medium", "High", "Critical"]);
+    }
 }
