@@ -35,8 +35,6 @@ fn section(title: &str) {
     println!("  {}", light_line().chars().take(W - 2).collect::<String>());
 }
 
-///
-///
 /// Returns the plain-text description of the DACL state for console display.
 ///
 /// - `null_dacl == true` → unrestricted full access (NULL DACL)
@@ -236,7 +234,6 @@ fn severity_label(sev: &RiskSeverity) -> &'static str {
     }
 }
 
-/// Prints the risk findings of a run to the console in a formatted block.
 /// Renders the structured diagnostic markers block. Shared by the analyze
 /// report and the membership (`groups`) report so both classify and word
 /// every marker identically.

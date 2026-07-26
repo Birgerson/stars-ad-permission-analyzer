@@ -108,6 +108,22 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **The CLI compiles on non-Windows again (cli review 2026-07-26,
+  CLI-1).** The `cfg(not(windows))` branch of the identity resolution had
+  fallen two struct fields behind (`resolved_via_fsp`,
+  `resolved_via_global_catalog`, added in the L1/L2 work) — a latent
+  compile error nobody could notice because every CI job runs on Windows.
+
+- **A lowercase SID now gets a precise rejection (CLI-2).** `s-1-5-21-…`
+  fell through the case-sensitive SID-vs-name dispatch into *name*
+  resolution and failed with a misleading "LSA name lookup failed"; the
+  dispatch is now case-insensitive at all six sites, so the SID validator
+  answers with its exact "must start with 'S-1-'" message. Also: German
+  comment fragments, bilingual step comments and a stale doc line from
+  another function purged from the CLI, two ad_resolver stragglers from
+  the AD-3 sweep included, language gate hardened with their stems
+  (CLI-3, selftest 81/25).
+
 - **The "who has access" view no longer silently omits what it could not
   read (exporter review 2026-07-26, EX-1).** The trustee builder ignored
   unevaluated NTFS ACEs entirely: a partially unreadable DACL showed a

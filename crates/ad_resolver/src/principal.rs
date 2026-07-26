@@ -147,14 +147,12 @@ pub struct PrincipalResolution {
 }
 
 impl PrincipalResolution {
-    /// Status-Feldern ableiten.
     /// Derives the engine flags from the resolution status — the
     /// single official source for the corresponding
     /// `PermissionEvaluationInput` fields.
     pub fn engine_flags(&self) -> EngineFlags {
-        // Review 2026-06-04 round 4 finding 1: LookupFailed,
-        // daraus IdentityLookupFailed / GroupResolutionFailed-Marker.
-        // Review round 4 finding 1.
+        // Review 2026-06-04 round 4 finding 1: the IdentityLookupFailed /
+        // GroupResolutionFailed markers derive from the status fields.
         let identity_lookup_failure_reason = match &self.scope_status {
             IdentityScopeStatus::LookupFailed { reason } => Some(reason.clone()),
             _ => None,
