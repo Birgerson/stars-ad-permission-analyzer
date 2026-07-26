@@ -35,6 +35,10 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# HTTPS client for the manual update check (update_manager::checker) —
+# blocking, rustls-based, no OpenSSL system dependency.
+ureq = "2"
+
 # Windows API
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",

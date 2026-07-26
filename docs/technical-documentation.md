@@ -136,7 +136,7 @@ directed — higher layers depend on lower ones, never the reverse:
 | Crate | Role | Key modules |
 | --- | --- | --- |
 | `core` | Domain types (`Identity`, `Sid`, `FileSystemObject`, `EffectivePermission`, `PermissionDiagnostic`, `DomainTrust`) + the five architectural traits + `CoreError` | `model.rs`, `traits.rs`, `error.rs` |
-| `validation` | Typed wrappers for every user input (`ValidatedSid`, `ValidatedDn`, `ValidatedServerName`, …), path/UNC handling, and the central RFC-4515 LDAP filter escaper | `sid.rs`, `net.rs`, `path.rs`, `numbers.rs`, `ldap.rs`, `export_path.rs`, `db_path.rs` |
+| `validation` | Typed wrappers for every user input (`ValidatedSid`, `ValidatedDn`, `ValidatedServerName`, …), path/UNC handling, and the central RFC-4515 LDAP filter escaper | `sid.rs`, `net.rs`, `path.rs`, `numbers.rs`, `ldap.rs`, `export_path.rs`, `db_path.rs`, `update_source.rs` |
 | `win_safe` | RAII guards so native allocations are always released (`NetApiBuffer`, `LocalFreeGuard`) plus the shared guard-based SID→string conversion | `netapi.rs`, `localalloc.rs`, `sid.rs` |
 | `ad_resolver` | AD / LSA / SAM access; **central Principal pipeline** lives here; read-only trust inventory | `principal.rs`, `resolver.rs`, `ldap_client.rs`, `sam.rs`, `local_groups.rs`, `enumerate.rs`, `trusts.rs`, `sid_util.rs`, `config.rs` |
 | `fs_scanner` | NTFS DACL read + walker with reparse cycle/duplicate detection, cancellation, per-scan SD cache | `acl.rs`, `walker.rs`, `cancel.rs`, `scanner.rs` (dormant `Scanner` seam) |
@@ -145,7 +145,7 @@ directed — higher layers depend on lower ones, never the reverse:
 | `risk_engine` | Six risk rules + `is_incomplete()` delegation | `rules.rs` |
 | `persistence` | SQLite schema + migrations (v1–v8) + `ScanStore`, delta comparison | `scan_store.rs`, `migrations.rs`, `delta.rs`, `db.rs` |
 | `exporter` | CSV / JSON / HTML renderers + the shared path-centric trustee view | `csv.rs`, `json.rs`, `html.rs`, `trustees.rs` |
-| `update_manager` | Fail-closed seam for signature-checked updates (see known-limitations L12) | `manager.rs`, `manifest.rs`, `verifier.rs`, `version.rs` |
+| `update_manager` | Fail-closed seam for signature-checked updates (L12) + the manual read-only update check (ADR 0061) | `checker.rs`, `manager.rs`, `manifest.rs`, `verifier.rs`, `version.rs` |
 | `cli` | Command-line front-end (`adpa.exe`): `analyze`, `scan`, `groups`, `members`, `shares`, `trusts` | `main.rs`, `output.rs` |
 | `gui` | Slint-based GUI (`adpa-gui.exe`); the UI is currently declared inline via `slint!{}` in `main.rs` (extraction to external `.slint` files is planned) | `main.rs`, `worker.rs` |
 

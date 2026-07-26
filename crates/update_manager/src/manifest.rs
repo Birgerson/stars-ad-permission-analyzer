@@ -3,7 +3,6 @@
 
 //! Manifest schema for signed update packages.
 //!
-//!
 //! A manifest fully describes an update: target version, channel, platform
 //! constraint, file list with SHA-256 hashes, and a separately stored Base64
 //! signature over the canonicalized manifest. The cryptographic backend
@@ -27,13 +26,6 @@ const RESERVED_DEVICE_NAMES: &[&str] = &[
     "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
-/// Pfadangriffe.
-///
-///
-/// Lehnt ab:
-/// - Null-Bytes
-///
-///
 /// Validates a relative manifest target path against Windows-specific
 /// path-shape attacks.
 ///
@@ -73,7 +65,6 @@ pub fn validate_manifest_relative_path(path: &str) -> Result<(), CoreError> {
             "file path '{path}' must be relative (UNC prefix not allowed)"
         )));
     }
-    // zeigen.
     // Leading separators — path would otherwise point outside the
     // install tree.
     if path.starts_with('\\') || path.starts_with('/') {
@@ -147,7 +138,6 @@ pub enum TargetPlatform {
 pub struct ManifestFile {
     /// Relative target path inside the installation directory.
     pub path: String,
-    /// SHA-256 als lowercase-Hex-String (64 Zeichen).
     /// SHA-256 as a lowercase hex string (64 characters).
     pub sha256: String,
     /// File size in bytes — additional sanity check against truncated
@@ -159,7 +149,6 @@ pub struct ManifestFile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateManifest {
     /// Schema version of the manifest itself — decoupled from the application version.
-    /// Manifest schema version itself — decoupled from app version.
     pub manifest_version: u32,
     /// Target application version. Enforced by `validate_schema` to be a
     /// parseable SemVer-like version (`MAJOR.MINOR.PATCH[-pre][+build]`,
@@ -187,7 +176,6 @@ impl UpdateManifest {
         Ok(parsed)
     }
 
-    /// Structural validation — before any further processing.
     /// Structural validation — runs before any further processing.
     ///
     /// Pure schema check; signature and file hashes are the verifier's job.
@@ -242,8 +230,6 @@ impl UpdateManifest {
         Ok(())
     }
 
-    ///
-    ///
     /// Canonical JSON representation of the signable manifest body.
     ///
     /// We strip the `signature` field and serialize the remaining fields
@@ -350,7 +336,6 @@ mod tests {
     }
 
     // ----------------------------------------------------------------
-    // Finding 6 — Windows-sichere Pfadvalidierung
     // Finding 6 — Windows-safe path validation
     // ----------------------------------------------------------------
 
@@ -382,7 +367,9 @@ mod tests {
 
     #[test]
     fn relative_path_rejects_drive_relative_with_colon() {
-        // `C:evil.exe` is Windows "drive-relative": not absolute in the
+        // `C:evil.exe` is Windows "drive-relative": it resolves against
+        // the drive's current directory, so it can escape the install
+        // tree just like an absolute path — the `:` ban catches it.
         for bad in &["C:evil.exe", "c:foo", "Z:weird"] {
             assert!(
                 validate_manifest_relative_path(bad).is_err(),

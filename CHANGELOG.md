@@ -10,6 +10,26 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Added
+
+- **Manual update check — GUI and CLI (update_manager review 2026-07-26,
+  ADR 0061).** Stars can now tell you when a newer version is published:
+  the Info tab gets a "Check for updates" button with an editable source
+  field, and the CLI gets `adpa check-update [--source <URL>]`. The check
+  is **manual only** (never at startup, no timer — Stars runs on DCs,
+  often offline or hardened), **read-only** (fetches one release-info
+  JSON, compares versions with SemVer precedence incl. the F4
+  rc-before-final rule, downloads and installs nothing), and the source
+  is **configurable but validated** via the new
+  `validation::update_source` module: HTTPS only, no embedded
+  credentials, no fragment, length-capped. Live-verified against the
+  official GitHub feed. Also from the update_manager review: the unused
+  `tokio` dependency removed (UM-1), the truncated "Planned requirements"
+  module doc restored (UM-2), German doc fragments purged and the
+  language gate hardened with their stems (UM-3, selftest 74/25), and a
+  redundant test assignment removed (UM-4). New workspace dependency:
+  `ureq` (rustls-based HTTPS client).
+
 ### Security
 
 - **CSV exports hardened against spreadsheet formula injection (CWE-1236;

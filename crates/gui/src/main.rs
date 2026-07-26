@@ -24,7 +24,8 @@ use permission_engine::NormalizedRights;
 
 use crate::worker::{
     spawn_worker, DeltaRow, GroupsViewData, IdentitySearchResult, IdentitySuggestion, LdapParams,
-    NotifyFn, RunErrorRow, ScanRow, ScanRunSummary, TrusteeRow, WorkerEvent, WorkerRequest,
+    NotifyFn, RunErrorRow, ScanRow, ScanRunSummary, TrusteeRow, UpdateCheckRow, WorkerEvent,
+    WorkerRequest,
 };
 
 // Slint UI inline. Defines view models for scan rows, scan errors, risk
@@ -486,6 +487,14 @@ slint::slint! {
         // Version / branding text for the HeaderBar — set by main.rs at
         // setup so the UI does not need to decide what to render.
         in property <string> app-version: "";
+
+        // Manual update check (ADR 0061) — Info tab. The source is
+        // user-editable (validated in the worker); status carries the
+        // outcome text.
+        in-out property <string> i-update-source: "";
+        in property <string> i-update-status: "";
+        in property <bool> i-update-status-is-error: false;
+        callback info-check-update(string);
 
         // ============================================================
         // Analyze-Tab Properties / Analyze tab properties
@@ -2190,8 +2199,44 @@ slint::slint! {
                                         wrap: word-wrap;
                                     }
                                     Text {
-                                        text: "3. No backdoor authentication. Stars binds via LDAP (LDAPS preferred), nothing else. No hidden telemetry, no update beacons without signature verification.";
+                                        text: "3. No backdoor authentication. Stars binds via LDAP (LDAPS preferred), nothing else. No hidden telemetry, no automatic update beacons — the update check below contacts its source only when you click it.";
                                         color: Theme.text-primary;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            // Manual update check (ADR 0061): read-only —
+                            // fetches release info, compares versions,
+                            // shows the result. Downloads and installs
+                            // nothing, and runs ONLY on click.
+                            GroupBox {
+                                title: "Updates (manual check)";
+                                VerticalBox {
+                                    spacing: Theme.spacing-sm;
+                                    Text {
+                                        text: "Checks whether a newer Stars version is published at the source below. Read-only: nothing is downloaded or installed, and the check runs only when you click the button.";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-sm;
+                                        wrap: word-wrap;
+                                    }
+                                    HorizontalBox {
+                                        spacing: Theme.spacing-sm;
+                                        LineEdit {
+                                            text <=> root.i-update-source;
+                                            placeholder-text: "https:// update source";
+                                            horizontal-stretch: 1;
+                                        }
+                                        PrimaryButton {
+                                            text: "Check for updates";
+                                            clicked => {
+                                                root.info-check-update(root.i-update-source);
+                                            }
+                                        }
+                                    }
+                                    if root.i-update-status != "": Text {
+                                        text: root.i-update-status;
+                                        color: root.i-update-status-is-error ? Theme.error : Theme.text-primary;
                                         wrap: word-wrap;
                                     }
                                 }
@@ -2384,6 +2429,9 @@ fn run_ui(_log_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>>
     // App version from Cargo metadata into the GUI. Without this the
     // HeaderBar version badge stays hidden behind its `if != ""` guard.
     ui.set_app_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
+    // Default update source for the Info tab's manual check (ADR 0061) —
+    // user-editable, validated in the worker on every check.
+    ui.set_i_update_source(update_manager::DEFAULT_UPDATE_SOURCE.into());
 
     // notify callback: wakes the GUI thread once the worker has sent an
     // event. Slint's `invoke_from_event_loop` is callable from any thread
@@ -3394,6 +3442,25 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
             }
         });
     }
+
+    // Manual update check (ADR 0061): send the user-edited source to the
+    // worker; validation and the network call happen there so the GUI
+    // never blocks on the 10-second timeout.
+    {
+        let weak = ui.as_weak();
+        let req_tx = req_tx.clone();
+        ui.on_info_check_update(move |source| {
+            let Some(ui) = weak.upgrade() else { return };
+            ui.set_i_update_status("Checking…".into());
+            ui.set_i_update_status_is_error(false);
+            if let Err(e) = req_tx.send(WorkerRequest::CheckUpdate {
+                source: source.to_string(),
+            }) {
+                ui.set_i_update_status(format!("Worker not reachable: {e}").into());
+                ui.set_i_update_status_is_error(true);
+            }
+        });
+    }
 }
 
 fn refresh_delta_runs(ui: &MainWindow) {
@@ -3527,6 +3594,33 @@ fn handle_run_errors_loaded(ui: &MainWindow, result: Result<Vec<RunErrorRow>, St
     }
 }
 
+/// Renders the manual update-check outcome in the Info tab (ADR 0061).
+/// Every path is explicit — up to date, update available (with the
+/// release page), or the honest error (offline DC, invalid source).
+fn handle_update_check_done(ui: &MainWindow, result: Result<UpdateCheckRow, String>) {
+    match result {
+        Ok(r) if r.update_available => {
+            let mut text = format!("Update available: {} (installed: {}).", r.latest, r.current);
+            if let Some(url) = &r.release_url {
+                text.push_str(&format!(" Release page: {url}"));
+            }
+            text.push_str(" Stars downloads and installs nothing — get it from the release page.");
+            ui.set_i_update_status(text.into());
+            ui.set_i_update_status_is_error(false);
+        }
+        Ok(r) => {
+            ui.set_i_update_status(
+                format!("Stars is up to date (installed: {}).", r.current).into(),
+            );
+            ui.set_i_update_status_is_error(false);
+        }
+        Err(e) => {
+            ui.set_i_update_status(format!("Update check failed: {e}").into());
+            ui.set_i_update_status_is_error(true);
+        }
+    }
+}
+
 fn handle_delta_computed(ui: &MainWindow, result: Result<Vec<DeltaRow>, String>) {
     ui.set_d_is_loading(false);
     match result {
@@ -3608,6 +3702,7 @@ fn pump_worker_events(ui: &MainWindow) {
                     handle_scan_run_deleted(ui, &run_id, result)
                 }
                 WorkerEvent::RunErrorsLoaded(result) => handle_run_errors_loaded(ui, result),
+                WorkerEvent::UpdateCheckDone(result) => handle_update_check_done(ui, result),
                 WorkerEvent::IdentitiesLoaded(result) => handle_identities_loaded(ui, result),
                 WorkerEvent::TrusteesDone(result) => handle_trustees_done(ui, result),
                 WorkerEvent::GroupsDone(result) => handle_groups_done(ui, *result),

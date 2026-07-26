@@ -722,6 +722,28 @@ pub fn print_trusts(trusts: &[DomainTrust]) {
     println!("{}", heavy_line());
 }
 
+/// Prints the manual update-check result (`adpa check-update`; ADR 0061).
+pub fn print_update_check(result: &update_manager::UpdateCheckResult, source: &str) {
+    header("Update check (read-only)");
+    println!();
+    println!("  Source    : {source}");
+    println!("  Installed : {}", result.current_version);
+    println!("  Published : {}", result.latest_version);
+    println!();
+    if result.update_available {
+        println!("  [!] A newer version is available.");
+        if let Some(url) = &result.release_url {
+            println!("      Release page: {url}");
+        }
+        println!("      Stars downloads and installs nothing — get the new version");
+        println!("      from the release page and install it manually.");
+    } else {
+        println!("  Stars is up to date.");
+    }
+    println!();
+    println!("{}", heavy_line());
+}
+
 /// Prints the stored scan runs with per-run path and error counts
 /// (`adpa runs`; persistence review 2026-07-26, PS-1).
 pub fn print_runs(runs: &[(ScanRun, usize, usize)]) {

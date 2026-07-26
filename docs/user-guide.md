@@ -334,7 +334,17 @@ but meaningless report.
 Shows version, platform status (e.g. "verified against Server 2022
 and 2025"), license, AI authorship (the implementation was carried out
 by Claude models under direction — see [About the project](../README.md#about-the-project)),
-and links to the online documentation. No interactive content.
+and links to the online documentation.
+
+Since ADR 0061 the tab also carries the **manual update check**: an
+editable source field (default: the official Stars release feed on
+GitHub; HTTPS-only, credentials in the URL are rejected) and a **Check
+for updates** button. The check runs **only when you click it** — never
+automatically — and is strictly read-only: it fetches one release-info
+document, compares versions, and tells you "up to date" or "update
+available" with the release page. Stars downloads and installs nothing;
+on an offline system the connection error is the expected, honest
+answer. Corporate proxies are not auto-detected in this first stage.
 
 ---
 
@@ -860,6 +870,23 @@ they validate the database path, refuse a file that does not exist
 (opening would otherwise create an empty database), and never modify the
 history. The GUI shows the same evidence via the ⚠ button in the Delta
 tab's run list.
+
+### Check for a newer Stars version (read-only)
+
+*Is a newer version published?* Manual check, never automatic:
+
+```powershell
+adpa check-update
+adpa check-update --source "https://updates.corp.local/stars/latest"
+```
+
+Compares the installed version against the release published at the
+source (default: the official GitHub feed) using SemVer precedence — a
+system running a release candidate sees the final build as an update.
+The source is validated (**HTTPS only**, no embedded credentials, no
+`file://`/UNC); the check downloads and installs **nothing** and prints
+the release page URL when an update exists. On an offline system the
+connection error is reported honestly.
 
 ### List the domain's trusts (read-only)
 
