@@ -1122,39 +1122,39 @@ impl RuleRegistry {
 ```
 
 A rule reads `context.findings`, filters by its criterion, and
-produces one `RiskFinding` per hit:
+produces one `RiskFinding` per hit (actual struct in
+`crates/core/src/model.rs`):
 
 ```rust
 struct RiskFinding {
-    severity: RiskSeverity,    // Critical | High | Medium | Low | Info
-    rule_id: String,           // "FULL_CONTROL", "BROAD_GROUP_WRITE", …
-    identity: Identity,
-    path: NormalizedPath,
-    rights: AccessMask,
-    explanation: String,
-    incomplete: bool,          // from is_incomplete(p)
+    rule_id: String,                        // "FULL_CONTROL", "PARTIAL_WRITE", …
+    severity: RiskSeverity,                 // Critical | High | Medium | Low | Info
+    description: String,                    // human-readable, names identity and cause
+    affected_path: Option<NormalizedPath>,
+    affected_identity: Option<Sid>,
+    incomplete: bool,                       // from EffectivePermission::is_incomplete()
 }
 ```
 
 ### 10.2 The six rules
 
-| Rule | Severity | Trigger |
-| --- | --- | --- |
-| `FullControlRule` | Critical | Effective mask contains `MASK_FULL_CONTROL` bits |
-| `WriteAccessRule` | High | Effective mask has write-specific bits (`MASK_WRITE & !MASK_READ`) |
-| `AdminRightsRule` | High | `FILE_WRITE_DAC`, `FILE_WRITE_OWNER` individually present |
-| `BroadGroupWriteRule` | Critical | Write right via `Everyone`, `Authenticated Users`, `Anonymous Logon` |
-| `DirectUserAceRule` | Low | ACE directly on the user SID (not via a group) |
-| `SensitivePathRule` | Critical/High/Medium | Path contains sensitive keywords (`password`, `credentials`, …) |
+One rule struct can emit several rule-IDs; severities are fixed per
+rule-ID (there is no dynamic severity derivation).
 
-`SensitivePathRule` is the only one whose severity is *dynamically*
-derived from the effective right — Full Control on a
-`passwords.txt` is Critical, Read on the same file is Medium.
+| Rule | Rule-IDs (severity) | Trigger |
+| --- | --- | --- |
+| `FullControlRule` | `FULL_CONTROL` (Critical) | Effective mask contains **all** `MASK_FULL_CONTROL` bits |
+| `WriteAccessRule` | `WRITE_ACCESS` (High), `PARTIAL_WRITE` (Medium) | Full Modify/Write composite → `WRITE_ACCESS`; content-write bits (`FILE_WRITE_DATA`/`FILE_APPEND_DATA`) without the composite → `PARTIAL_WRITE`. Skips Full Control holders |
+| `AdminRightsRule` | `PERMISSION_CHANGE` (High), `OWNER_CHANGE` (High), `DELETE_RIGHT` (Medium), `DELETE_CHILD_RIGHT` (Medium) | `FILE_WRITE_DAC`, `FILE_WRITE_OWNER`, `FILE_DELETE`, `FILE_DELETE_CHILD` individually present; skips Full Control holders |
+| `BroadGroupWriteRule` | `BROAD_GROUP_WRITE` (Critical) | A broad SID (`Everyone`, `Authenticated Users`, `Anonymous Logon`, `NETWORK`) contributed content-write bits that survived into the effective mask |
+| `DirectUserAceRule` | `DIRECT_USER_ACE` (Low) | Non-inherited ACE directly on the analyzed user/computer SID (Allow **or** Deny, including full-deny); silent for group and other identity kinds |
+| `SensitivePathRule` | `SENSITIVE_PATH` (Medium) | Path contains sensitive keywords (`password`, `credentials`, …) **and** the identity has access (`effective_mask > 0`) |
 
 ### 10.3 `incomplete = true`
 
-Every rule calls `is_incomplete(&p)` and writes the result into the
-`RiskFinding`. CLI, HTML, and JSON sort and render findings
+Every rule calls `is_incomplete(&p)` — a thin delegate to
+`EffectivePermission::is_incomplete()` in the core model, the single
+source of truth — and writes the result into the `RiskFinding`. CLI, HTML, and JSON sort and render findings
 differently when `incomplete` is set — typically with an additional
 hint at the finding.
 

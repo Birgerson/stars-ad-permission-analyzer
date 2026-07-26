@@ -221,6 +221,9 @@ DE_WORDS = [
     # modules, all reported clean by the gate.
     "Kandidaten", "gescheitert", "bestehender", "Komplett",
     "zusammenfallen", "Konstruktion", "teilen", "ausweisen", "analog",
+    # risk_engine review 2026-07-25 (RK-8): German half-lines in rules.rs
+    # test docs, all reported clean by the gate.
+    "tragen", "durchschlagen", "behauptet", "Falschmeldung",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -410,6 +413,11 @@ def selftest() -> int:
         # German-style capitalised "Bytes" it consists of English words, so
         # no denylist entry can catch it without flagging legitimate English
         # (same situation as "Fall `false`."). It was deleted at the source.
+        # risk_engine review 2026-07-25 RK-8: the exact lines the gate
+        # reported as clean.
+        "/// tragen.",
+        "/// als incomplete durchschlagen.",
+        "/// behauptet — Falschmeldung.",
     ]
     must_pass = [
         "Risk Findings",

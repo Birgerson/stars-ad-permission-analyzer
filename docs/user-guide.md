@@ -279,15 +279,24 @@ for what each marker means.
 finding:
 
 - **FullControlRule** (Critical) — user has Full Control.
-- **WriteAccessRule** (High) — user has write rights.
-- **AdminRightsRule** (High) — user carries admin-relevant rights
-  (TakeOwnership, WriteDAC).
-- **BroadGroupWriteRule** (Critical) — write rights via a wide group
-  (`Everyone`, `Authenticated Users`).
-- **DirectUserAceRule** (Low) — direct ACE on the user (not via a
-  group).
-- **SensitivePathRule** (variable) — path contains sensitive
-  keywords (`password`, `credentials`, …).
+- **WriteAccessRule** (High / Medium) — user has full Modify/Write
+  rights (High), or bare content-write bits granted as "special
+  permissions" without the full composite — e.g. an append-only
+  upload folder (`PARTIAL_WRITE`, Medium).
+- **AdminRightsRule** (High / Medium) — user carries admin-relevant
+  single rights: change permissions or take ownership (High), delete
+  the object or its children (Medium).
+- **BroadGroupWriteRule** (Critical) — content-write rights via a
+  broad group (`Everyone`, `Authenticated Users`, `Anonymous Logon`,
+  `NETWORK`).
+- **DirectUserAceRule** (Low) — direct ACE on the analyzed user or
+  computer (not via a group). Also fires for a direct Deny —
+  including one that blocks all access. Does not fire when the
+  analyzed identity is itself a group: a group's own ACE is exactly
+  how permissions should be assigned.
+- **SensitivePathRule** (Medium) — path contains sensitive
+  keywords (`password`, `credentials`, …) and the user actually has
+  access.
 
 Findings carry `incomplete = true` when the underlying finding is
 incomplete — see the diagnostic markers.

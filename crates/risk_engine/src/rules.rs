@@ -4,7 +4,7 @@
 //! Risk rules for NTFS and share permission analysis.
 
 use adpa_core::{
-    model::{EffectivePermission, RiskFinding, RiskSeverity},
+    model::{EffectivePermission, IdentityKind, RiskFinding, RiskSeverity},
     traits::{RiskContext, RiskRule},
 };
 // Only the tests name diagnostic variants now that is_incomplete delegates to
@@ -31,13 +31,19 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
     p.is_incomplete()
 }
 use permission_engine::mask::{
-    FILE_DELETE, FILE_DELETE_CHILD, FILE_WRITE_DAC, FILE_WRITE_OWNER, MASK_FULL_CONTROL,
-    MASK_MODIFY, MASK_READ, MASK_WRITE,
+    FILE_APPEND_DATA, FILE_DELETE, FILE_DELETE_CHILD, FILE_WRITE_DAC, FILE_WRITE_DATA,
+    FILE_WRITE_OWNER, MASK_FULL_CONTROL, MASK_MODIFY, MASK_WRITE,
 };
 
-/// Bits that signal write capability exclusively — excluding READ_CONTROL and SYNCHRONIZE,
-/// which are present in both MASK_READ and MASK_WRITE.
-const WRITE_SPECIFIC_BITS: u32 = MASK_WRITE & !MASK_READ;
+/// Bits that grant the ability to create or alter file *content*:
+/// `FILE_WRITE_DATA` (overwrite) and `FILE_APPEND_DATA` (append, or create
+/// inside a folder). Deliberately excludes `FILE_WRITE_EA` and
+/// `FILE_WRITE_ATTRIBUTES`: attribute/EA writes cannot change file content,
+/// and reporting them as "write access" would overstate the finding
+/// (risk_engine review 2026-07-25, RK-1/RK-3). Shared by `WriteAccessRule`
+/// (PARTIAL_WRITE branch) and `BroadGroupWriteRule` so both answer the same
+/// question: "can this principal change what is stored?"
+const CONTENT_WRITE_BITS: u32 = FILE_WRITE_DATA | FILE_APPEND_DATA;
 
 // ---------------------------------------------------------------------------
 // Known well-known SIDs
@@ -144,10 +150,20 @@ impl RiskRule for FullControlRule {
 }
 
 // ---------------------------------------------------------------------------
-// Rule 2: Write access — HIGH
+// Rule 2: Write access — HIGH (composite) / MEDIUM (partial content write)
 // ---------------------------------------------------------------------------
 
-/// Reports paths with write access (Modify or Write, but not Full Control).
+/// Reports write access below Full Control, in two forms:
+///
+/// - `WRITE_ACCESS` (High): the effective mask carries the full Modify or
+///   Write composite — the classic checkbox-level grant.
+/// - `PARTIAL_WRITE` (Medium): the effective mask carries content-write bits
+///   (`FILE_WRITE_DATA` / `FILE_APPEND_DATA`) *without* the full composite —
+///   "special permissions", e.g. an append-only drop-box folder.
+///
+/// Review 2026-07-25 finding RK-1: before the PARTIAL_WRITE branch existed, a
+/// principal with bare content-write bits triggered no rule at all — a
+/// content-writable path produced an empty risk report.
 pub struct WriteAccessRule;
 
 impl RiskRule for WriteAccessRule {
@@ -155,38 +171,67 @@ impl RiskRule for WriteAccessRule {
         context
             .findings
             .iter()
-            .filter(|p| {
+            .filter_map(|p| {
                 let m = p.effective_mask.0;
-                (m & MASK_MODIFY == MASK_MODIFY || m & MASK_WRITE == MASK_WRITE)
-                    && m & MASK_FULL_CONTROL != MASK_FULL_CONTROL
-            })
-            .map(|p| {
-                let name = p.identity.name.as_deref().unwrap_or(&p.identity.sid.0);
-                let level = if p.effective_mask.0 & MASK_MODIFY == MASK_MODIFY {
-                    "Modify"
-                } else {
-                    "Write"
-                };
-                RiskFinding {
-                    rule_id: "WRITE_ACCESS".to_string(),
-                    severity: RiskSeverity::High,
-                    description: format!(
-                        "'{name}' has {level} access — can create or modify files"
-                    ),
-                    affected_path: Some(p.path.clone()),
-                    affected_identity: Some(p.identity.sid.clone()),
-                    incomplete: is_incomplete(p),
+                // Full Control is reported as CRITICAL by FullControlRule.
+                if m & MASK_FULL_CONTROL == MASK_FULL_CONTROL {
+                    return None;
                 }
+                let name = p.identity.name.as_deref().unwrap_or(&p.identity.sid.0);
+                if m & MASK_MODIFY == MASK_MODIFY || m & MASK_WRITE == MASK_WRITE {
+                    let level = if m & MASK_MODIFY == MASK_MODIFY {
+                        "Modify"
+                    } else {
+                        "Write"
+                    };
+                    return Some(RiskFinding {
+                        rule_id: "WRITE_ACCESS".to_string(),
+                        severity: RiskSeverity::High,
+                        description: format!(
+                            "'{name}' has {level} access — can create or modify files"
+                        ),
+                        affected_path: Some(p.path.clone()),
+                        affected_identity: Some(p.identity.sid.clone()),
+                        incomplete: is_incomplete(p),
+                    });
+                }
+                if m & CONTENT_WRITE_BITS != 0 {
+                    let bits = content_write_bit_names(m);
+                    return Some(RiskFinding {
+                        rule_id: "PARTIAL_WRITE".to_string(),
+                        severity: RiskSeverity::Medium,
+                        description: format!(
+                            "'{name}' can write file content via special permissions ({bits}) \
+                             without the full Write composite"
+                        ),
+                        affected_path: Some(p.path.clone()),
+                        affected_identity: Some(p.identity.sid.clone()),
+                        incomplete: is_incomplete(p),
+                    });
+                }
+                None
             })
             .collect()
     }
 }
 
+/// Names the content-write bits present in `mask`, for PARTIAL_WRITE
+/// descriptions. Only called when at least one bit is set.
+fn content_write_bit_names(mask: u32) -> String {
+    let mut names = Vec::new();
+    if mask & FILE_WRITE_DATA != 0 {
+        names.push("FILE_WRITE_DATA");
+    }
+    if mask & FILE_APPEND_DATA != 0 {
+        names.push("FILE_APPEND_DATA");
+    }
+    names.join(" + ")
+}
+
 // ---------------------------------------------------------------------------
+// Rule 3: Admin-relevant single rights — HIGH / MEDIUM
 // ---------------------------------------------------------------------------
 
-///
-///
 /// Reports individual destructive or administrative rights that are not
 /// necessarily covered by the composite Modify/Write masks.
 ///
@@ -257,6 +302,7 @@ impl RiskRule for AdminRightsRule {
 }
 
 // ---------------------------------------------------------------------------
+// Rule 4: Broad group write — CRITICAL
 // ---------------------------------------------------------------------------
 
 /// Reports when write access originated from a broad-group ACE (Everyone, Authenticated Users,
@@ -271,61 +317,64 @@ impl RiskRule for BroadGroupWriteRule {
             SID_ANONYMOUS_LOGON,
             SID_NETWORK,
         ];
-        // Review 2026-06-08 finding 1: gate on write-specific effective
-        // bits, not the composite MASK_WRITE. MASK_WRITE includes
-        // READ_CONTROL and SYNCHRONIZE which a Read-only final mask also
-        // satisfies. Plus require the contributing SID's mask AND the final
-        // effective mask to overlap on write-specific bits — otherwise an
+        // Review 2026-06-08 finding 1: gate on write bits actually present in
+        // the final effective mask (not the composite MASK_WRITE, which
+        // shares READ_CONTROL/SYNCHRONIZE with Read), and require the
+        // contributing broad SID's ACE mask to overlap them — otherwise an
         // NTFS Allow whose write bits got capped away by Share Read would
         // still trigger.
-        let effective_write_bits =
-            |p: &EffectivePermission| p.effective_mask.0 & WRITE_SPECIFIC_BITS;
+        //
+        // Review 2026-07-25 finding RK-3: narrowed further to
+        // CONTENT_WRITE_BITS. "Everyone can write attributes/EAs" is not
+        // "write access affecting all users" — the Critical claim must match
+        // a capability that can alter file content. EA/attribute-only ACEs
+        // stay fully visible in the permission view; they are just not this
+        // risk finding.
         context
             .findings
             .iter()
-            .filter(|p| {
-                let eff_w = effective_write_bits(p);
-                eff_w != 0
-                    && p.contributing_sids.iter().any(|cs| {
-                        broad_sids.contains(&cs.sid.0.as_str())
-                            && (cs.mask.0 & eff_w) != 0
-                    })
-            })
-            .map(|p| {
-                let eff_w = effective_write_bits(p);
-                let broad_sid = p
-                    .contributing_sids
-                    .iter()
-                    .find(|cs| {
-                        broad_sids.contains(&cs.sid.0.as_str())
-                            && (cs.mask.0 & eff_w) != 0
-                    })
-                    .map(|cs| cs.sid.0.as_str())
-                    .unwrap_or("");
-                let sid_name = match broad_sid {
-                    SID_EVERYONE => "Everyone",
-                    SID_AUTHENTICATED_USERS => "Authenticated Users",
-                    SID_ANONYMOUS_LOGON => "Anonymous Logon",
-                    SID_NETWORK => "NETWORK",
-                    other => other,
+            .filter_map(|p| {
+                let eff_w = p.effective_mask.0 & CONTENT_WRITE_BITS;
+                if eff_w == 0 {
+                    return None;
+                }
+                // RK-9: bind the matched broad ACE once — the previous
+                // filter/map pair ran the same `find` twice and papered over
+                // the impossible miss with `unwrap_or("")`.
+                let broad = p.contributing_sids.iter().find(|cs| {
+                    broad_sids.contains(&cs.sid.0.as_str()) && (cs.mask.0 & eff_w) != 0
+                })?;
+                // RK-3 (honest wording): name the audience of the broad SID
+                // precisely — "all users in the domain" was wrong for
+                // Anonymous Logon and NETWORK.
+                let (sid_name, scope) = match broad.sid.0.as_str() {
+                    SID_EVERYONE => ("Everyone", "every user, including guests"),
+                    SID_AUTHENTICATED_USERS => (
+                        "Authenticated Users",
+                        "every authenticated user in the domain",
+                    ),
+                    SID_ANONYMOUS_LOGON => ("Anonymous Logon", "unauthenticated clients"),
+                    SID_NETWORK => ("NETWORK", "every user connecting over the network"),
+                    other => (other, "a broad built-in principal"),
                 };
                 let identity_name = p.identity.name.as_deref().unwrap_or(&p.identity.sid.0);
-                RiskFinding {
+                Some(RiskFinding {
                     rule_id: "BROAD_GROUP_WRITE".to_string(),
                     severity: RiskSeverity::Critical,
                     description: format!(
-                        "'{identity_name}' has write access via '{sid_name}' — affects all users in the domain"
+                        "'{identity_name}' has write access via '{sid_name}' — affects {scope}"
                     ),
                     affected_path: Some(p.path.clone()),
                     affected_identity: Some(p.identity.sid.clone()),
                     incomplete: is_incomplete(p),
-                }
+                })
             })
             .collect()
     }
 }
 
 // ---------------------------------------------------------------------------
+// Rule 5: Direct user ACE — LOW
 // ---------------------------------------------------------------------------
 
 /// Reports when a user has a direct explicit ACE (best practice: groups only).
@@ -333,6 +382,18 @@ impl RiskRule for BroadGroupWriteRule {
 /// Relies on the result's structured `matched_aces` instead of the explanation
 /// text — robust against localization and format changes. Catches direct Allow
 /// *and* Deny ACEs, since both violate the best-practice principle.
+///
+/// Review 2026-07-25 finding RK-2: fires only for leaf principals (`User`,
+/// `Computer`). When the analyzed identity is itself a group, a direct ACE on
+/// that group SID is exactly how AGDLP assigns permissions — not a finding.
+/// For `WellKnown`, `ForeignSecurityPrincipal`, `Orphaned` and `Unknown` the
+/// rule stays silent too: it cannot honestly claim "user" there.
+///
+/// Review 2026-07-25 finding RK-6: deliberately no `effective_mask > 0` gate.
+/// A direct Deny ACE that removes *all* access (typical "lock out this
+/// employee quickly" leftover) is still a direct ACE on the user and must
+/// stay visible — the management smell is the ACE itself, not the resulting
+/// access.
 pub struct DirectUserAceRule;
 
 impl RiskRule for DirectUserAceRule {
@@ -341,10 +402,13 @@ impl RiskRule for DirectUserAceRule {
             .findings
             .iter()
             .filter(|p| {
-                p.effective_mask.0 > 0
-                    && p.matched_aces
-                        .iter()
-                        .any(|ace| !ace.inherited && ace.sid.0 == p.identity.sid.0)
+                matches!(
+                    p.identity.kind,
+                    IdentityKind::User | IdentityKind::Computer
+                ) && p
+                    .matched_aces
+                    .iter()
+                    .any(|ace| !ace.inherited && ace.sid.0 == p.identity.sid.0)
             })
             .map(|p| {
                 let name = p.identity.name.as_deref().unwrap_or(&p.identity.sid.0);
@@ -369,7 +433,7 @@ impl RiskRule for DirectUserAceRule {
 }
 
 // ---------------------------------------------------------------------------
-// Rule 5: Sensitive path names — MEDIUM
+// Rule 6: Sensitive path names — MEDIUM
 // ---------------------------------------------------------------------------
 
 /// Reports paths whose name suggests sensitive data.
@@ -408,10 +472,10 @@ impl RiskRule for SensitivePathRule {
                     affected_identity: Some(p.identity.sid.clone()),
                     // The path name is an NTFS property, but the "has access"
                     // claim relies on `effective_mask`. When the share DACL
-                    // real SMB access could be more restrictive. So the
-                    // finding must be marked `incomplete` like every other
-                    // risk for the same permission whenever the evaluation
-                    // had gaps.
+                    // could not be read, real SMB access could be more
+                    // restrictive. So the finding must be marked `incomplete`
+                    // like every other risk for the same permission whenever
+                    // the evaluation had gaps.
                     incomplete: is_incomplete(p),
                 }
             })
@@ -433,7 +497,9 @@ mod tests {
         },
         traits::RiskContext,
     };
-    use permission_engine::mask::{MASK_FULL_CONTROL, MASK_MODIFY, MASK_READ};
+    use permission_engine::mask::{
+        FILE_WRITE_ATTRIBUTES, FILE_WRITE_EA, MASK_FULL_CONTROL, MASK_MODIFY, MASK_READ,
+    };
 
     const USER_SID: &str = "S-1-5-21-1000-1000-1000-1001";
 
@@ -516,6 +582,7 @@ mod tests {
 
     /// Follow-up finding 2: same logic for the share side. If
     /// `EffectivePermission.diagnostics` carries an `UnsupportedShareAces`
+    /// marker, the finding must be flagged incomplete.
     #[test]
     fn unsupported_share_aces_diagnostic_marks_finding_incomplete() {
         let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data", vec![]);
@@ -651,6 +718,87 @@ mod tests {
         assert!(WriteAccessRule
             .evaluate(&ctx(vec![perm(USER_SID, MASK_READ, r"C:\data", vec![])]))
             .is_empty());
+    }
+
+    // --- WriteAccessRule: partial content write (review 2026-07-25, RK-1) ---
+
+    /// RK-1: content-write bits without the full Write composite must be
+    /// reported. Before the PARTIAL_WRITE branch existed, a principal with
+    /// bare FILE_WRITE_DATA triggered no rule at all — a content-writable
+    /// path produced an empty risk report.
+    #[test]
+    fn write_data_without_composite_flagged_as_partial_write() {
+        let r = WriteAccessRule.evaluate(&ctx(vec![perm(
+            USER_SID,
+            MASK_READ | FILE_WRITE_DATA,
+            r"C:\data",
+            vec![],
+        )]));
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].rule_id, "PARTIAL_WRITE");
+        assert_eq!(r[0].severity, RiskSeverity::Medium);
+        assert!(
+            r[0].description.contains("FILE_WRITE_DATA"),
+            "description must name the exact bit, got: {}",
+            r[0].description
+        );
+    }
+
+    /// RK-1: append-only (FILE_APPEND_DATA without FILE_WRITE_DATA) — the
+    /// classic drop-box folder.
+    #[test]
+    fn append_only_flagged_as_partial_write() {
+        let r = WriteAccessRule.evaluate(&ctx(vec![perm(
+            USER_SID,
+            MASK_READ | FILE_APPEND_DATA,
+            r"C:\upload",
+            vec![],
+        )]));
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].rule_id, "PARTIAL_WRITE");
+        assert!(
+            r[0].description.contains("FILE_APPEND_DATA"),
+            "description must name the exact bit, got: {}",
+            r[0].description
+        );
+    }
+
+    /// RK-1 boundary: attribute/EA writes cannot change file content and
+    /// must NOT be reported as write access — the deliberate
+    /// CONTENT_WRITE_BITS exclusion.
+    #[test]
+    fn attribute_and_ea_write_only_not_flagged_as_partial_write() {
+        assert!(WriteAccessRule
+            .evaluate(&ctx(vec![perm(
+                USER_SID,
+                MASK_READ | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA,
+                r"C:\data",
+                vec![],
+            )]))
+            .is_empty());
+    }
+
+    /// The full composite must keep reporting WRITE_ACCESS (High), never the
+    /// weaker PARTIAL_WRITE — exactly one finding per permission.
+    #[test]
+    fn full_write_composite_reports_write_access_not_partial_write() {
+        let r =
+            WriteAccessRule.evaluate(&ctx(vec![perm(USER_SID, MASK_WRITE, r"C:\data", vec![])]));
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].rule_id, "WRITE_ACCESS");
+        assert_eq!(r[0].severity, RiskSeverity::High);
+    }
+
+    /// PARTIAL_WRITE follows the same confidence model as every other rule:
+    /// share DACL unreadable → finding flagged incomplete.
+    #[test]
+    fn partial_write_marks_finding_incomplete_on_share_read_failed() {
+        let mut p = perm(USER_SID, MASK_READ | FILE_APPEND_DATA, r"C:\upload", vec![]);
+        p.share_status = adpa_core::model::ShareEvalStatus::ReadFailed("access denied".to_owned());
+        let r = WriteAccessRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].rule_id, "PARTIAL_WRITE");
+        assert!(r[0].incomplete);
     }
 
     // --- AdminRightsRule: destructive/administrative single rights ---
@@ -809,7 +957,6 @@ mod tests {
             .is_empty());
     }
 
-    ///
     /// Regression test for the reported false positive:
     /// Everyone contributes only Read; Modify comes from a specific group.
     /// BroadGroupWriteRule must NOT fire.
@@ -862,6 +1009,61 @@ mod tests {
         );
     }
 
+    /// Review 2026-07-25 finding RK-3: "Everyone can write attributes/EAs"
+    /// is not content write — the Critical BROAD_GROUP_WRITE claim ("has
+    /// write access") must not fire on it. The ACE itself stays visible in
+    /// the permission view.
+    #[test]
+    fn everyone_attribute_write_only_no_broad_group_write() {
+        let mask = MASK_READ | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA;
+        assert!(BroadGroupWriteRule
+            .evaluate(&ctx(vec![perm_cs(
+                USER_SID,
+                mask,
+                r"C:\data",
+                vec![],
+                vec![ace(SID_EVERYONE, mask)],
+            )]))
+            .is_empty());
+    }
+
+    /// RK-3 counterpart: append-only via Everyone IS content write and must
+    /// keep firing as Critical.
+    #[test]
+    fn everyone_append_only_flagged_as_critical() {
+        let mask = MASK_READ | FILE_APPEND_DATA;
+        let r = BroadGroupWriteRule.evaluate(&ctx(vec![perm_cs(
+            USER_SID,
+            mask,
+            r"C:\upload",
+            vec![],
+            vec![ace(SID_EVERYONE, mask)],
+        )]));
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].rule_id, "BROAD_GROUP_WRITE");
+        assert_eq!(r[0].severity, RiskSeverity::Critical);
+    }
+
+    /// RK-3 (honest wording): the description must name the audience of the
+    /// matched broad SID — Anonymous Logon means unauthenticated clients,
+    /// not "all users in the domain".
+    #[test]
+    fn anonymous_write_description_names_unauthenticated_clients() {
+        let r = BroadGroupWriteRule.evaluate(&ctx(vec![perm_cs(
+            USER_SID,
+            MASK_MODIFY,
+            r"C:\data",
+            vec![],
+            vec![ace(SID_ANONYMOUS_LOGON, MASK_MODIFY)],
+        )]));
+        assert_eq!(r.len(), 1);
+        assert!(
+            r[0].description.contains("unauthenticated clients"),
+            "description must state the real audience, got: {}",
+            r[0].description
+        );
+    }
+
     /// ChatGPT review 2026-06-04 round 2, finding 4: when the engine
     /// sets `PermissionDiagnostic::DomainGroupRecursionIncomplete`
     /// (SAM/LSA fallback without LDAP), risk findings for that
@@ -884,7 +1086,6 @@ mod tests {
     }
 
     /// Review 2026-06-04 round 2 finding 1: `IdentityNotInConfiguredLdapBase`
-    /// Review 2026-06-04 round 2 finding 1: `IdentityNotInConfiguredLdapBase`
     /// means LSA resolved the SID but the LDAP `base_dn` does not index
     /// it. Cross-domain group recursion is incomplete — risk findings
     /// must be marked `incomplete` just like for the SAM fallback.
@@ -902,8 +1103,6 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 round 2 finding 5:
-    /// tragen.
     /// Review 2026-06-04 round 2 finding 5: `IdentityDisabledStatusUnknown`
     /// is informational only — it signals "`disabled` could not be
     /// determined" but the ACL evaluation is complete. Risk findings
@@ -923,8 +1122,8 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 round 4 finding 1: `IdentityLookupFailed`
-    /// Round 4 finding 1: IdentityLookupFailed → incomplete.
+    /// Review 2026-06-04 round 4 finding 1: `IdentityLookupFailed` →
+    /// incomplete.
     #[test]
     fn full_control_marks_finding_incomplete_on_identity_lookup_failed() {
         use adpa_core::model::PermissionDiagnostic;
@@ -974,9 +1173,8 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 round 4 finding 1: `GroupResolutionFailed`
-    /// als incomplete durchschlagen.
-    /// Round 4 finding 1: GroupResolutionFailed → incomplete.
+    /// Review 2026-06-04 round 4 finding 1: `GroupResolutionFailed` →
+    /// incomplete.
     #[test]
     fn full_control_marks_finding_incomplete_on_group_resolution_failed() {
         use adpa_core::model::PermissionDiagnostic;
@@ -1092,7 +1290,6 @@ mod tests {
             .is_empty());
     }
 
-    ///
     /// Follow-up finding 2: `matched_aces` must no longer carry INHERIT_ONLY
     /// entries — the engine filters them out. This test documents the
     /// downstream consequence: an explicit user ACE that only applies to
@@ -1100,7 +1297,6 @@ mod tests {
     /// `DIRECT_USER_ACE` finding.
     #[test]
     fn inherit_only_explicit_user_ace_does_not_trigger_direct_user_finding() {
-        //
         // We simulate what the engine produces AFTER the fix: matched_aces
         // only contains ACEs that actually affect the object. The explicit
         // IO user ACE is therefore absent — only a group ACE that carries
@@ -1120,6 +1316,92 @@ mod tests {
              was INHERIT_ONLY and therefore filtered out of matched_aces by \
              the engine"
         );
+    }
+
+    /// Review 2026-07-25 finding RK-2: when the analyzed identity is itself
+    /// a group, a direct ACE on that group SID is exactly how AGDLP assigns
+    /// permissions — not a finding. Before the kind guard, analyzing a group
+    /// produced a false "best practice violated" report for the correct
+    /// configuration.
+    #[test]
+    fn direct_ace_on_analyzed_group_identity_not_flagged() {
+        let group_sid = "S-1-5-21-1000-1000-1000-2001";
+        let mut p = perm_ma(
+            group_sid,
+            MASK_MODIFY,
+            r"C:\data",
+            vec![],
+            vec![],
+            vec![ace_entry(group_sid, AceKind::Allow, false)],
+        );
+        p.identity.kind = IdentityKind::Group;
+        assert!(
+            DirectUserAceRule.evaluate(&ctx(vec![p])).is_empty(),
+            "a group's own direct ACE is best practice, not a finding"
+        );
+    }
+
+    /// RK-2: computers are leaf principals like users — the best-practice
+    /// rule applies to them unchanged.
+    #[test]
+    fn direct_ace_on_computer_identity_flagged() {
+        let mut p = perm_ma(
+            USER_SID,
+            MASK_READ,
+            r"C:\data",
+            vec![],
+            vec![],
+            vec![ace_entry(USER_SID, AceKind::Allow, false)],
+        );
+        p.identity.kind = IdentityKind::Computer;
+        let r = DirectUserAceRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].rule_id, "DIRECT_USER_ACE");
+    }
+
+    /// RK-2: for non-leaf kinds (well-known, FSP, orphaned, unknown) the
+    /// rule cannot honestly claim "user has a direct ACE" — it stays silent.
+    #[test]
+    fn direct_ace_on_non_leaf_kinds_not_flagged() {
+        for kind in [
+            IdentityKind::WellKnown,
+            IdentityKind::ForeignSecurityPrincipal,
+            IdentityKind::Orphaned,
+            IdentityKind::Unknown,
+        ] {
+            let mut p = perm_ma(
+                USER_SID,
+                MASK_READ,
+                r"C:\data",
+                vec![],
+                vec![],
+                vec![ace_entry(USER_SID, AceKind::Allow, false)],
+            );
+            p.identity.kind = kind.clone();
+            assert!(
+                DirectUserAceRule.evaluate(&ctx(vec![p])).is_empty(),
+                "kind {kind:?} must not produce DIRECT_USER_ACE"
+            );
+        }
+    }
+
+    /// Review 2026-07-25 finding RK-6: a direct Deny ACE that removes ALL
+    /// access (effective mask 0 — the typical "lock out this employee
+    /// quickly" leftover) is still a direct ACE on the user. The old
+    /// `effective_mask > 0` gate silently hid exactly this case.
+    #[test]
+    fn full_deny_direct_user_ace_still_flagged() {
+        let r = DirectUserAceRule.evaluate(&ctx(vec![perm_ma(
+            USER_SID,
+            0,
+            r"C:\data",
+            vec![],
+            vec![],
+            vec![ace_entry(USER_SID, AceKind::Deny, false)],
+        )]));
+        assert_eq!(r.len(), 1, "full-deny direct ACE must remain visible");
+        assert_eq!(r[0].rule_id, "DIRECT_USER_ACE");
+        assert_eq!(r[0].severity, RiskSeverity::Low);
     }
 
     #[test]
@@ -1149,7 +1431,6 @@ mod tests {
         );
     }
 
-    /// behauptet — Falschmeldung.
     /// Follow-up finding 3 (review 2026-05-25): SensitivePathRule must
     /// only fire when the identity actually has access. Effective mask
     /// 0 = no access → no finding. Previously the rule would fire on
