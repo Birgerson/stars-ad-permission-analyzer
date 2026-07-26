@@ -224,6 +224,12 @@ DE_WORDS = [
     # risk_engine review 2026-07-25 (RK-8): German half-lines in rules.rs
     # test docs, all reported clean by the gate.
     "tragen", "durchschlagen", "behauptet", "Falschmeldung",
+    # persistence review 2026-07-26 (PS-7): German twin lines and orphaned
+    # fragments across scan_store/migrations/delta plus one GUI comment,
+    # all reported clean by the gate.
+    "existieren", "geschuetzt", "vergleicht", "zerlegen",
+    "spaeter", "deaktiviert", "gleiche", "Zugriff", "Effektiver",
+    "aktiv", "Signatur", "ausblenden",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -418,6 +424,22 @@ def selftest() -> int:
         "/// tragen.",
         "/// als incomplete durchschlagen.",
         "/// behauptet — Falschmeldung.",
+        # persistence review 2026-07-26 PS-7: the exact lines the gate
+        # reported as clean. NOTE: two further leaked lines are
+        # un-guardable by the denylist and were deleted at the source
+        # instead — "// Code Review 2026-06-07 Finding 1: Identity-Snapshot
+        # pro" (every word is English or the English word "pro") and
+        # "// ... Finding 3: neue `PermissionDiagnostic`" (its only German
+        # word "neue" is deliberately excluded for the surname "Neuer").
+        "// v1 existieren.",
+        "/// geschuetzt.",
+        "// ShareEvalStatus in Status-Text + optionalen Fehlertext zerlegen.",
+        '// Run A: SID S-1-5-21-…-1000, Name "alice.old", aktiv (disabled=false).',
+        "// Run B (spaeter): gleiche SID, jetzt deaktiviert, anderer Name,",
+        "/// vergleicht `compare_scans` nur `effective_mask` — d.h. audit-",
+        "// Added + Changed via Signatur-Diff (Finding 3).",
+        "/// NTFS=Read, Share=Full, Effective=Read. Effektiver Zugriff",
+        "// ausblenden.",
     ]
     must_pass = [
         "Risk Findings",

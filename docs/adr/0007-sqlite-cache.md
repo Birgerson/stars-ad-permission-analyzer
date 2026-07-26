@@ -1,7 +1,13 @@
 # ADR 0007 — SQLite cache and scan history
 
 ## Status
-Accepted
+Accepted — **partially superseded 2026-07-26**: the `IdentityCache` API
+(purpose 1 below) was removed in the persistence review (finding PS-2); it
+never gained a production caller — identity/group caching happens in
+ad_resolver's in-memory maps, and the per-row identity snapshot (schema v7)
+covers historical reports. The `identities` table remains in active use by
+`ScanStore`; `group_memberships` remains only because migrations are
+append-only. The scan-history purpose (2) is unchanged and in daily use.
 
 ## Context
 

@@ -121,9 +121,17 @@ that applies.
   reuse, so it can never change a computed result, only the parsing speed
   of a large scan.
 - **Scan history** in SQLite (local, `persistence` crate) — see
-  ADR 0026.
+  ADR 0026. Since schema v8 run-scoped reads/deletes are indexed.
+- **Per-run error evidence is reviewable** (persistence review
+  2026-07-26): `adpa runs` lists stored runs with true path/error
+  counts, `adpa errors --run-id <ID>` prints the paths a run could not
+  read, and the Delta tab's ⚠ button shows the same list in the GUI.
+  Before this, the stored error lists had no reader — and the GUI run
+  label claimed "(0 errors)" for every run.
 - **Delta comparison** between two scans (what changed per path in
-  effective rights?).
+  effective rights?). Refuses runs with different targets and unknown
+  run ids instead of producing a meaningless report; rows are keyed by
+  (identity, path).
 - **Trustee view** per path (who has access?), complementing the
   classic per-user report.
 - **Exporter:** CSV, JSON (variant-tagged diagnostics — ADR 0021),

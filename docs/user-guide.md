@@ -310,12 +310,19 @@ diagnostic markers.
 
 **Fields:**
 
-- **Left run** and **right run** selected from the scan history.
+- **Left run** and **right run** selected from the scan history. Each
+  run's row shows its true error count and a **⚠ button** that opens
+  the run's stored error list — the paths that scan could **not** read
+  and which are therefore missing from its results.
 - **Compare** — table with `Before → After` per path, including a
   "Changed (...)" column with concrete change reasons (e.g. "NTFS
   mask + share status").
 
 Unchanged paths are hidden so only the relevant entries remain.
+
+Two runs with **different targets** are refused with a clear error —
+comparing scans of two different trees would produce a plausible-looking
+but meaningless report.
 
 ### `Info` tab — about Stars
 
@@ -829,6 +836,25 @@ returning an empty list that would look like "this server has no shares".
 > **This is the share layer only.** A user's real permission is the more
 > restrictive combination of share and NTFS rights — use
 > `adpa analyze --path "\\server\share\folder" --user "CORP\alice"` for that.
+
+### Review the stored scan history (read-only)
+
+*Which scans are stored, and what could each of them NOT read?* Every
+`scan --db` run keeps its error list — the paths the scan could not read
+are **missing from the results**, so this list is part of the evidence:
+
+```powershell
+adpa runs   --db "C:\audits\stars_data.db"
+adpa errors --db "C:\audits\stars_data.db" --run-id "9be04a2e-…"
+```
+
+`runs` lists every stored run (id, start/finish time, target) with its
+**path and error counts**; `errors` prints one run's error list — each
+unreadable path with the reason. Both commands are **strictly read-only**:
+they validate the database path, refuse a file that does not exist
+(opening would otherwise create an empty database), and never modify the
+history. The GUI shows the same evidence via the ⚠ button in the Delta
+tab's run list.
 
 ### List the domain's trusts (read-only)
 

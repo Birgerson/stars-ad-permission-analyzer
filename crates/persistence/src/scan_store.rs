@@ -52,7 +52,6 @@ impl<'a> ScanStore<'a> {
         Ok(())
     }
 
-    ///
     /// Deletes a scan run completely along with all dependent records
     /// (permissions and scan errors). Runs in a transaction: either
     /// everything is gone or nothing. SQLite foreign keys are not enabled
@@ -149,7 +148,6 @@ impl<'a> ScanStore<'a> {
         let matched_aces = encode_evidence(&perm.matched_aces, "matched_aces", &perm.path)?;
         let diagnostics = encode_evidence(&perm.diagnostics, "diagnostics", &perm.path)?;
 
-        // ShareEvalStatus in Status-Text + optionalen Fehlertext zerlegen.
         // Decompose ShareEvalStatus into a status string + optional error text.
         let (share_status, share_error): (&str, Option<&str>) = match &perm.share_status {
             ShareEvalStatus::NotApplicable => ("NotApplicable", None),
@@ -168,13 +166,13 @@ impl<'a> ScanStore<'a> {
                 }
             };
 
-        // Code Review 2026-06-07 Finding 1: Identity-Snapshot pro
         // Code review 2026-06-07 finding 1: identity snapshot per
         // permission row. Previously the identity (name/domain/kind/
         // disabled) lived only in the global `identities` table and was
         // resolved on read via JOIN — meaning a later upsert could
         // retroactively change how earlier runs looked. The snapshot
         // columns make the permission row immutable against later
+        // identity upserts.
         self.conn
             .execute(
                 "INSERT INTO effective_permissions
@@ -303,6 +301,34 @@ impl<'a> ScanStore<'a> {
             errors.push(r.map_err(|e| CoreError::Database(format!("row list_errors_for: {e}")))?);
         }
         Ok(errors)
+    }
+
+    /// Number of stored permissions for a run — for run listings, without
+    /// loading full rows (uses the v8 index on `scan_run_id`).
+    pub fn count_permissions_for(&self, scan_run_id: &Uuid) -> Result<usize, CoreError> {
+        let n: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM effective_permissions WHERE scan_run_id = ?1",
+                params![scan_run_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(|e| CoreError::Database(format!("count_permissions_for: {e}")))?;
+        Ok(n.max(0) as usize)
+    }
+
+    /// Number of stored scan errors for a run — the "how much could this
+    /// run not read?" figure for run listings.
+    pub fn count_errors_for(&self, scan_run_id: &Uuid) -> Result<usize, CoreError> {
+        let n: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM scan_errors WHERE scan_run_id = ?1",
+                params![scan_run_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(|e| CoreError::Database(format!("count_errors_for: {e}")))?;
+        Ok(n.max(0) as usize)
     }
 
     /// Returns all stored scan runs (newest first).
@@ -483,6 +509,22 @@ impl RawPermRow {
             ))
         };
 
+        // PS-5 (persistence review 2026-07-26): masks are required evidence.
+        // A stored value outside the u32 range (hand-edited or corrupt row)
+        // must hard-fail like broken JSON — the old `as u32` casts wrapped
+        // silently, reloading a wrong mask without any marker.
+        let mask_err = |field: &str, v: i64| {
+            CoreError::Database(format!(
+                "corrupt persisted evidence: field '{field}' for path '{path}' \
+                 holds {v}, outside the valid access-mask range"
+            ))
+        };
+        let ntfs_mask = u32::try_from(ntfs).map_err(|_| mask_err("ntfs_mask", ntfs))?;
+        let share_mask = share
+            .map(|s| u32::try_from(s).map_err(|_| mask_err("share_mask", s)))
+            .transpose()?;
+        let effective_mask = u32::try_from(eff).map_err(|_| mask_err("effective_mask", eff))?;
+
         // Required evidence — a decode failure aborts loudly.
         let steps: Vec<String> =
             serde_json::from_str(&expl).map_err(|e| decode_err("explanation", e))?;
@@ -560,9 +602,9 @@ impl RawPermRow {
                 sid_history: Vec::new(),
             },
             path: NormalizedPath(path),
-            ntfs_mask: AccessMask(ntfs as u32),
-            share_mask: share.map(|s| AccessMask(s as u32)),
-            effective_mask: AccessMask(eff as u32),
+            ntfs_mask: AccessMask(ntfs_mask),
+            share_mask: share_mask.map(AccessMask),
+            effective_mask: AccessMask(effective_mask),
             path_explanation: PermissionPath { steps },
             share_status,
             local_group_status,
@@ -1213,6 +1255,43 @@ mod tests {
         assert_eq!(errors[1].message, "Cancelled by user");
     }
 
+    /// PS-1 (persistence review 2026-07-26): the count methods backing the
+    /// run listings must count per run and return 0 for unknown ids.
+    #[test]
+    fn count_methods_count_per_run() {
+        let conn = setup();
+        let store = ScanStore::new(&conn);
+        let run = make_run("target");
+        store.insert_scan_run(&run).unwrap();
+        store
+            .insert_permission(
+                &run.id,
+                &make_perm("S-1-5-21-1-2-3-1000", r"C:\a", 1, None, 1),
+            )
+            .unwrap();
+        store
+            .insert_permission(
+                &run.id,
+                &make_perm("S-1-5-21-1-2-3-1001", r"C:\b", 1, None, 1),
+            )
+            .unwrap();
+        store
+            .insert_error(
+                &run.id,
+                &ScanError {
+                    path: None,
+                    message: "one error".to_owned(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(store.count_permissions_for(&run.id).unwrap(), 2);
+        assert_eq!(store.count_errors_for(&run.id).unwrap(), 1);
+        let other = Uuid::new_v4();
+        assert_eq!(store.count_permissions_for(&other).unwrap(), 0);
+        assert_eq!(store.count_errors_for(&other).unwrap(), 0);
+    }
+
     #[test]
     fn list_errors_for_other_run_is_empty() {
         let conn = setup();
@@ -1251,7 +1330,6 @@ mod tests {
         assert!(runs[1].started_at >= runs[2].started_at);
     }
 
-    /// geschuetzt.
     /// Code review 2026-06-07 finding 1: historical scan data must be
     /// immune against later identity upserts. Before v7,
     /// `insert_permission` upserted `identities` and `get_permissions`
@@ -1270,7 +1348,6 @@ mod tests {
         store.insert_scan_run(&run_a).unwrap();
         store.insert_scan_run(&run_b).unwrap();
 
-        // Run A: SID S-1-5-21-…-1000, Name "alice.old", aktiv (disabled=false).
         // Run A: SID S-1-5-21-…-1000, name "alice.old", active (disabled=false).
         let mut perm_a = make_perm("S-1-5-21-7-7-7-1000", r"C:\X", 0x1, None, 0x1);
         perm_a.identity.name = Some("alice.old".to_owned());
@@ -1279,7 +1356,6 @@ mod tests {
         perm_a.identity.disabled = false;
         store.insert_permission(&run_a.id, &perm_a).unwrap();
 
-        // Run B (spaeter): gleiche SID, jetzt deaktiviert, anderer Name,
         // Run B (later): same SID, now disabled, different name, different
         // domain. Historic pattern: identities upsert overwrites the
         // global row, JOIN on read of run A returns the new values ->
@@ -1314,6 +1390,70 @@ mod tests {
         assert_eq!(perms_b[0].identity.name.as_deref(), Some("alice.new"));
         assert_eq!(perms_b[0].identity.domain.as_deref(), Some("NEW-DOMAIN"));
         assert!(perms_b[0].identity.disabled);
+    }
+
+    /// PS-5 (persistence review 2026-07-26): a stored mask outside the u32
+    /// range is corrupt required evidence and must hard-fail the read like
+    /// broken JSON — the old `as u32` cast wrapped silently.
+    #[test]
+    fn out_of_range_mask_fails_loudly() {
+        let conn = setup();
+        let store = ScanStore::new(&conn);
+        let run = make_run(r"C:\corrupt");
+        let perm = make_perm("S-1-5-21-1-2-3-1000", r"C:\corrupt\a", 1, None, 1);
+        store.persist_scan_atomic(&run, &[perm], &[]).unwrap();
+
+        conn.execute("UPDATE effective_permissions SET ntfs_mask = -1", [])
+            .unwrap();
+
+        let result = store.get_permissions(&run.id);
+        let err = result.expect_err("out-of-range mask must abort the read");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("ntfs_mask") && msg.contains("corrupt persisted evidence"),
+            "the error must name the corrupt mask field; got: {msg}"
+        );
+    }
+
+    /// PS-9 (persistence review 2026-07-26): every identity kind — most
+    /// importantly the longest, most typo-prone `ForeignSecurityPrincipal`
+    /// string — must survive the snapshot round-trip. Before this test the
+    /// store never round-tripped any kind other than `User`.
+    #[test]
+    fn all_identity_kinds_round_trip_through_snapshot() {
+        let kinds = [
+            IdentityKind::User,
+            IdentityKind::Group,
+            IdentityKind::Computer,
+            IdentityKind::WellKnown,
+            IdentityKind::ForeignSecurityPrincipal,
+            IdentityKind::Orphaned,
+            IdentityKind::Unknown,
+        ];
+        let conn = setup();
+        let store = ScanStore::new(&conn);
+        let run = make_run(r"C:\kinds");
+        store.insert_scan_run(&run).unwrap();
+        for (i, kind) in kinds.iter().enumerate() {
+            let mut perm = make_perm(
+                &format!("S-1-5-21-1-2-3-{i}"),
+                &format!(r"C:\kinds\{i}"),
+                1,
+                None,
+                1,
+            );
+            perm.identity.kind = kind.clone();
+            store.insert_permission(&run.id, &perm).unwrap();
+        }
+        let perms = store.get_permissions(&run.id).unwrap();
+        assert_eq!(perms.len(), kinds.len());
+        for (i, kind) in kinds.iter().enumerate() {
+            let p = perms
+                .iter()
+                .find(|p| p.path.0 == format!(r"C:\kinds\{i}"))
+                .expect("row must exist");
+            assert_eq!(&p.identity.kind, kind, "kind must survive the round-trip");
+        }
     }
 
     #[test]

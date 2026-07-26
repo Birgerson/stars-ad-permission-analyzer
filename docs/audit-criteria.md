@@ -559,7 +559,7 @@ This list is updated with every documented test run. A missing entry does **not*
 
 #### <a name="11-persisted-data"></a>11. Persisted data and scan history
 
-Stars stores every completed scan in a **local SQLite database** so the Delta tab can compare two runs and identity resolutions are cached across sessions.
+Stars stores every completed scan in a **local SQLite database** so the Delta tab can compare two runs and every run's evidence — including its error list — stays reviewable later.
 
 **Location:** `%APPDATA%\Stars\stars_data.db` (typically `C:\Users\<account>\AppData\Roaming\Stars\stars_data.db`).
 If `%APPDATA%` is not set, Stars falls back to the directory next to the EXE — relevant only for development runs.
@@ -569,11 +569,16 @@ If `%APPDATA%` is not set, Stars falls back to the directory next to the EXE —
 | Table | Content |
 |---|---|
 | `scan_runs` | One row per completed scan: UUID, start time, end time, target path |
-| `permissions` | Every evaluated path per run with identity, NTFS mask, share mask, effective mask, full explanation path |
-| `scan_errors` | Walk/eval errors per scan (e.g. "Access denied", "Path not found", "Cancelled by user") |
-| `identity_cache` | SAM/LDAP resolution cache (SID → name, domain, group memberships) — speeds up repeated scans for the same identity |
+| `effective_permissions` | Every evaluated path per run with an identity snapshot, NTFS mask, share mask, effective mask, full explanation path, diagnostic markers |
+| `scan_errors` | Walk/eval errors per scan (e.g. "Access denied", "Path not found", "Cancelled by user") — reviewable per run via `adpa runs` / `adpa errors` and the Delta tab's ⚠ button |
+| `identities` | SID → name/domain/kind/disabled. Since v1.5.16 the per-row identity snapshot in `effective_permissions` is the source for historical reports, not this table |
+| `group_memberships` | Legacy, empty in practice — its writer was removed in the persistence review 2026-07-26 (no production reader); the table stays because migrations are append-only |
+
+*(This table previously named `permissions` and `identity_cache` — neither table ever existed under those names; corrected in the persistence review 2026-07-26.)*
 
 **Auditor-relevant properties:**
+
+* **Per-run error evidence is reviewable.** Every run keeps the list of paths it could **not** read — those paths are missing from the results, so the list is part of the evidence. GUI: ⚠ button in the Delta tab's run list. CLI: `adpa runs --db <DB>` (run overview with true error counts) and `adpa errors --db <DB> --run-id <ID>` (one run's error list).
 
 * **Separate per user profile.** If multiple admins maintain the same server, each has their own audit history. Clean separation of activity traces, but not a "team audit pool".
 * **Survives a Stars uninstall** — by default the uninstaller removes only its install directory (`%LOCALAPPDATA%\Stars\` without `logs\`). The audit history at `%APPDATA%\Stars\stars_data.db` is kept. This is by design: audit history is evidence and should not vanish accidentally with the tool. To remove it deliberately, check the optional component **"Remove audit history and logs"** in the uninstaller — it is off by default.

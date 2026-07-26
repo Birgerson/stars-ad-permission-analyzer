@@ -15,6 +15,7 @@ Stars fits if **at least one** of these is true for you:
 - You need the reverse: **who is in this group?** — including the members whose *primary group* it is, which a naive `member` read misses entirely (`adpa members`).
 - You want to see **which SMB shares a server publishes and who passes the share layer** — with NULL DACL (“no share-level restriction”) kept distinct from an empty DACL (“no access”), because they mean opposite things (`adpa shares`).
 - You need to know whether a **trust filters SIDs or gates authentication** (`adpa trusts`) — the settings that decide whether a cross-forest or migrated SID really grants what a DACL promises.
+- You want to know **what a stored scan could not read** — every run keeps its error list (those paths are missing from the results), visible via `adpa runs` / `adpa errors --run-id <ID>` or the ⚠ button in the GUI's Delta tab.
 - You want a permission snapshot of a directory tree (e.g. 5000 dirs) as CSV/JSON/HTML.
 
 ## When Stars is **not** the right tool

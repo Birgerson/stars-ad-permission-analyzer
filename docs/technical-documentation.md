@@ -143,7 +143,7 @@ directed — higher layers depend on lower ones, never the reverse:
 | `share_scanner` | SMB share enumeration + share DACL read via Windows API; the shared CLI/GUI share-mask orchestration | `scanner.rs` |
 | `permission_engine` | AccessCheck reproduction, token SID assembly, permission path generation, mask normalization | `engine.rs`, `mask.rs` |
 | `risk_engine` | Six risk rules + `is_incomplete()` delegation | `rules.rs` |
-| `persistence` | SQLite schema + migrations + `ScanStore`, identity cache, delta comparison | `scan_store.rs`, `migrations.rs`, `delta.rs`, `identity_cache.rs`, `db.rs` |
+| `persistence` | SQLite schema + migrations (v1–v8) + `ScanStore`, delta comparison | `scan_store.rs`, `migrations.rs`, `delta.rs`, `db.rs` |
 | `exporter` | CSV / JSON / HTML renderers + the shared path-centric trustee view | `csv.rs`, `json.rs`, `html.rs`, `trustees.rs` |
 | `update_manager` | Fail-closed seam for signature-checked updates (see known-limitations L12) | `manager.rs`, `manifest.rs`, `verifier.rs`, `version.rs` |
 | `cli` | Command-line front-end (`adpa.exe`): `analyze`, `scan`, `groups`, `members`, `shares`, `trusts` | `main.rs`, `output.rs` |

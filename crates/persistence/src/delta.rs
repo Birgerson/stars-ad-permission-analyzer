@@ -15,8 +15,6 @@ use uuid::Uuid;
 
 use crate::scan_store::load_permissions_for_run;
 
-/// vergleicht `compare_scans` nur `effective_mask` — d.h. audit-
-///
 /// Audit-relevant fields of a permission, bundled for comparison.
 /// Code review 2026-06-07 finding 3: before this patch, `compare_scans`
 /// only diffed `effective_mask` — meaning audit-relevant changes with
@@ -172,12 +170,45 @@ pub struct DeltaEntry {
     pub new_perm: Option<EffectivePermission>,
 }
 
+/// Fetches the stored target of a scan run. A nonexistent run id is a
+/// `Validation` error — before this guard, comparing against an unknown id
+/// silently read as "everything was removed"
+/// (persistence review 2026-07-26, PS-4).
+fn run_target(conn: &Connection, run_id: &Uuid) -> Result<String, CoreError> {
+    conn.query_row(
+        "SELECT target FROM scan_runs WHERE id = ?1",
+        [run_id.to_string()],
+        |row| row.get(0),
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            CoreError::Validation(format!("unknown scan run id '{run_id}'"))
+        }
+        other => CoreError::Database(format!("reading scan run '{run_id}': {other}")),
+    })
+}
+
 /// Compares two scan runs and returns all changes.
+///
+/// Persistence review 2026-07-26, PS-4: refuses semantically incomparable
+/// runs. Two runs with different targets produce a plausible-looking but
+/// meaningless report ("everything changed"), so the mismatch is a
+/// `Validation` error naming both targets instead of a silent nonsense
+/// delta.
 pub fn compare_scans(
     conn: &Connection,
     old_run_id: &Uuid,
     new_run_id: &Uuid,
 ) -> Result<Vec<DeltaEntry>, CoreError> {
+    let old_target = run_target(conn, old_run_id)?;
+    let new_target = run_target(conn, new_run_id)?;
+    if old_target != new_target {
+        return Err(CoreError::Validation(format!(
+            "scan runs are not comparable: the old run scanned '{old_target}', \
+             the new run scanned '{new_target}'"
+        )));
+    }
+
     let old_perms = load_permissions_for_run(conn, old_run_id)?;
     let new_perms = load_permissions_for_run(conn, new_run_id)?;
 
@@ -185,23 +216,30 @@ pub fn compare_scans(
 }
 
 /// Pure diff logic on two permission lists — for tests without a DB.
+///
+/// Keyed by **(identity SID, path)**, not by path alone: with path-only
+/// keys, two rows for different identities on the same path would silently
+/// collapse to whichever the map kept last (persistence review 2026-07-26,
+/// PS-4). Runs are single-identity today, so the key change is free — and
+/// correct the day multi-identity runs land.
 pub fn diff_permission_lists(
     old: Vec<EffectivePermission>,
     new: Vec<EffectivePermission>,
 ) -> Vec<DeltaEntry> {
-    let old_map: std::collections::HashMap<String, EffectivePermission> =
-        old.into_iter().map(|p| (p.path.0.clone(), p)).collect();
-    let new_map: std::collections::HashMap<String, EffectivePermission> =
-        new.into_iter().map(|p| (p.path.0.clone(), p)).collect();
+    type Key = (String, String);
+    let key_of = |p: &EffectivePermission| (p.identity.sid.0.clone(), p.path.0.clone());
+    let old_map: std::collections::HashMap<Key, EffectivePermission> =
+        old.into_iter().map(|p| (key_of(&p), p)).collect();
+    let new_map: std::collections::HashMap<Key, EffectivePermission> =
+        new.into_iter().map(|p| (key_of(&p), p)).collect();
 
     let mut entries: Vec<DeltaEntry> = Vec::new();
 
-    // Added + Changed via Signatur-Diff (Finding 3).
     // Added + Changed via signature diff (finding 3).
-    for (path, new_p) in &new_map {
-        match old_map.get(path) {
+    for (key, new_p) in &new_map {
+        match old_map.get(key) {
             None => entries.push(DeltaEntry {
-                path: NormalizedPath(path.clone()),
+                path: NormalizedPath(key.1.clone()),
                 kind: DeltaKind::Added,
                 old_perm: None,
                 new_perm: Some(new_p.clone()),
@@ -212,7 +250,7 @@ pub fn diff_permission_lists(
                 let reasons = signature_diff(&old_sig, &new_sig);
                 if !reasons.is_empty() {
                     entries.push(DeltaEntry {
-                        path: NormalizedPath(path.clone()),
+                        path: NormalizedPath(key.1.clone()),
                         kind: DeltaKind::Changed {
                             old_mask: old_p.effective_mask,
                             new_mask: new_p.effective_mask,
@@ -227,10 +265,10 @@ pub fn diff_permission_lists(
     }
 
     // Removed
-    for (path, old_p) in &old_map {
-        if !new_map.contains_key(path) {
+    for (key, old_p) in &old_map {
+        if !new_map.contains_key(key) {
             entries.push(DeltaEntry {
-                path: NormalizedPath(path.clone()),
+                path: NormalizedPath(key.1.clone()),
                 kind: DeltaKind::Removed,
                 old_perm: Some(old_p.clone()),
                 new_perm: None,
@@ -238,8 +276,25 @@ pub fn diff_permission_lists(
         }
     }
 
-    entries.sort_by(|a, b| a.path.0.cmp(&b.path.0));
+    // Deterministic order: path first, then the identity SID for the rare
+    // case of two identities on the same path.
+    entries.sort_by(|a, b| {
+        a.path
+            .0
+            .cmp(&b.path.0)
+            .then_with(|| entry_sid(a).cmp(entry_sid(b)))
+    });
     entries
+}
+
+/// SID of the permission a delta entry is about (from whichever side is
+/// present) — only used for deterministic ordering.
+fn entry_sid(e: &DeltaEntry) -> &str {
+    e.new_perm
+        .as_ref()
+        .or(e.old_perm.as_ref())
+        .map(|p| p.identity.sid.0.as_str())
+        .unwrap_or("")
 }
 
 // ---------------------------------------------------------------------------
@@ -333,7 +388,6 @@ mod tests {
         assert!(diff_permission_lists(old, new).is_empty());
     }
 
-    /// NTFS=Read, Share=Full, Effective=Read. Effektiver Zugriff
     /// Code review 2026-06-07 finding 3: identical `effective_mask` but
     /// different NTFS or share mask must be reported as Changed. Example:
     /// old NTFS=Modify, Share=Read, Effective=Read; new NTFS=Read,
@@ -369,7 +423,6 @@ mod tests {
     }
 
     /// Code review 2026-06-07 finding 3: `share_status` flips from
-    /// Code review 2026-06-07 finding 3: `share_status` flips from
     /// `Applied` to `ReadFailed`. The engine then keeps
     /// `Effective = NTFS` and sets a diagnostic/incompleteness. If the
     /// mask happens to stay equal, the old delta reported nothing.
@@ -392,7 +445,6 @@ mod tests {
         assert!(reasons.contains(&DeltaReason::ShareStatusChanged));
     }
 
-    /// Code Review 2026-06-07 Finding 3: neue `PermissionDiagnostic`
     /// Code review 2026-06-07 finding 3: a new `PermissionDiagnostic`
     /// (e.g. `NonCanonicalDaclOrder`) must be reported as Changed even
     /// when the final mask stays equal — such markers are audit events
@@ -433,7 +485,6 @@ mod tests {
         assert!(reasons.contains(&DeltaReason::LocalGroupStatusChanged));
     }
 
-    /// Code Review 2026-06-07 Finding 3: `unsupported_ace_count`
     /// Code review 2026-06-07 finding 3: `unsupported_ace_count`
     /// flips — signals new/disappeared exotic ACEs.
     #[test]
@@ -448,5 +499,105 @@ mod tests {
             panic!("expected Changed");
         };
         assert!(reasons.contains(&DeltaReason::UnsupportedAceCountChanged));
+    }
+
+    // --- PS-4 (persistence review 2026-07-26): comparability guards ---
+
+    fn mk_perm_sid(sid: &str, path: &str, mask: u32) -> EffectivePermission {
+        let mut p = mk_perm(path, mask);
+        p.identity.sid = Sid(sid.into());
+        p
+    }
+
+    /// PS-4: two identities on the same path must be diffed independently —
+    /// with the old path-only key, one of the two rows silently vanished
+    /// (HashMap last-wins).
+    #[test]
+    fn two_identities_on_same_path_are_diffed_independently() {
+        let old = vec![
+            mk_perm_sid("S-1-5-21-1", r"C:\data", MASK_READ),
+            mk_perm_sid("S-1-5-21-2", r"C:\data", MASK_READ),
+        ];
+        let new = vec![
+            mk_perm_sid("S-1-5-21-1", r"C:\data", MASK_MODIFY), // changed
+            mk_perm_sid("S-1-5-21-2", r"C:\data", MASK_READ),   // unchanged
+        ];
+        let delta = diff_permission_lists(old, new);
+        assert_eq!(
+            delta.len(),
+            1,
+            "exactly the changed identity must be reported, the unchanged one not"
+        );
+        assert!(matches!(delta[0].kind, DeltaKind::Changed { .. }));
+        assert_eq!(
+            delta[0].new_perm.as_ref().unwrap().identity.sid.0,
+            "S-1-5-21-1"
+        );
+    }
+
+    /// PS-4: the same path held by different identities in old vs. new run
+    /// is Removed + Added — not a fake "Changed" between two different
+    /// principals.
+    #[test]
+    fn identity_swap_on_same_path_is_removed_plus_added() {
+        let old = vec![mk_perm_sid("S-1-5-21-1", r"C:\data", MASK_READ)];
+        let new = vec![mk_perm_sid("S-1-5-21-2", r"C:\data", MASK_READ)];
+        let delta = diff_permission_lists(old, new);
+        assert_eq!(delta.len(), 2);
+        assert!(delta.iter().any(|e| e.kind == DeltaKind::Removed));
+        assert!(delta.iter().any(|e| e.kind == DeltaKind::Added));
+    }
+
+    /// PS-4: comparing runs with different targets is refused with a
+    /// Validation error naming both targets.
+    #[test]
+    fn compare_scans_refuses_different_targets() {
+        use crate::scan_store::ScanStore;
+        use adpa_core::model::ScanRun;
+        use chrono::Utc;
+        use uuid::Uuid;
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::migrations::run_migrations(&conn).unwrap();
+        let store = ScanStore::new(&conn);
+        let run_a = ScanRun {
+            id: Uuid::new_v4(),
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            target: r"C:\alpha".into(),
+            errors: vec![],
+        };
+        let run_b = ScanRun {
+            id: Uuid::new_v4(),
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            target: r"C:\beta".into(),
+            errors: vec![],
+        };
+        store.insert_scan_run(&run_a).unwrap();
+        store.insert_scan_run(&run_b).unwrap();
+
+        let result = compare_scans(&conn, &run_a.id, &run_b.id);
+        let err = result.expect_err("different targets must be refused");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains(r"C:\alpha") && msg.contains(r"C:\beta"),
+            "error must name both targets; got: {msg}"
+        );
+    }
+
+    /// PS-4: an unknown run id is a Validation error — before the guard it
+    /// silently read as an empty permission list ("everything removed").
+    #[test]
+    fn compare_scans_refuses_unknown_run_id() {
+        use uuid::Uuid;
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::migrations::run_migrations(&conn).unwrap();
+        let result = compare_scans(&conn, &Uuid::new_v4(), &Uuid::new_v4());
+        let err = result.expect_err("unknown run id must be refused");
+        assert!(
+            format!("{err}").contains("unknown scan run id"),
+            "error must say the run id is unknown; got: {err}"
+        );
     }
 }
