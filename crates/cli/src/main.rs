@@ -70,7 +70,6 @@ enum Commands {
         /// DN's CN) survives a display-name change.
         #[arg(long)]
         bind_dn: Option<String>,
-        /// in an upcoming release.
         /// **DEPRECATED — insecure.** Visible in process listings and shell
         /// history. Use the `ADPA_BIND_PASSWORD` environment variable
         /// instead. Kept for backwards compatibility; will be removed in
@@ -128,7 +127,6 @@ enum Commands {
         /// DN's CN) survives a display-name change.
         #[arg(long)]
         bind_dn: Option<String>,
-        /// in an upcoming release.
         /// **DEPRECATED — insecure.** Visible in process listings and shell
         /// history. Use the `ADPA_BIND_PASSWORD` environment variable
         /// instead. Kept for backwards compatibility; will be removed in
@@ -529,6 +527,19 @@ async fn main() -> anyhow::Result<()> {
 // Shared identity resolution
 // ---------------------------------------------------------------------------
 
+/// True when the input is meant as a SID — case-insensitive `S-1-` prefix.
+///
+/// Classification only: `validate_sid` / `Sid::try_new` still enforce the
+/// canonical uppercase form and produce the precise rejection. Before this
+/// helper the dispatch was case-sensitive, so `s-1-5-21-…` ran into *name*
+/// resolution and failed with a misleading "LSA name lookup failed" instead
+/// of a clear "invalid SID" message (cli review 2026-07-26, CLI-2).
+fn looks_like_sid(input: &str) -> bool {
+    input
+        .get(..4)
+        .is_some_and(|p| p.eq_ignore_ascii_case("S-1-"))
+}
+
 /// CLI-local bundle: [`PrincipalResolution`] + the `ad_connected`
 /// flag.
 struct ResolvedIdentity {
@@ -792,7 +803,7 @@ async fn resolve_identity(
             // constructor does the actual syntax validation so a malformed
             // SID-like string fails here rather than flowing into SAM
             // resolution (review 2026-06-13 finding 5).
-            let sid = if trimmed.starts_with("S-1-") {
+            let sid = if looks_like_sid(trimmed) {
                 adpa_core::model::Sid::try_new(trimmed)
                     .map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?
             } else {
@@ -834,7 +845,7 @@ async fn resolve_identity(
         }
         #[cfg(not(windows))]
         {
-            if !trimmed.starts_with("S-1-") {
+            if !looks_like_sid(trimmed) {
                 return Err(anyhow::anyhow!(
                     "Without --server, --user must be a SID (S-1-5-...). \
                      Use --server to resolve sAMAccountNames."
@@ -854,6 +865,12 @@ async fn resolve_identity(
                 sid_history_count: 0,
                 sid_history: Vec::new(),
             };
+            // CLI-1 (cli review 2026-07-26): this literal had fallen two
+            // fields behind the struct (resolved_via_fsp /
+            // resolved_via_global_catalog, added in the L1/L2 work) — the
+            // crate silently stopped compiling on non-Windows because every
+            // CI job runs on Windows. Both are `false` here: the SID-only
+            // stub path resolves nothing via FSP or a Global Catalog.
             let resolution = PrincipalResolution {
                 sid,
                 identity,
@@ -864,6 +881,8 @@ async fn resolve_identity(
                 diagnostics: vec![
                     adpa_core::model::PermissionDiagnostic::IdentityDisabledStatusUnknown,
                 ],
+                resolved_via_fsp: false,
+                resolved_via_global_catalog: false,
             };
             Ok(ResolvedIdentity {
                 resolution,
@@ -914,10 +933,10 @@ async fn run_analyze(
     let path = validate_path(&path)
         .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
         .0;
-    // Review 2026-06-04 round 3 finding 2 + round 4 Finding 2:
-    // Round 3 finding 2 + round 4 finding 2: classify on the trimmed value.
+    // Review 2026-06-04 round 3 finding 2 + round 4 finding 2: classify on
+    // the trimmed value.
     let user_trimmed = user.trim();
-    let user = if user_trimmed.starts_with("S-1-") {
+    let user = if looks_like_sid(user_trimmed) {
         validate_sid(user_trimmed)
             .map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?
             .0
@@ -1011,9 +1030,8 @@ async fn run_analyze(
     #[cfg(not(windows))]
     let sid_names = std::collections::BTreeMap::new();
 
-    // derived — single source of truth (Review round 3 finding 1).
-    // Engine flags are derived centrally from the resolution status.
-    // Review 2026-06-05 round 6 finding 1: AD memberships +
+    // Engine flags are derived centrally from the resolution status —
+    // single source of truth (review round 3 finding 1).
     // Round 6 finding 1: feed AD memberships + local server group
     // memberships together so the explanation path renders every
     // mediator step.
@@ -1053,7 +1071,6 @@ async fn run_analyze(
         let status = validate_export_path(&out_path)
             .map_err(|e| anyhow::anyhow!("Invalid export path: {e}"))?;
         check_overwrite_policy(&status, force)?;
-        // pfadzentrische Trustee-Liste mitliefern.
         // Round-9 finding 1: CLI exports must carry the path-centric
         // trustee list.
         // Round-10 finding 1: server/share derivation now goes through
@@ -1127,7 +1144,6 @@ async fn run_scan(
     } = opts;
 
     // Review 2026-06-04 round 2, finding 6: propagate the normalized form.
-    // Review 2026-06-04 round 2, finding 6: propagate the normal form.
     let path = validate_path(&path)
         .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
         .0;
@@ -1138,7 +1154,7 @@ async fn run_scan(
         .map_err(|e| anyhow::anyhow!("Invalid --max-depth: {e}"))?
         .map(|d| d.0);
     let user_trimmed = user.trim();
-    let user = if user_trimmed.starts_with("S-1-") {
+    let user = if looks_like_sid(user_trimmed) {
         validate_sid(user_trimmed)
             .map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?
             .0
@@ -1195,8 +1211,8 @@ async fn run_scan(
     let run_id = Uuid::new_v4();
     let started_at = Utc::now();
 
-    //     Resolve local server groups before the share mask — otherwise the local
-    //     group SIDs are missing from the token evaluated against the share DACL.
+    // Resolve local server groups before the share mask — otherwise the local
+    // group SIDs are missing from the token evaluated against the share DACL.
     let (scan_local_group_sids, scan_local_group_memberships, scan_local_group_status) =
         collect_local_group_sids_for_path(
             &path,
@@ -1243,7 +1259,7 @@ async fn run_scan(
         _ => None,
     };
 
-    // 5. Header ausgeben / print header
+    // 5. Print the header.
     print_scan_header(
         &path,
         &resolved,
@@ -1252,7 +1268,7 @@ async fn run_scan(
         scan_share_mask_for_header.as_ref(),
     );
 
-    // 6. Baum scannen / walk tree
+    // 6. Walk the tree.
     // Ctrl-C triggers a cooperative cancellation instead of killing the process.
     let cancel = CancellationToken::new();
     {
@@ -1432,7 +1448,7 @@ async fn run_scan(
             .map_err(|e| anyhow::anyhow!("Failed to persist scan: {e}"))?;
     }
 
-    // 8. Zusammenfassung / summary
+    // 8. Summary.
     let duration = (Utc::now() - started_at).num_milliseconds();
     print_scan_summary(
         object_count,
@@ -1447,7 +1463,7 @@ async fn run_scan(
     let risk_findings = compute_risk_findings(&all_permissions);
     output::print_risk_findings(&risk_findings);
 
-    // 9. Optionaler Export / optional export
+    // 9. Optional export.
     if let Some(out_path) = output {
         let status = validate_export_path(&out_path)
             .map_err(|e| anyhow::anyhow!("Invalid export path: {e}"))?;
@@ -1473,7 +1489,6 @@ async fn run_scan(
 // mis-split long-path UNC (review finding 4).
 use validation::path::effective_smb_target;
 
-/// Collects all SIDs for the user (own + group SIDs).
 /// Resolves the share status for scan and analyze commands.
 ///
 /// Returns `NotApplicable` when no SMB context is detectable; `Applied(mask)`
@@ -1504,9 +1519,9 @@ fn resolve_scan_share_status(
 }
 
 // ---------------------------------------------------------------------------
+// Local group resolution
 // ---------------------------------------------------------------------------
 
-///
 /// Collects the user's local group SIDs on the analysis target server. For UNC
 /// paths the server is derived from the path; for local paths the local machine
 /// is queried. Without a resolved identity (no AD) an empty list is returned —
@@ -1615,7 +1630,7 @@ async fn run_groups(
 
     // AGENTS.md DoD 11: validate every input before processing.
     let user_trimmed = user.trim();
-    let user = if user_trimmed.starts_with("S-1-") {
+    let user = if looks_like_sid(user_trimmed) {
         validate_sid(user_trimmed)
             .map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?
             .0
@@ -1698,7 +1713,7 @@ async fn run_members(
 
     // Validate the group input (SID or identity query) before any I/O.
     let group_trimmed = group.trim();
-    let group_query = if group_trimmed.starts_with("S-1-") {
+    let group_query = if looks_like_sid(group_trimmed) {
         validate_sid(group_trimmed)
             .map_err(|e| anyhow::anyhow!("Invalid SID: {e}"))?
             .0
@@ -2275,6 +2290,35 @@ mod tests {
     use super::{check_overwrite_policy, csv_field, resolve_search_base};
     use std::path::PathBuf;
     use validation::export_path::{ExportPathStatus, ValidatedExportPath};
+
+    // --- CLI-2 (cli review 2026-07-26): SID-vs-name dispatch ---
+
+    #[test]
+    fn looks_like_sid_is_case_insensitive() {
+        use super::looks_like_sid;
+        assert!(looks_like_sid("S-1-5-21-1-2-3-1000"));
+        assert!(looks_like_sid("s-1-5-21-1-2-3-1000"));
+        assert!(looks_like_sid("S-1-5-18"));
+        assert!(!looks_like_sid("alice"));
+        assert!(!looks_like_sid("S-2-anything"));
+        assert!(!looks_like_sid("S-1"));
+        assert!(!looks_like_sid(""));
+        // Multi-byte character straddling the prefix window must not panic.
+        assert!(!looks_like_sid("S€-1"));
+    }
+
+    /// The point of CLI-2: a lowercase SID now reaches the SID validator,
+    /// which rejects it precisely — instead of running into name
+    /// resolution with a misleading "LSA name lookup failed".
+    #[test]
+    fn lowercase_sid_is_rejected_by_the_sid_validator_with_a_precise_message() {
+        let err = validation::sid::validate_sid("s-1-5-21-1-2-3-1000").unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("S-1-"),
+            "rejection must name the canonical prefix, got: {msg}"
+        );
+    }
 
     // --- CSV escaping for the groups export ---
 

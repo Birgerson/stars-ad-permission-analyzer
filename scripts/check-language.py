@@ -239,6 +239,11 @@ DE_WORDS = [
     "Pfadangriffe", "Lehnt", "zeigen", "Zeichen", "Zukunft", "Toleranz",
     "deterministisch", "Aktuell", "installierte", "sichere",
     "Pfadvalidierung",
+    # cli review 2026-07-26 (CLI-3): bilingual step comments and German
+    # half-lines in main.rs plus two ad_resolver stragglers, all reported
+    # clean by the gate.
+    "ausgeben", "scannen", "Zusammenfassung", "Optionaler",
+    "mitliefern", "pfadzentrische", "ableiten", "daraus",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -470,6 +475,17 @@ def selftest() -> int:
         "///    Zukunft.",
         "// Toleranz hinaus.",
         "// Finding 6 — Windows-sichere Pfadvalidierung",
+        # cli review 2026-07-26 CLI-3: the exact lines the gate reported
+        # as clean. NOTE: the orphan doc head "/// in an upcoming release."
+        # is pure English (a torn-off sentence tail) — un-guardable by a
+        # German denylist; deleted at the source.
+        "// pfadzentrische Trustee-Liste mitliefern.",
+        "// 5. Header ausgeben / print header",
+        "// 6. Baum scannen / walk tree",
+        "// 8. Zusammenfassung / summary",
+        "// 9. Optionaler Export / optional export",
+        "/// Status-Feldern ableiten.",
+        "// daraus IdentityLookupFailed / GroupResolutionFailed-Marker.",
     ]
     must_pass = [
         "Risk Findings",
