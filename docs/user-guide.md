@@ -1,6 +1,6 @@
 # Stars — User Guide
 
-**Version:** v1.7.8+ — documents `main` including unreleased changes (see [CHANGELOG](../CHANGELOG.md))
+**Version:** v1.8.0 (see [CHANGELOG](../CHANGELOG.md))
 **Audience:** Windows / AD administrators who want to audit NTFS and
 SMB permissions **without changing anything**.
 
@@ -95,7 +95,7 @@ The full list lives in
 Get the installer from the GitHub release page:
 [releases](https://github.com/Birgerson/stars-ad-permission-analyzer/releases).
 Always take the newest **`Stars-vX.Y.Z-Setup.exe`** at the top of the list
-(the current release is `v1.7.8`), and — recommended — the matching
+(the current release is `v1.8.0`), and — recommended — the matching
 `.sha256` file to verify integrity.
 
 ### Installation

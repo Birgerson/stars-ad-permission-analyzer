@@ -74,6 +74,7 @@ Stars always reports the **highest** matching level (precedence `F > M > RX > RW
 - handle nested AD groups, local server groups (`BUILTIN\…`), Deny ACEs, and protected inheritance
 - use a tool that changes **nothing** in AD, NTFS, or SMB — not even “just to fix it”
 - snapshot a directory tree (e.g. 5000 folders) as CSV / JSON / HTML
+- prove later **what a stored scan could not read** — every run keeps its error evidence (`adpa runs` / `adpa errors`, or the ⚠ button in the Delta tab)
 
 **❌ Stars is *not* the right tool for:**
 
@@ -96,9 +97,9 @@ Stars always reports the **highest** matching level (precedence `F > M > RX > RW
 
 Stars is a **local tool**. Concretely:
 
-- **No telemetry, no phone-home.** Stars never contacts an external server, neither during install nor while running.
-- **No network connections beyond the targets you explicitly enter** — i.e. LDAP/LDAPS to the DC you configure, plus SMB to the servers whose shares you analyze. Nothing else.
-- **No auto-update.** The update mechanic is architecturally prepared but currently inactive — Stars makes no connection to an update server.
+- **No telemetry, no phone-home.** Stars never contacts an external server on its own, neither during install nor while running.
+- **No network connections beyond the targets you explicitly enter** — i.e. LDAP/LDAPS to the DC you configure, plus SMB to the servers whose shares you analyze. The single exception is the **manual update check** (since v1.8.0): it contacts its configured HTTPS source **only when you click the button** — never at startup, never on a timer — and it downloads nothing.
+- **No auto-update.** Stars can *tell* you when a newer version is published (manual check, ADR 0061), but installation stays entirely in your hands.
 - **No crash reports to third parties.** If Stars crashes, the error stays in the local log file (see below).
 
 This makes Stars suitable for isolated audit environments and air-gapped networks.
@@ -116,7 +117,7 @@ Get the current Windows installer from the **[Releases page](https://github.com/
 
 System requirements: Windows 10, Windows 11, or Windows Server. No additional runtime needed.
 
-> ⚠️ **Antivirus false positive (every unsigned release, incl. v1.7.8).** Because the installer is **not yet code-signed**, Microsoft Defender — and some other engines — may flag it with a **generic, machine-learning heuristic** such as `Trojan:Win32/Wacatac.C!ml`. The `!ml` suffix means "flagged by an ML model," **not** a match against known malware; `Wacatac` is Defender's catch-all label and is the single most common false positive for new, unsigned, freshly-compiled binaries. It is triggered by the combination of *unsigned + zero reputation + AD/SMB enumeration behaviour* — exactly what a read-only permission auditor legitimately does.
+> ⚠️ **Antivirus false positive (every unsigned release, incl. v1.8.0).** Because the installer is **not yet code-signed**, Microsoft Defender — and some other engines — may flag it with a **generic, machine-learning heuristic** such as `Trojan:Win32/Wacatac.C!ml`. The `!ml` suffix means "flagged by an ML model," **not** a match against known malware; `Wacatac` is Defender's catch-all label and is the single most common false positive for new, unsigned, freshly-compiled binaries. It is triggered by the combination of *unsigned + zero reputation + AD/SMB enumeration behaviour* — exactly what a read-only permission auditor legitimately does.
 >
 > **This is a false positive, and you can prove it yourself:** verify the SHA256 (see below) against the `Stars-vX.Y.Z-Setup.exe.sha256` published next to the installer on the release page. A matching hash means the file is bit-for-bit the build GitHub Actions produced from this public source — by definition nothing could have been injected.
 >
@@ -127,13 +128,13 @@ System requirements: Windows 10, Windows 11, or Windows Server. No additional ru
 So you can confirm your download is bit-for-bit identical to the build produced by GitHub Actions:
 
 ```powershell
-$exe = "Stars-v1.7.8-Setup.exe"  # adapt to your version
+$exe = "Stars-v1.8.0-Setup.exe"  # adapt to your version
 $expected = (Get-Content "$exe.sha256").Split("  ")[0]
 $actual   = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
 if ($actual -eq $expected) { "OK — file matches" } else { "MISMATCH — do NOT use" }
 ```
 
-On WSL / Linux / macOS, `sha256sum -c Stars-v1.7.8-Setup.exe.sha256` works directly.
+On WSL / Linux / macOS, `sha256sum -c Stars-v1.8.0-Setup.exe.sha256` works directly.
 
 > **What the hash file gives you — and what it doesn't:** The hash protects against tampered downloads (mirror modification, MITM). It does **not** replace code signing — you verify the authenticity of the source through the GitHub repo itself, not through the hash. Code signing is planned; see [`docs/codesigning.md`](docs/codesigning.md) for status.
 
@@ -190,6 +191,13 @@ single trustee and `AccessCheck` (token-based) for the multi-group case.
 A dedicated CI job runs this harness on `windows-latest` for every push,
 so conformance is checked per commit, not just claimed.
 
+As of v1.8.0, every crate in the workspace has additionally passed a
+dedicated per-module code review (findings and reasoning recorded per
+module). The recurring finding class — a silent omission behind a
+confident display — is closed end to end: whatever Stars could not read
+or evaluate is now *named*, in the scan output, the reports, the CLI and
+the GUI alike.
+
 ### What does Stars analyze?
 
 #### NTFS permissions
@@ -239,7 +247,7 @@ User max.muster → member of "Accounting" → member of "FileServer_Read"
 
 ### How is Stars started?
 
-Stars is distributed as a **setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.7.8-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and installs **no background services** and **no auto-start components**.
+Stars is distributed as a **setup installer** on the [release page](https://github.com/Birgerson/stars-ad-permission-analyzer/releases) — currently `Stars-v1.8.0-Setup.exe`. The installer places the application under `C:\Program Files\Stars\`, adds a "Stars" start menu entry, and installs **no background services** and **no auto-start components**.
 
 > **Note on code signing:** The installer is currently **not code-signed**. Windows SmartScreen will warn on first launch ("Windows protected your PC — unrecognized publisher"). A code-signing certificate is planned but not yet in place — see [`docs/codesigning.md`](docs/codesigning.md). Until then, you can verify the integrity of the file via the SHA256 hash above.
 
@@ -291,6 +299,9 @@ adpa.exe scan --path "C:\Data" --user S-1-5-21-... --max-depth 8
 | `adpa members` | The reverse: *who is in this group?* — including `primaryGroupID` members |
 | `adpa shares` | *Which SMB shares does this server publish, and who passes the share layer?* (administrative shares hidden unless `--include-admin`) |
 | `adpa trusts` | *Which AD trusts exist, and are they configured to filter SIDs or gate authentication?* (read-only) |
+| `adpa runs` | *Which scan runs are stored?* — run overview with true path/error counts |
+| `adpa errors` | *What could run N not read?* — one run's stored error list, the paths missing from its results |
+| `adpa check-update` | *Is a newer Stars version published?* — manual, read-only check against a validated HTTPS source |
 
 All of them are read-only. See the [user guide](docs/user-guide.md) for each
 command in detail.
@@ -353,8 +364,8 @@ Inputs:
 - Optional: LDAP connection settings for group resolution (not needed on a DC — SAM/LSA is enough).
 
 Actions:
-- **Analyze** — identity-bound evaluation (NTFS and share rights, effective permission, full explanation chain).
-- **Who has access?** — path-centric trustee table of all ACEs (NTFS and share separated).
+- **Analyze** — identity-bound evaluation (NTFS and share rights, effective permission, full explanation chain), including a **Diagnostics block** listing every marker of this result (ℹ informational, ⚠ warning) — an understated right or an incomplete group resolution is visible right here, not only in exports.
+- **Who has access?** — path-centric trustee table of all ACEs (NTFS and share separated); unreadable ACLs, partially unevaluated ACEs and empty DACLs appear as explicit diagnostic rows.
 
 #### `Groups` tab
 
@@ -405,10 +416,12 @@ Output:
 - List of path, change kind (Added / Removed / Changed), rights before and after.
 - "Changed (...)" column names the concrete reasons (e.g. "NTFS mask + share status").
 - Color code: green = Added, red = Removed, yellow = Changed.
+- Each stored run shows its **true error count** and a **⚠ button** opening the run's error list — the paths that scan could not read.
+- Two runs with different targets are refused with a clear message instead of producing a meaningless comparison.
 
 #### `Info` tab
 
-Version, platform status ("verified against Server 2022 and 2025"), license, AI authorship, and links to the online documentation. No interactive content.
+Version, platform status ("verified against Server 2022 and 2025"), license, AI authorship, links to the online documentation — and the **manual update check** (ADR 0061): an editable, validated HTTPS source and a "Check for updates" button. Runs only on click, downloads and installs nothing.
 
 ### Identity input — name or SID
 
@@ -440,11 +453,16 @@ If you have a SID copied from another tool (e.g. `S-1-5-21-1234-5678-…-500`), 
 ### CLI commands (overview)
 
 ```
-adpa.exe analyze   — effective permission for a single path
-adpa.exe groups    — recursive group memberships of a user (no path/rights)
-adpa.exe members   — members of a group (reverse of groups; requires LDAP)
-adpa.exe scan      — recursive scan of a directory tree
-adpa.exe --help    — full help with all options
+adpa.exe analyze       — effective permission for a single path
+adpa.exe scan          — recursive scan of a directory tree
+adpa.exe groups        — recursive group memberships of a user (no path/rights)
+adpa.exe members       — members of a group (reverse of groups; requires LDAP)
+adpa.exe shares        — SMB share inventory of a server with share-level DACLs
+adpa.exe trusts        — read-only AD trust inventory (SID filtering visible)
+adpa.exe runs          — stored scan runs with path/error counts
+adpa.exe errors        — one run's stored error list (its missing paths)
+adpa.exe check-update  — manual, read-only version check
+adpa.exe --help        — full help with all options
 ```
 
 Detailed invocation examples are above under "How is Stars started?".

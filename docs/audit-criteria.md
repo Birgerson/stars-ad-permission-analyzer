@@ -297,7 +297,7 @@ Stars classifies every finding into one of five levels (`adpa_core::model::RiskS
 
 Every `RiskFinding` carries a boolean `incomplete` field. It marks findings whose underlying **permission evaluation** had gaps and which should therefore be read **cautiously**.
 
-`incomplete = true` is set when the underlying evaluation has at least one of the gaps listed below. **Authoritative source:** `EffectivePermission::is_incomplete()` together with `PermissionDiagnostic::is_incompleteness_trigger()` in `crates/core/src/model.rs` — `rules.rs::is_incomplete()` is a thin delegate to it. The list here must stay in sync with the code (last verified 2026-07-26, post-v1.7.8).
+`incomplete = true` is set when the underlying evaluation has at least one of the gaps listed below. **Authoritative source:** `EffectivePermission::is_incomplete()` together with `PermissionDiagnostic::is_incompleteness_trigger()` in `crates/core/src/model.rs` — `rules.rs::is_incomplete()` is a thin delegate to it. The list here must stay in sync with the code (last verified 2026-07-26 for v1.8.0).
 
 **Direct evaluation gaps:**
 

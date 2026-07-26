@@ -10,6 +10,58 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+_No open changes._
+
+---
+
+## [1.8.0] — 2026-07-26
+
+**The audit-honesty release: a complete per-module code review of all 13
+crates, and the end of the silent omission.**
+
+Between v1.7.8 and this release every crate was reviewed one by one —
+`core`, `win_safe`, `validation`, `ad_resolver`, `fs_scanner`,
+`share_scanner`, `permission_engine`, `risk_engine`, `persistence`,
+`exporter`, `update_manager`, `cli`, `gui` — with the findings and their
+reasoning recorded per module. The reviews found **no crash-class defect
+and no wrong permission computation**. What they did find, over and over,
+was the same failure mode: **Stars stating something it could not
+actually know.** An unreadable ACL presented as "deny all". A trustee
+list that silently omitted the paths it could not read. Write access that
+no rule could see. Stored error evidence nobody could read back. A GUI
+tab that dropped every uncertainty marker and answered "Analysis
+complete."
+
+That family is now closed end to end — scanner, engine consumers, risk
+rules, persistence, reports, CLI and GUI.
+
+**Minor version, not a patch:** four new read-only commands
+(`adpa shares`, `runs`, `errors`, `check-update`), a new risk finding
+(`PARTIAL_WRITE`), a database schema upgrade (v8), format-aware GUI
+exports, a security hardening (CSV formula injection), and one removed
+dead subsystem.
+
+### Highlights
+
+- **Nothing is omitted silently any more.** An NTFS ACL that could not be
+  read now says so — in the scan, in the trustee view, in the reports and
+  in the GUI — instead of appearing as "no access". Partially unevaluated
+  DACLs, empty DACLs and unreadable share DACLs are all named.
+- **The GUI Analyze tab shows its diagnostics.** Previously the
+  single-path view — the one most admins use first — dropped every
+  marker, so an understated right or a flat SAM-fallback group resolution
+  looked like a clean, confident result.
+- **Historical scan evidence is reviewable**: `adpa runs`,
+  `adpa errors --run-id`, and a ⚠ button per run in the Delta tab. The
+  GUI also stopped claiming "(0 errors)" for every stored run.
+- **Reports tell the truth about themselves**: the HTML summary counts
+  only real evaluation gaps, GUI exports honour the file extension, and
+  CSV cells can no longer smuggle spreadsheet formulas.
+- **New**: partial content-write findings, an SMB share inventory, a
+  read-only AD trust inventory, and a manual update check.
+
+The detailed, per-finding entries follow below.
+
 ### Added
 
 - **Manual update check — GUI and CLI (update_manager review 2026-07-26,

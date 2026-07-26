@@ -141,14 +141,22 @@ jobs:
             - No additional software required (self-contained EXE)
 
             ### Features
-            - NTFS ACL analysis with the full permission path
-            - Recursive tree scan with a live result table
-            - Risk analysis (6 rules: Full Control, Write Access, Admin Rights, Broad Group, Direct User ACE, Sensitive Path)
-            - HTML / JSON / CSV report export
-            - Delta comparison between two scan runs
+            - NTFS ACL analysis with the full permission path, and a
+              path-centric "who has access?" trustee view
+            - Recursive tree scan with a live result table, cancellable
+            - Risk analysis — 6 rules emitting 11 finding types (Full Control,
+              Write Access incl. partial content write, permission/owner change,
+              delete rights, broad-group write, direct user ACE, sensitive path)
+            - Group membership views in both directions (member-of / members)
+            - HTML / JSON / CSV report export — the file extension picks the format
+            - Delta comparison between two scan runs, with per-run error evidence
             - Optional LDAP / Active Directory identity resolution
-            - Optional SMB share permission overlay
+              (LDAPS, Global Catalog, Kerberos-signed bind)
+            - Optional SMB share permission overlay and share inventory
+            - Read-only AD trust inventory
             - SQLite scan history per user profile
+            - Manual, read-only update check against a configurable source
+            - Strictly read-only: Stars never writes to NTFS, SMB or AD
           files: |
             Stars-${{ github.ref_name }}-Setup.exe
             Stars-${{ github.ref_name }}-Setup.exe.sha256

@@ -1,6 +1,6 @@
 # Stars — Technical Documentation
 
-**Version:** v1.7.8+ — documents `main` including unreleased changes (see [CHANGELOG](../CHANGELOG.md))
+**Version:** v1.8.0 (see [CHANGELOG](../CHANGELOG.md))
 **Audience:** Developers, code reviewers, and security engineers who
 want to understand *how* Stars works internally — not *how to use* it
 (that's the [User Guide](user-guide.md)).
