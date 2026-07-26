@@ -39,6 +39,7 @@ use validation::{
     numbers::{validate_optional_ldap_timeout, validate_optional_scan_depth},
     path::validate_path,
     sid::validate_sid,
+    update_source::validate_update_source,
 };
 
 #[derive(Parser)]
@@ -291,6 +292,18 @@ enum Commands {
         run_id: String,
     },
 
+    /// Manually check whether a newer Stars version is published
+    /// (read-only): fetches the release info from the update source,
+    /// compares versions with SemVer precedence, and prints the result.
+    /// Downloads and installs nothing. Requires outbound HTTPS; on an
+    /// offline system the connection error is reported honestly.
+    CheckUpdate {
+        /// HTTPS update source (default: the official Stars release feed
+        /// on GitHub). Validated: https-only, no embedded credentials.
+        #[arg(long)]
+        source: Option<String>,
+    },
+
     /// List the domain's Active Directory trusts (read-only): direction and
     /// `trustAttributes`, including whether SID filtering / quarantine or
     /// Selective Authentication is configured. This surfaces the trust
@@ -479,6 +492,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Errors { db, run_id } => {
             run_errors(&db, &run_id)?;
+        }
+        Commands::CheckUpdate { source } => {
+            run_check_update(source.as_deref())?;
         }
         Commands::Trusts {
             server,
@@ -1870,6 +1886,19 @@ fn run_errors(db: &str, run_id: &str) -> anyhow::Result<()> {
         .list_errors_for(&run_id)
         .map_err(|e| anyhow::anyhow!("Cannot read scan errors: {e}"))?;
     output::print_run_errors(&run, &errors);
+    Ok(())
+}
+
+/// `check-update` command: manual, read-only version check against the
+/// validated update source (ADR 0061). Fetches release info, compares
+/// versions, prints — downloads and installs nothing.
+fn run_check_update(source: Option<&str>) -> anyhow::Result<()> {
+    let source = source.unwrap_or(update_manager::DEFAULT_UPDATE_SOURCE);
+    let validated =
+        validate_update_source(source).map_err(|e| anyhow::anyhow!("Invalid --source: {e}"))?;
+    let result = update_manager::check_release_source(&validated.0, env!("CARGO_PKG_VERSION"))
+        .map_err(|e| anyhow::anyhow!("Update check failed: {e}"))?;
+    output::print_update_check(&result, &validated.0);
     Ok(())
 }
 

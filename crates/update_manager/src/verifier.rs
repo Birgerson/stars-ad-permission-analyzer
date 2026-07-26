@@ -25,7 +25,6 @@ pub trait SignatureVerifier: Send + Sync {
     fn verify(&self, body: &[u8], signature_b64: &str) -> Result<(), CoreError>;
 }
 
-///
 /// Reject-by-default verifier — refuses any signature. Used as the default
 /// while no production verifier is configured. Prevents an unconfigured
 /// system from accidentally accepting updates.
@@ -67,10 +66,6 @@ pub fn verify_file_bytes(entry: &ManifestFile, content: &[u8]) -> Result<(), Cor
     Ok(())
 }
 
-///
-/// [`verify_update_policy`].
-///
-///
 /// Integrity check for a manifest: schema → signature → file contents.
 ///
 /// This function covers only cryptographic and structural correctness —
@@ -109,9 +104,6 @@ pub fn verify_manifest_integrity<V: SignatureVerifier>(
     Ok(())
 }
 
-///
-/// [`verify_update_policy`].
-///
 /// Policy context for releasing a manifest for installation.
 ///
 /// Separates cryptographic integrity (see [`verify_manifest_integrity`])
@@ -121,7 +113,6 @@ pub fn verify_manifest_integrity<V: SignatureVerifier>(
 /// [`verify_update_policy`].
 #[derive(Debug, Clone)]
 pub struct UpdatePolicyContext {
-    /// Aktuell installierte Version (dotted numeric, z. B. `1.0.0`).
     /// Currently installed version (dotted numeric, e.g. `1.0.0`).
     pub current_version: String,
     /// Platform of the running installation.
@@ -131,7 +122,6 @@ pub struct UpdatePolicyContext {
     /// When `false`, manifests with a lower or equal version are rejected
     /// (no downgrade, no re-install).
     pub allow_downgrade: bool,
-    /// `Utc::now()`, in Tests deterministisch.
     /// Reference time for the `issued_at` check — `Utc::now()` in
     /// production, deterministic in tests.
     pub now_utc: DateTime<Utc>,
@@ -143,11 +133,6 @@ pub struct UpdatePolicyContext {
     pub max_future_skew: Duration,
 }
 
-///
-/// It validates in this order:
-///
-///    Zukunft.
-///
 /// Checks whether an integrity-verified manifest applies to the running
 /// installation. Does not replace [`verify_manifest_integrity`] — both
 /// must pass before an update is allowed. Validates, in order:
@@ -286,12 +271,11 @@ mod tests {
     #[test]
     fn verify_file_bytes_rejects_size_mismatch() {
         let content = b"hello world";
-        let mut entry = ManifestFile {
+        let entry = ManifestFile {
             path: "x.bin".into(),
             sha256: sha256_hex(content),
             size_bytes: 999,
         };
-        entry.size_bytes = 999;
         let err = verify_file_bytes(&entry, content).unwrap_err();
         assert!(format!("{err}").contains("size mismatch"));
     }
@@ -427,7 +411,8 @@ mod tests {
 
     #[test]
     fn policy_rejects_equal_version() {
-        // A re-install must not slip through — `current == manifest` is not
+        // A re-install must not slip through — `current == manifest` is
+        // not an upgrade.
         let m = policy_manifest("1.0.0", "2026-06-01T11:00:00Z");
         let err = verify_update_policy(&m, &base_policy()).unwrap_err();
         assert!(format!("{err}").contains("not newer"));
@@ -443,7 +428,6 @@ mod tests {
 
     #[test]
     fn policy_rejects_issued_at_in_far_future() {
-        // Toleranz hinaus.
         // One hour ahead of `now_utc` — well past the five-minute skew
         // tolerance.
         let m = policy_manifest("1.1.0", "2026-06-01T13:00:00Z");

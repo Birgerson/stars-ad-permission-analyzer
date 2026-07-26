@@ -234,6 +234,11 @@ DE_WORDS = [
     # trustees, all reported clean by the gate.
     "vollen", "nutzen", "wollen", "seit",
     "Plattform", "unabhaengig", "testbar",
+    # update_manager review 2026-07-26 (UM-3): German fragments in
+    # manifest.rs/verifier.rs docs, all reported clean by the gate.
+    "Pfadangriffe", "Lehnt", "zeigen", "Zeichen", "Zukunft", "Toleranz",
+    "deterministisch", "Aktuell", "installierte", "sichere",
+    "Pfadvalidierung",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -452,6 +457,19 @@ def selftest() -> int:
         "// vollen JSON-Export nutzen wollen.",
         "/// Plattform-unabhaengig testbar.",
         "// TrusteeCategory-Schema seit v2.",
+        # update_manager review 2026-07-26 UM-3: the exact lines the gate
+        # reported as clean. NOTE: the manifest.rs fragment "/// - Null-Bytes"
+        # is un-guardable (hyphenated "Null-Bytes" reads as English);
+        # deleted at the source.
+        "/// Pfadangriffe.",
+        "/// Lehnt ab:",
+        "// zeigen.",
+        "/// SHA-256 als lowercase-Hex-String (64 Zeichen).",
+        "/// `Utc::now()`, in Tests deterministisch.",
+        "/// Aktuell installierte Version (dotted numeric, z. B. `1.0.0`).",
+        "///    Zukunft.",
+        "// Toleranz hinaus.",
+        "// Finding 6 — Windows-sichere Pfadvalidierung",
     ]
     must_pass = [
         "Risk Findings",

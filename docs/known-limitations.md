@@ -589,6 +589,16 @@ Stars is distributed as a versioned installer on the GitHub release page and
 verified via the published SHA256 hash. There is **no in-app auto-update**,
 and none is promised.
 
+Since the update_manager review 2026-07-26 (ADR 0061) Stars can at least
+**tell you** when a newer version is published: a **manual, read-only
+check** — the "Check for updates" button in the GUI Info tab, or
+`adpa check-update` in the CLI — fetches the release info from a
+configurable, validated HTTPS source (default: the official GitHub feed),
+compares versions with SemVer precedence, and reports. It never runs
+automatically (Stars runs on DCs, often offline or hardened — no
+phone-home), downloads nothing, and installs nothing. Installation stays
+manual as described below.
+
 The `update_manager` crate is an **intentional architectural seam**, not a
 half-finished feature. `AGENTS.md` requires that update/patch installation be
 *architecturally provided for* — so the crate establishes the shape of that

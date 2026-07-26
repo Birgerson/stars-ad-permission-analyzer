@@ -298,6 +298,12 @@ pub enum WorkerRequest {
     /// run could not read (persistence review 2026-07-26, PS-1; before
     /// this request the persisted error evidence was write-only).
     ListRunErrors { run_id: String },
+    /// Manual, read-only update check against a user-configurable source
+    /// (ADR 0061). Triggered ONLY by the Info tab's button — never
+    /// automatically: Stars runs on domain controllers, where unsolicited
+    /// outbound traffic is unacceptable. The raw source string is
+    /// validated here in the worker (core-side validation, not GUI-side).
+    CheckUpdate { source: String },
     /// Lists all trustees with their rights on a path — path-centric
     /// audit view without a fixed identity. Answers the question "Who
     /// has any access to X?" rather than "What can user Y do on X?".
@@ -484,6 +490,8 @@ pub enum WorkerEvent {
     },
     /// Stored scan errors of one historical run, ready for display.
     RunErrorsLoaded(Result<Vec<RunErrorRow>, String>),
+    /// Result of the manual update check (ADR 0061).
+    UpdateCheckDone(Result<UpdateCheckRow, String>),
     /// Result of a per-path trustee listing.
     TrusteesDone(Result<Vec<TrusteeRow>, String>),
     /// Result of a Groups-tab membership resolution. Boxed because
@@ -531,6 +539,15 @@ pub struct RunErrorRow {
     /// carried no path (e.g. a cancellation).
     pub path: String,
     pub message: String,
+}
+
+/// Outcome of the manual update check, for the Info tab (ADR 0061).
+#[derive(Clone)]
+pub struct UpdateCheckRow {
+    pub current: String,
+    pub latest: String,
+    pub update_available: bool,
+    pub release_url: Option<String>,
 }
 
 /// One suggestion in the name fields' live search.
@@ -779,6 +796,11 @@ pub fn spawn_worker(
                             .unwrap_or_else(|| "Database not open".to_string())),
                     };
                     let _ = evt_tx.send(WorkerEvent::RunErrorsLoaded(result));
+                    notify();
+                }
+                WorkerRequest::CheckUpdate { source } => {
+                    let result = run_update_check(&source);
+                    let _ = evt_tx.send(WorkerEvent::UpdateCheckDone(result));
                     notify();
                 }
                 WorkerRequest::AnalyzeTrustees {
@@ -1739,6 +1761,23 @@ fn list_scan_run_summaries(db: &Database) -> Result<Vec<ScanRunSummary>, String>
         });
     }
     Ok(summaries)
+}
+
+/// Manual update check (ADR 0061): validate the user-configurable source,
+/// then fetch/compare via `update_manager::checker`. Runs on the worker
+/// thread, so the 10-second network timeout never blocks the GUI. On an
+/// offline DC the connection error is the expected, honest answer.
+fn run_update_check(source: &str) -> Result<UpdateCheckRow, String> {
+    let validated = validation::update_source::validate_update_source(source)
+        .map_err(|e| format!("Invalid update source: {e}"))?;
+    let result = update_manager::check_release_source(&validated.0, env!("CARGO_PKG_VERSION"))
+        .map_err(|e| e.to_string())?;
+    Ok(UpdateCheckRow {
+        current: result.current_version,
+        latest: result.latest_version,
+        update_available: result.update_available,
+        release_url: result.release_url,
+    })
 }
 
 /// Loads the stored scan errors of one historical run for the Delta tab's

@@ -144,9 +144,12 @@ that applies.
   permissions CSV and the CLI groups/members CSV alike.
 - **Exporter:** CSV, JSON (variant-tagged diagnostics — ADR 0021),
   HTML with diagnostic badges.
-- **Update-manager skeleton:** versioning, signature verification,
-  update-path validation are designated as their own component
-  (ADR 0028, ADR 0030).
+- **Update-manager:** versioning, signature verification and update-path
+  validation are designated as their own component (ADR 0028, ADR 0030);
+  the install flow remains a reject-by-default seam. Since ADR 0061 the
+  component has its first live feature: a **manual, read-only update
+  check** (GUI Info tab / `adpa check-update`) against a configurable,
+  validated HTTPS source — never automatic, downloads nothing.
 
 ### Structured diagnostic markers per finding
 
