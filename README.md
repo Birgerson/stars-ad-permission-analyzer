@@ -386,7 +386,7 @@ Output:
 
 Switch the **Direction** toggle to **Members** to list **who is in a group** instead — direct members plus accounts whose *primary* group it is (found via a `primaryGroupID` search and tagged, so *Domain Users* is not wrongly shown as empty).
 
-![Stars Groups tab, Members direction (v1.7.8) — the group "Domain Users" enumerated to 2012 members, all tagged "via primaryGroupID" (a naive member-attribute read would show zero), with the LDAP connection fields above](docs/screenshots/stars-members-view.png) Large groups are read via a paged search, so they are not silently truncated; a member that is itself a privileged group is flagged. This direction requires LDAP and lists direct members (recursive nesting planned). To check effective rights on a path, switch to the `Analyze` or `Scan Tree` tab.
+![Stars Groups tab, Members direction (v1.8.0) — the domain's default user group enumerated to 10003 members, every one tagged "via primaryGroupID" and 0 direct (a naive member-attribute read would show zero members), with the LDAP connection fields above and disabled accounts marked](docs/screenshots/stars-members-view.png) Large groups are read via a paged search, so they are not silently truncated; a member that is itself a privileged group is flagged. This direction requires LDAP and lists direct members (recursive nesting planned). To check effective rights on a path, switch to the `Analyze` or `Scan Tree` tab.
 
 #### `Scan Tree` tab
 

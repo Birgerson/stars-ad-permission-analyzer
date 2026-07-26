@@ -1536,7 +1536,8 @@ Mode "Plain LDAP", server `192.168.11.147`, base `DC=corp,DC=test`. Identity
 `u00042` → **"1 directory match."** with the picker row
 `[U] u00042  S-1-5-21-…-1144`. A directory hit carries its SID, so picking a
 row fills the Resolved-SID field directly. Screenshot:
-`docs/screenshots/stars-search-ad.png`.
+`docs/screenshots/stars-search-ad.png` (re-captured against the same lab
+for v1.8.0, same query and same result).
 
 ### P.2 — Bug found: broad queries failed with rc=88
 
