@@ -16,7 +16,7 @@ For every user, the tool shows the effective access rights that actually apply t
 
 > **Stars is exclusively a read-and-analyze tool. It does not modify any permissions, groups, or AD objects.**
 
-![Stars Analyze tab (v1.7.8) — target path, identity, resolution mode, SMB share fields, and the action buttons "Resolve SID", "Search AD" (live directory identity picker), "Analyze" and "Who has access?"](docs/screenshots/stars-analyze-tab.png)
+![Stars Analyze tab (v1.8.0) — the analysis of C:\Windows for "Administrator": effective right "Modify (M)" with access mask, the numbered permission path from the user through its groups to the deciding ACEs, and the Diagnostics block naming the SAM/LSA fallback so the result's limits are visible in the tab itself](docs/screenshots/stars-analyze-tab.png)
 
 ## Contents
 
@@ -369,7 +369,7 @@ Actions:
 
 #### `Groups` tab
 
-![Stars Groups tab (v1.7.8) — direction toggle "Member of", the identity "Administrator" resolved to its recursive group memberships, with a red "member of Administrators" privileged banner, each membership labelled by how it arose, and the SAM/LSA-fallback diagnostic](docs/screenshots/stars-groups-tab.png)
+![Stars Groups tab (v1.8.0) — direction toggle "Member of", the identity "Administrator" resolved to its group memberships, with a red "member of Administrators" privileged banner, each membership labelled by how it arose (direct, local group), and the SAM/LSA-fallback diagnostic](docs/screenshots/stars-groups-tab.png)
 
 Answers a pure identity question — **"which groups is this user (or group) in?"** — without touching a path or computing rights. A **direction toggle** flips it to the reverse question, **"who is in this group?"** (see below).
 
