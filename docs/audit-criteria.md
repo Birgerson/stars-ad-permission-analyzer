@@ -141,7 +141,7 @@ All rules live in `crates/risk_engine/src/rules.rs` and are registered via `Rule
 
 ##### 4.1 Rule: `FULL_CONTROL` — severity **Critical**
 
-**Source:** `FullControlRule` (rules.rs:135ff)
+**Source:** `FullControlRule` in `crates/risk_engine/src/rules.rs`
 
 **Trigger:** The effective mask contains **all** bits of `MASK_FULL_CONTROL` (`0x001F01FF` plus `WRITE_DAC`, `WRITE_OWNER`).
 
@@ -161,16 +161,20 @@ Full Control gives the principal the right to change the ACL itself (`WRITE_DAC`
 * A normal user has Full Control on a *foreign* share or on a shared data directory
 * A service account has Full Control beyond its own data directory
 
-##### 4.2 Rule: `WRITE_ACCESS` — severity **High**
+##### 4.2 Rule: `WRITE_ACCESS` — severity **High** / `PARTIAL_WRITE` — severity **Medium**
 
-**Source:** `WriteAccessRule` (rules.rs:166ff)
+**Source:** `WriteAccessRule` in `crates/risk_engine/src/rules.rs`
 
-**Trigger:** The effective mask contains Modify or Write, but **not** Full Control.
+**Trigger `WRITE_ACCESS`:** The effective mask contains the **full** Modify or Write composite, but **not** Full Control.
 
-**Logic:** `(MASK_MODIFY or MASK_WRITE) set, MASK_FULL_CONTROL not set`
+**Logic:** `(MASK_MODIFY or MASK_WRITE) fully contained, MASK_FULL_CONTROL not fully contained`
+
+**Trigger `PARTIAL_WRITE`** *(added in the risk_engine review 2026-07-25, finding RK-1)*: The effective mask contains at least one **content-write bit** (`FILE_WRITE_DATA` or `FILE_APPEND_DATA`) but **not** the full Modify/Write composite — "special permissions" in the Windows security dialog, e.g. an append-only upload folder. Before this rule-ID existed, such a principal triggered **no rule at all**: a content-writable path produced an empty risk report. The description names the exact bits found.
+
+**Deliberately excluded from `PARTIAL_WRITE`:** `FILE_WRITE_EA` and `FILE_WRITE_ATTRIBUTES`. Attribute and EA writes cannot change file content; reporting them as "write access" would overstate the finding. Such ACEs remain fully visible in the permission view — they are just not a risk finding.
 
 **Severity justification:**
-Write access allows creating, modifying, or deleting files. On data that others use for reading (configs, scripts, reports), this is a **tampering risk**: an attacker (or an accidentally compromised account) can swap content. Write access on user profiles is normal; on system files it is not.
+Write access allows creating, modifying, or deleting files. On data that others use for reading (configs, scripts, reports), this is a **tampering risk**: an attacker (or an accidentally compromised account) can swap content. Write access on user profiles is normal; on system files it is not. `PARTIAL_WRITE` is **Medium** rather than High: the capability is real but narrower than the full composite, and the named bits let the auditor judge the actual exposure.
 
 **Relation to Full Control:**
 The rule deliberately does **not** fire when Full Control is present — that is already covered by `FullControlRule`. Otherwise there would be duplicate findings for the same situation.
@@ -186,7 +190,7 @@ The rule deliberately does **not** fire when Full Control is present — that is
 
 ##### 4.3 Rule: `PERMISSION_CHANGE` / `OWNER_CHANGE` / `DELETE_RIGHT` / `DELETE_CHILD_RIGHT`
 
-**Source:** `AdminRightsRule` (rules.rs:217ff)
+**Source:** `AdminRightsRule` in `crates/risk_engine/src/rules.rs`
 
 This rule closes a gap left by `WriteAccessRule` and `FullControlRule`: **destructive or administrative individual rights** that are not included in Modify/Write but already represent a privilege escalation opportunity.
 
@@ -207,9 +211,9 @@ This rule closes a gap left by `WriteAccessRule` and `FullControlRule`: **destru
 
 ##### 4.4 Rule: `BROAD_GROUP_WRITE` — severity **Critical**
 
-**Source:** `BroadGroupWriteRule` (rules.rs:290ff)
+**Source:** `BroadGroupWriteRule` in `crates/risk_engine/src/rules.rs`
 
-**Trigger:** Write access arose from an ACE on a **broad well-known group**, **and** that ACE actually contributed write bits.
+**Trigger:** Write access arose from an ACE on a **broad well-known group**, **and** that ACE actually contributed **content-write bits** (`FILE_WRITE_DATA` / `FILE_APPEND_DATA`) that survived into the final effective mask.
 
 **Broad SIDs:**
 
@@ -222,14 +226,22 @@ This rule closes a gap left by `WriteAccessRule` and `FullControlRule`: **destru
 
 **Important (anti-false-positive):** The rule fires **only** when the broad principal actually contributed **write bits** to the effective mask (via the `contributing_sids` field). If `Everyone` only has Read and the Modify rights come through a specific group, it is **not** reported. Otherwise it would be a classic false alarm that makes the entire audit unusable.
 
+**Content-write narrowing** *(risk_engine review 2026-07-25, finding RK-3)*: "write bits" means `FILE_WRITE_DATA` / `FILE_APPEND_DATA`. An `Everyone` ACE that only grants `FILE_WRITE_ATTRIBUTES` or `FILE_WRITE_EA` does **not** fire this Critical rule — "Everyone can change the archive bit" is not "write access for all users". The ACE stays visible in the permission view.
+
+**Honest audience naming** *(same review)*: the finding description names the actual audience of the matched SID — `Everyone` → "every user, including guests", `Authenticated Users` → "every authenticated user in the domain", `Anonymous Logon` → "unauthenticated clients", `NETWORK` → "every user connecting over the network". The earlier blanket phrase "all users in the domain" was wrong for two of the four SIDs.
+
 **Severity justification:**
 Write access via a broad SID is the worst configuration that practically occurs — it makes every user on the network (or with `Anonymous Logon`, every unauthenticated client) a potential attacker on that path. It is essentially an "open door" that often arose historically from quick fixes and was never rolled back.
 
 ##### 4.5 Rule: `DIRECT_USER_ACE` — severity **Low**
 
-**Source:** `DirectUserAceRule` (rules.rs:356ff)
+**Source:** `DirectUserAceRule` in `crates/risk_engine/src/rules.rs`
 
 **Trigger:** The user has a **direct explicit ACE** on the path — not via a group but on their own user SID, **not inherited** but explicitly assigned on the object.
+
+**Applies to leaf principals only** *(risk_engine review 2026-07-25, finding RK-2)*: the rule fires only when the analyzed identity is a **user or computer**. When the analyzed identity is itself a group, a direct ACE on that group SID is exactly how AGDLP assigns permissions — the earlier behavior reported a "best practice violated" finding for the *correct* configuration. For well-known, foreign-security-principal, orphaned, and unknown identities the rule also stays silent: it cannot honestly claim "user" there.
+
+**Full-deny stays visible** *(same review, finding RK-6)*: the rule has **no** minimum-access gate. A direct Deny ACE that removes *all* access (the typical "lock out this employee quickly" leftover) is still a direct ACE on the user — the management smell is the ACE itself, not the resulting access.
 
 **Data source:** The `matched_aces` field of `EffectivePermission`. The rule is therefore **localization-safe** and independent of the explanation text — it also works on German systems with translated names.
 
@@ -243,11 +255,11 @@ This is **Low** because it is rarely a concrete security risk — rather a **man
 * hard to maintain (every path must be touched individually instead of swapping a group)
 * historically often a sign of "just rubber-stamped" actions
 
-`incomplete` flag: always `false`. The structured ACE source is an NTFS property, independent of share status.
+`incomplete` flag: follows the shared confidence model (`EffectivePermission::is_incomplete()`), like every rule. The direct ACE itself is an NTFS fact independent of share status — but when the surrounding evaluation had gaps (e.g. share DACL unreadable, unevaluable ACE types), the finding is marked `incomplete` so its confidence is consistent with all other findings for the same permission.
 
 ##### 4.6 Rule: `SENSITIVE_PATH` — severity **Medium**
 
-**Source:** `SensitivePathRule` (rules.rs:394ff)
+**Source:** `SensitivePathRule` in `crates/risk_engine/src/rules.rs`
 
 **Trigger:** The path name contains one of the following keywords (case-insensitive), **and** the principal actually has access (`effective_mask > 0`):
 
@@ -265,7 +277,7 @@ Medium, because the **path name alone** is a weak indicator. `password-policies.
 * sensitive paths often carry overly broad permissions (convenience over security)
 * sensitive paths are typical targets in pentests and real attacks
 
-`incomplete` flag: always `false`. The path name is an NTFS property, independent of share status.
+`incomplete` flag: follows the shared confidence model (`EffectivePermission::is_incomplete()`), like every rule. The path name is an NTFS fact — but the "has access" claim relies on `effective_mask`, and when the evaluation had gaps (e.g. share DACL unreadable) real SMB access could be more restrictive, so the finding is marked `incomplete`.
 
 #### <a name="5-the-severity-model"></a>5. The severity model
 
@@ -275,7 +287,7 @@ Stars classifies every finding into one of five levels (`adpa_core::model::RiskS
 |---|---|---|
 | **Critical** | Immediate attention. Privilege escalation, tampering by broad user groups, or direct data loss are imminent. | `FULL_CONTROL`, `BROAD_GROUP_WRITE` |
 | **High** | Elevated risk. Write rights on valuable objects, individual privilege escalation bits. | `WRITE_ACCESS`, `PERMISSION_CHANGE`, `OWNER_CHANGE` |
-| **Medium** | Worth attention. Destructive individual rights, sensitive path names. | `DELETE_RIGHT`, `DELETE_CHILD_RIGHT`, `SENSITIVE_PATH` |
+| **Medium** | Worth attention. Destructive individual rights, partial content write, sensitive path names. | `DELETE_RIGHT`, `DELETE_CHILD_RIGHT`, `PARTIAL_WRITE`, `SENSITIVE_PATH` |
 | **Low** | More of a best-practice or management finding than an acute risk. | `DIRECT_USER_ACE` |
 | **Info** | Hints without risk character (not currently used by any default rule; reserved for extensions). | — |
 
@@ -285,7 +297,7 @@ Stars classifies every finding into one of five levels (`adpa_core::model::RiskS
 
 Every `RiskFinding` carries a boolean `incomplete` field. It marks findings whose underlying **permission evaluation** had gaps and which should therefore be read **cautiously**.
 
-`incomplete = true` is set when the underlying evaluation has at least one of the gaps listed below. **Authoritative source:** `crates/risk_engine/src/rules.rs::is_incomplete()` — the list here must stay in sync with the code (last verified for v1.5.3).
+`incomplete = true` is set when the underlying evaluation has at least one of the gaps listed below. **Authoritative source:** `EffectivePermission::is_incomplete()` together with `PermissionDiagnostic::is_incompleteness_trigger()` in `crates/core/src/model.rs` — `rules.rs::is_incomplete()` is a thin delegate to it. The list here must stay in sync with the code (last verified 2026-07-26, post-v1.7.8).
 
 **Direct evaluation gaps:**
 
@@ -298,33 +310,52 @@ Every `RiskFinding` carries a boolean `incomplete` field. It marks findings whos
 3. **Local server groups could not be resolved** (`LocalGroupEvalStatus::NotAvailable(...)`).
    ACEs targeting e.g. a local `Administrators` group are then invisible; effective rights may be **too low**. Since v1.5.3 this also covers the case where `NetUserGetLocalGroups` returns `NERR_USER_NOT_FOUND` for **all** tried account name forms (typical with trust / LSA identities backed by a NetBIOS domain) — see ADR 0040.
 
-**Structural identity / group gaps** (variant-tagged `PermissionDiagnostic` markers in `EffectivePermission.diagnostics`):
+**Structural identity / group gaps** (variant-tagged `PermissionDiagnostic` markers in `EffectivePermission.diagnostics`; the full per-marker table with meanings and ADR references lives in `docs/features-and-limitations.md`, section "Structured diagnostic markers per finding"):
 
 4. **Share DACL contained unsupported ACEs** (`PermissionDiagnostic::UnsupportedShareAces`).
    Analogous to point 2 but on the share side.
 
-5. **Domain group recursion was flat** (`PermissionDiagnostic::DomainGroupRecursionIncomplete`).
+5. **NTFS DACL contained unsupported or unreadable ACEs** (`PermissionDiagnostic::UnsupportedNtfsAces`).
+   The diagnostics-list twin of point 2 — including the sentinel entries for "entire ACL unreadable" / "single ACE unreadable" introduced with the fs_scanner review (FS-1/FS-2).
+
+6. **Domain group recursion was flat** (`PermissionDiagnostic::DomainGroupRecursionIncomplete`).
    Group resolution via the SAM/LSA fallback (`NetUserGetGroups`) returns only direct global groups — nested domain groups are not recursively resolved. See ADR 0033.
 
-6. **Identity lives outside the configured LDAP base** (`PermissionDiagnostic::IdentityNotInConfiguredLdapBase`).
+7. **Identity lives outside the configured LDAP base** (`PermissionDiagnostic::IdentityNotInConfiguredLdapBase`).
    LSA resolved the SID, but the configured `base_dn` does not index it — typical in multi-domain forests / trusts. Cross-domain memberships may be missing. See ADR 0034 / 0036.
 
-7. **LDAP identity lookup failed with a technical error** (`PermissionDiagnostic::IdentityLookupFailed { reason }`).
+8. **LDAP identity lookup failed with a technical error** (`PermissionDiagnostic::IdentityLookupFailed { reason }`).
    Bind, timeout, DC unreachable. The analysis runs with a placeholder identity and an empty token — `reason` carries the underlying error. See ADR 0039.
 
-8. **Recursive group resolution failed or was skipped** (`PermissionDiagnostic::GroupResolutionFailed { reason }`).
+9. **Recursive group resolution failed or was skipped** (`PermissionDiagnostic::GroupResolutionFailed { reason }`).
    Also fires when the `OutsideConfiguredLdapBase` path has no GC crawl logic and memberships remain structurally empty. See ADR 0039.
+
+10. **Identity resolved only via its FSP object** (`PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal`).
+    The foreign-forest principal behind the FSP could not be enriched; memberships in its home forest are invisible.
+
+11. **Group memberships resolved via Global Catalog** (`PermissionDiagnostic::GroupResolutionViaGlobalCatalog`).
+    The GC carries universal groups but not domain-local memberships of other domains — the token may be incomplete.
+
+12. **Historical SIDs present but not evaluated** (`PermissionDiagnostic::SidHistoryPresent` on the account, `PermissionDiagnostic::GroupSidHistoryPresent` on token groups).
+    `sIDHistory` values that could not be read into the token — the effective right may be understated. See ADR 0052 / 0056 / 0059.
+
+13. **Persisted evidence could not be fully decoded** (`PermissionDiagnostic::PersistedEvidenceDecodeFailed`), **member enumeration incomplete** (`PermissionDiagnostic::GroupMemberEnumerationIncomplete`), **universal-group members of other domains not visible** (`PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible`).
+    Gaps of the persistence / members views that make a reconstructed or listed result a lower bound.
 
 Markers that do **not** contribute to incomplete — informational:
 
 - `PermissionDiagnostic::IdentityDisabled` (account flagged disabled in AD via `userAccountControl`; ACL-theoretical rights are correct).
 - `PermissionDiagnostic::IdentityDisabledStatusUnknown` (`disabled` flag not reliably determinable; orthogonal to permission computation).
 - `PermissionDiagnostic::NonCanonicalDaclOrder { at_index }` (DACL not in Windows canonical order; AccessCheck still works correctly on the stored order).
+- `PermissionDiagnostic::OwnerRightsAceApplied` (an OWNER RIGHTS ACE governs the owner's rights; result is exact).
+- `PermissionDiagnostic::TrustBoundaryEffectsNotModeled` (hint that SID filtering / trust effects are not simulated; the NTFS/share computation itself is complete — see L4 in the known limitations).
+- `PermissionDiagnostic::SidHistoryEvaluated` / `PermissionDiagnostic::GroupSidHistoryEvaluated` (historical SIDs **were** read and included in the token; the marker documents that the result already accounts for them).
+- `PermissionDiagnostic::MembersViaPrimaryGroupIncluded` (members view: members found via `primaryGroupID` were included; transparency, not a gap).
 
 A finding with `incomplete = true` does **not** mean it is wrong — it means the underlying result might not be 100 % complete. For an audit that is the honest statement; for an automated escalation you should not blindly trust it.
 
 > **Doc consistency check (contribution policy):** When `PermissionDiagnostic` is extended with a variant that should count as an incomplete trigger, the following must be updated **at the same time**:
-> - `crates/risk_engine/src/rules.rs::is_incomplete()` (the matching list),
+> - `PermissionDiagnostic::is_incompleteness_trigger()` in `crates/core/src/model.rs` (the exhaustive matching list),
 > - this section (audit-criteria.md),
 > - the marker table in `docs/features-and-limitations.md`,
 > - the marker table in `docs/user-guide.md`.

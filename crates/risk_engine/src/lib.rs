@@ -5,7 +5,10 @@
 
 pub mod rules;
 
+// Review 2026-07-25 finding RK-7: AdminRightsRule was the only registered
+// rule missing from the re-export list — external callers building a custom
+// registry could not name it without the `rules::` path.
 pub use rules::{
-    BroadGroupWriteRule, DirectUserAceRule, FullControlRule, RuleRegistry, SensitivePathRule,
-    WriteAccessRule,
+    AdminRightsRule, BroadGroupWriteRule, DirectUserAceRule, FullControlRule, RuleRegistry,
+    SensitivePathRule, WriteAccessRule,
 };

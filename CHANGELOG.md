@@ -12,6 +12,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Added
 
+- **Partial content write is no longer invisible — new `PARTIAL_WRITE` risk
+  finding (risk_engine review 2026-07-25, RK-1).** `WriteAccessRule` demanded
+  the *full* Modify/Write composite, so an effective mask carrying
+  `FILE_WRITE_DATA` and/or `FILE_APPEND_DATA` via "special permissions" —
+  the classic append-only upload folder — triggered **no rule at all**: a
+  content-writable path produced an empty risk report. Such masks are now
+  reported as `PARTIAL_WRITE` (Medium) with the exact bits named in the
+  description. `FILE_WRITE_EA`/`FILE_WRITE_ATTRIBUTES`-only masks are
+  deliberately **not** reported (attribute writes cannot change file
+  content); the ACEs stay visible in the permission view. Documented in
+  audit-criteria 4.2.
+
 - **SMB share inventory — the `adpa shares` command (share_scanner review
   2026-07-25, SH-3).** The share-enumeration half of `share_scanner` was
   fully implemented but had **no consumer**: no CLI command, no GUI view,
@@ -32,6 +44,48 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   looking like an empty success.
 
 ### Fixed
+
+- **`DIRECT_USER_ACE` no longer scolds correct AGDLP practice (risk_engine
+  review 2026-07-25, RK-2).** The rule had no identity-kind guard: analyzing
+  a **group** that carries a direct explicit ACE — exactly how AGDLP says
+  permissions should be assigned — produced "best practice is to assign
+  permissions via groups". The rule now fires only for leaf principals
+  (user, computer) and stays silent for group, well-known, FSP, orphaned and
+  unknown identities, with one regression test per silenced kind.
+
+- **`BROAD_GROUP_WRITE` severity claim made honest (risk_engine review
+  2026-07-25, RK-3).** The rule fired **Critical — "has write access"** when
+  a broad SID contributed only `FILE_WRITE_EA`/`FILE_WRITE_ATTRIBUTES`
+  (attribute writes, no content risk). It now gates on content-write bits
+  (`FILE_WRITE_DATA`/`FILE_APPEND_DATA`), and the finding text names the
+  real audience of the matched SID — `Anonymous Logon` → "unauthenticated
+  clients", `NETWORK` → "every user connecting over the network" — instead
+  of the blanket "affects all users in the domain", which was wrong for two
+  of the four SIDs.
+
+- **A full-deny direct ACE is visible again (risk_engine review 2026-07-25,
+  RK-6).** `DIRECT_USER_ACE` was gated on `effective_mask > 0`, which hid
+  the finding exactly when a direct Deny removes *all* access — the typical
+  "lock out this employee quickly" leftover that audits exist to find. The
+  gate is removed; the management smell is the ACE itself, not the resulting
+  access.
+
+- **Risk-rule documentation matched back to the code (risk_engine review
+  2026-07-25, RK-4/RK-5).** `audit-criteria.md` claimed twice that
+  `incomplete` is "always `false`" for `DIRECT_USER_ACE`/`SENSITIVE_PATH`
+  while code and tests prove the opposite — an auditor trusting the handbook
+  would trust findings the tool itself marked as uncertain. Both claims now
+  describe the shared confidence model; §6 was rebuilt to the full current
+  trigger/informational marker state (was 5 variants behind core, "last
+  verified v1.5.3") and points to the authoritative
+  `PermissionDiagnostic::is_incompleteness_trigger()` in core.
+  `technical-documentation.md` §10 described a rule set that never existed
+  (invented `RiskFinding` fields, "dynamic severity" for `SENSITIVE_PATH`,
+  wrong `WriteAccessRule` trigger); it now shows the real struct and a
+  per-rule-ID table. User-guide rule bullets corrected accordingly. Also:
+  `AdminRightsRule` re-exported like the other five rules (RK-7), German
+  comment fragments purged and the language gate hardened with their stems
+  (RK-8), duplicate broad-ACE lookup replaced by a single bind (RK-9).
 
 - **Share ACEs are no longer dropped without a trace (share_scanner review
   2026-07-25, SH-1/SH-2).** Finding F1 ("a supported ACE whose trustee SID
