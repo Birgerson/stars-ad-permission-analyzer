@@ -133,7 +133,15 @@ that applies.
   run ids instead of producing a meaningless report; rows are keyed by
   (identity, path).
 - **Trustee view** per path (who has access?), complementing the
-  classic per-user report.
+  classic per-user report. The view never silently omits what it could
+  not read (exporter review 2026-07-26): an unreadable NTFS ACL, partially
+  unevaluated ACEs and an empty DACL all surface as typed diagnostic
+  rows in GUI, HTML and JSON alike.
+- **CSV exports are hardened against spreadsheet formula injection**
+  (CWE-1236): free-text cells starting with `=`, `+`, `-`, `@`, TAB or
+  CR — e.g. an AD display name crafted as a formula — are neutralized
+  with a leading apostrophe before they reach Excel. Applies to the
+  permissions CSV and the CLI groups/members CSV alike.
 - **Exporter:** CSV, JSON (variant-tagged diagnostics — ADR 0021),
   HTML with diagnostic badges.
 - **Update-manager skeleton:** versioning, signature verification,

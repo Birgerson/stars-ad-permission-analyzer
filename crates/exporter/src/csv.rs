@@ -35,7 +35,6 @@ const HEADERS: &[&str] = &[
     "local_group_status",
     // Reason when local_group_status = not_available (otherwise empty).
     "local_group_error",
-    // vollen JSON-Export nutzen wollen.
     // Compact JSON list of all ACEs matching the token (sid, kind, mask,
     // inherited). For structured audit pipelines that don't want the
     // full JSON export.
@@ -44,10 +43,26 @@ const HEADERS: &[&str] = &[
     // result (sid, contributed mask).
     "contributing_sids_json",
     // Structured diagnostic markers (follow-up finding 3) — e.g.
-    // Structured diagnostic markers (follow-up finding 3) — e.g.
     // {"kind":"NonCanonicalDaclOrder","at_index":N}. Empty list: "[]".
     "diagnostics_json",
 ];
+
+/// Neutralizes spreadsheet formula injection (CWE-1236) in a CSV cell.
+///
+/// Excel and LibreOffice execute cells starting with `=`, `+`, `-` or `@`
+/// as formulas (DDE / WEBSERVICE exfiltration included), and a leading TAB
+/// or CR can smuggle the trigger character past naive filters. AD display
+/// names, group names and file names — all attacker-influenceable — end up
+/// in audit CSVs, and audit CSVs get opened in Excel. A leading apostrophe
+/// forces text interpretation; Excel hides it in the display, so the
+/// neutralization is lossless for auditing (exporter review 2026-07-26,
+/// EX-2). Shared by this exporter and the CLI's `csv_field`.
+pub fn neutralize_spreadsheet_formula(value: &str) -> String {
+    match value.chars().next() {
+        Some('=' | '+' | '-' | '@' | '\t' | '\r') => format!("'{value}"),
+        _ => value.to_owned(),
+    }
+}
 
 pub struct CsvExporter;
 
@@ -102,11 +117,16 @@ fn record_for(p: &EffectivePermission) -> csv::Result<[String; 20]> {
     let contributing_sids_json = contributing_sids_to_json(&p.contributing_sids)?;
     let diagnostics_json =
         serde_json::to_string(&p.diagnostics).map_err(|e| evidence_err("diagnostics", e))?;
+    // EX-2 (exporter review 2026-07-26): neutralize the free-text columns
+    // against spreadsheet formula injection. The remaining columns are
+    // structurally immune — path is an absolute Windows path (drive letter
+    // or `\\`), SID/masks/counts/status labels have fixed leading
+    // characters, and the JSON columns start with `[`.
     Ok([
         p.path.0.clone(),
         p.identity.sid.0.clone(),
-        p.identity.name.clone().unwrap_or_default(),
-        p.identity.domain.clone().unwrap_or_default(),
+        neutralize_spreadsheet_formula(&p.identity.name.clone().unwrap_or_default()),
+        neutralize_spreadsheet_formula(&p.identity.domain.clone().unwrap_or_default()),
         kind,
         p.identity.disabled.to_string(),
         format!("0x{:08X}", p.ntfs_mask.0),
@@ -115,11 +135,11 @@ fn record_for(p: &EffectivePermission) -> csv::Result<[String; 20]> {
         share_label,
         format!("0x{:08X}", p.effective_mask.0),
         eff.display_name().to_owned(),
-        explanation,
+        neutralize_spreadsheet_formula(&explanation),
         p.unsupported_ace_count.to_string(),
         share_status_label(&p.share_status),
         lg_status,
-        lg_error,
+        neutralize_spreadsheet_formula(&lg_error),
         matched_aces_json,
         contributing_sids_json,
         diagnostics_json,
@@ -271,8 +291,52 @@ mod tests {
         assert_eq!(rows[0][17], "matched_aces_json");
         assert_eq!(rows[0][18], "contributing_sids_json");
         // Follow-up finding 3: structured diagnostic markers.
-        // Follow-up finding 3: structured diagnostic markers.
         assert_eq!(rows[0][19], "diagnostics_json");
+    }
+
+    // --- EX-2 (exporter review 2026-07-26): formula-injection neutralization ---
+
+    #[test]
+    fn formula_prefixes_are_neutralized_with_apostrophe() {
+        use super::neutralize_spreadsheet_formula as n;
+        assert_eq!(n("=cmd|' /C calc'!A0"), "'=cmd|' /C calc'!A0");
+        assert_eq!(n("+2+5"), "'+2+5");
+        assert_eq!(n("-2+5"), "'-2+5");
+        assert_eq!(n("@SUM(A1)"), "'@SUM(A1)");
+        assert_eq!(n("\t=1"), "'\t=1");
+        assert_eq!(n("\r=1"), "'\r=1");
+        // Plain values pass through untouched.
+        assert_eq!(n("Domain Admins"), "Domain Admins");
+        assert_eq!(n("S-1-5-32-544"), "S-1-5-32-544");
+        assert_eq!(n(""), "");
+    }
+
+    /// A user name that is a formula must reach the CSV neutralized — an
+    /// AD display name is attacker-influenceable, and audit CSVs get
+    /// opened in Excel.
+    #[test]
+    fn formula_user_name_is_neutralized_in_csv_output() {
+        let perm = make_perm(
+            "C:\\Share",
+            "S-1-5-21-1-2-3-1000",
+            "=HYPERLINK(\"http://evil\",\"click\")",
+            MASK_READ,
+            None,
+            MASK_READ,
+            vec![],
+        );
+        let mut buf = Vec::new();
+        write_csv(&mut buf, &[perm]).unwrap();
+        let rows = parse_csv(&buf);
+        assert!(
+            rows[1][2].starts_with('\''),
+            "formula-shaped user name must be neutralized, got: {}",
+            rows[1][2]
+        );
+        assert!(
+            rows[1][2].contains("=HYPERLINK"),
+            "the original value must stay readable after the apostrophe"
+        );
     }
 
     #[test]

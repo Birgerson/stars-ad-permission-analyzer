@@ -8,7 +8,7 @@ pub mod html;
 pub mod json;
 pub mod trustees;
 
-pub use csv::{write_csv, CsvExporter};
+pub use csv::{neutralize_spreadsheet_formula, write_csv, CsvExporter};
 pub use html::{render_html, HtmlExporter};
 pub use json::JsonExporter;
 pub use trustees::{
@@ -16,7 +16,6 @@ pub use trustees::{
     collect_ace_sids_for_resolution, read_share_overlay, ShareTrusteeOverlay,
 };
 
-///
 /// Centralised overwrite policy for every file-based exporter.
 /// Implements round-8 follow-up finding 1: the trait default refuses
 /// existing target files (`create_new`); the explicit `FileOverwrite`

@@ -345,30 +345,13 @@ pub fn read_file_system_object_cached(
     })
 }
 
-/// Synthetic `ace_type` marking **"the ACL itself could not be read"** —
-/// `GetAclInformation` failed, so not a single ACE could be enumerated
-/// (fs_scanner review 2026-07-25, FS-1).
-///
-/// Recorded as one `UnsupportedAce` so the object is flagged incomplete
-/// instead of presenting an unread ACL as a legitimately empty DACL (which
-/// the model defines as "deny all" — an authoritative-looking wrong answer).
-/// `0xFF` is not a valid Windows ACE type, so it cannot collide with a real
-/// one.
-pub const ACE_TYPE_ACL_UNREADABLE: u8 = 0xFF;
-
-/// Synthetic `ace_type` marking **"this single ACE could not be retrieved"**
-/// — `GetAce` failed or returned null for an index inside `AceCount`
-/// (fs_scanner review 2026-07-25, FS-2). Same rationale as
-/// [`ACE_TYPE_ACL_UNREADABLE`]: a silently skipped Deny would over-report
-/// access. `0xFE` is not a valid Windows ACE type.
-pub const ACE_TYPE_ACE_UNREADABLE: u8 = 0xFE;
-
-// Compile-time guarantee that the two synthetic markers stay distinct from
-// each other and from every real Windows ACE type (those are small values,
-// far below 0x40) — a read failure must never be reportable as a genuine
-// unsupported ACE type. Enforced at build time rather than by a test.
-const _: () = assert!(ACE_TYPE_ACL_UNREADABLE != ACE_TYPE_ACE_UNREADABLE);
-const _: () = assert!(ACE_TYPE_ACL_UNREADABLE > 0x40 && ACE_TYPE_ACE_UNREADABLE > 0x40);
+// The two synthetic ace_type sentinels ("ACL unreadable" / "single ACE
+// unreadable", FS-1/FS-2) live in the core model since the exporter review
+// 2026-07-26 (EX-1): they are part of the UnsupportedAce data contract and
+// consumers (e.g. the trustee report) must read them without coupling to
+// this scanner implementation. Re-exported here so existing call and test
+// sites keep working unchanged.
+pub use adpa_core::model::{ACE_TYPE_ACE_UNREADABLE, ACE_TYPE_ACL_UNREADABLE};
 
 /// Result of a single ACE parse attempt.
 enum ParseAceOutcome {

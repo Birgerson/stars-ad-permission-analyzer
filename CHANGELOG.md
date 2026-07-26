@@ -10,6 +10,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Security
+
+- **CSV exports hardened against spreadsheet formula injection (CWE-1236;
+  exporter review 2026-07-26, EX-2).** Both CSV writers — the permissions
+  CSV (`exporter::write_csv`) and the CLI groups/members export
+  (`csv_field`) — emitted attacker-influenceable strings raw: an AD
+  display or group name like `=HYPERLINK(...)` or `=cmd|...` executes as
+  a formula the moment an administrator opens the audit CSV in Excel.
+  Free-text cells starting with `=`, `+`, `-`, `@`, TAB or CR are now
+  neutralized with a leading apostrophe (lossless in Excel's display) via
+  one shared helper; SID, mask, path and JSON columns are structurally
+  immune and stay byte-identical.
+
 ### Added
 
 - **Per-run error evidence is finally reviewable — `adpa runs`, `adpa
@@ -74,6 +87,32 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   looking like an empty success.
 
 ### Fixed
+
+- **The "who has access" view no longer silently omits what it could not
+  read (exporter review 2026-07-26, EX-1).** The trustee builder ignored
+  unevaluated NTFS ACEs entirely: a partially unreadable DACL showed a
+  shorter list with no hint, the "whole ACL unreadable" case produced an
+  empty list — which the HTML report then skipped, making "ACL
+  unreadable" indistinguishable from "never scanned" — and an empty
+  (non-NULL) DACL ("no access for anyone", audit-relevant) rendered
+  nothing. The builder now emits typed diagnostic rows for all three
+  cases ("who has access is UNKNOWN" / "list is incomplete" / "no access
+  for anyone"); GUI, HTML and JSON pick them up through the existing
+  tagged trustee union, so the JSON schema version stays at 3. The FS-1
+  sentinel constants moved from `fs_scanner` into the core model so the
+  exporter can distinguish the cases without coupling to a scanner
+  implementation.
+
+- **The HTML summary card counts only real evaluation gaps (EX-3).** The
+  former "Diagnostics" card counted paths with *any* marker — purely
+  informational ones (historical SIDs correctly evaluated, OWNER RIGHTS
+  applied, …) inflated the number an auditor reads as "needs a second
+  look". The card is now labeled "Incomplete evaluations" and counts via
+  `is_incomplete()`, the same source of truth as the risk findings'
+  `incomplete` flag; every marker stays visible in the per-row
+  diagnostics column. Also: a garbled tooltip (runs of 20+ spaces from
+  lost line continuations) fixed (EX-4), German comment fragments purged
+  and the language gate hardened with their stems (EX-5, selftest 65/25).
 
 - **The Delta tab no longer claims "(0 errors)" for every run (persistence
   review 2026-07-26, PS-1).** The run label read the in-memory

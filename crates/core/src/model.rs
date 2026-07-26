@@ -597,6 +597,36 @@ pub struct UnsupportedAce {
     pub mask: u32,
 }
 
+/// Synthetic `ace_type` marking **"the ACL itself could not be read"** —
+/// `GetAclInformation` failed, so not a single ACE could be enumerated
+/// (fs_scanner review 2026-07-25, FS-1).
+///
+/// Recorded as one [`UnsupportedAce`] so the object is flagged incomplete
+/// instead of presenting an unread ACL as a legitimately empty DACL (which
+/// the model defines as "deny all" — an authoritative-looking wrong answer).
+/// `0xFF` is not a valid Windows ACE type, so it cannot collide with a real
+/// one.
+///
+/// Lives in the core model (moved from `fs_scanner` in the exporter review
+/// 2026-07-26, EX-1) because consumers of [`UnsupportedAce`] — e.g. the
+/// trustee report — must be able to distinguish "ACL unreadable" from
+/// "N ACEs unevaluated" without coupling to a scanner implementation.
+pub const ACE_TYPE_ACL_UNREADABLE: u8 = 0xFF;
+
+/// Synthetic `ace_type` marking **"this single ACE could not be retrieved"**
+/// — `GetAce` failed or returned null for an index inside `AceCount`
+/// (fs_scanner review 2026-07-25, FS-2). Same rationale as
+/// [`ACE_TYPE_ACL_UNREADABLE`]: a silently skipped Deny would over-report
+/// access. `0xFE` is not a valid Windows ACE type.
+pub const ACE_TYPE_ACE_UNREADABLE: u8 = 0xFE;
+
+// Compile-time guarantee that the two synthetic markers stay distinct from
+// each other and from every real Windows ACE type (those are small values,
+// far below 0x40) — a read failure must never be reportable as a genuine
+// unsupported ACE type. Enforced at build time rather than by a test.
+const _: () = assert!(ACE_TYPE_ACL_UNREADABLE != ACE_TYPE_ACE_UNREADABLE);
+const _: () = assert!(ACE_TYPE_ACL_UNREADABLE > 0x40 && ACE_TYPE_ACE_UNREADABLE > 0x40);
+
 /// File system object (folder or file)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileSystemObject {
