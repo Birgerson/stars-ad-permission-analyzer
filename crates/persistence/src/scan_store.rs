@@ -107,33 +107,22 @@ impl<'a> ScanStore<'a> {
         }
     }
 
-    /// Stores an effective permission and upserts the associated identity.
+    /// Stores an effective permission.
+    ///
+    /// Workspace re-sweep 2026-10-06 (finding PS2-1): this used to also
+    /// upsert the identity into the global `identities` table on every
+    /// call. Nothing has read that table back since the v7 snapshot
+    /// columns below made each row carry its own immutable identity
+    /// snapshot (`identity_name`/`identity_domain`/`identity_kind`/
+    /// `identity_disabled`) — so the upsert was a write-only cost on
+    /// every permission row, forever, for data nobody consulted. See
+    /// ADR 0007. The table itself stays (migrations are append-only);
+    /// only databases created before schema v7 still carry rows in it.
     pub fn insert_permission(
         &self,
         scan_run_id: &Uuid,
         perm: &EffectivePermission,
     ) -> Result<(), CoreError> {
-        self.conn
-            .execute(
-                "INSERT INTO identities (sid, name, domain, kind, disabled)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(sid) DO UPDATE SET
-                     name     = excluded.name,
-                     domain   = excluded.domain,
-                     kind     = excluded.kind,
-                     disabled = excluded.disabled",
-                params![
-                    perm.identity.sid.0,
-                    perm.identity.name,
-                    perm.identity.domain,
-                    kind_to_str(&perm.identity.kind),
-                    perm.identity.disabled as i32,
-                ],
-            )
-            .map_err(|e| {
-                CoreError::Database(format!("identity upsert in insert_permission: {e}"))
-            })?;
-
         // Review 2026-06-13 (Codex) finding 4: serialize the JSON evidence
         // fields with explicit error propagation instead of silently
         // substituting "[]". For these plain serializable types
