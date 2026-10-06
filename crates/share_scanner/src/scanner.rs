@@ -4,7 +4,13 @@
 //! SMB share enumeration and permission reading via Windows Net API.
 //!
 //! - `enumerate_shares` lists all shares on a server.
-//! - `get_share_permissions` reads permissions for a single share.
+//! - `get_share_dacl` reads the DACL status of a single share, keeping
+//!   the NULL-DACL (unrestricted) and empty-DACL (deny-all) cases
+//!   distinguishable — see ADR 0017. A lossy `get_share_permissions`
+//!   convenience wrapper existed here until the 2026-10-06 review
+//!   (SH2-1): it collapsed both cases to the same empty `Vec`, had zero
+//!   callers, and was removed rather than fixed, since its return type
+//!   could not represent the distinction no matter what the body did.
 //! - `scan_shares` is the combined entry point.
 
 use std::ffi::OsStr;
@@ -261,20 +267,6 @@ pub fn enumerate_shares(server: &str) -> Result<Vec<Share>, CoreError> {
     info!(server, count = shares.len(), "Share enumeration complete");
     Ok(shares)
     // `buf` is dropped here, calling NetApiBufferFree.
-}
-
-/// Reads permissions for a single share (Level 502).
-///
-/// For NULL DACL (no access restriction) an empty list is returned.
-/// Use `get_share_dacl` when NULL vs empty DACL must be distinguished.
-pub fn get_share_permissions(
-    server: &str,
-    share_name: &str,
-) -> Result<Vec<SharePermission>, CoreError> {
-    match get_share_dacl(server, share_name)?.dacl {
-        ShareDacl::NullDacl => Ok(Vec::new()),
-        ShareDacl::Acl(perms) => Ok(perms),
-    }
 }
 
 /// Reads the DACL status of a share, distinguishing NULL DACL from empty DACL.

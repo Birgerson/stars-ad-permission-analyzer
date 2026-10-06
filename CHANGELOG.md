@@ -10,7 +10,22 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-_No open changes._
+### Removed
+
+- `share_scanner::get_share_permissions` — a lossy convenience wrapper
+  that collapsed `ShareDacl::NullDacl` (unrestricted) and
+  `ShareDacl::Acl(vec![])` (deny-all) into the same empty `Vec`, exactly
+  the false-negative class ADR 0017 exists to prevent. Had zero
+  production callers; `get_share_dacl` is the (and was already the)
+  correct way to read a share's DACL status (workspace re-sweep finding
+  SH2-1, ADR 0017 decision point 4 reversed).
+- `persistence::ScanStore::insert_permission` no longer upserts the
+  global `identities` table. Nothing has read that table back since the
+  v7 snapshot columns made every permission row carry its own immutable
+  identity snapshot — the upsert was a write-only cost on every row,
+  forever, for data nobody consulted. The table itself stays (migrations
+  are append-only); only pre-v7 databases still carry rows in it
+  (workspace re-sweep finding PS2-1, ADR 0007 updated).
 
 ---
 

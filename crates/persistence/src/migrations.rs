@@ -7,8 +7,15 @@
 //! that wrote it was removed in the persistence review 2026-07-26 (PS-2,
 //! zero production callers). The table itself stays — migrations are
 //! append-only, and existing databases must keep opening cleanly. The
-//! `identities` table is unaffected: `scan_store::insert_permission`
-//! still upserts it as the SID lookup cache.
+//! `identities` table is in the same position since the 2026-10-06
+//! re-sweep (PS2-1): `scan_store::insert_permission` stopped upserting
+//! it because nothing read it back after the v7 snapshot columns
+//! landed — see ADR 0007. The `v1_data_survives_full_migration_to_latest`
+//! test below still inserts a legacy row into `identities` directly via
+//! raw SQL, because it is testing the one-time v7 **backfill** path
+//! (`schema_v7.sql`'s `UPDATE … SET … = (SELECT … FROM identities …)`),
+//! which is unrelated to `insert_permission` and still reads the table
+//! for databases created before v7.
 
 use adpa_core::error::CoreError;
 use rusqlite::Connection;

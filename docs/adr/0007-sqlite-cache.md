@@ -1,13 +1,21 @@
 # ADR 0007 — SQLite cache and scan history
 
 ## Status
-Accepted — **partially superseded 2026-07-26**: the `IdentityCache` API
-(purpose 1 below) was removed in the persistence review (finding PS-2); it
-never gained a production caller — identity/group caching happens in
-ad_resolver's in-memory maps, and the per-row identity snapshot (schema v7)
-covers historical reports. The `identities` table remains in active use by
-`ScanStore`; `group_memberships` remains only because migrations are
-append-only. The scan-history purpose (2) is unchanged and in daily use.
+Accepted — **partially superseded 2026-07-26, further 2026-10-06**: the
+`IdentityCache` API (purpose 1 below) was removed in the persistence
+review (finding PS-2); it never gained a production caller —
+identity/group caching happens in ad_resolver's in-memory maps, and the
+per-row identity snapshot (schema v7) covers historical reports. As of
+the 2026-10-06 workspace re-sweep (finding PS2-1), `ScanStore` no
+longer **writes** to the `identities` table either: `insert_permission`
+upserted it on every row, but nothing had read it back since the v7
+snapshot columns landed (confirmed: the only `SELECT … FROM identities`
+left anywhere is schema_v7.sql's one-time backfill for databases
+created before that migration). Both `identities` and
+`group_memberships` stay as tables — migrations are append-only — but
+neither is written or read by current code; only pre-v7 databases still
+carry rows in them. The scan-history purpose (2) is unchanged and in
+daily use.
 
 ## Context
 

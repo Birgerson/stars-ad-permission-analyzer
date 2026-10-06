@@ -1,6 +1,15 @@
 # ADR 0017 — Share scan preserves the NULL-DACL semantics
 
-**Status:** Accepted  
+**Status:** Accepted — **decision point 4 reversed 2026-10-06**: the
+workspace re-sweep (finding SH2-1) found `get_share_permissions` had
+**zero** production callers anywhere, so "stays unchanged as a
+convenient path for callers that do not care about the distinction" no
+longer had a caller to be convenient for. The function was removed
+instead of kept — its `Result<Vec<SharePermission>, CoreError>` return
+type cannot represent the NULL/empty distinction regardless of its
+body, so "fixing" it would only have rebuilt `get_share_dacl` under a
+different name. `get_share_dacl` (decision 2) is unaffected and remains
+the sole way to read a share's DACL status.  
 **Date:** 2026-05-24
 
 ## Context
