@@ -26,7 +26,8 @@ Concretely:
 - A new `WalkItem` enum (`Object(FileSystemObject)` / `Error(WalkError)`).
 - A new `walk_tree_streaming(root, config, cancel, on_item)` that invokes `on_item` for each object and error as it is discovered and returns whether the walk was cancelled.
 - `walk_tree` is now a thin **buffering wrapper** over `walk_tree_streaming` that collects items back into the classic `WalkResult`. Every existing caller keeps working unchanged.
-- The internal recursive `walk_dir` writes to a `&mut dyn FnMut(WalkItem)` sink instead of two `Vec`s. The traversal, the reparse-point loop detection (`visited_canonical`), the per-scan security-descriptor cache (ADR-less, engine review finding 2), the cancellation checks, and the result ordering are **byte-for-byte identical** to before.
+- The internal `walk_dir` writes to a `&mut dyn FnMut(WalkItem)` sink instead of two `Vec`s. The traversal, the reparse-point loop detection (`visited_canonical`), the per-scan security-descriptor cache (ADR-less, engine review finding 2), the cancellation checks, and the result ordering are **byte-for-byte identical** to before.
+  - **Update, FS2-1 (2026-10-06):** `walk_dir` was recursive (one call-stack frame per directory level) when this ADR was written; the workspace re-sweep replaced that with an explicit `Vec`-based DFS stack, since unlimited depth plus call-stack recursion had no safety ceiling. The "byte-for-byte identical" traversal order claim above still holds — it is what the rewrite's tests (including `streaming_matches_buffered`) verify — only the mechanism producing that order changed.
 
 ## Rationale — why correctness-first, why not parallelize now
 

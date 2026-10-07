@@ -236,6 +236,45 @@ impl LoopDetector {
     }
 }
 
+/// One pending unit of work in the iterative walk (see [`walk_dir`]).
+///
+/// `Leave` pairs with a `Visit` that got a `Fresh` decision from the loop
+/// detector: it is pushed onto the stack immediately *before* that
+/// `Visit`'s children, so — because the stack is LIFO — it is only popped
+/// (and `detector.leave()` only runs) once every item below it (the whole
+/// subtree) has been fully processed. This is the same position the old
+/// recursive version reached by falling through to `detector.leave()`
+/// after its children loop returned.
+///
+/// `DirEntryError` exists so a single `std::fs::read_dir` pass can be
+/// turned into stack entries *in order* without emitting anything early:
+/// pushing every entry (error or child) in the same relative sequence they
+/// came from `read_dir`, then reversing before pushing, reproduces the
+/// exact depth-first interleaving the old recursive version produced
+/// (error for entry N emitted, then entry N+1's whole subtree, …).
+enum WalkWork {
+    Visit {
+        path: String,
+        parent_canonical: Option<String>,
+        depth: u32,
+    },
+    Leave,
+    DirEntryError(WalkError),
+}
+
+/// Walks one directory subtree, starting at `path`.
+///
+/// FS2-1 (2026-10-06): this used to recurse by plain function call, one
+/// stack frame per directory level, with no depth ceiling — `WalkConfig`'s
+/// default `max_depth: None` is also the common case for a full audit, so
+/// a real (if unusual) sufficiently deep tree — nested build caches,
+/// backup trees, or just a lot of them — could overflow the thread stack
+/// instead of producing a bounded, reportable result. This version uses
+/// an explicit `Vec` as the DFS stack so traversal depth is bounded only
+/// by available heap memory, not by stack frames. Traversal order, error
+/// reporting, cancellation behavior and loop/duplicate-target detection
+/// are unchanged — see [`WalkWork`] for how the `Leave`/`detector.leave()`
+/// pairing is preserved without recursion.
 #[allow(clippy::too_many_arguments)]
 fn walk_dir(
     path: &str,
@@ -250,158 +289,194 @@ fn walk_dir(
     detector: &mut LoopDetector,
     sd_cache: &mut crate::acl::SdCache,
 ) {
-    if cancel.is_cancelled() {
-        return;
-    }
-    match read_file_system_object_cached(path, sd_cache) {
-        Err(e) => {
-            warn!(path, error = %e, "Cannot read security descriptor");
-            on_item(WalkItem::Error(WalkError {
-                path: path.to_owned(),
-                error: e,
-            }));
+    let mut stack = vec![WalkWork::Visit {
+        path: path.to_owned(),
+        parent_canonical: parent_canonical.map(str::to_owned),
+        depth: current_depth,
+    }];
+
+    while let Some(work) = stack.pop() {
+        // Checked before processing every unit of work — a Visit, a
+        // Leave, or a deferred directory-entry error — exactly the same
+        // granularity as the old per-recursive-call check. On
+        // cancellation the whole walk ends here: any `Leave` entries
+        // still on the stack are abandoned along with it, which is fine
+        // because `detector` is dropped by the caller right after this
+        // function returns and its partially-unwound `chain` is never
+        // consulted again (same reasoning the old version documented at
+        // its own early-return).
+        if cancel.is_cancelled() {
+            return;
         }
-        Ok(fso) => {
-            let is_dir = fso.is_directory;
-            let is_reparse = fso.is_reparse_point;
-            debug!(path, is_dir, is_reparse, depth = current_depth, "Read FSO");
-            on_item(WalkItem::Object(fso));
 
-            // An unresolvable reparse target (broken link, no access) stops
-            // here for files and directories alike — visible, not silent.
-            if is_reparse && canonicalize_path(path).is_none() {
-                warn!(path, "Reparse point target could not be resolved");
+        let (path, parent_canonical, current_depth) = match work {
+            WalkWork::Leave => {
+                detector.leave();
+                continue;
+            }
+            WalkWork::DirEntryError(err) => {
+                warn!(path = %err.path, error = %err.error, "Directory entry error");
+                on_item(WalkItem::Error(err));
+                continue;
+            }
+            WalkWork::Visit {
+                path,
+                parent_canonical,
+                depth,
+            } => (path, parent_canonical, depth),
+        };
+
+        match read_file_system_object_cached(&path, sd_cache) {
+            Err(e) => {
+                warn!(path, error = %e, "Cannot read security descriptor");
                 on_item(WalkItem::Error(WalkError {
-                    path: path.to_owned(),
-                    error: CoreError::AccessDenied(
-                        "Reparse point target could not be resolved — recursion stopped at this junction/link. The object itself is in the result with its DACL; objects behind the link were not enumerated."
-                            .to_owned(),
-                    ),
+                    path: path.clone(),
+                    error: e,
                 }));
-                return;
             }
+            Ok(fso) => {
+                let is_dir = fso.is_directory;
+                let is_reparse = fso.is_reparse_point;
+                debug!(path, is_dir, is_reparse, depth = current_depth, "Read FSO");
+                on_item(WalkItem::Object(fso));
 
-            // Only directories recurse, so only directories need the cycle /
-            // duplicate-target bookkeeping (a file symlink cannot loop).
-            if !is_dir {
-                return;
-            }
-
-            // Canonical identity of this directory. Reparse points and the
-            // root resolve via the filesystem (the reparse *target* is the
-            // identity); plain children derive from the parent — same
-            // lowercased, prefix-consistent form without a syscall per
-            // directory.
-            let canonical = if is_reparse || parent_canonical.is_none() {
-                match canonicalize_path(path) {
-                    Some(c) => c,
-                    // Root that cannot be canonicalized (rare: virtual FS):
-                    // best-effort identity so the walk still runs.
-                    None => path.to_ascii_lowercase(),
+                // An unresolvable reparse target (broken link, no access) stops
+                // here for files and directories alike — visible, not silent.
+                if is_reparse && canonicalize_path(&path).is_none() {
+                    warn!(path, "Reparse point target could not be resolved");
+                    on_item(WalkItem::Error(WalkError {
+                        path: path.clone(),
+                        error: CoreError::AccessDenied(
+                            "Reparse point target could not be resolved — recursion stopped at this junction/link. The object itself is in the result with its DACL; objects behind the link were not enumerated."
+                                .to_owned(),
+                        ),
+                    }));
+                    continue;
                 }
-            } else {
-                let component = std::path::Path::new(path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_ascii_lowercase());
-                match (parent_canonical, component) {
-                    (Some(parent), Some(name)) => {
-                        format!("{parent}{}{name}", std::path::MAIN_SEPARATOR)
+
+                // Only directories recurse, so only directories need the cycle /
+                // duplicate-target bookkeeping (a file symlink cannot loop).
+                if !is_dir {
+                    continue;
+                }
+
+                // Canonical identity of this directory. Reparse points and the
+                // root resolve via the filesystem (the reparse *target* is the
+                // identity); plain children derive from the parent — same
+                // lowercased, prefix-consistent form without a syscall per
+                // directory.
+                let canonical = if is_reparse || parent_canonical.is_none() {
+                    match canonicalize_path(&path) {
+                        Some(c) => c,
+                        // Root that cannot be canonicalized (rare: virtual FS):
+                        // best-effort identity so the walk still runs.
+                        None => path.to_ascii_lowercase(),
                     }
-                    // No derivable component — fall back to the filesystem.
-                    _ => canonicalize_path(path).unwrap_or_else(|| path.to_ascii_lowercase()),
-                }
-            };
+                } else {
+                    let component = std::path::Path::new(&path)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_ascii_lowercase());
+                    match (parent_canonical.as_deref(), component) {
+                        (Some(parent), Some(name)) => {
+                            format!("{parent}{}{name}", std::path::MAIN_SEPARATOR)
+                        }
+                        // No derivable component — fall back to the filesystem.
+                        _ => canonicalize_path(&path).unwrap_or_else(|| path.to_ascii_lowercase()),
+                    }
+                };
 
-            match detector.enter(&canonical, path) {
-                DescendDecision::Cycle => {
-                    info!(
-                        path,
-                        target = %canonical,
-                        "Reparse point target is an ancestor of the active chain — cycle, recursion stopped"
-                    );
-                    on_item(WalkItem::Error(WalkError {
-                        path: path.to_owned(),
-                        error: CoreError::ReparseCycle(format!(
-                            "Reparse point target is an ancestor of the current traversal chain — descending would loop forever; recursion stopped at this junction/link. Target: {canonical}. The object itself is in the result with its DACL."
-                        )),
-                    }));
-                    return;
-                }
-                DescendDecision::DuplicateTarget { first_path } => {
-                    info!(
-                        path,
-                        target = %canonical,
-                        first_path = %first_path,
-                        "Reparse point target already enumerated under another namespace path — duplicate route, not enumerated again"
-                    );
-                    on_item(WalkItem::Error(WalkError {
-                        path: path.to_owned(),
-                        error: CoreError::ReparseDuplicateTarget(format!(
-                            "Reparse point target already enumerated in this scan under '{first_path}' — subtree not enumerated again under this namespace path (duplicate target, not a cycle). Target: {canonical}. The link object itself is in the result with its DACL."
-                        )),
-                    }));
-                    return;
-                }
-                DescendDecision::Fresh => {}
-            }
-
-            let depth_ok = config.max_depth.is_none_or(|max| current_depth < max);
-            if depth_ok {
-                // Apply the long-path prefix before `read_dir` so that
-                // directories with paths > MAX_PATH can be enumerated
-                // reliably. The `entry.path()` results carry the prefix
-                // forward — `to_windows_api_path` recognises that on the
-                // next recursion step (idempotent) and does not double-prefix.
-                let api_path = validation::path::to_windows_api_path(path);
-                match std::fs::read_dir(&api_path) {
-                    Err(e) => {
-                        warn!(path, error = %e, "Cannot enumerate directory");
+                match detector.enter(&canonical, &path) {
+                    DescendDecision::Cycle => {
+                        info!(
+                            path,
+                            target = %canonical,
+                            "Reparse point target is an ancestor of the active chain — cycle, recursion stopped"
+                        );
                         on_item(WalkItem::Error(WalkError {
-                            path: path.to_owned(),
-                            error: CoreError::AccessDenied(format!(
-                                "Cannot enumerate directory: {e}"
+                            path: path.clone(),
+                            error: CoreError::ReparseCycle(format!(
+                                "Reparse point target is an ancestor of the current traversal chain — descending would loop forever; recursion stopped at this junction/link. Target: {canonical}. The object itself is in the result with its DACL."
                             )),
                         }));
+                        continue;
                     }
-                    Ok(entries) => {
-                        for entry_result in entries {
-                            // Check for cancellation between sibling entries.
-                            // (Aborting mid-chain without `leave()` is fine —
-                            // the whole walk ends here.)
-                            if cancel.is_cancelled() {
-                                return;
+                    DescendDecision::DuplicateTarget { first_path } => {
+                        info!(
+                            path,
+                            target = %canonical,
+                            first_path = %first_path,
+                            "Reparse point target already enumerated under another namespace path — duplicate route, not enumerated again"
+                        );
+                        on_item(WalkItem::Error(WalkError {
+                            path: path.clone(),
+                            error: CoreError::ReparseDuplicateTarget(format!(
+                                "Reparse point target already enumerated in this scan under '{first_path}' — subtree not enumerated again under this namespace path (duplicate target, not a cycle). Target: {canonical}. The link object itself is in the result with its DACL."
+                            )),
+                        }));
+                        continue;
+                    }
+                    DescendDecision::Fresh => {}
+                }
+
+                // Pairs with the `Fresh` entry above — pushed *before* any
+                // children so it is only popped (and `detector.leave()`
+                // called) once this directory's whole subtree — pushed
+                // next, on top of it — has been fully processed.
+                stack.push(WalkWork::Leave);
+
+                let depth_ok = config.max_depth.is_none_or(|max| current_depth < max);
+                if depth_ok {
+                    // Apply the long-path prefix before `read_dir` so that
+                    // directories with paths > MAX_PATH can be enumerated
+                    // reliably. The `entry.path()` results carry the prefix
+                    // forward — `to_windows_api_path` recognises that on the
+                    // next step (idempotent) and does not double-prefix.
+                    let api_path = validation::path::to_windows_api_path(&path);
+                    match std::fs::read_dir(&api_path) {
+                        Err(e) => {
+                            warn!(path, error = %e, "Cannot enumerate directory");
+                            on_item(WalkItem::Error(WalkError {
+                                path: path.clone(),
+                                error: CoreError::AccessDenied(format!(
+                                    "Cannot enumerate directory: {e}"
+                                )),
+                            }));
+                        }
+                        Ok(entries) => {
+                            // Collect in read_dir's own order, then push in
+                            // reverse — the LIFO stack then pops them back
+                            // in original order, so the next directory
+                            // listing's entries and this directory's own
+                            // `Leave` interleave exactly like the old
+                            // recursive call sequence did.
+                            let mut children: Vec<WalkWork> = Vec::new();
+                            for entry_result in entries {
+                                match entry_result {
+                                    Err(e) => {
+                                        children.push(WalkWork::DirEntryError(WalkError {
+                                            path: path.clone(),
+                                            error: CoreError::AccessDenied(format!(
+                                                "Directory entry error: {e}"
+                                            )),
+                                        }));
+                                    }
+                                    Ok(entry) => {
+                                        let child = entry.path().to_string_lossy().into_owned();
+                                        children.push(WalkWork::Visit {
+                                            path: child,
+                                            parent_canonical: Some(canonical.clone()),
+                                            depth: current_depth + 1,
+                                        });
+                                    }
+                                }
                             }
-                            match entry_result {
-                                Err(e) => {
-                                    warn!(path, error = %e, "Directory entry error");
-                                    on_item(WalkItem::Error(WalkError {
-                                        path: path.to_owned(),
-                                        error: CoreError::AccessDenied(format!(
-                                            "Directory entry error: {e}"
-                                        )),
-                                    }));
-                                }
-                                Ok(entry) => {
-                                    let child = entry.path().to_string_lossy().into_owned();
-                                    walk_dir(
-                                        &child,
-                                        Some(&canonical),
-                                        current_depth + 1,
-                                        config,
-                                        cancel,
-                                        on_item,
-                                        detector,
-                                        sd_cache,
-                                    );
-                                }
+                            for child in children.into_iter().rev() {
+                                stack.push(child);
                             }
                         }
                     }
                 }
             }
-            // Pairs with the `Fresh` entry above — the directory leaves the
-            // active recursion chain (it stays in the scan-wide seen map).
-            detector.leave();
         }
     }
 }
@@ -658,6 +733,65 @@ mod tests {
                 obj.path.0
             );
         }
+    }
+
+    // --- FS2-1: no recursion-depth ceiling ---
+
+    /// FS2-1 (2026-10-06): the walker used to recurse by plain function
+    /// call, one stack frame per directory level, with no depth ceiling —
+    /// `WalkConfig::max_depth: None` (unlimited) is also the common case
+    /// for a full audit. 2,000 nested one-character directories stay well
+    /// inside the `\\?\` long-path budget (~4,000 chars) and are already
+    /// far deeper than any real directory tree — but are a real, if
+    /// unusual, tree shape (deeply nested build caches, backup trees).
+    /// The explicit-stack walk must complete it correctly regardless —
+    /// depth is now bounded by heap, not by call-stack frames.
+    #[test]
+    fn walk_handles_pathologically_deep_tree_without_stack_overflow() {
+        use std::path::PathBuf;
+
+        const DEPTH: usize = 2_000;
+        let stamp = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let root: PathBuf = std::env::temp_dir().join(format!("adpa-deep-{stamp}"));
+        let _ = std::fs::remove_dir_all(&root);
+
+        // Create via the `\\?\` prefix so the creation calls themselves
+        // don't trip over MAX_PATH; the test then scans *without* the
+        // prefix, same as the long-path test above.
+        let mut deep = root.clone();
+        for _ in 0..DEPTH {
+            deep.push("d");
+        }
+        let deep_with_prefix = PathBuf::from(format!(r"\\?\{}", deep.to_string_lossy()));
+        std::fs::create_dir_all(&deep_with_prefix).expect("create deep dir");
+
+        let root_str = root.to_string_lossy().into_owned();
+        let result = walk(&root_str, &unlimited());
+
+        let _ = std::fs::remove_dir_all(PathBuf::from(format!(r"\\?\{root_str}")));
+
+        assert!(
+            result.errors.is_empty(),
+            "walk of a {DEPTH}-level tree must produce no errors — got: {:?}",
+            result
+                .errors
+                .iter()
+                .map(|e| format!("{}: {}", e.path, e.error))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            result.objects.len(),
+            DEPTH + 1,
+            "expected root + {DEPTH} nested directories, got {}",
+            result.objects.len()
+        );
     }
 
     // ----------------------------------------------------------------
