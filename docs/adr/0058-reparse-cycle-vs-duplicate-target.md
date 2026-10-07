@@ -29,7 +29,9 @@ could appear covered without ever being exercised.
 
 1. **Two structures with distinct jobs** in a new, OS-free-testable
    `LoopDetector` (`fs_scanner::walker`):
-   - `chain` — canonical identities of the **active** recursion path.
+   - `chain` — canonical identities of the **active** traversal path (the
+     ancestor chain currently being descended — see FS2-1 for why this is
+     no longer literally a call-stack recursion path).
      Membership ⇒ descending would re-enter an ancestor ⇒ **cycle**.
    - `seen_first_path` — scan-wide map canonical identity → **first
      namespace path** that enumerated it. A later hit ⇒ **duplicate

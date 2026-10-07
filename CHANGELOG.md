@@ -27,6 +27,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   are append-only); only pre-v7 databases still carry rows in it
   (workspace re-sweep finding PS2-1, ADR 0007 updated).
 
+### Fixed
+
+- `fs_scanner`'s directory walk (`walk_dir`) no longer recurses by plain
+  function call. A pathologically deep (but real — nested build caches,
+  backup trees) directory tree had no depth ceiling and could overflow
+  the thread stack instead of producing a bounded, reportable result.
+  Replaced with an explicit `Vec`-based DFS stack bounded by heap, not
+  call-stack frames; traversal order, error reporting, cancellation
+  behavior and loop/duplicate-target detection are unchanged — covered by
+  the existing walker test suite plus a new regression test with a
+  2,000-level tree (workspace re-sweep finding FS2-1, ADR 0049 and ADR
+  0058 updated).
+
 ---
 
 ## [1.8.0] — 2026-07-26
