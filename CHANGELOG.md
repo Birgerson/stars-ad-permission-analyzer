@@ -10,6 +10,43 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+_No open changes._
+
+---
+
+## [1.9.0] — 2026-10-07
+
+**The GUI catches up with the CLI, and the first end-to-end lab
+verification.**
+
+The workspace re-sweep (2026-10-06) found that the trust inventory and the
+share inventory existed only in the CLI. Both now have their own GUI tab.
+Stars was then run end to end against an extended lab domain — about 500
+documents with deliberately mixed permissions, AGDLP groups, a group
+cycle, primary-group-only access, foreign and orphaned SIDs, NULL / empty
+/ non-canonical DACLs, a conditional ACE, long paths, junctions, and a
+dedicated set of 23 inheritance and inheritance-break cases. **72 of 75
+cases passed**; the permission engine matched Windows bit for bit in every
+effective-mask case. The run found one defect that is fixed here (hidden
+data shares were hidden by default) and two that are documented as known
+limitations (see below).
+
+**Minor version, not a patch:** two new GUI tabs and a new field on the
+`Share` model. The removed `get_share_permissions` had no callers and was
+never part of a documented interface.
+
+### Known issues
+
+- **L14 — junction cycles are not detected when scanning over UNC.** The
+  scan terminates at Windows' own limit of 63 reparse traversals, but the
+  result contains duplicate paths and the error names the wrong cause.
+  Scanning the same tree via its local path is not affected.
+- **L15 — accounts of a trusted domain, given by SID, are reported as
+  orphaned**, and their groups in that domain are not resolved, so the
+  effective right under-reports. A generic "incomplete" warning is shown.
+
+Details and planned fixes: `docs/known-limitations.md`, L14 and L15.
+
 ### Added
 
 - GUI **`Trusts`** and **`Shares`** tabs — the domain trust inventory
@@ -62,6 +99,11 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   the existing walker test suite plus a new regression test with a
   2,000-level tree (workspace re-sweep finding FS2-1, ADR 0049 and ADR
   0058 updated).
+- Build: CI broke when the unpinned stable toolchain moved to Rust 1.99,
+  whose clippy flags `async_trait`'s generated, message-less `#[must_use]`
+  (`double_must_use`) on the `IdentityResolver` and `IdentityBackend`
+  trait definitions. Silenced on exactly those two traits with the reason
+  documented; no behaviour change.
 
 ---
 

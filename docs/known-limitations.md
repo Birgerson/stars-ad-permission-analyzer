@@ -1,6 +1,6 @@
 # Stars — Known Limitations and Roadmap (v1.6+)
 
-**Status:** v1.8.0
+**Status:** v1.9.0
 **Purpose:** Honest enumeration of the places where Stars **structurally
 cannot guarantee** to deliver a complete picture.
 
@@ -660,6 +660,74 @@ be built and live-tested together, plus user-guide examples.
 
 ---
 
+## L14 — Junction cycles are not detected when scanning over UNC
+
+**Priority:** Medium — found by the corp.test lab run 2026-10-07
+(finding FS3-1). Bounded, but it inflates results.
+
+### Problem
+
+The walker detects a reparse-point cycle by comparing the canonical
+identity of each directory with the active traversal chain (ADR 0058).
+On a local path that identity is the resolved target, so a junction that
+points to its own ancestor is stopped at once (unit test
+`walker_detects_junction_loop_and_emits_visible_error`). Over SMB the
+**server** resolves the junction; seen from the client, every level of
+`\\server\share\Loop\back\back\…` has a new, distinct path, so the
+cycle is not recognised.
+
+### Effect
+
+The walker follows the loop until Windows' own limit of 63 reparse
+traversals per path (about 64 levels in the lab), re-enumerating the
+looped subtree on every level, and then reports the deepest level as
+"Reparse point target could not be resolved". The scan terminates and
+the error is visible, but the result contains duplicate paths (in the
+lab: 216 paths scanned, more than 100 of them loop duplicates) and the
+message names the wrong cause.
+Scanning the same tree via its local path on the server is not affected.
+
+### Resolution
+
+Planned: identify directories by volume serial number + file ID
+(`GetFileInformationByHandle`), which SMB reports consistently for the
+same server-side directory, instead of by canonical path when the scan
+root is a UNC path — then cycle and duplicate-target detection work over
+SMB as they do locally. Must be lab-verified over UNC.
+
+---
+
+## L15 — Accounts of a trusted domain, given by SID, are reported as orphaned
+
+**Priority:** Medium — found by the corp.test lab run 2026-10-07
+(finding AD3-1).
+
+### Problem
+
+When the identity to analyze is a SID of a **trusted** domain (e.g. an
+`ext.test` account analyzed against `corp.test`), the resolver only asks
+the configured domain. It finds no account object and classifies the SID
+as `Kind: Orphaned`, although the account is valid in its own domain.
+Its group memberships in that domain are not resolved.
+
+### Effect
+
+The effective right **under-reports**: in the lab an `ext.test` user whose
+group is granted Read & Execute in the DACL was reported with no access.
+A generic "local groups could not be resolved — result is incomplete"
+warning appears, but no marker names the foreign domain, and the L4
+SID-filtering caveat is not shown. Analyzing such an identity through its
+FSP-backed group membership in the resource domain (L1) is not affected.
+
+### Resolution
+
+Planned: recognise SIDs whose domain part belongs to a trusted domain
+(trust inventory, ADR 0060), report them as foreign rather than orphaned,
+add an explicit marker, and resolve their groups via the Global Catalog
+or the trusted domain's DC when one is configured.
+
+---
+
 ## Status overview
 
 | Limit | Priority | Marker present? | Resolvable? |
@@ -677,6 +745,8 @@ be built and live-tested together, plus user-guide examples.
 | L11 — Engine module size | Low | n/a | optional refactor (readability only, not a defect) |
 | L12 — Manual updates / `update_manager` extension point | Low | n/a | by design; fail-closed seam, implement a real verifier only if in-app updates are required |
 | L13 — IPv6 literals rejected as server addresses | Low | n/a (explicit validation error) | yes — bracket handling (LDAP) + `ipv6-literal.net` (UNC/NetAPI), must be built and lab-verified together |
+| L14 — Junction cycles over UNC | Medium | partial (visible error, wrong cause) | yes — file-ID based directory identity for UNC scans |
+| L15 — Trusted-domain SID reported as orphaned | Medium | partial (generic "incomplete") | yes — classify via trust inventory + resolve via GC / trusted DC |
 
 ## Contribution policy
 

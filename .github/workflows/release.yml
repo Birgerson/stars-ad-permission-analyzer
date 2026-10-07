@@ -153,7 +153,8 @@ jobs:
             - Optional LDAP / Active Directory identity resolution
               (LDAPS, Global Catalog, Kerberos-signed bind)
             - Optional SMB share permission overlay and share inventory
-            - Read-only AD trust inventory
+              (CLI and GUI Shares tab; hidden `$` data shares are flagged)
+            - Read-only AD trust inventory (CLI and GUI Trusts tab)
             - SQLite scan history per user profile
             - Manual, read-only update check against a configurable source
             - Strictly read-only: Stars never writes to NTFS, SMB or AD
