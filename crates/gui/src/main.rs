@@ -24,8 +24,8 @@ use permission_engine::NormalizedRights;
 
 use crate::worker::{
     spawn_worker, DeltaRow, GroupsViewData, IdentitySearchResult, IdentitySuggestion, LdapParams,
-    NotifyFn, ReportFormat, RunErrorRow, ScanRow, ScanRunSummary, TrusteeRow, UpdateCheckRow,
-    WorkerEvent, WorkerRequest,
+    NotifyFn, ReportFormat, RunErrorRow, ScanRow, ScanRunSummary, SharesViewData, TrustRow,
+    TrusteeRow, UpdateCheckRow, WorkerEvent, WorkerRequest,
 };
 
 // Slint UI inline. Defines view models for scan rows, scan errors, risk
@@ -387,6 +387,45 @@ slint::slint! {
         role: string,
     }
 
+    // One ACE of a share's DACL for the Shares tab.
+    export struct ShareAceVm {
+        // "Allow" or "Deny".
+        kind: string,
+        // Resolved account name, or the SID when unresolved.
+        trustee: string,
+        sid: string,
+        rights: string,
+        mask: string,
+    }
+
+    // One share for the Shares tab.
+    export struct ShareVm {
+        name: string,
+        unc: string,
+        local: string,
+        is-admin: bool,
+        // Empty for a normal ACE list; otherwise NULL DACL / empty DACL /
+        // not read (kept distinct — ADR 0017).
+        dacl-status: string,
+        // 0 = neutral, 1 = notice, 2 = concern.
+        dacl-level: int,
+        aces: [ShareAceVm],
+        // > 0 = the share mask is incomplete.
+        unsupported: int,
+    }
+
+    // One domain trust for the Trusts tab.
+    export struct TrustVm {
+        partner: string,
+        flat-name: string,
+        direction: string,
+        attributes: string,
+        raw-hex: string,
+        sid: string,
+        sid-filtering: bool,
+        selective-auth: bool,
+    }
+
     // A row in the scan result.
     export struct ScanRowVm {
         path: string,
@@ -694,6 +733,43 @@ slint::slint! {
         callback groups-resolve-clicked();
         callback groups-name-edited(string);
         callback pick-groups-suggestion(string);
+
+        // ============================================================
+        // Trusts tab properties
+        // ============================================================
+        // Reading trustedDomain objects always needs LDAP, so this selector
+        // has no "Off" entry: 0 = LDAPS, 1 = plain LDAP, 2 = Global Catalog,
+        // 3 = Signed LDAP. The Rust side maps it to `LdapParams::from_mode`
+        // modes 1–4.
+        in-out property <int>    t-ldap-mode: 0;
+        in-out property <string> t-ldap-server;
+        in-out property <string> t-ldap-base-dn;
+        in-out property <string> t-ldap-bind-dn;
+        in-out property <string> t-ldap-password;
+        in-out property <int>    t-ldap-timeout: 10;
+        in property <bool>       t-is-running;
+        in property <string>     t-status;
+        in property <bool>       t-status-is-error;
+        in property <bool>       t-has-result;
+        in property <[TrustVm]>  t-trusts;
+        callback trusts-list-clicked();
+
+        // ============================================================
+        // Shares tab properties
+        // ============================================================
+        in-out property <string> sh-server;
+        // Administrative shares (C$, ADMIN$, IPC$) are hidden by default
+        // (AGENTS.md SMB rule 3); toggling re-filters without a re-run.
+        in-out property <bool>   sh-include-admin: false;
+        in property <bool>       sh-is-running;
+        in property <string>     sh-status;
+        in property <bool>       sh-status-is-error;
+        in property <bool>       sh-has-result;
+        in property <string>     sh-result-server;
+        in property <[ShareVm]>  sh-shares;
+        in property <[string]>   sh-errors;
+        in property <int>        sh-admin-count;
+        callback shares-list-clicked();
 
         VerticalLayout {
             spacing: 0;
@@ -2163,6 +2239,331 @@ slint::slint! {
                 }
 
                 // ============================================================
+                // Tab: Trusts — the domain's trust inventory (read-only, L4)
+                // ============================================================
+                Tab {
+                    title: "Trusts";
+
+                    ScrollView {
+                        VerticalBox {
+                            alignment: start;
+                            padding: Theme.spacing-md;
+                            spacing: Theme.spacing-sm;
+
+                            Text {
+                                text: "Which domains does this domain trust, in which direction, and are SID filtering or Selective Authentication configured? Read-only — Stars never changes a trust.";
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                            }
+
+                            GroupBox {
+                                title: "Domain controller";
+                                VerticalBox {
+                                    spacing: Theme.spacing-sm;
+                                    HorizontalBox {
+                                        spacing: Theme.spacing-sm;
+                                        padding: 0px;
+                                        Text { text: "Mode:"; vertical-alignment: center; width: 110px; }
+                                        ComboBox {
+                                            model: [
+                                                "LDAPS — encrypted, port 636",
+                                                "Plain LDAP — port 389 (test only)",
+                                                "Global Catalog — forest-wide, port 3269 (LDAPS)",
+                                                "Signed LDAP — Kerberos sign & seal, port 389",
+                                            ];
+                                            current-index <=> root.t-ldap-mode;
+                                            horizontal-stretch: 1;
+                                        }
+                                        HelpTip {
+                                            tip: "Trusts are stored as trustedDomain objects in Active Directory, so this tab always needs an LDAP connection — there is no SAM/LSA fallback.\n\n• LDAPS: encrypted, port 636. Requires a DC certificate this machine trusts; connect by FQDN.\n\n• Plain LDAP: port 389, no TLS — test environments only (password in cleartext).\n\n• Global Catalog: forest-wide bind over LDAPS (port 3269).\n\n• Signed LDAP: port 389 with Kerberos sign & seal, no certificate needed. Uses the current Windows logon (no bind DN / password).";
+                                        }
+                                    }
+                                    GridBox {
+                                        spacing: Theme.spacing-sm;
+                                        Row {
+                                            Text { text: "Server:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            LineEdit { placeholder-text: "dc01.domain.local"; text <=> root.t-ldap-server; }
+                                            HelpTip {
+                                                tip: "Fully qualified hostname (FQDN) of the domain controller.\n\nExample: dc01.company.local\n\nNo scheme prefix (no ldap:// or ldaps://) — the mode determines it.";
+                                            }
+                                        }
+                                        Row {
+                                            Text { text: "Base DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            LineEdit { placeholder-text: "DC=domain,DC=local"; text <=> root.t-ldap-base-dn; }
+                                            HelpTip {
+                                                tip: "Distinguished Name of the domain ROOT — the trust objects live under CN=System of the domain.\n\nExample: DC=company,DC=local\n\nAn OU here finds no trusts.";
+                                            }
+                                        }
+                                        Row {
+                                            Text { text: "Bind DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            LineEdit { placeholder-text: "DOMAIN\\user  ·  user@domain  ·  CN=…,DC=…"; text <=> root.t-ldap-bind-dn; }
+                                            HelpTip {
+                                                tip: "The account Stars binds with: DOMAIN\\user, user@domain (UPN), or a full DN. Not needed for Signed LDAP. A read-only service account is recommended.";
+                                            }
+                                        }
+                                        Row {
+                                            Text { text: "Password:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            LineEdit { input-type: password; text <=> root.t-ldap-password; }
+                                            HelpTip {
+                                                tip: "Password for the bind account. Not persisted, only held in memory for the running session.";
+                                            }
+                                        }
+                                        Row {
+                                            Text { text: "Timeout (s):"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            SpinBox { minimum: 1; maximum: 600; value <=> root.t-ldap-timeout; }
+                                            HelpTip {
+                                                tip: "LDAP operation timeout in seconds (1–600, default 10).";
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalBox {
+                                alignment: start;
+                                spacing: Theme.spacing-sm;
+                                padding: 0px;
+                                Button {
+                                    text: "🔗 Read trusts";
+                                    enabled: !root.t-is-running;
+                                    clicked => { root.trusts-list-clicked(); }
+                                }
+                                Text {
+                                    text: root.t-status;
+                                    color: root.t-status-is-error ? Theme.error : Theme.text-secondary;
+                                    vertical-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+
+                            if root.t-has-result: GroupBox {
+                                title: "Trusts (" + root.t-trusts.length + ")";
+                                VerticalBox {
+                                    spacing: Theme.spacing-sm;
+                                    if root.t-trusts.length == 0: Text {
+                                        text: "No trustedDomain objects found under the configured base DN. Make sure the base DN is the domain root (e.g. DC=corp,DC=local).";
+                                        color: Theme.text-muted;
+                                        wrap: word-wrap;
+                                    }
+                                    for t in root.t-trusts: VerticalLayout {
+                                        padding-top: 4px;
+                                        padding-bottom: 4px;
+                                        spacing: 2px;
+                                        Text {
+                                            text: t.flat-name != "" ? t.partner + "  (" + t.flat-name + ")" : t.partner;
+                                            font-weight: 700;
+                                            color: Theme.text-primary;
+                                        }
+                                        Text {
+                                            text: "Direction: " + t.direction;
+                                            color: Theme.text-secondary;
+                                        }
+                                        Text {
+                                            text: "Attributes: " + t.attributes + "  [raw " + t.raw-hex + "]";
+                                            color: Theme.text-secondary;
+                                            wrap: word-wrap;
+                                        }
+                                        if t.sid != "": Text {
+                                            text: "Domain SID: " + t.sid;
+                                            color: Theme.text-muted;
+                                            font-size: 11px;
+                                        }
+                                        if t.sid-filtering: Text {
+                                            text: "⚠ SID filtering (quarantine) is ON — historical / foreign SIDs across this trust are dropped at runtime, so a finding that relies on such a SID may over-report. Stars shows the DACL view, not the filtered one.";
+                                            color: Theme.warning;
+                                            wrap: word-wrap;
+                                        }
+                                        if t.selective-auth: Text {
+                                            text: "⚠ Selective Authentication is ON — principals from this trust need an explicit 'allowed to authenticate' right on the target, so a DACL grant alone does not imply real access.";
+                                            color: Theme.warning;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                    Text {
+                                        text: "Note: Stars reads these attributes read-only and does not model the runtime filter effect (that would need a synthetic logon). See the L4 section of known-limitations.md.";
+                                        color: Theme.text-muted;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ============================================================
+                // Tab: Shares — a server's SMB shares and share-level DACL
+                // ============================================================
+                Tab {
+                    title: "Shares";
+
+                    ScrollView {
+                        VerticalBox {
+                            alignment: start;
+                            padding: Theme.spacing-md;
+                            spacing: Theme.spacing-sm;
+
+                            Text {
+                                text: "Which shares does a server publish, and what do their SHARE-level permissions allow? Read-only — Stars never changes a share. For a user's effective right (share and NTFS combined) use the Analyze tab.";
+                                color: Theme.text-muted;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                            }
+
+                            GroupBox {
+                                title: "Server";
+                                VerticalBox {
+                                    spacing: Theme.spacing-sm;
+                                    GridBox {
+                                        spacing: Theme.spacing-sm;
+                                        Row {
+                                            Text { text: "Server:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                                            LineEdit {
+                                                placeholder-text: "fileserver01  ·  fileserver01.domain.local  ·  10.0.0.5";
+                                                text <=> root.sh-server;
+                                                accepted(s) => { root.shares-list-clicked(); }
+                                            }
+                                            HelpTip {
+                                                tip: "NetBIOS name, DNS name or IPv4 address of the server whose shares should be listed. No backslashes, no share name.\n\nReading share permissions requires administrative rights on the target server.";
+                                            }
+                                        }
+                                    }
+                                    CheckBox {
+                                        text: "Show administrative shares (C$, ADMIN$, IPC$, …)";
+                                        checked <=> root.sh-include-admin;
+                                    }
+                                }
+                            }
+
+                            HorizontalBox {
+                                alignment: start;
+                                spacing: Theme.spacing-sm;
+                                padding: 0px;
+                                Button {
+                                    text: "📂 List shares";
+                                    enabled: !root.sh-is-running;
+                                    clicked => { root.shares-list-clicked(); }
+                                }
+                                Text {
+                                    text: root.sh-status;
+                                    color: root.sh-status-is-error ? Theme.error : Theme.text-secondary;
+                                    vertical-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+
+                            if root.sh-has-result: GroupBox {
+                                title: "Shares on " + root.sh-result-server;
+                                VerticalBox {
+                                    spacing: Theme.spacing-sm;
+                                    Text {
+                                        text: root.sh-include-admin || root.sh-admin-count == 0
+                                            ? (root.sh-shares.length + " share(s) shown")
+                                            : ((root.sh-shares.length - root.sh-admin-count) + " share(s) shown, " + root.sh-admin-count + " administrative share(s) hidden");
+                                        color: Theme.text-secondary;
+                                    }
+                                    if !root.sh-include-admin && root.sh-shares.length > 0 && root.sh-shares.length == root.sh-admin-count: Text {
+                                        text: "No non-administrative shares found — tick 'Show administrative shares' to see them.";
+                                        color: Theme.text-muted;
+                                        wrap: word-wrap;
+                                    }
+                                    if root.sh-shares.length == 0: Text {
+                                        text: "No shares found on this server.";
+                                        color: Theme.text-muted;
+                                    }
+                                    // The `if` sits inside the per-share layout so a hidden
+                                    // administrative share takes no space at all.
+                                    for s in root.sh-shares: VerticalLayout {
+                                        padding: 0px;
+                                        spacing: 0px;
+                                        if !s.is-admin || root.sh-include-admin: VerticalLayout {
+                                            padding-top: 4px;
+                                            padding-bottom: 4px;
+                                            spacing: 2px;
+                                            HorizontalLayout {
+                                                spacing: Theme.spacing-sm;
+                                                Text {
+                                                    text: s.name;
+                                                    font-weight: 700;
+                                                    color: Theme.text-primary;
+                                                    horizontal-stretch: 0;
+                                                }
+                                                Text {
+                                                    text: s.is-admin ? "administrative / hidden share" : "";
+                                                    color: Theme.text-muted;
+                                                    font-size: 11px;
+                                                    vertical-alignment: center;
+                                                    horizontal-stretch: 1;
+                                                }
+                                            }
+                                            Text {
+                                                text: s.unc + "   →   " + s.local;
+                                                color: Theme.text-secondary;
+                                                font-size: 11px;
+                                                overflow: elide;
+                                            }
+                                            if s.dacl-status != "": Text {
+                                                text: (s.dacl-level == 0 ? "ℹ " : "⚠ ") + s.dacl-status;
+                                                color: s.dacl-level == 2 ? Theme.danger
+                                                     : s.dacl-level == 1 ? Theme.warning
+                                                     : Theme.text-secondary;
+                                                wrap: word-wrap;
+                                            }
+                                            for a in s.aces: HorizontalLayout {
+                                                spacing: Theme.spacing-sm;
+                                                padding-left: 12px;
+                                                Text {
+                                                    text: a.kind;
+                                                    width: 44px;
+                                                    color: a.kind == "Deny" ? Theme.danger : Theme.text-primary;
+                                                    font-weight: a.kind == "Deny" ? 700 : 400;
+                                                }
+                                                Text {
+                                                    text: a.trustee != a.sid ? a.trustee + "  (" + a.sid + ")" : a.sid;
+                                                    color: Theme.text-primary;
+                                                    horizontal-stretch: 1;
+                                                    overflow: elide;
+                                                }
+                                                Text {
+                                                    text: a.rights + "  " + a.mask;
+                                                    color: Theme.text-secondary;
+                                                }
+                                            }
+                                            if s.unsupported > 0: Text {
+                                                text: "⚠ " + s.unsupported + " share ACE(s) could not be evaluated — this share's permissions are INCOMPLETE (a hidden Deny among them could change the result).";
+                                                color: Theme.danger;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+                                    }
+                                    if root.sh-errors.length > 0: VerticalBox {
+                                        padding: 0px;
+                                        spacing: 2px;
+                                        Text {
+                                            text: "Shares that could not be read (" + root.sh-errors.length + "):";
+                                            font-weight: 700;
+                                            color: Theme.danger;
+                                        }
+                                        for e in root.sh-errors: Text {
+                                            text: "⚠ " + e;
+                                            color: Theme.danger;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                    Text {
+                                        text: "Note: these are SHARE-level rights only. A user's effective right over SMB is the more restrictive combination of share and NTFS — use the Analyze tab with a \\\\server\\share\\… path for that.";
+                                        color: Theme.text-muted;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ============================================================
                 // Tab: Info / legal notices
                 // ============================================================
                 Tab {
@@ -2781,6 +3182,160 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
                 ui.set_g_status_is_error(true);
             }
         });
+    }
+
+    // Trusts tab — the domain's trust inventory (read-only, L4).
+    {
+        let weak = ui.as_weak();
+        let req_tx = req_tx.clone();
+        ui.on_trusts_list_clicked(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            // The Trusts selector has no "Off" entry (LDAP is mandatory), so
+            // its index 0–3 maps onto `from_mode`'s LDAP modes 1–4.
+            let ldap = LdapParams::from_mode(
+                ui.get_t_ldap_mode() + 1,
+                ui.get_t_ldap_server().to_string(),
+                ui.get_t_ldap_base_dn().to_string(),
+                ui.get_t_ldap_bind_dn().to_string(),
+                ui.get_t_ldap_password().to_string(),
+                ui.get_t_ldap_timeout(),
+            );
+            ui.set_t_is_running(true);
+            ui.set_t_has_result(false);
+            ui.set_t_status("Reading trusts...".into());
+            ui.set_t_status_is_error(false);
+            if let Err(e) = req_tx.send(WorkerRequest::ListTrusts { ldap }) {
+                ui.set_t_is_running(false);
+                ui.set_t_status(format!("Worker not reachable: {e}").into());
+                ui.set_t_status_is_error(true);
+            }
+        });
+    }
+
+    // Shares tab — a server's SMB shares and their share-level DACL.
+    {
+        let weak = ui.as_weak();
+        let req_tx = req_tx.clone();
+        ui.on_shares_list_clicked(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let server = ui.get_sh_server().to_string();
+            if server.trim().is_empty() {
+                ui.set_sh_status("Server is required.".into());
+                ui.set_sh_status_is_error(true);
+                return;
+            }
+            ui.set_sh_is_running(true);
+            ui.set_sh_has_result(false);
+            ui.set_sh_status("Listing shares...".into());
+            ui.set_sh_status_is_error(false);
+            if let Err(e) = req_tx.send(WorkerRequest::ListShares { server }) {
+                ui.set_sh_is_running(false);
+                ui.set_sh_status(format!("Worker not reachable: {e}").into());
+                ui.set_sh_status_is_error(true);
+            }
+        });
+    }
+}
+
+fn handle_trusts_done(ui: &MainWindow, result: Result<Vec<TrustRow>, String>) {
+    ui.set_t_is_running(false);
+    match result {
+        Ok(rows) => {
+            let flagged = rows
+                .iter()
+                .filter(|t| t.sid_filtering || t.selective_auth)
+                .count();
+            let status = if flagged > 0 {
+                format!(
+                    "{} trust(s) — {flagged} with SID filtering or Selective Authentication",
+                    rows.len()
+                )
+            } else {
+                format!("{} trust(s)", rows.len())
+            };
+            ui.set_t_status(status.into());
+            ui.set_t_status_is_error(false);
+            let vms: Vec<TrustVm> = rows
+                .into_iter()
+                .map(|t| TrustVm {
+                    partner: t.partner.into(),
+                    flat_name: t.flat_name.into(),
+                    direction: t.direction.into(),
+                    attributes: t.attributes.into(),
+                    raw_hex: t.raw_hex.into(),
+                    sid: t.sid.into(),
+                    sid_filtering: t.sid_filtering,
+                    selective_auth: t.selective_auth,
+                })
+                .collect();
+            ui.set_t_trusts(slint::ModelRc::new(slint::VecModel::from(vms)));
+            ui.set_t_has_result(true);
+        }
+        Err(e) => {
+            ui.set_t_has_result(false);
+            ui.set_t_status(e.into());
+            ui.set_t_status_is_error(true);
+        }
+    }
+}
+
+fn handle_shares_done(ui: &MainWindow, result: Result<SharesViewData, String>) {
+    ui.set_sh_is_running(false);
+    match result {
+        Ok(data) => {
+            let status = if data.errors.is_empty() {
+                format!("{} share(s) found", data.shares.len())
+            } else {
+                format!(
+                    "{} share(s) found, {} could not be read",
+                    data.shares.len(),
+                    data.errors.len()
+                )
+            };
+            ui.set_sh_status(status.into());
+            // Read failures are part of the result, not a hard error — but
+            // they must not look like a clean run.
+            ui.set_sh_status_is_error(!data.errors.is_empty());
+            ui.set_sh_result_server(data.server.into());
+            ui.set_sh_admin_count(data.admin_count);
+            let vms: Vec<ShareVm> = data
+                .shares
+                .into_iter()
+                .map(|s| {
+                    let aces: Vec<ShareAceVm> = s
+                        .aces
+                        .into_iter()
+                        .map(|a| ShareAceVm {
+                            kind: a.kind.into(),
+                            trustee: a.trustee.into(),
+                            sid: a.sid.into(),
+                            rights: a.rights_label.into(),
+                            mask: a.mask_hex.into(),
+                        })
+                        .collect();
+                    ShareVm {
+                        name: s.name.into(),
+                        unc: s.unc_path.into(),
+                        local: s.local_path.into(),
+                        is_admin: s.is_admin,
+                        dacl_status: s.dacl_status.into(),
+                        dacl_level: s.dacl_status_level,
+                        aces: slint::ModelRc::new(slint::VecModel::from(aces)),
+                        unsupported: s.unsupported_count,
+                    }
+                })
+                .collect();
+            ui.set_sh_shares(slint::ModelRc::new(slint::VecModel::from(vms)));
+            let errors: Vec<slint::SharedString> =
+                data.errors.into_iter().map(|e| e.into()).collect();
+            ui.set_sh_errors(slint::ModelRc::new(slint::VecModel::from(errors)));
+            ui.set_sh_has_result(true);
+        }
+        Err(e) => {
+            ui.set_sh_has_result(false);
+            ui.set_sh_status(e.into());
+            ui.set_sh_status_is_error(true);
+        }
     }
 }
 
@@ -3778,6 +4333,8 @@ fn pump_worker_events(ui: &MainWindow) {
                 WorkerEvent::IdentitiesLoaded(result) => handle_identities_loaded(ui, result),
                 WorkerEvent::TrusteesDone(result) => handle_trustees_done(ui, result),
                 WorkerEvent::GroupsDone(result) => handle_groups_done(ui, *result),
+                WorkerEvent::SharesDone(result) => handle_shares_done(ui, *result),
+                WorkerEvent::TrustsDone(result) => handle_trusts_done(ui, result),
                 WorkerEvent::SearchResults(result) => handle_search_results(ui, result),
             }
         }

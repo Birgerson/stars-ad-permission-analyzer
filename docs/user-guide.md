@@ -16,7 +16,7 @@ SMB permissions **without changing anything**.
 1. [What can Stars do?](#what-can-stars-do)
 2. [Installation and prerequisites](#installation-and-prerequisites)
 3. [First run — the GUI](#first-run--the-gui)
-4. [The five GUI tabs](#the-five-gui-tabs)
+4. [The seven GUI tabs](#the-five-gui-tabs)
 5. [Identity input forms](#identity-input-forms)
 6. [Active Directory binding (optional)](#active-directory-binding-optional)
 7. [Local paths vs. SMB shares](#local-paths-vs-smb-shares)
@@ -116,8 +116,8 @@ access).
 
 ## First run — the GUI
 
-After starting Stars the main window shows **five tabs:** `Analyze`,
-`Groups`, `Scan Tree`, `Delta`, `Info`. **Recommended first workflow:**
+After starting Stars the main window shows **seven tabs:** `Analyze`,
+`Groups`, `Scan Tree`, `Delta`, `Trusts`, `Shares`, `Info`. **Recommended first workflow:**
 
 1. Open the **`Analyze`** tab — type an identity (user/group + SID)
    and a path. Hit "Analyze".
@@ -137,7 +137,7 @@ and shows the engine in action.
 
 <a name="the-five-gui-tabs"></a>
 
-## The five GUI tabs
+## The seven GUI tabs
 
 ### `Analyze` tab — single-path analysis
 
@@ -334,6 +334,63 @@ Unchanged paths are hidden so only the relevant entries remain.
 Two runs with **different targets** are refused with a clear error —
 comparing scans of two different trees would produce a plausible-looking
 but meaningless report.
+
+### `Trusts` tab — which domains does this domain trust?
+
+**Purpose:** The GUI counterpart to `adpa trusts`. Lists the domain's
+Active Directory trusts with their direction and decoded
+`trustAttributes`. Read-only — Stars never changes a trust.
+
+**Fields:** the same LDAP connection fields as the `Groups` tab
+(mode, server, base DN, bind DN, password, timeout). There is no
+"Off" mode: trusts are `trustedDomain` objects in AD, so this tab
+always needs an LDAP connection. The **base DN must be the domain
+root** (e.g. `DC=corp,DC=local`) — the trust objects live under
+`CN=System` there; an OU finds nothing.
+
+**Output:** one block per trust — partner domain and NetBIOS name,
+direction (`inbound`, `outbound`, `bidirectional`, `disabled`, or
+`unknown (<code>)` for a value outside the documented range),
+attributes with the raw bitmask, and the partner's domain SID. Two
+settings get an explicit ⚠ callout, because they can make a Stars
+finding read *higher* than the access a user really gets:
+
+- **SID filtering (quarantine)** — foreign and historical
+  (`sIDHistory`) SIDs across the trust are dropped at runtime.
+- **Selective Authentication** — principals from the trust need an
+  explicit "allowed to authenticate" right on the target.
+
+Stars shows the DACL view and does **not** model this runtime effect
+(known-limitations L4).
+
+### `Shares` tab — which shares does a server publish?
+
+**Purpose:** The GUI counterpart to `adpa shares`. Lists a server's SMB
+shares with their **share-level** permissions. Read-only — Stars never
+changes a share. For a user's effective right over SMB (share and NTFS
+combined) use the `Analyze` tab with a `\\server\share\…` path.
+
+**Fields:** server name (NetBIOS, DNS, or IPv4 — no backslashes, no
+share name) and a **Show administrative shares** checkbox. `C$`,
+`ADMIN$`, `IPC$` and similar are hidden by default; the checkbox
+re-filters the current result without a new query. Reading share
+permissions needs administrative rights on the target server.
+
+**Output:** per share the UNC path, the local target (or "none
+reported", e.g. for `IPC$`), and its permissions. Three states that
+mean opposite things are kept apart:
+
+- an **ACE list** — Allow/Deny, account name (resolved via the local
+  LSA, otherwise the SID), rights label and raw mask;
+- **NULL DACL** — no share-level restriction, every principal passes
+  the share layer and NTFS alone decides (shown as a warning);
+- **empty DACL** — no access via this share.
+
+Share ACEs Stars could not evaluate are flagged as **incomplete**, and a
+share whose permissions could not be read is listed with its reason
+instead of being dropped. If the server's shares cannot be enumerated
+at all, the tab shows an error rather than an empty list — an empty list
+would read as "this server has no shares".
 
 ### `Info` tab — about Stars
 

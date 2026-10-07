@@ -85,7 +85,10 @@ that applies.
   restriction, NTFS alone decides), **empty DACL** (no access), and an
   explicit ACE list. Administrative shares are hidden unless
   `--include-admin` is passed; a share whose DACL could not be read is
-  listed *with its reason* rather than dropped.
+  listed *with its reason* rather than dropped. The GUI's **`Shares`
+  tab** shows the same inventory (admin shares behind a checkbox) and
+  additionally resolves ACE SIDs to account names where the local LSA
+  can.
 
 ### Active Directory trust inventory (read-only)
 
@@ -98,6 +101,8 @@ that applies.
 - Strictly read-only: Stars never modifies a trust, and it deliberately
   does **not** model the runtime filter effect — that would require a
   synthetic logon (ADR 0060, known-limitations L4).
+- The GUI's **`Trusts` tab** shows the same inventory with the same
+  callouts.
 
 ### Permission-path explanation
 

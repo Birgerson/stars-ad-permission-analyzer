@@ -10,6 +10,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Added
+
+- GUI **`Trusts`** and **`Shares`** tabs — the domain trust inventory
+  (`adpa trusts`) and a server's share inventory (`adpa shares`) were
+  CLI-only, so a GUI-only admin could neither see the trust topology
+  nor enumerate shares, and had no hint that Stars could. Both tabs call
+  the same read-only core functions as the CLI; no new business logic.
+  The Trusts tab flags SID filtering and Selective Authentication; the
+  Shares tab keeps NULL DACL, empty DACL and ACE list distinct, hides
+  administrative shares behind a checkbox, resolves ACE SIDs to account
+  names, and lists unreadable shares and unevaluated ACEs instead of
+  dropping them (workspace re-sweep finding GUI2-1).
+
 ### Removed
 
 - `share_scanner::get_share_permissions` — a lossy convenience wrapper
