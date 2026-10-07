@@ -558,7 +558,8 @@ pub fn print_risk_findings(findings: &[RiskFinding]) {
 ///
 /// Administrative shares (`C$`, `ADMIN$`, `IPC$`, …) are omitted unless
 /// `include_admin` is set — AGENTS.md requires them to be hideable, and they
-/// are noise in a normal audit. A share whose DACL could not be read is
+/// are noise in a normal audit. A merely hidden `$` data share is NOT
+/// administrative and is always listed, flagged as hidden. A share whose DACL could not be read is
 /// listed with the failure reason instead of being dropped, and unevaluated
 /// ACEs are called out per share so a mask is never presented as complete
 /// when it is not.
@@ -592,7 +593,12 @@ pub fn print_shares(result: &ShareScanResult, include_admin: bool) {
             _ => println!("    Local path   : (none reported — e.g. IPC$ or a special share)"),
         }
         if share.is_admin_share {
-            println!("    Type         : administrative / hidden share");
+            println!("    Type         : administrative share (system)");
+        } else if share.is_hidden {
+            // Shown by default on purpose: a `$` data share is invisible when
+            // browsing but reachable by anyone it grants — not system noise.
+            println!("    Type         : [!] HIDDEN data share ('$' name) — not listed when");
+            println!("                   browsing the network, but NOT an administrative share");
         }
 
         match result.share_dacls.iter().find(|(n, _)| n == &share.name) {

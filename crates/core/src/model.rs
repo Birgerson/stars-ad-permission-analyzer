@@ -670,7 +670,16 @@ pub struct Share {
     pub name: String,
     pub unc_path: String,
     pub local_path: Option<NormalizedPath>,
+    /// A system administrative share (`STYPE_SPECIAL`: `C$`, `ADMIN$`,
+    /// `IPC$`, …) — the shares AGENTS.md wants hideable by default.
     pub is_admin_share: bool,
+    /// The name ends in `$`, so the share is not listed when browsing the
+    /// network. Independent of `is_admin_share`: a data share named `Data$`
+    /// is hidden but NOT administrative, and must stay visible in an audit —
+    /// a hidden, broadly granted data share is exactly what an auditor needs
+    /// to see.
+    #[serde(default)]
+    pub is_hidden: bool,
 }
 
 /// Permission on a share

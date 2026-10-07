@@ -40,8 +40,19 @@ const MAX_PREFERRED_LENGTH: u32 = 0xFFFF_FFFF;
 // Net API success status
 const NERR_SUCCESS: u32 = 0;
 
-// Share type flag: hidden / administrative share
+// Share type flag: system administrative share (C$, ADMIN$, IPC$, …)
 const STYPE_SPECIAL: u32 = 0x8000_0000;
+
+/// Classifies a share as `(administrative, hidden)`.
+///
+/// Only `STYPE_SPECIAL` makes a share administrative. A trailing `$` only
+/// hides it from network browsing — a user data share such as `Data$` is
+/// hidden but not administrative. Treating every `$` share as administrative
+/// hid exactly such shares from the default audit view, even with broad
+/// grants like "Domain Users: Full Control" (lab finding SH2-2, 2026-10-07).
+pub fn classify_share(stype: u32, name: &str) -> (bool, bool) {
+    (stype & STYPE_SPECIAL != 0, name.ends_with('$'))
+}
 
 // ACE type raw values (WinNT.h) — not exported as constants in windows-sys 0.59
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
@@ -253,14 +264,15 @@ pub fn enumerate_shares(server: &str) -> Result<Vec<Share>, CoreError> {
             Some(NormalizedPath(local_path_str))
         };
         let unc_path = format!("\\\\{server_for_unc}\\{name}");
-        let is_admin = entry.shi502_type & STYPE_SPECIAL != 0 || name.ends_with('$');
+        let (is_admin, is_hidden) = classify_share(entry.shi502_type, &name);
 
-        debug!(server, share = %name, is_admin, local_path = ?local_path, "Found share");
+        debug!(server, share = %name, is_admin, is_hidden, local_path = ?local_path, "Found share");
         shares.push(Share {
             name,
             unc_path,
             local_path,
             is_admin_share: is_admin,
+            is_hidden,
         });
     }
 
@@ -896,12 +908,14 @@ mod tests {
                     unc_path: r"\\srv\unrestricted".to_owned(),
                     local_path: None,
                     is_admin_share: false,
+                    is_hidden: false,
                 },
                 Share {
                     name: "deny-all".to_owned(),
                     unc_path: r"\\srv\deny-all".to_owned(),
                     local_path: None,
                     is_admin_share: false,
+                    is_hidden: false,
                 },
             ],
             permissions: vec![],
@@ -973,6 +987,46 @@ mod tests {
 
     fn sids(list: &[&str]) -> std::collections::HashSet<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    // --- SH2-2 (lab 2026-10-07): administrative vs. merely hidden shares ---
+
+    const STYPE_DISKTREE: u32 = 0;
+    const STYPE_IPC: u32 = 3;
+
+    #[test]
+    fn system_admin_shares_are_administrative_and_hidden() {
+        assert_eq!(
+            classify_share(STYPE_DISKTREE | STYPE_SPECIAL, "C$"),
+            (true, true)
+        );
+        assert_eq!(
+            classify_share(STYPE_DISKTREE | STYPE_SPECIAL, "ADMIN$"),
+            (true, true)
+        );
+        assert_eq!(
+            classify_share(STYPE_IPC | STYPE_SPECIAL, "IPC$"),
+            (true, true)
+        );
+    }
+
+    /// The lab case: a data share like `Data$` (Domain Users: Full Control) was
+    /// classified administrative purely by its name and so hidden from the
+    /// default audit view.
+    #[test]
+    fn dollar_named_data_share_is_hidden_but_not_administrative() {
+        assert_eq!(classify_share(STYPE_DISKTREE, "Data$"), (false, true));
+        assert_eq!(classify_share(STYPE_DISKTREE, "print$"), (false, true));
+    }
+
+    #[test]
+    fn plain_share_is_neither_administrative_nor_hidden() {
+        assert_eq!(classify_share(STYPE_DISKTREE, "Finanzen"), (false, false));
+        // A `$` in the middle does not hide a share.
+        assert_eq!(
+            classify_share(STYPE_DISKTREE, "Kosten$2026"),
+            (false, false)
+        );
     }
 
     #[test]
@@ -1345,6 +1399,7 @@ mod tests {
                 unc_path: r"\\srv\S".to_owned(),
                 local_path: None,
                 is_admin_share: false,
+                is_hidden: false,
             }],
             permissions: vec![],
             errors: vec![],

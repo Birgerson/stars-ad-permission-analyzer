@@ -2218,7 +2218,11 @@ pub struct ShareRow {
     /// none — a share without a valid target stays visible (AGENTS.md SMB
     /// rule 4).
     pub local_path: String,
+    /// System administrative share (`STYPE_SPECIAL`) — hideable in the GUI.
     pub is_admin: bool,
+    /// `$` name, not listed when browsing. A hidden share that is not
+    /// administrative is always shown and flagged (lab finding SH2-2).
+    pub is_hidden: bool,
     /// One-line DACL status. Empty for a normal ACE list; otherwise the
     /// NULL-DACL, empty-DACL or not-read explanation. NULL and empty DACL are
     /// kept distinct on purpose (ADR 0017): one means "no restriction", the
@@ -2353,6 +2357,7 @@ pub fn shares_to_view(
                 unc_path: share.unc_path.clone(),
                 local_path,
                 is_admin: share.is_admin_share,
+                is_hidden: share.is_hidden,
                 dacl_status,
                 dacl_status_level,
                 aces,
@@ -3398,6 +3403,7 @@ mod tests {
             unc_path: format!(r"\\srv\{name}"),
             local_path: local.map(|p| NormalizedPath(p.to_owned())),
             is_admin_share: admin,
+            is_hidden: name.ends_with('$'),
         }
     }
 
@@ -3535,6 +3541,29 @@ mod tests {
         assert_eq!(view.errors.len(), 2);
         assert!(view.errors[0].starts_with("unread: "));
         assert!(view.errors[1].starts_with("(enumeration): "));
+    }
+
+    /// SH2-2: a `$` data share is hidden but not administrative — it must not
+    /// be counted with (and filtered out like) the system admin shares.
+    #[test]
+    fn shares_view_hidden_data_share_is_not_counted_as_admin() {
+        use share_scanner::{ShareDacl, ShareScanResult};
+        let result = ShareScanResult {
+            shares: vec![
+                test_share("Data$", false, Some(r"C:\Data")),
+                test_share("C$", true, Some(r"C:\")),
+            ],
+            permissions: vec![],
+            errors: vec![],
+            share_dacls: vec![
+                ("Data$".to_owned(), dacl_scan(ShareDacl::Acl(vec![]), 0)),
+                ("C$".to_owned(), dacl_scan(ShareDacl::NullDacl, 0)),
+            ],
+        };
+        let view = shares_to_view("srv", &result, &Default::default()).unwrap();
+        assert_eq!(view.admin_count, 1, "only C$ is administrative");
+        assert!(view.shares[0].is_hidden && !view.shares[0].is_admin);
+        assert!(view.shares[1].is_hidden && view.shares[1].is_admin);
     }
 
     /// An enumeration that failed outright is an error, not an empty list

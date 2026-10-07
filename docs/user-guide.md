@@ -372,8 +372,10 @@ combined) use the `Analyze` tab with a `\\server\share\…` path.
 
 **Fields:** server name (NetBIOS, DNS, or IPv4 — no backslashes, no
 share name) and a **Show administrative shares** checkbox. `C$`,
-`ADMIN$`, `IPC$` and similar are hidden by default; the checkbox
-re-filters the current result without a new query. Reading share
+`ADMIN$`, `IPC$` and similar system shares are hidden by default; the
+checkbox re-filters the current result without a new query. Hidden data
+shares (a `$` name that is not a system share, e.g. `Data$`) are always
+shown, with a ⚠ "hidden data share" label. Reading share
 permissions needs administrative rights on the target server.
 
 **Output:** per share the UNC path, the local target (or "none
@@ -911,6 +913,11 @@ mean opposite things:
 
 **Administrative shares** (`C$`, `ADMIN$`, `IPC$`, …) are **hidden by
 default** — they are noise in a normal audit; `--include-admin` shows them.
+Only shares Windows marks as system shares (`STYPE_SPECIAL`) count as
+administrative. A **hidden data share** — any other share whose name ends
+in `$`, e.g. `Data$` — is **always listed** and flagged `HIDDEN`: it does
+not appear when browsing the network, but anyone it grants can reach it,
+which is exactly what an audit should surface.
 A share whose DACL could not be read is listed with the reason instead of
 being dropped, and if individual ACEs could not be evaluated the share is
 explicitly marked as having an **incomplete** mask.

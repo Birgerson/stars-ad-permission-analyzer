@@ -42,6 +42,16 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- Hidden data shares were treated as administrative shares and so hidden
+  by default. `share_scanner` classified every share whose name ends in
+  `$` as administrative, so a data share such as `Daten$` granting
+  "Domain Users: Full Control" disappeared from `adpa shares` (without
+  `--include-admin`) and from the GUI's Shares tab — exactly the kind of
+  share an audit must surface. Now only `STYPE_SPECIAL` shares (`C$`,
+  `ADMIN$`, `IPC$`, …) are administrative; a `$` name only sets the new
+  `Share::is_hidden` flag, and such shares are always listed with a
+  "hidden data share" label. Found by the corp.test lab run (finding
+  SH2-2), verified live against the lab DC.
 - `fs_scanner`'s directory walk (`walk_dir`) no longer recurses by plain
   function call. A pathologically deep (but real — nested build caches,
   backup trees) directory tree had no depth ceiling and could overflow

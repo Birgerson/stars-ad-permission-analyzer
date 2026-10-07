@@ -83,8 +83,9 @@ that applies.
   shares with their share-level permissions. The three states that
   mean opposite things stay distinct — **NULL DACL** (no share-level
   restriction, NTFS alone decides), **empty DACL** (no access), and an
-  explicit ACE list. Administrative shares are hidden unless
-  `--include-admin` is passed; a share whose DACL could not be read is
+  explicit ACE list. Administrative system shares (`STYPE_SPECIAL`) are
+  hidden unless `--include-admin` is passed; a hidden `$` data share is
+  not administrative and is always listed, flagged as hidden. A share whose DACL could not be read is
   listed *with its reason* rather than dropped. The GUI's **`Shares`
   tab** shows the same inventory (admin shares behind a checkbox) and
   additionally resolves ACE SIDs to account names where the local LSA
