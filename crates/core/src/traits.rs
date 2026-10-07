@@ -154,6 +154,12 @@ pub trait Scanner {
 /// Resolves SIDs to identities and determines group memberships via LDAP/AD.
 ///
 /// All methods are async because AD queries are I/O-bound.
+// `async_trait` desugars each method to return a `#[must_use]`-annotated
+// boxed future, then puts its own `#[must_use]` (no message) on the
+// generated function — clippy's `double_must_use` (new in Rust 1.99,
+// 2026-09-28) flags that redundant, message-less pair. No correctness
+// issue: the generated future is still `#[must_use]`.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait IdentityResolver: Send + Sync {
     /// Resolves a SID to a full identity (name, domain, kind, status).
