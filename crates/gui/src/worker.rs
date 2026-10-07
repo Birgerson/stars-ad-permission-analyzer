@@ -331,6 +331,14 @@ pub enum WorkerRequest {
         identity: String,
         ldap: Option<LdapParams>,
     },
+    /// Lists a server's SMB shares with their share-level DACL for the
+    /// Shares tab. Mirrors the CLI `shares` command; the raw server string
+    /// is validated in the worker.
+    ListShares { server: String },
+    /// Reads the domain's trust inventory (known-limitations L4) for the
+    /// Trusts tab. Mirrors the CLI `trusts` command. Requires LDAP — `None`
+    /// is answered with an explicit error, not an empty list.
+    ListTrusts { ldap: Option<LdapParams> },
 }
 
 /// One diagnostic marker for GUI display: its one-line reason plus a
@@ -514,6 +522,11 @@ pub enum WorkerEvent {
     /// `GroupsViewData` carries several vectors and is larger than the other
     /// variants (clippy::large_enum_variant).
     GroupsDone(Box<Result<GroupsViewData, String>>),
+    /// Result of a Shares-tab enumeration. Boxed for the same reason as
+    /// `GroupsDone` (several vectors).
+    SharesDone(Box<Result<SharesViewData, String>>),
+    /// Result of a Trusts-tab inventory read.
+    TrustsDone(Result<Vec<TrustRow>, String>),
 }
 
 /// One row in the trustee view — one ACE from a path's DACL plus
@@ -836,6 +849,16 @@ pub fn spawn_worker(
                     let result =
                         rt.block_on(handle_resolve_group_members(&identity, ldap.as_ref()));
                     let _ = evt_tx.send(WorkerEvent::GroupsDone(Box::new(result)));
+                    notify();
+                }
+                WorkerRequest::ListShares { server } => {
+                    let result = handle_list_shares(&server);
+                    let _ = evt_tx.send(WorkerEvent::SharesDone(Box::new(result)));
+                    notify();
+                }
+                WorkerRequest::ListTrusts { ldap } => {
+                    let result = rt.block_on(handle_list_trusts(ldap.as_ref()));
+                    let _ = evt_tx.send(WorkerEvent::TrustsDone(result));
                     notify();
                 }
             }
@@ -2169,6 +2192,288 @@ fn format_mask(mask: u32) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Shares tab — a server's SMB shares and their share-level DACL
+// ---------------------------------------------------------------------------
+
+/// One ACE of a share's DACL, for the Shares tab.
+#[derive(Clone)]
+pub struct ShareAceRow {
+    /// `"Allow"` or `"Deny"`.
+    pub kind: String,
+    /// Account name resolved via LSA, or the SID itself when it could not be
+    /// resolved — never blank.
+    pub trustee: String,
+    pub sid: String,
+    /// Normalized rights label, e.g. `Full Control (F)`.
+    pub rights_label: String,
+    pub mask_hex: String,
+}
+
+/// One share for the Shares tab.
+#[derive(Clone)]
+pub struct ShareRow {
+    pub name: String,
+    pub unc_path: String,
+    /// Local target path, or an explicit placeholder when the server reports
+    /// none — a share without a valid target stays visible (AGENTS.md SMB
+    /// rule 4).
+    pub local_path: String,
+    pub is_admin: bool,
+    /// One-line DACL status. Empty for a normal ACE list; otherwise the
+    /// NULL-DACL, empty-DACL or not-read explanation. NULL and empty DACL are
+    /// kept distinct on purpose (ADR 0017): one means "no restriction", the
+    /// other "no access".
+    pub dacl_status: String,
+    /// Presentation level of `dacl_status`: `0` neutral, `1` notice, `2`
+    /// concern — same scale as `DiagnosticRow::level`.
+    pub dacl_status_level: i32,
+    pub aces: Vec<ShareAceRow>,
+    /// ACEs the share scanner could not evaluate. `> 0` means the share mask
+    /// is incomplete — a hidden Deny among them could change the result.
+    pub unsupported_count: i32,
+}
+
+/// GUI-ready share inventory of one server. The GUI decides whether to show
+/// administrative shares; the worker always returns all of them.
+#[derive(Clone)]
+pub struct SharesViewData {
+    pub server: String,
+    pub shares: Vec<ShareRow>,
+    /// Per-share read failures as `"<share>: <reason>"` — listed, never
+    /// dropped.
+    pub errors: Vec<String>,
+    /// Number of administrative / hidden shares (`C$`, `ADMIN$`, `IPC$`, …).
+    pub admin_count: i32,
+}
+
+/// Lists a server's shares for the Shares tab — the GUI counterpart to the
+/// CLI `shares` command. Read-only.
+fn handle_list_shares(server: &str) -> Result<SharesViewData, String> {
+    info!(server, "ListShares request");
+    let server = validate_smb_server(server)
+        .map_err(|e| format!("Invalid server: {e}"))?
+        .0;
+    let result = share_scanner::scan_shares(&server);
+
+    // Resolve each distinct ACE SID once via LSA so the list shows
+    // "Everyone" rather than only "S-1-1-0". Unresolved SIDs stay as SIDs.
+    #[cfg(windows)]
+    let names = {
+        let mut sids: Vec<String> = Vec::new();
+        for (_, scan) in &result.share_dacls {
+            if let share_scanner::ShareDacl::Acl(perms) = &scan.dacl {
+                for p in perms {
+                    if !sids.contains(&p.sid.0) {
+                        sids.push(p.sid.0.clone());
+                    }
+                }
+            }
+        }
+        ad_resolver::build_sid_name_map(&[], sids)
+    };
+    #[cfg(not(windows))]
+    let names = std::collections::BTreeMap::new();
+
+    shares_to_view(&server, &result, &names)
+}
+
+/// Maps a [`share_scanner::ShareScanResult`] into the GUI-ready
+/// [`SharesViewData`]. Pure, so the NULL/empty/not-read distinction is
+/// unit-testable without a server.
+///
+/// An enumeration that failed outright (no shares, only errors) is an error,
+/// not an empty list — same rule as the CLI: reading shares needs
+/// administrative rights, and an empty result would read as "this server has
+/// no shares".
+pub fn shares_to_view(
+    server: &str,
+    result: &share_scanner::ShareScanResult,
+    names: &std::collections::BTreeMap<String, String>,
+) -> Result<SharesViewData, String> {
+    use share_scanner::ShareDacl;
+
+    if result.shares.is_empty() && !result.errors.is_empty() {
+        let reasons = result
+            .errors
+            .iter()
+            .map(|e| e.error.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(format!(
+            "Could not enumerate shares on '{server}': {reasons}. \
+             Reading share information requires administrative rights on the target."
+        ));
+    }
+
+    let shares = result
+        .shares
+        .iter()
+        .map(|share| {
+            let scan = result
+                .share_dacls
+                .iter()
+                .find(|(n, _)| n == &share.name)
+                .map(|(_, s)| s);
+            let (dacl_status, dacl_status_level, aces, unsupported_count) = match scan {
+                None => (
+                    "Permissions not read — see the errors below.".to_owned(),
+                    2,
+                    Vec::new(),
+                    0,
+                ),
+                Some(scan) => {
+                    let (status, level, aces) = match &scan.dacl {
+                        ShareDacl::NullDacl => (
+                            "NULL DACL — no share-level restriction: every principal passes \
+                             the share layer, NTFS alone decides the effective right."
+                                .to_owned(),
+                            1,
+                            Vec::new(),
+                        ),
+                        ShareDacl::Acl(perms) if perms.is_empty() => (
+                            "Empty DACL — no access via this share.".to_owned(),
+                            0,
+                            Vec::new(),
+                        ),
+                        ShareDacl::Acl(perms) => (
+                            String::new(),
+                            0,
+                            perms.iter().map(|p| share_ace_row(p, names)).collect(),
+                        ),
+                    };
+                    (status, level, aces, scan.unsupported_count as i32)
+                }
+            };
+            let local_path = match &share.local_path {
+                Some(p) if !p.0.is_empty() => p.0.clone(),
+                _ => "(none reported — e.g. IPC$ or a special share)".to_owned(),
+            };
+            ShareRow {
+                name: share.name.clone(),
+                unc_path: share.unc_path.clone(),
+                local_path,
+                is_admin: share.is_admin_share,
+                dacl_status,
+                dacl_status_level,
+                aces,
+                unsupported_count,
+            }
+        })
+        .collect();
+
+    let errors = result
+        .errors
+        .iter()
+        .map(|e| {
+            let which = if e.share_name.is_empty() {
+                "(enumeration)"
+            } else {
+                e.share_name.as_str()
+            };
+            format!("{which}: {}", e.error)
+        })
+        .collect();
+    let admin_count = result.shares.iter().filter(|s| s.is_admin_share).count() as i32;
+
+    Ok(SharesViewData {
+        server: server.to_owned(),
+        shares,
+        errors,
+        admin_count,
+    })
+}
+
+/// Formats one share ACE for display, using the same rights label as the
+/// trustee view (`trustee_row_for_display`).
+fn share_ace_row(
+    p: &adpa_core::model::SharePermission,
+    names: &std::collections::BTreeMap<String, String>,
+) -> ShareAceRow {
+    use adpa_core::model::AceKind;
+    use permission_engine::mask::expand_generic_rights;
+
+    let rights = NormalizedRights::new(expand_generic_rights(p.mask.0));
+    ShareAceRow {
+        kind: match p.kind {
+            AceKind::Allow => "Allow",
+            AceKind::Deny => "Deny",
+        }
+        .to_owned(),
+        trustee: names
+            .get(&p.sid.0)
+            .cloned()
+            .unwrap_or_else(|| p.sid.0.clone()),
+        sid: p.sid.0.clone(),
+        rights_label: format!("{} ({})", rights.display_name(), rights.label()),
+        mask_hex: format!("0x{:08X}", p.mask.0),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Trusts tab — the domain's trust inventory (known-limitations L4)
+// ---------------------------------------------------------------------------
+
+/// One domain trust for the Trusts tab.
+#[derive(Clone)]
+pub struct TrustRow {
+    /// DNS name of the trusted domain/forest.
+    pub partner: String,
+    /// NetBIOS name, empty when the trust object carries none.
+    pub flat_name: String,
+    pub direction: String,
+    /// Decoded `trustAttributes`, comma-separated, or `"(none)"`.
+    pub attributes: String,
+    /// Raw `trustAttributes` bitmask — nothing is lost in the decoding.
+    pub raw_hex: String,
+    /// Domain SID of the trusted domain, empty when not present.
+    pub sid: String,
+    /// SID filtering / quarantine is on: foreign and historical SIDs across
+    /// this trust are dropped at runtime, so a finding relying on one may
+    /// over-report.
+    pub sid_filtering: bool,
+    /// Selective Authentication is on: a DACL grant alone does not imply
+    /// real access for principals from this trust.
+    pub selective_auth: bool,
+}
+
+/// Reads the domain's trust inventory for the Trusts tab — the GUI
+/// counterpart to the CLI `trusts` command. Read-only.
+async fn handle_list_trusts(ldap: Option<&LdapParams>) -> Result<Vec<TrustRow>, String> {
+    info!("ListTrusts request");
+    let normalized = validate_connection_inputs(None, None, ldap)?;
+    let ldap = normalized.ldap.ok_or_else(|| {
+        "Reading the domain's trusts needs an LDAP connection — choose a connection mode \
+         and enter the domain controller."
+            .to_owned()
+    })?;
+    let trusts = ad_resolver::resolve_domain_trusts(&ldap.to_config())
+        .await
+        .map_err(|e| format!("Could not read the domain trusts: {e}"))?;
+    Ok(trusts.iter().map(trust_to_row).collect())
+}
+
+/// Maps a [`DomainTrust`](adpa_core::model::DomainTrust) into a GUI row.
+/// The flag interpretation comes from `TrustAttributes` in core — no trust
+/// logic lives in the GUI.
+pub fn trust_to_row(t: &adpa_core::model::DomainTrust) -> TrustRow {
+    let labels = t.attributes.labels();
+    TrustRow {
+        partner: t.partner.clone(),
+        flat_name: t.flat_name.clone().unwrap_or_default(),
+        direction: t.direction.label(),
+        attributes: if labels.is_empty() {
+            "(none)".to_owned()
+        } else {
+            labels.join(", ")
+        },
+        raw_hex: format!("0x{:08X}", t.attributes.raw),
+        sid: t.sid.as_ref().map(|s| s.0.clone()).unwrap_or_default(),
+        sid_filtering: t.attributes.sid_filtering_enabled(),
+        selective_auth: t.attributes.selective_authentication(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Identity resolution
 // ---------------------------------------------------------------------------
 
@@ -3083,5 +3388,255 @@ mod tests {
             c.bind_dn.is_empty() && c.bind_password.is_empty(),
             "signed bind uses the current Windows logon — no bind credentials"
         );
+    }
+
+    // --- GUI2-1 (workspace re-sweep 2026-10-06): Shares and Trusts tabs ---
+
+    fn test_share(name: &str, admin: bool, local: Option<&str>) -> adpa_core::model::Share {
+        adpa_core::model::Share {
+            name: name.to_owned(),
+            unc_path: format!(r"\\srv\{name}"),
+            local_path: local.map(|p| NormalizedPath(p.to_owned())),
+            is_admin_share: admin,
+        }
+    }
+
+    fn test_share_perm(
+        share: &str,
+        sid: &str,
+        mask: u32,
+        kind: adpa_core::model::AceKind,
+    ) -> adpa_core::model::SharePermission {
+        adpa_core::model::SharePermission {
+            share_name: share.to_owned(),
+            sid: Sid(sid.to_owned()),
+            mask: adpa_core::model::AccessMask(mask),
+            kind,
+        }
+    }
+
+    fn dacl_scan(
+        dacl: share_scanner::ShareDacl,
+        unsupported: usize,
+    ) -> share_scanner::ShareDaclScan {
+        share_scanner::ShareDaclScan {
+            dacl,
+            unsupported_count: unsupported,
+        }
+    }
+
+    /// ADR 0017 in the GUI: "no restriction" (NULL DACL) and "no access"
+    /// (empty DACL) must never render the same way.
+    #[test]
+    fn shares_view_keeps_null_and_empty_dacl_distinct() {
+        use share_scanner::{ShareDacl, ShareScanResult};
+        let result = ShareScanResult {
+            shares: vec![
+                test_share("open", false, Some(r"D:\open")),
+                test_share("closed", false, Some(r"D:\closed")),
+            ],
+            permissions: vec![],
+            errors: vec![],
+            share_dacls: vec![
+                ("open".to_owned(), dacl_scan(ShareDacl::NullDacl, 0)),
+                ("closed".to_owned(), dacl_scan(ShareDacl::Acl(vec![]), 0)),
+            ],
+        };
+        let view = shares_to_view("srv", &result, &Default::default()).unwrap();
+        let open = &view.shares[0];
+        let closed = &view.shares[1];
+        assert!(
+            open.dacl_status.contains("NULL DACL"),
+            "{}",
+            open.dacl_status
+        );
+        assert_eq!(open.dacl_status_level, 1, "NULL DACL is flagged");
+        assert!(
+            closed.dacl_status.contains("Empty DACL"),
+            "{}",
+            closed.dacl_status
+        );
+        assert_ne!(open.dacl_status, closed.dacl_status);
+        assert!(open.aces.is_empty() && closed.aces.is_empty());
+    }
+
+    /// ACEs keep Allow/Deny and the raw mask; a SID LSA could resolve shows
+    /// the name, an unresolved one falls back to the SID instead of a blank.
+    #[test]
+    fn shares_view_lists_aces_with_names_or_sid_fallback() {
+        use adpa_core::model::AceKind;
+        use share_scanner::{ShareDacl, ShareScanResult};
+        let result = ShareScanResult {
+            shares: vec![test_share("data", false, Some(r"D:\data"))],
+            permissions: vec![],
+            errors: vec![],
+            share_dacls: vec![(
+                "data".to_owned(),
+                dacl_scan(
+                    ShareDacl::Acl(vec![
+                        test_share_perm("data", "S-1-1-0", 0x001F_01FF, AceKind::Allow),
+                        test_share_perm("data", "S-1-5-21-1-2-3-1105", 0x0012_0089, AceKind::Deny),
+                    ]),
+                    0,
+                ),
+            )],
+        };
+        let mut names = std::collections::BTreeMap::new();
+        names.insert("S-1-1-0".to_owned(), "Everyone".to_owned());
+        let view = shares_to_view("srv", &result, &names).unwrap();
+        let aces = &view.shares[0].aces;
+        assert_eq!(aces.len(), 2);
+        assert_eq!(aces[0].kind, "Allow");
+        assert_eq!(aces[0].trustee, "Everyone");
+        assert_eq!(aces[0].mask_hex, "0x001F01FF");
+        assert_eq!(aces[1].kind, "Deny");
+        assert_eq!(aces[1].trustee, "S-1-5-21-1-2-3-1105", "unresolved → SID");
+        assert!(view.shares[0].dacl_status.is_empty());
+    }
+
+    /// Nothing is dropped silently: an unread share, unevaluated ACEs,
+    /// read errors and a missing local path all stay visible.
+    #[test]
+    fn shares_view_marks_unread_shares_unsupported_aces_and_errors() {
+        use share_scanner::{ShareDacl, ShareScanError, ShareScanResult};
+        let result = ShareScanResult {
+            shares: vec![
+                test_share("unread", false, Some(r"D:\x")),
+                test_share("partial", false, Some(r"D:\y")),
+                test_share("IPC$", true, None),
+            ],
+            permissions: vec![],
+            errors: vec![
+                ShareScanError {
+                    share_name: "unread".to_owned(),
+                    error: adpa_core::error::CoreError::AccessDenied("no rights".to_owned()),
+                },
+                ShareScanError {
+                    share_name: String::new(),
+                    error: adpa_core::error::CoreError::AccessDenied(
+                        "partial enumeration".to_owned(),
+                    ),
+                },
+            ],
+            share_dacls: vec![
+                ("partial".to_owned(), dacl_scan(ShareDacl::Acl(vec![]), 2)),
+                ("IPC$".to_owned(), dacl_scan(ShareDacl::NullDacl, 0)),
+            ],
+        };
+        let view = shares_to_view("srv", &result, &Default::default()).unwrap();
+        assert_eq!(
+            view.shares[0].dacl_status_level, 2,
+            "unread share is a concern"
+        );
+        assert!(view.shares[0].dacl_status.contains("not read"));
+        assert_eq!(view.shares[1].unsupported_count, 2);
+        assert!(view.shares[2].local_path.contains("none reported"));
+        assert_eq!(view.admin_count, 1);
+        assert_eq!(view.errors.len(), 2);
+        assert!(view.errors[0].starts_with("unread: "));
+        assert!(view.errors[1].starts_with("(enumeration): "));
+    }
+
+    /// An enumeration that failed outright is an error, not an empty list
+    /// that would read as "this server has no shares" — same rule as the CLI.
+    #[test]
+    fn shares_view_total_enumeration_failure_is_an_error() {
+        use share_scanner::{ShareScanError, ShareScanResult};
+        let result = ShareScanResult {
+            shares: vec![],
+            permissions: vec![],
+            errors: vec![ShareScanError {
+                share_name: String::new(),
+                error: adpa_core::error::CoreError::AccessDenied("NetShareEnum failed".to_owned()),
+            }],
+            share_dacls: vec![],
+        };
+        let err = shares_to_view("srv", &result, &Default::default())
+            .err()
+            .expect("must be an error");
+        assert!(err.contains("administrative rights"), "{err}");
+        assert!(err.contains("NetShareEnum failed"), "{err}");
+    }
+
+    /// A server that genuinely has no shares (no errors) is a valid, empty
+    /// result — distinct from the failure case above.
+    #[test]
+    fn shares_view_no_shares_without_errors_is_an_empty_result() {
+        let result = share_scanner::ShareScanResult {
+            shares: vec![],
+            permissions: vec![],
+            errors: vec![],
+            share_dacls: vec![],
+        };
+        let view = shares_to_view("srv", &result, &Default::default()).unwrap();
+        assert!(view.shares.is_empty() && view.errors.is_empty());
+    }
+
+    /// The server is validated in the worker before any NetAPI call.
+    #[test]
+    fn list_shares_rejects_an_invalid_server_before_any_call() {
+        let err = handle_list_shares(r"srv\share")
+            .err()
+            .expect("must be rejected");
+        assert!(err.starts_with("Invalid server"), "{err}");
+    }
+
+    /// Flag interpretation comes from core `TrustAttributes`; the row only
+    /// carries it.
+    #[test]
+    fn trust_row_carries_sid_filtering_and_selective_auth() {
+        use adpa_core::model::{DomainTrust, TrustAttributes, TrustDirection};
+        let t = DomainTrust {
+            partner: "ext.test".to_owned(),
+            flat_name: Some("EXT".to_owned()),
+            direction: TrustDirection::Bidirectional,
+            attributes: TrustAttributes::from_bits(
+                TrustAttributes::QUARANTINED_DOMAIN | TrustAttributes::CROSS_ORGANIZATION,
+            ),
+            sid: Some(Sid("S-1-5-21-9-9-9".to_owned())),
+        };
+        let row = trust_to_row(&t);
+        assert!(row.sid_filtering && row.selective_auth);
+        assert_eq!(row.direction, "bidirectional");
+        assert!(
+            row.attributes.contains("SID-filtering"),
+            "{}",
+            row.attributes
+        );
+        assert!(row.attributes.contains("selective-authentication"));
+        assert_eq!(row.raw_hex, "0x00000014");
+        assert_eq!(row.flat_name, "EXT");
+        assert_eq!(row.sid, "S-1-5-21-9-9-9");
+    }
+
+    /// Missing optional fields stay empty; an unknown direction keeps its
+    /// raw code visible rather than being dressed up as a known value.
+    #[test]
+    fn trust_row_without_optional_fields_or_flags() {
+        use adpa_core::model::{DomainTrust, TrustAttributes, TrustDirection};
+        let t = DomainTrust {
+            partner: "old.test".to_owned(),
+            flat_name: None,
+            direction: TrustDirection::Unknown(7),
+            attributes: TrustAttributes::default(),
+            sid: None,
+        };
+        let row = trust_to_row(&t);
+        assert!(!row.sid_filtering && !row.selective_auth);
+        assert_eq!(row.attributes, "(none)");
+        assert_eq!(row.direction, "unknown (7)");
+        assert!(row.flat_name.is_empty() && row.sid.is_empty());
+    }
+
+    /// Trusts need LDAP — without it the worker answers with an explicit
+    /// error, never an empty "no trusts" list.
+    #[test]
+    fn list_trusts_without_ldap_is_an_explicit_error() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(handle_list_trusts(None))
+            .err()
+            .expect("must be an error");
+        assert!(err.contains("needs an LDAP connection"), "{err}");
     }
 }

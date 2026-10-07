@@ -349,9 +349,9 @@ adpa.exe analyze --path "\\fileserver\Accounting\Reports" --user S-1-5-21-...
 ```
 Stars detects the UNC path automatically and factors the share permission into the calculation.
 
-### GUI — the five tabs
+### GUI — the seven tabs
 
-Stars has exactly **five tabs:** `Analyze`, `Groups`, `Scan Tree`, `Delta`, `Info`. "Identity", "Trustees", and "Risk findings" are not separate tabs — they are sections inside the real tabs.
+Stars has exactly **seven tabs:** `Analyze`, `Groups`, `Scan Tree`, `Delta`, `Trusts`, `Shares`, `Info`. "Identity", "Trustees", and "Risk findings" are not separate tabs — they are sections inside the real tabs.
 
 #### `Analyze` tab
 
@@ -418,6 +418,14 @@ Output:
 - Color code: green = Added, red = Removed, yellow = Changed.
 - Each stored run shows its **true error count** and a **⚠ button** opening the run's error list — the paths that scan could not read.
 - Two runs with different targets are refused with a clear message instead of producing a meaningless comparison.
+
+#### `Trusts` tab
+
+The GUI counterpart to `adpa trusts`: the domain's Active Directory trusts with direction and decoded `trustAttributes`, read over LDAP (base DN = domain root). **SID filtering** and **Selective Authentication** get an explicit ⚠ callout — both can make a finding read higher than the real runtime access, which Stars does not model (known-limitations L4). Read-only.
+
+#### `Shares` tab
+
+The GUI counterpart to `adpa shares`: a server's SMB shares with their share-level permissions. NULL DACL (no share restriction), empty DACL (no access) and an ACE list stay visibly distinct; account names are resolved where possible; administrative shares are hidden unless the checkbox is ticked; unreadable shares and unevaluated ACEs are shown, not dropped. Read-only.
 
 #### `Info` tab
 
