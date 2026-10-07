@@ -404,6 +404,8 @@ slint::slint! {
         unc: string,
         local: string,
         is-admin: bool,
+        // `$` name; when not also is-admin it is a hidden DATA share.
+        is-hidden: bool,
         // Empty for a normal ACE list; otherwise NULL DACL / empty DACL /
         // not read (kept distinct — ADR 0017).
         dacl-status: string,
@@ -2490,8 +2492,10 @@ slint::slint! {
                                                     horizontal-stretch: 0;
                                                 }
                                                 Text {
-                                                    text: s.is-admin ? "administrative / hidden share" : "";
-                                                    color: Theme.text-muted;
+                                                    text: s.is-admin ? "administrative share (system)"
+                                                        : s.is-hidden ? "⚠ hidden data share ($) — not listed when browsing, NOT administrative"
+                                                        : "";
+                                                    color: s.is-admin ? Theme.text-muted : Theme.warning;
                                                     font-size: 11px;
                                                     vertical-alignment: center;
                                                     horizontal-stretch: 1;
@@ -3318,6 +3322,7 @@ fn handle_shares_done(ui: &MainWindow, result: Result<SharesViewData, String>) {
                         unc: s.unc_path.into(),
                         local: s.local_path.into(),
                         is_admin: s.is_admin,
+                        is_hidden: s.is_hidden,
                         dacl_status: s.dacl_status.into(),
                         dacl_level: s.dacl_status_level,
                         aces: slint::ModelRc::new(slint::VecModel::from(aces)),

@@ -253,7 +253,8 @@ enum Commands {
 
     /// List the SMB shares of a server (read-only) with their share-level
     /// permissions. Administrative shares (`C$`, `ADMIN$`, `IPC$`, …) are
-    /// hidden unless `--include-admin` is given. This shows the SHARE layer
+    /// hidden unless `--include-admin` is given; hidden `$` data shares are
+    /// always listed and flagged. This shows the SHARE layer
     /// only — for a user's effective right use `analyze`, which combines
     /// share and NTFS. Reading shares requires administrative rights on the
     /// target server. Stars never modifies a share.
@@ -263,7 +264,8 @@ enum Commands {
         /// explicitly.
         #[arg(short = 's', long)]
         server: String,
-        /// Also list administrative / hidden shares (`C$`, `ADMIN$`, `IPC$`).
+        /// Also list administrative system shares (`C$`, `ADMIN$`, `IPC$`).
+        /// Hidden `$` data shares are listed regardless.
         #[arg(long)]
         include_admin: bool,
     },
