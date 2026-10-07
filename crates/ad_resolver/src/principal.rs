@@ -307,6 +307,11 @@ pub use adpa_core::traits::ResolutionProvenance as EngineFlags;
 // ---------------------------------------------------------------------------
 
 /// LDAP backend the principal resolver consumes.
+// See the matching `#[allow]` on `adpa_core::traits::IdentityResolver` for
+// why: `async_trait`'s generated, message-less `#[must_use]` now triggers
+// clippy's `double_must_use` (new in Rust 1.99, 2026-09-28) on every
+// `#[async_trait]` trait *definition* — not a correctness issue.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait IdentityBackend: Send + Sync {
     /// als `Err` propagiert.
