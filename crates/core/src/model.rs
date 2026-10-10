@@ -1411,6 +1411,14 @@ pub enum PermissionDiagnostic {
     /// whose SID could not be looked up. Before ADR 0066 these cases were
     /// dropped silently. Incompleteness trigger; Concern.
     GroupResolutionIncomplete { reason: String },
+
+    /// Groups the directory reports the account as (transitively) member of
+    /// but that Windows does **not** put into the token: distribution groups,
+    /// and security groups reached only through a distribution group (the
+    /// DC's `tokenGroups` omit both — lab-confirmed). They were left out of
+    /// the evaluated token; listed so the omission is never silent.
+    /// Informational (ADR 0067).
+    NonSecurityGroupsExcluded { groups: Vec<String> },
 }
 
 /// Account state as it may be stated to a reader — the single source for
@@ -1632,6 +1640,12 @@ impl PermissionDiagnostic {
             PermissionDiagnostic::GroupResolutionIncomplete { reason } => {
                 format!("Group resolution is incomplete: {reason}.")
             }
+            PermissionDiagnostic::NonSecurityGroupsExcluded { groups } => format!(
+                "{} group(s) are not in the token and were left out — Windows ignores \
+                 distribution groups and nesting through them: {}.",
+                groups.len(),
+                groups.join("; ")
+            ),
         }
     }
 
@@ -1686,7 +1700,8 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::SidHistoryEvaluated { .. }
             | PermissionDiagnostic::GroupSidHistoryEvaluated { .. }
             | PermissionDiagnostic::MembersViaPrimaryGroupIncluded { .. }
-            | PermissionDiagnostic::IdentityOrphaned => None,
+            | PermissionDiagnostic::IdentityOrphaned
+            | PermissionDiagnostic::NonSecurityGroupsExcluded { .. } => None,
         }
     }
 
@@ -1709,7 +1724,8 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::SidHistoryEvaluated { .. }
             | PermissionDiagnostic::GroupSidHistoryEvaluated { .. }
             | PermissionDiagnostic::GroupResolutionViaGlobalCatalog
-            | PermissionDiagnostic::IdentityOrphaned => DiagnosticSeverity::Neutral,
+            | PermissionDiagnostic::IdentityOrphaned
+            | PermissionDiagnostic::NonSecurityGroupsExcluded { .. } => DiagnosticSeverity::Neutral,
             // Worth a look — a hidden Deny among skipped ACEs could change the
             // result.
             PermissionDiagnostic::UnsupportedShareAces { .. }
@@ -2460,6 +2476,9 @@ mod tests {
                 max_mask: 1,
             },
             PermissionDiagnostic::GroupResolutionIncomplete { reason: "r".into() },
+            PermissionDiagnostic::NonSecurityGroupsExcluded {
+                groups: vec!["g".into()],
+            },
         ];
         for d in &all {
             assert_eq!(

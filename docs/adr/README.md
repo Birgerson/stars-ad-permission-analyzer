@@ -76,3 +76,4 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0064 | Orphaned only with evidence; unresolvable SIDs are incomplete |
 | 0065 | Results that cannot be determined are never stated as facts |
 | 0066 | No silent drops in group resolution |
+| 0067 | Only security groups count; cross-check against tokenGroups |

@@ -54,6 +54,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   read as empty — direct memberships counted as nested; it is now completed
   through validated range retrieval (lab: 1601 direct memberships read
   completely, before 0).
+- **Distribution groups no longer count as access** (lab finding AD4-4,
+  ADR 0067). The transitive LDAP search also returns distribution groups,
+  and Stars put them — and every group reached through them — into the
+  token. Windows does not: in the lab, an account in a distribution group
+  nested in a security group was shown "Modify" while the DC's
+  `tokenGroups` contained neither group and Windows Authz granted nothing.
+  Only groups reachable through security groups count now; the left-out
+  groups are listed (`NonSecurityGroupsExcluded`), an unreadable `groupType`
+  is a gap, and the resolved set is cross-checked against the account's
+  `tokenGroups` on the domain controller — every difference makes the
+  result not determinable. An account in more groups than fit into a
+  Windows logon token (1,015) is reported as such: it cannot log on, so its
+  rights are not determinable.
 - **A group that arrives from two sources is listed once** (lab finding
   CLI3-1). On a domain controller a domain-local or builtin group comes from
   LDAP and from the local-group lookup; the explanation printed it twice

@@ -832,6 +832,7 @@ async fn resolve_identity(
                 resolved_via_fsp: false,
                 resolved_via_global_catalog: false,
                 group_resolution_gaps: sam_res.gaps,
+                excluded_groups: Vec::new(),
             };
             Ok(ResolvedIdentity {
                 resolution,
@@ -879,6 +880,7 @@ async fn resolve_identity(
                 resolved_via_fsp: false,
                 resolved_via_global_catalog: false,
                 group_resolution_gaps: Vec::new(),
+                excluded_groups: Vec::new(),
             };
             Ok(ResolvedIdentity {
                 resolution,

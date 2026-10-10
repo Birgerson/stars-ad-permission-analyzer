@@ -427,6 +427,12 @@ enum IdentityScopeStatus {
 }
 ```
 
+Only security groups are counted: a group must be reachable from the
+account through security groups (`groupType` bit 0x80000000); distribution
+groups and groups reached only through one are left out and listed in
+`NonSecurityGroupsExcluded`, and the result is compared with the account's
+`tokenGroups` on the DC — differences become gaps (ADR 0067).
+
 Group resolution returns `GroupMembershipResolution { memberships, gaps }`
 (ADR 0066): every group the token may lack — a primary group that could not
 be read, a group without a readable SID, `memberOf` DNs outside the resolved
@@ -1063,6 +1069,8 @@ enum PermissionDiagnostic {
     LogonDependentTrustees { sids: Vec<String>, min_mask: u32, max_mask: u32 },
     // A successful group resolution that may still lack groups (ADR 0066).
     GroupResolutionIncomplete { reason: String },
+    // Distribution groups / groups reached only through one, left out (ADR 0067).
+    NonSecurityGroupsExcluded { groups: Vec<String> },
 }
 ```
 
