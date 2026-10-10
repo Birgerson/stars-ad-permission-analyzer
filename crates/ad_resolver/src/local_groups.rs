@@ -250,11 +250,13 @@ pub struct LocalGroupMember {
     pub display_name: Option<String>,
 }
 
-/// name. Required for chain reconstruction.
+/// name. Required for chain reconstruction. The second list names every
+/// local group whose SID could not be looked up — it is missing from the
+/// token and must surface as a gap (ADR 0066), never be dropped silently.
 pub fn resolve_local_groups(
     server: Option<&str>,
     account: &str,
-) -> Result<Vec<LocalGroupInfo>, CoreError> {
+) -> Result<(Vec<LocalGroupInfo>, Vec<String>), CoreError> {
     let server_w = server.map(to_wide_null);
     let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let account_w = to_wide_null(account);
@@ -286,7 +288,7 @@ pub fn resolve_local_groups(
             ))),
             NERR_USER_NOT_FOUND => {
                 debug!(account, ?server, "user not found");
-                Ok(Vec::new())
+                Ok((Vec::new(), Vec::new()))
             }
             _ => Err(CoreError::LdapQuery(format!(
                 "NetUserGetLocalGroups('{account}') failed with status {status}"
@@ -295,6 +297,7 @@ pub fn resolve_local_groups(
     }
 
     let mut result = Vec::with_capacity(entries_read as usize);
+    let mut unresolved: Vec<String> = Vec::new();
     if !buf.is_null() && entries_read > 0 {
         // SAFETY: see above
         let entries = unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };
@@ -302,18 +305,23 @@ pub fn resolve_local_groups(
             // SAFETY: lgrui0_name is a valid null-terminated wide string inside the buffer.
             let name = unsafe { wide_ptr_to_string(entry.lgrui0_name) };
             if name.is_empty() {
+                unresolved.push("(a local group with an empty name)".to_owned());
                 continue;
             }
-            if let Some(sid_str) = lookup_account_sid(server, &name) {
-                result.push(LocalGroupInfo {
+            match lookup_account_sid(server, &name) {
+                Some(sid_str) => result.push(LocalGroupInfo {
                     name,
                     sid: Sid(sid_str),
-                });
+                }),
+                None => {
+                    warn!(local_group = %name, "Could not resolve local group SID");
+                    unresolved.push(name);
+                }
             }
         }
     }
 
-    Ok(result)
+    Ok((result, unresolved))
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
@@ -413,8 +421,18 @@ pub fn resolve_local_group_chains(
     user_name: Option<&str>,
     known_member_sids_to_names: &std::collections::HashMap<String, String>,
     account: &str,
-) -> Result<Vec<(Sid, Option<String>, MembershipPath)>, CoreError> {
-    let local_groups = resolve_local_groups(server, account)?;
+) -> Result<LocalGroupChains, CoreError> {
+    let (local_groups, unresolved) = resolve_local_groups(server, account)?;
+    let gaps: Vec<String> = if unresolved.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!(
+            "{} local group(s) of the target server could not be resolved to a SID and are not \
+             in the evaluated token: {}",
+            unresolved.len(),
+            unresolved.join(", ")
+        )]
+    };
     let mut out: Vec<(Sid, Option<String>, MembershipPath)> = Vec::new();
     for lg in local_groups {
         let lg_display =
@@ -457,7 +475,24 @@ pub fn resolve_local_group_chains(
         ));
     }
     sort_local_group_chains(&mut out);
-    Ok(out)
+    Ok(LocalGroupChains { chains: out, gaps })
+}
+
+/// Local-group chains of one account plus the gaps found (ADR 0066).
+#[derive(Debug, Clone)]
+pub struct LocalGroupChains {
+    pub chains: Vec<(Sid, Option<String>, MembershipPath)>,
+    /// Reader-facing reasons why local groups are missing from `chains`.
+    pub gaps: Vec<String>,
+}
+
+/// Local-group memberships of an identity plus the gaps found (ADR 0066).
+#[derive(Debug, Clone)]
+pub struct LocalGroupMemberships {
+    pub memberships: Vec<GroupMembership>,
+    /// Reader-facing reasons why local groups are missing; callers must mark
+    /// the local-group evaluation as not complete when this is non-empty.
+    pub gaps: Vec<String>,
 }
 
 /// Orders local-group chains by display name (case-insensitive), then SID,
@@ -553,7 +588,7 @@ pub fn resolve_local_group_chains_for_identity(
     server: Option<&str>,
     identity: &Identity,
     known_member_sids_to_names: &std::collections::HashMap<String, String>,
-) -> Result<Vec<GroupMembership>, CoreError> {
+) -> Result<LocalGroupMemberships, CoreError> {
     let candidates = format_account_candidates_for_local_groups(identity);
     if candidates.is_empty() {
         return Err(CoreError::Validation(format!(
@@ -580,7 +615,7 @@ pub fn resolve_local_group_chains_for_identity(
                     known_member_sids_to_names,
                     candidate,
                 ) {
-                    Ok(chains) => {
+                    Ok(LocalGroupChains { chains, gaps }) => {
                         let memberships: Vec<GroupMembership> = chains
                             .into_iter()
                             .map(|(group_sid, group_name, path)| GroupMembership {
@@ -597,7 +632,7 @@ pub fn resolve_local_group_chains_for_identity(
                                 group_sid_history: Vec::new(),
                             })
                             .collect();
-                        return Ok(memberships);
+                        return Ok(LocalGroupMemberships { memberships, gaps });
                     }
                     Err(e) => {
                         last_err = Some(e);

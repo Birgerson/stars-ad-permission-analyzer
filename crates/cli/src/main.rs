@@ -831,6 +831,7 @@ async fn resolve_identity(
                 diagnostics,
                 resolved_via_fsp: false,
                 resolved_via_global_catalog: false,
+                group_resolution_gaps: sam_res.gaps,
             };
             Ok(ResolvedIdentity {
                 resolution,
@@ -877,6 +878,7 @@ async fn resolve_identity(
                 ],
                 resolved_via_fsp: false,
                 resolved_via_global_catalog: false,
+                group_resolution_gaps: Vec::new(),
             };
             Ok(ResolvedIdentity {
                 resolution,
@@ -1568,7 +1570,7 @@ fn collect_local_group_sids_for_path(
         identity,
         &known_member_sids_to_names,
     ) {
-        Ok(memberships) => {
+        Ok(ad_resolver::LocalGroupMemberships { memberships, gaps }) => {
             let sids: Vec<adpa_core::model::Sid> =
                 memberships.iter().map(|m| m.group_sid.clone()).collect();
             tracing::debug!(
@@ -1577,7 +1579,14 @@ fn collect_local_group_sids_for_path(
                 count = sids.len(),
                 "Resolved local group chains for target server"
             );
-            (sids, memberships, LocalGroupEvalStatus::Applied)
+            // ADR 0066: groups that could not be resolved keep the
+            // evaluation incomplete; the resolved ones stay in the token.
+            let status = if gaps.is_empty() {
+                LocalGroupEvalStatus::Applied
+            } else {
+                LocalGroupEvalStatus::NotAvailable(gaps.join("; "))
+            };
+            (sids, memberships, status)
         }
         Err(e) => {
             let msg = e.to_string();

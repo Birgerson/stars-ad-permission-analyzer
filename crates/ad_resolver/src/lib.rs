@@ -29,7 +29,8 @@ pub use enumerate::{enumerate_all, IdentitySnapshot};
 #[cfg(windows)]
 pub use local_groups::{
     resolve_local_group_chains_for_identity, resolve_local_group_sids_for_identity,
-    resolve_local_group_sids_strict, LocalGroupLookupOutcome,
+    resolve_local_group_sids_strict, LocalGroupChains, LocalGroupLookupOutcome,
+    LocalGroupMemberships,
 };
 #[cfg(not(windows))]
 pub use principal::NoLsaBackend;

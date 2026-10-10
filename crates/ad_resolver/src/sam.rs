@@ -405,6 +405,8 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
 
     // Global groups only meaningful for user accounts.
     let mut memberships: Vec<GroupMembership> = Vec::new();
+    // ADR 0066: every group that could not be resolved is a visible gap.
+    let mut gaps: Vec<String> = Vec::new();
     if matches!(account_kind, IdentityKind::User) {
         match user_global_group_names(None, &account.name) {
             Ok(mut names) => {
@@ -446,18 +448,30 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
                                 group_sid_history: Vec::new(),
                             });
                         }
-                        Err(e) => warn!(
-                            group_name,
-                            error = %e,
-                            "SAM: could not resolve domain group name to SID"
-                        ),
+                        Err(e) => {
+                            warn!(
+                                group_name,
+                                error = %e,
+                                "SAM: could not resolve domain group name to SID"
+                            );
+                            gaps.push(format!(
+                                "the domain group '{group_name}' could not be resolved to a SID \
+                                 and is not in the evaluated token"
+                            ));
+                        }
                     }
                 }
             }
-            Err(e) => warn!(
-                error = %e,
-                "SAM: NetUserGetGroups failed; falling back to local groups only"
-            ),
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "SAM: NetUserGetGroups failed; falling back to local groups only"
+                );
+                gaps.push(format!(
+                    "the direct domain groups could not be read ({e}) — none is in the \
+                     evaluated token"
+                ));
+            }
         }
 
         // konkret beschriften.
@@ -480,7 +494,11 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
             &known_token_sids,
             &account.name,
         ) {
-            Ok(chains) => {
+            Ok(crate::local_groups::LocalGroupChains {
+                chains,
+                gaps: local_gaps,
+            }) => {
+                gaps.extend(local_gaps);
                 for (group_sid, group_name, path) in chains {
                     memberships.push(GroupMembership {
                         member_sid: Sid(sid_str.to_owned()),
@@ -498,10 +516,15 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
                     });
                 }
             }
-            Err(e) => warn!(
-                error = %e,
-                "SAM: resolve_local_group_chains failed; local group SIDs missing from token"
-            ),
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "SAM: resolve_local_group_chains failed; local group SIDs missing from token"
+                );
+                gaps.push(format!(
+                    "the local groups could not be read ({e}) — none is in the evaluated token"
+                ));
+            }
         }
     }
 
@@ -509,6 +532,7 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
         identity,
         memberships,
         disabled_known,
+        gaps,
     })
 }
 
@@ -522,6 +546,9 @@ pub struct SamResolution {
     pub identity: Identity,
     pub memberships: Vec<GroupMembership>,
     pub disabled_known: bool,
+    /// Groups that could not be resolved (ADR 0066) — surfaced as
+    /// `GroupResolutionIncomplete` instead of being dropped.
+    pub gaps: Vec<String>,
 }
 
 ///

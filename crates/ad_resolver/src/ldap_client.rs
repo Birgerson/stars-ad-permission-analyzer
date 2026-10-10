@@ -128,9 +128,26 @@ impl RawEntry {
         self.attrs.get(name)?.first().map(String::as_str)
     }
 
-    /// Returns the binary data of an attribute (e.g. objectSid).
+    /// Returns the binary data of an attribute (e.g. objectSid), whichever
+    /// map the LDAP layer put it in.
+    ///
+    /// ldap3 stores a value whose bytes happen to be valid UTF-8 in `attrs`,
+    /// not `bin_attrs` — and every builtin SID (`S-1-5-32-*`, e.g.
+    /// BUILTIN\Users) consists only of bytes below 0x80. Reading only
+    /// `bin_attrs` therefore lost those SIDs, and with them the groups, from
+    /// every LDAP result; the same could hit any SID whose bytes form valid
+    /// UTF-8 by chance. Found in the lab through the ADR 0066 gap report.
     pub fn first_bin_attr(&self, name: &str) -> Option<&[u8]> {
-        self.bin_attrs.get(name)?.first().map(Vec::as_slice)
+        self.bin_attrs
+            .get(name)
+            .and_then(|v| v.first())
+            .map(Vec::as_slice)
+            .or_else(|| {
+                self.attrs
+                    .get(name)
+                    .and_then(|v| v.first())
+                    .map(|s| s.as_bytes())
+            })
     }
 
     /// Returns all values of a string attribute (e.g. memberOf).
@@ -560,6 +577,123 @@ async fn search_paged_with_limit(
     Ok(entries)
 }
 
+/// Upper bound for range-retrieval rounds — 1,000 rounds of 1,500 values
+/// each covers 1.5 million values, far beyond any real `memberOf`; the
+/// bound only guards against a server that never reports the last chunk.
+const MAX_RANGE_ROUNDS: usize = 1_000;
+
+/// Parses the range suffix of an attribute description returned by AD for a
+/// multi-valued attribute larger than `MaxValRange`: `memberOf;range=0-1499`
+/// → `(0, Some(1499))`, the final chunk `memberOf;range=1500-*` →
+/// `(1500, None)`. `None` when `key` is not a ranged form of `attr`.
+pub(crate) fn parse_range_suffix(key: &str, attr: &str) -> Option<(u32, Option<u32>)> {
+    let prefix_len = attr.len() + ";range=".len();
+    let head = key.get(..prefix_len)?;
+    if !head.eq_ignore_ascii_case(&format!("{attr};range=")) {
+        return None;
+    }
+    let (start, end) = key.get(prefix_len..)?.split_once('-')?;
+    let start: u32 = start.parse().ok()?;
+    let end = if end == "*" {
+        None
+    } else {
+        let end: u32 = end.parse().ok()?;
+        if end < start {
+            return None;
+        }
+        Some(end)
+    };
+    Some((start, end))
+}
+
+fn ranged_key(entry: &RawEntry, attr: &str) -> Option<(String, u32, Option<u32>)> {
+    entry
+        .attrs
+        .keys()
+        .find_map(|key| parse_range_suffix(key, attr).map(|(start, end)| (key.clone(), start, end)))
+}
+
+/// Completes `attr` on `entry` through AD **range retrieval** when the
+/// server returned only the first range (`memberOf;range=0-1499` instead of
+/// `memberOf`) because the attribute holds more values than `MaxValRange`.
+/// Afterwards `entry.attrs[attr]` holds every value and `Ok(true)` is
+/// returned; `Ok(false)` when the attribute was not ranged.
+///
+/// Until ADR 0066 a ranged `memberOf` was read as empty: direct memberships
+/// counted as nested and further routes went unseen. Every server answer is
+/// validated — each chunk must start right after the previous one, and the
+/// loop is bounded — and any inconsistency is an error, never a silently
+/// shortened list.
+pub async fn complete_ranged_attribute(
+    ldap: &mut Ldap,
+    entry: &mut RawEntry,
+    attr: &str,
+) -> Result<bool, CoreError> {
+    let Some((key, start, mut end)) = ranged_key(entry, attr) else {
+        return Ok(false);
+    };
+    if start != 0 {
+        return Err(CoreError::LdapQuery(format!(
+            "range retrieval of {attr} on {}: first chunk starts at {start}, not 0",
+            entry.dn
+        )));
+    }
+    let mut values = entry.attrs.remove(&key).unwrap_or_default();
+    let mut rounds = 0usize;
+    while let Some(last) = end {
+        rounds += 1;
+        if rounds > MAX_RANGE_ROUNDS {
+            return Err(CoreError::LdapQuery(format!(
+                "range retrieval of {attr} on {} did not finish after {MAX_RANGE_ROUNDS} rounds",
+                entry.dn
+            )));
+        }
+        let next = last.checked_add(1).ok_or_else(|| {
+            CoreError::LdapQuery(format!("range retrieval of {attr}: range end overflow"))
+        })?;
+        let request = format!("{attr};range={next}-*");
+        debug!(dn = %entry.dn, %request, "LDAP range retrieval");
+        let (rs, _res) = ldap
+            .search(
+                &entry.dn,
+                Scope::Base,
+                "(objectClass=*)",
+                vec![request.as_str()],
+            )
+            .await
+            .map_err(|e| CoreError::LdapQuery(format!("range retrieval failed: {e}")))?
+            .success()
+            .map_err(|e| CoreError::LdapQuery(format!("range retrieval result error: {e}")))?;
+        let chunk = rs
+            .into_iter()
+            .next()
+            .map(RawEntry::from_search_entry)
+            .ok_or_else(|| {
+                CoreError::LdapQuery(format!(
+                    "range retrieval of {attr} on {}: entry vanished",
+                    entry.dn
+                ))
+            })?;
+        let Some((chunk_key, chunk_start, chunk_end)) = ranged_key(&chunk, attr) else {
+            return Err(CoreError::LdapQuery(format!(
+                "range retrieval of {attr} on {}: no values for range {next}-*",
+                entry.dn
+            )));
+        };
+        if chunk_start != next {
+            return Err(CoreError::LdapQuery(format!(
+                "range retrieval of {attr} on {}: expected range starting at {next}, got {chunk_start}",
+                entry.dn
+            )));
+        }
+        values.extend(chunk.attrs.get(&chunk_key).cloned().unwrap_or_default());
+        end = chunk_end;
+    }
+    debug!(dn = %entry.dn, attr, count = values.len(), "Ranged attribute completed");
+    entry.attrs.insert(attr.to_owned(), values);
+    Ok(true)
+}
+
 /// Terminates the LDAP connection properly.
 pub async fn disconnect(mut ldap: Ldap) {
     if let Err(e) = ldap.unbind().await {
@@ -616,5 +750,62 @@ mod tests {
             bin_attrs: bin,
         };
         assert_eq!(e.value_count("attr"), 3);
+    }
+
+    /// A builtin SID (S-1-5-32-545, BUILTIN\Users) is valid UTF-8 and lands
+    /// in `attrs`; it must still be readable as binary.
+    #[test]
+    fn binary_attribute_that_is_valid_utf8_is_still_readable() {
+        let sid_bytes = crate::sid_util::sid_str_to_bytes("S-1-5-32-545").expect("encode");
+        let as_text = String::from_utf8(sid_bytes.clone()).expect("builtin SIDs are valid UTF-8");
+        let mut attrs = HashMap::new();
+        attrs.insert("objectSid".to_string(), vec![as_text]);
+        let e = RawEntry {
+            dn: "CN=Users,CN=Builtin,DC=corp,DC=test".to_string(),
+            attrs,
+            bin_attrs: HashMap::new(),
+        };
+        assert_eq!(e.first_bin_attr("objectSid"), Some(sid_bytes.as_slice()));
+        assert_eq!(
+            crate::resolver::extract_sid_from_entry(&e).map(|s| s.0),
+            Some("S-1-5-32-545".to_string())
+        );
+    }
+
+    #[test]
+    fn range_suffix_parsing_accepts_only_valid_ranges() {
+        assert_eq!(
+            parse_range_suffix("memberOf;range=0-1499", "memberOf"),
+            Some((0, Some(1499)))
+        );
+        assert_eq!(
+            parse_range_suffix("memberof;RANGE=1500-*", "memberOf"),
+            Some((1500, None))
+        );
+        assert_eq!(parse_range_suffix("memberOf", "memberOf"), None);
+        assert_eq!(parse_range_suffix("member;range=0-1499", "memberOf"), None);
+        assert_eq!(parse_range_suffix("memberOf;range=10-5", "memberOf"), None);
+        assert_eq!(parse_range_suffix("memberOf;range=a-5", "memberOf"), None);
+        assert_eq!(parse_range_suffix("memberOf;range=0", "memberOf"), None);
+    }
+
+    #[test]
+    fn ranged_key_finds_the_ranged_description() {
+        let mut attrs = HashMap::new();
+        attrs.insert(
+            "memberOf;range=0-1499".to_string(),
+            vec!["CN=a,DC=x".to_string()],
+        );
+        let e = RawEntry {
+            dn: "CN=u,DC=x".to_string(),
+            attrs,
+            bin_attrs: HashMap::new(),
+        };
+        assert_eq!(
+            ranged_key(&e, "memberOf"),
+            Some(("memberOf;range=0-1499".to_string(), 0, Some(1499)))
+        );
+        // The plain accessor sees nothing — exactly the pre-ADR-0066 bug.
+        assert!(e.all_attr("memberOf").is_empty());
     }
 }

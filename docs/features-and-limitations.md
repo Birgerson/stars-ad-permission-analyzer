@@ -24,8 +24,12 @@ that applies.
   hits are reported as an uniqueness error (no silent selection) —
   see ADR 0032.
 - **Recursive group resolution via LDAP**: through `memberOf` with
-  `LDAP_MATCHING_RULE_IN_CHAIN`. This avoids N+1 recursion and
-  range-retrieval problems on large groups — and cycles.
+  `LDAP_MATCHING_RULE_IN_CHAIN`. This avoids N+1 recursion on large groups —
+  and cycles. The `memberOf` lists used for the membership routes are
+  completed through range retrieval when AD returns them in 1500-value
+  chunks, and every group the resolution could not include (primary group
+  outside the base, groups outside the resolved set, groups without a
+  readable SID) is reported instead of dropped (ADR 0066).
 - **Primary group** is evaluated separately via `primaryGroupID`.
 - **`disabled` status** is read in the LDAP path via
   `userAccountControl` and in the SAM path via `NetUserGetInfo`
@@ -210,6 +214,7 @@ out; the report font is Arial.
 | `PersistedEvidenceDecodeFailed { detail }` | Concern | **yes** | A persisted (historical) row could not be fully decoded; the reconstructed result may be less complete than originally stored. |
 | `IdentityNotResolvable { reason }` | Concern | **yes** | The SID could not be resolved and is **not** proven orphaned — it belongs to a trusted domain (named), another domain, lies outside a base that is only an OU, or its domain could not be determined. Its memberships are unknown; the rights computed for the bare SID can be too low or too high (ADR 0064). |
 | `IdentityOrphaned` | Neutral | no | The SID belongs to the configured domain, the base covers that whole domain, and no object exists: the account no longer exists. Nobody can log on with it; an ACE naming it is a dead entry (ADR 0064). |
+| `GroupResolutionIncomplete { reason }` | Concern | **yes** | A successful group resolution may still lack groups — a primary group that could not be read, a group without a readable SID, memberships in groups outside the resolved set (e.g. outside a base that is only an OU), an unresolvable local group. `reason` names them (ADR 0066). |
 | `LogonDependentTrustees { sids, min_mask, max_mask }` | Notice | **yes** | Applicable ACEs for well-known SIDs whose presence depends on how the user logs on (This Organization, authentication assertion / package, console or remote-interactive logon, local account) decide bits of this result; the NTFS right lies between the two bounds. If the bounds were equal the ACEs could not matter and no marker is attached (ADR 0065). |
 | `MembersViaPrimaryGroupIncluded { count }` | Neutral | no | *(members view)* `count` members were found via their `primaryGroupID` and included — they do not appear in the `member` attribute, so this makes the completeness of the count transparent. |
 | `UniversalGroupCrossDomainMembersNotVisible` | Neutral | **yes** | *(members view)* The group is **universal** and was queried over a plain domain bind; members from other domains of the forest are not visible — use a Global Catalog bind to see them. |

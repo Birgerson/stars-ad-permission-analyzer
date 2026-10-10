@@ -236,6 +236,10 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if let Some(reason) = input.resolution.group_resolution_failure_reason {
             diagnostics.push(PermissionDiagnostic::GroupResolutionFailed { reason });
         }
+        // ADR 0066: groups that may be missing from a successful resolution.
+        for reason in input.resolution.group_resolution_gaps {
+            diagnostics.push(PermissionDiagnostic::GroupResolutionIncomplete { reason });
+        }
         // ADR 0064 (lab finding AD3-1): a SID that could not be resolved is
         // only called orphaned when the evidence shows the account no longer
         // exists; otherwise its memberships are unknown — incompleteness.
@@ -4132,6 +4136,39 @@ mod tests {
             found.contains("timed out"),
             "reason must carry the underlying message, got: {found}"
         );
+    }
+
+    /// ADR 0066: each gap of the group resolution becomes a marker and
+    /// makes the result not determinable.
+    #[test]
+    fn engine_turns_group_resolution_gaps_into_markers() {
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![],
+                file_system_object: fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                access_context: AccessContext::Unspecified,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                resolution: ResolutionProvenance {
+                    group_resolution_gaps: vec!["gap one".into(), "gap two".into()],
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let reasons: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .filter_map(|d| match d {
+                PermissionDiagnostic::GroupResolutionIncomplete { reason } => Some(reason.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reasons, ["gap one", "gap two"]);
+        assert!(!result.effective_determinable());
     }
 
     /// ADR 0064 (lab finding AD3-1): an unresolvable SID makes the result

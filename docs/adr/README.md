@@ -75,3 +75,4 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0063 | Deterministic membership routes and disclosure of further routes |
 | 0064 | Orphaned only with evidence; unresolvable SIDs are incomplete |
 | 0065 | Results that cannot be determined are never stated as facts |
+| 0066 | No silent drops in group resolution |
