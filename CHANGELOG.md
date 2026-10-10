@@ -36,6 +36,24 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   if they can change it, the new marker `LogonDependentTrustees` states
   the range and the result is not determinable. Share ACEs of that kind
   that can change the share mask are counted as not evaluable.
+- **Builtin groups (`S-1-5-32-*`) were missing from every LDAP result**
+  (found in the lab through the new gap report, ADR 0066). ldap3 stores a
+  value whose bytes happen to be valid UTF-8 as text, and every builtin SID
+  is valid UTF-8 — Stars read `objectSid` only as binary and dropped those
+  groups (on a domain controller the local-group lookup happened to add
+  them back). Binary attributes are now read from either map; this also
+  covers trust SIDs and any account SID that forms valid UTF-8 by chance.
+- **No group is dropped silently any more** (ADR 0066). A primary group
+  that could not be read, a group without a readable SID, memberships in
+  groups outside the resolved set (e.g. outside a base that is only an OU),
+  a principal entry the group search no longer found, an unresolvable local
+  group and failing SAM/LSA group reads were skipped or only logged; each
+  is now a `GroupResolutionIncomplete` marker naming the groups, and the
+  result is not determinable. A `memberOf` larger than the server's
+  `MaxValRange` (1500 in the lab) arrived as `memberOf;range=0-1499` and was
+  read as empty — direct memberships counted as nested; it is now completed
+  through validated range retrieval (lab: 1601 direct memberships read
+  completely, before 0).
 
 - **The explanation path no longer changes between runs, and it no longer
   implies that one chain is the only route into a group** (lab finding

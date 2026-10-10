@@ -1331,6 +1331,15 @@ pub enum PermissionDiagnostic {
         min_mask: u32,
         max_mask: u32,
     },
+
+    /// The group resolution succeeded, but `reason` names groups that may be
+    /// missing from the evaluated token: a primary group that could not be
+    /// read, a group entry without a readable SID, memberships in groups
+    /// outside the resolved set (e.g. outside the configured LDAP base), a
+    /// `memberOf` list that could not be read completely, or a local group
+    /// whose SID could not be looked up. Before ADR 0066 these cases were
+    /// dropped silently. Incompleteness trigger; Concern.
+    GroupResolutionIncomplete { reason: String },
 }
 
 /// Account state as it may be stated to a reader — the single source for
@@ -1549,6 +1558,9 @@ impl PermissionDiagnostic {
                  lies between 0x{min_mask:08X} and 0x{max_mask:08X}.",
                 sids.join(", ")
             ),
+            PermissionDiagnostic::GroupResolutionIncomplete { reason } => {
+                format!("Group resolution is incomplete: {reason}.")
+            }
         }
     }
 
@@ -1592,7 +1604,8 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::GroupSidHistoryPresent { .. }
             | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
             | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible
-            | PermissionDiagnostic::IdentityNotResolvable { .. } => Some(UncertainLayer::Token),
+            | PermissionDiagnostic::IdentityNotResolvable { .. }
+            | PermissionDiagnostic::GroupResolutionIncomplete { .. } => Some(UncertainLayer::Token),
             // Informational — the result itself is exact.
             PermissionDiagnostic::NonCanonicalDaclOrder { .. }
             | PermissionDiagnostic::IdentityDisabled
@@ -1638,7 +1651,8 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::GroupResolutionFailed { .. }
             | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
             | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
-            | PermissionDiagnostic::IdentityNotResolvable { .. } => DiagnosticSeverity::Concern,
+            | PermissionDiagnostic::IdentityNotResolvable { .. }
+            | PermissionDiagnostic::GroupResolutionIncomplete { .. } => DiagnosticSeverity::Concern,
         }
     }
 }
@@ -2296,6 +2310,12 @@ mod tests {
             PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible,
             PermissionDiagnostic::IdentityNotResolvable { reason: "r".into() },
             PermissionDiagnostic::IdentityOrphaned,
+            PermissionDiagnostic::LogonDependentTrustees {
+                sids: vec!["S-1-5-15".into()],
+                min_mask: 0,
+                max_mask: 1,
+            },
+            PermissionDiagnostic::GroupResolutionIncomplete { reason: "r".into() },
         ];
         for d in &all {
             assert_eq!(

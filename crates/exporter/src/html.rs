@@ -504,6 +504,15 @@ fn write_permissions_table(
                             .to_string(),
                     );
                 }
+                PermissionDiagnostic::GroupResolutionIncomplete { reason } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-high\" \
+                         title=\"Group resolution is incomplete: {} — the evaluated \
+                         token may lack these groups.\">⚠ group resolution \
+                         incomplete</span>",
+                        escape_html(reason)
+                    ));
+                }
                 PermissionDiagnostic::LogonDependentTrustees {
                     sids,
                     min_mask,

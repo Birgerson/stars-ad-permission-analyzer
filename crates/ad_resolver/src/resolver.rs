@@ -29,7 +29,7 @@ use adpa_core::{
         GroupMembership, Identity, IdentityKind, MemberNode, MemberVia, MembershipHop,
         MembershipPath, MembershipPathSource, Sid,
     },
-    traits::IdentityResolver,
+    traits::{GroupMembershipResolution, IdentityResolver},
 };
 
 use crate::{
@@ -412,7 +412,7 @@ impl LdapResolver {
     async fn resolve_memberships_internal(
         &self,
         sid: &Sid,
-    ) -> Result<Vec<GroupMembership>, CoreError> {
+    ) -> Result<GroupMembershipResolution, CoreError> {
         // — guard for review finding 5.
         // Bound the whole membership resolution against the configured
         // timeout (review finding 5).
@@ -427,65 +427,95 @@ impl LdapResolver {
     async fn resolve_memberships_inner(
         &self,
         sid: &Sid,
-    ) -> Result<Vec<GroupMembership>, CoreError> {
+    ) -> Result<GroupMembershipResolution, CoreError> {
         let mut ldap = ldap_client::connect(&self.config).await?;
 
         // 1) Load the principal entry.
-        // 1) Load the principal entry.
-        let Some(entry) =
+        let Some(mut entry) =
             ldap_client::search_by_sid(&mut ldap, &self.config.base_dn, &sid.0).await?
         else {
             ldap_client::disconnect(ldap).await;
-            return Ok(Vec::new());
+            // ADR 0066: never an empty membership list that looks complete.
+            return Ok(GroupMembershipResolution {
+                memberships: Vec::new(),
+                gaps: vec![format!(
+                    "the account object of {} was not found by the group search under '{}' — \
+                     no group membership could be resolved",
+                    sid.0, self.config.base_dn
+                )],
+            });
         };
 
         // 2) Resolve the primary group (separate from the `member` chain).
-        let primary_group_sid =
-            resolve_primary_group(&entry, &self.config.base_dn, &mut ldap).await;
+        let primary = resolve_primary_group(&entry, &self.config.base_dn, &mut ldap).await;
 
         // 3) Server-side transitive membership of the principal.
-        let transitive_groups = ldap_client::search_transitive_groups_for_member(
+        let mut transitive_groups = ldap_client::search_transitive_groups_for_member(
             &mut ldap,
             &self.config.base_dn,
             &entry.dn,
         )
         .await?;
 
-        // 4) Primary group entry and its transitive parents — needed to
-        //    correctly reconstruct chains that run through the primary
-        //    group.
-        let (pg_entry, pg_parents) = if let Some(ref pg_sid) = primary_group_sid {
-            let pg_entry =
-                ldap_client::search_by_sid(&mut ldap, &self.config.base_dn, &pg_sid.0).await?;
-            let parents = if let Some(ref e) = pg_entry {
-                ldap_client::search_transitive_groups_for_member(
+        // 4) Transitive parents of the primary group — needed to correctly
+        //    reconstruct chains that run through the primary group.
+        let (primary, mut pg_parents, mut gaps) = match primary {
+            PrimaryGroupLookup::Found { sid: pg_sid, entry } => {
+                let parents = ldap_client::search_transitive_groups_for_member(
                     &mut ldap,
                     &self.config.base_dn,
-                    &e.dn,
+                    &entry.dn,
                 )
-                .await?
-            } else {
-                Vec::new()
-            };
-            (pg_entry, parents)
-        } else {
-            (None, Vec::new())
+                .await?;
+                (Some((pg_sid, Some(entry))), parents, Vec::new())
+            }
+            PrimaryGroupLookup::NotApplicable => (None, Vec::new(), Vec::new()),
+            PrimaryGroupLookup::Missing { reason } => (None, Vec::new(), vec![reason]),
         };
+
+        // 4b) ADR 0066: a `memberOf` larger than the server's MaxValRange
+        //     arrives as `memberOf;range=0-1499`; complete it so direct
+        //     memberships and further routes are not lost.
+        ldap_client::complete_ranged_attribute(&mut ldap, &mut entry, "memberOf").await?;
+        for group in transitive_groups.iter_mut().chain(pg_parents.iter_mut()) {
+            ldap_client::complete_ranged_attribute(&mut ldap, group, "memberOf").await?;
+        }
+        let mut primary = primary;
+        if let Some((_, Some(pg_entry))) = primary.as_mut() {
+            ldap_client::complete_ranged_attribute(&mut ldap, pg_entry, "memberOf").await?;
+        }
 
         ldap_client::disconnect(ldap).await;
 
         // 5)–8) Assemble the memberships with concrete, reproducible chains
         //       (ADR 0063). Pure function — no LDAP — so the route choice is
         //       unit-tested independently of server answer order.
-        let primary = primary_group_sid.map(|pg_sid| (pg_sid, pg_entry.as_ref()));
-        Ok(assemble_memberships(
-            sid,
-            &entry,
-            primary,
-            &transitive_groups,
-            &pg_parents,
-        ))
+        let primary_ref = primary
+            .as_ref()
+            .map(|(pg_sid, pg_entry)| (pg_sid.clone(), pg_entry.as_ref()));
+        let assembled =
+            assemble_memberships(sid, &entry, primary_ref, &transitive_groups, &pg_parents);
+        gaps.extend(assembled.gaps);
+        Ok(GroupMembershipResolution {
+            memberships: assembled.memberships,
+            gaps,
+        })
     }
+}
+
+/// Outcome of the primary-group lookup (ADR 0066): a missing primary group
+/// is a visible gap, never a silently shorter token.
+enum PrimaryGroupLookup {
+    /// The principal has no primary group (e.g. it is itself a group).
+    NotApplicable,
+    Found {
+        sid: Sid,
+        entry: RawEntry,
+    },
+    /// A user or computer whose primary group could not be read.
+    Missing {
+        reason: String,
+    },
 }
 
 /// Display name of a directory entry: `sAMAccountName`, else `cn`.
@@ -663,9 +693,10 @@ fn assemble_memberships(
     primary: Option<(Sid, Option<&RawEntry>)>,
     transitive_groups: &[RawEntry],
     pg_parents: &[RawEntry],
-) -> Vec<GroupMembership> {
+) -> AssembledMemberships {
     // Closure: every group the principal is in, keyed by lower-cased DN.
     let mut closure: BTreeMap<String, ClosureGroup<'_>> = BTreeMap::new();
+    let mut without_sid: BTreeSet<String> = BTreeSet::new();
     let primary_entry = primary.as_ref().and_then(|(_, e)| *e);
     for entry in transitive_groups
         .iter()
@@ -677,6 +708,9 @@ fn assemble_memberships(
             continue;
         }
         let Some(group_sid) = extract_sid_from_entry(entry) else {
+            // ADR 0066: a group the principal is in, but whose SID cannot
+            // be read, is missing from the token — say so.
+            without_sid.insert(entry.dn.clone());
             continue;
         };
         // A cyclic nesting returns the principal as its own "group"; it is
@@ -693,6 +727,47 @@ fn assemble_memberships(
                 parents: sorted_member_of(entry),
             },
         );
+    }
+
+    // ADR 0066: memberships in groups that are not part of the resolved
+    // set — typically outside the configured LDAP base or in another
+    // domain — are not in the token either.
+    let principal_dn = principal.dn.to_ascii_lowercase();
+    // Original spelling of every referenced DN, for a readable gap reason.
+    let original_dn: BTreeMap<String, String> = std::iter::once(principal)
+        .chain(closure.values().map(|g| g.entry))
+        .flat_map(|e| e.all_attr("memberOf").iter())
+        .map(|dn| (dn.to_ascii_lowercase(), dn.clone()))
+        .collect();
+    let mut outside: BTreeSet<String> = BTreeSet::new();
+    for dn in sorted_member_of(principal)
+        .iter()
+        .chain(closure.values().flat_map(|g| g.parents.iter()))
+    {
+        if !closure.contains_key(dn)
+            && *dn != principal_dn
+            && !without_sid.iter().any(|w| w.eq_ignore_ascii_case(dn))
+        {
+            outside.insert(original_dn.get(dn).cloned().unwrap_or_else(|| dn.clone()));
+        }
+    }
+    let mut gaps: Vec<String> = Vec::new();
+    if !without_sid.is_empty() {
+        gaps.push(format!(
+            "{} group(s) of the transitive result have no readable objectSid and are not \
+             in the evaluated token: {}",
+            without_sid.len(),
+            summarize_dns(&without_sid)
+        ));
+    }
+    if !outside.is_empty() {
+        gaps.push(format!(
+            "the account is (directly or through its groups) a member of {} group(s) outside \
+             the resolved set — typically outside the configured LDAP base or in another \
+             domain — which are not in the evaluated token: {}",
+            outside.len(),
+            summarize_dns(&outside)
+        ));
     }
 
     // Hop-1 seeds: the principal's direct groups plus the primary group.
@@ -818,7 +893,24 @@ fn assemble_memberships(
         });
     }
 
-    memberships
+    AssembledMemberships { memberships, gaps }
+}
+
+/// Memberships plus the gaps found while assembling them (ADR 0066).
+struct AssembledMemberships {
+    memberships: Vec<GroupMembership>,
+    gaps: Vec<String>,
+}
+
+/// First three DNs of a set, then "(+N more)" — keeps a gap reason short
+/// while naming concrete objects.
+fn summarize_dns(dns: &BTreeSet<String>) -> String {
+    let shown: Vec<&str> = dns.iter().take(3).map(String::as_str).collect();
+    let mut text = shown.join("; ");
+    if dns.len() > 3 {
+        text.push_str(&format!(" (+{} more)", dns.len() - 3));
+    }
+    text
 }
 
 #[async_trait]
@@ -830,7 +922,7 @@ impl IdentityResolver for LdapResolver {
     async fn resolve_group_memberships(
         &self,
         sid: &Sid,
-    ) -> Result<Vec<GroupMembership>, CoreError> {
+    ) -> Result<GroupMembershipResolution, CoreError> {
         self.resolve_memberships_internal(sid).await
     }
 }
@@ -1147,41 +1239,84 @@ fn dn_to_domain(dn: &str) -> Option<String> {
     }
 }
 
-/// Resolves the primary group of a user (not included in memberOf).
+/// Resolves the primary group of a user or computer (not in `memberOf`).
 ///
-/// Primary group = domain SID + primaryGroupID as RID.
+/// Primary group = domain SID + `primaryGroupID` as RID. Every way this can
+/// fail for an account that must have one is a visible gap (ADR 0066) —
+/// until v1.9.0 a missing primary group (e.g. Domain Users outside a base
+/// that is only an OU) silently dropped it from the token.
 async fn resolve_primary_group(
     entry: &RawEntry,
     base_dn: &str,
     ldap: &mut ldap3::Ldap,
-) -> Option<Sid> {
-    let primary_group_id: u32 = entry
-        .first_attr("primaryGroupID")
-        .and_then(|v| v.parse().ok())?;
+) -> PrimaryGroupLookup {
+    let classes: Vec<&str> = entry
+        .attrs
+        .get("objectClass")
+        .map(|v| v.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    let is_account = matches!(
+        classify_identity(&classes),
+        IdentityKind::User | IdentityKind::Computer
+    );
+    let Some(raw_id) = entry.first_attr("primaryGroupID") else {
+        return if is_account {
+            PrimaryGroupLookup::Missing {
+                reason: format!(
+                    "the primaryGroupID of {} is not readable — its primary group is not in \
+                     the evaluated token",
+                    entry.dn
+                ),
+            }
+        } else {
+            PrimaryGroupLookup::NotApplicable
+        };
+    };
+    let Ok(primary_group_id) = raw_id.trim().parse::<u32>() else {
+        return PrimaryGroupLookup::Missing {
+            reason: format!(
+                "the primaryGroupID '{raw_id}' of {} is not a number — its primary group is \
+                 not in the evaluated token",
+                entry.dn
+            ),
+        };
+    };
 
-    // Derive domain SID from user SID (all sub-authorities except the last RID)
-    let user_sid_bytes = entry.first_bin_attr("objectSid")?;
-    let user_sid_str = bytes_to_sid_str(user_sid_bytes).ok()?;
-
-    let mut parts: Vec<&str> = user_sid_str.split('-').collect();
-    if parts.len() < 4 {
-        return None;
-    }
-    // Replace last part (RID) with primaryGroupID
-    *parts.last_mut()? = "";
-    let domain_sid_prefix = parts[..parts.len() - 1].join("-");
+    // Domain SID = the account SID without its RID.
+    let Some(domain_sid_prefix) = extract_sid_from_entry(entry).and_then(|s| account_domain_of(&s))
+    else {
+        return PrimaryGroupLookup::Missing {
+            reason: format!(
+                "the domain of {} could not be derived from its objectSid — its primary group \
+                 is not in the evaluated token",
+                entry.dn
+            ),
+        };
+    };
     let primary_group_sid_str = format!("{domain_sid_prefix}-{primary_group_id}");
 
-    // Validate that this group actually exists
     match ldap_client::search_by_sid(ldap, base_dn, &primary_group_sid_str).await {
-        Ok(Some(_)) => Some(Sid(primary_group_sid_str)),
+        Ok(Some(pg_entry)) => PrimaryGroupLookup::Found {
+            sid: Sid(primary_group_sid_str),
+            entry: pg_entry,
+        },
         Ok(None) => {
             warn!("Primary group not found: {primary_group_sid_str}");
-            None
+            PrimaryGroupLookup::Missing {
+                reason: format!(
+                    "the primary group {primary_group_sid_str} was not found under the \
+                     configured LDAP base '{base_dn}' — it is not in the evaluated token"
+                ),
+            }
         }
         Err(e) => {
             warn!("Primary group search failed: {e}");
-            None
+            PrimaryGroupLookup::Missing {
+                reason: format!(
+                    "the primary group {primary_group_sid_str} could not be read ({e}) — it is \
+                     not in the evaluated token"
+                ),
+            }
         }
     }
 }
@@ -1560,7 +1695,7 @@ mod tests {
             for i in perm {
                 ordered.push(pool[i].take().expect("each index once"));
             }
-            let ms = assemble_memberships(&sid_of(1000), &user, None, &ordered, &[]);
+            let ms = assemble_memberships(&sid_of(1000), &user, None, &ordered, &[]).memberships;
             let target = membership_for(&ms, 1200);
             assert_eq!(chain_names(target), ["u", "gA", "gTarget"]);
             assert_eq!(also_via_names(target), ["gB"]);
@@ -1586,7 +1721,7 @@ mod tests {
             graph_entry("gE", 1105, &["gTarget"]),
             graph_entry("gTarget", 1200, &[]),
         ];
-        let ms = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]);
+        let ms = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]).memberships;
         let target = membership_for(&ms, 1200);
         assert_eq!(chain_names(target), ["u", "gA", "gTarget"]);
         assert_eq!(also_via_names(target), ["gE"]);
@@ -1602,7 +1737,7 @@ mod tests {
             graph_entry("gA", 1101, &["gTarget"]),
             graph_entry("gTarget", 1200, &[]),
         ];
-        let ms = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]);
+        let ms = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]).memberships;
         let target = membership_for(&ms, 1200);
         assert!(target.direct);
         assert_eq!(chain_names(target), ["u", "gTarget"]);
@@ -1623,7 +1758,8 @@ mod tests {
             Some((sid_of(513), Some(&du))),
             &groups,
             &parents,
-        );
+        )
+        .memberships;
         assert_eq!(ms[0].group_sid, sid_of(513));
         assert_eq!(
             ms[0].path.as_ref().expect("path").source,
@@ -1647,7 +1783,7 @@ mod tests {
             graph_entry("gA", 1101, &[]),
             graph_entry("gOrphanChain", 1400, &[]),
         ];
-        let ms = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]);
+        let ms = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]).memberships;
         let m = membership_for(&ms, 1400);
         let path = m.path.as_ref().expect("path");
         assert!(!path.complete);
@@ -1665,9 +1801,66 @@ mod tests {
             graph_entry("gA", 1101, &["gP"]),
             graph_entry("gP", 1500, &["gA"]),
         ];
-        let ms = assemble_memberships(&sid_of(1500), &principal, None, &groups, &[]);
+        let ms = assemble_memberships(&sid_of(1500), &principal, None, &groups, &[]).memberships;
         assert_eq!(ms.len(), 1);
         assert_eq!(chain_names(&ms[0]), ["gP", "gA"]);
+    }
+
+    // --- ADR 0066: gaps are reported, never dropped ---
+
+    #[test]
+    fn group_without_readable_sid_is_reported_as_a_gap() {
+        let user = graph_entry("u", 1000, &["gA", "gBroken"]);
+        let mut broken = graph_entry("gBroken", 1101, &[]);
+        broken.bin_attrs.clear(); // objectSid not readable
+        let groups = vec![graph_entry("gA", 1100, &[]), broken];
+        let assembled = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]);
+        assert_eq!(assembled.memberships.len(), 1);
+        assert_eq!(assembled.gaps.len(), 1, "{:?}", assembled.gaps);
+        assert!(assembled.gaps[0].contains("no readable objectSid"));
+        assert!(assembled.gaps[0].contains("CN=gBroken"));
+    }
+
+    #[test]
+    fn membership_outside_the_resolved_set_is_reported_as_a_gap() {
+        // gA is a member of gOutside, which the transitive search did not
+        // return (e.g. outside the configured base): it is missing from the
+        // token and must be named.
+        let user = graph_entry("u", 1000, &["gA", "gElsewhere"]);
+        let groups = vec![graph_entry("gA", 1100, &["gOutside"])];
+        let assembled = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]);
+        assert_eq!(assembled.gaps.len(), 1, "{:?}", assembled.gaps);
+        let gap = &assembled.gaps[0];
+        assert!(gap.contains("2 group(s) outside the resolved set"), "{gap}");
+        assert!(
+            gap.contains("CN=gOutside,OU=Groups") && gap.contains("CN=gElsewhere,OU=Groups"),
+            "{gap}"
+        );
+    }
+
+    #[test]
+    fn complete_closure_has_no_gaps() {
+        let user = graph_entry("u", 1000, &["gA"]);
+        let groups = vec![
+            graph_entry("gA", 1100, &["gB"]),
+            graph_entry("gB", 1200, &[]),
+        ];
+        let assembled = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]);
+        assert!(assembled.gaps.is_empty(), "{:?}", assembled.gaps);
+        // A cyclic nesting back to a group principal is not "outside".
+        let principal = graph_entry("gP", 1500, &["gA"]);
+        let cyclic = vec![
+            graph_entry("gA", 1100, &["gP"]),
+            graph_entry("gP", 1500, &["gA"]),
+        ];
+        let assembled = assemble_memberships(&sid_of(1500), &principal, None, &cyclic, &[]);
+        assert!(assembled.gaps.is_empty(), "{:?}", assembled.gaps);
+    }
+
+    #[test]
+    fn summarize_dns_names_three_and_counts_the_rest() {
+        let dns: BTreeSet<String> = (1..=5).map(|i| format!("CN=g{i}")).collect();
+        assert_eq!(summarize_dns(&dns), "CN=g1; CN=g2; CN=g3 (+2 more)");
     }
 
     #[test]
@@ -1709,7 +1902,7 @@ mod tests {
             let mut direct = vec!["g00", "g01", "g02"];
             direct.rotate_left(next() % 3);
             let user = graph_entry("u", 1000, &direct);
-            let ms = assemble_memberships(&sid_of(1000), &user, None, &entries, &[]);
+            let ms = assemble_memberships(&sid_of(1000), &user, None, &entries, &[]).memberships;
             assert_eq!(ms.len(), 24);
             let rendered = format!("{ms:?}");
             match &reference {
@@ -1864,7 +2057,11 @@ mod tests {
         ldap_client::disconnect(ldap).await;
 
         let sid = extract_sid_from_entry(&entry).unwrap();
-        let memberships = resolver.resolve_group_memberships(&sid).await.unwrap();
+        let memberships = resolver
+            .resolve_group_memberships(&sid)
+            .await
+            .unwrap()
+            .memberships;
 
         let group_names: Vec<String> = {
             let mut ldap2 = ldap_client::connect(&cfg).await.unwrap();

@@ -76,6 +76,23 @@ pub struct ResolutionProvenance {
     /// `IdentityNotResolvable`; the result is incomplete (ADR 0064, lab
     /// finding AD3-1).
     pub identity_unresolvable_reason: Option<String>,
+    /// Reasons why groups may be missing from an otherwise successful group
+    /// resolution — a primary group that could not be read, a group without
+    /// a readable SID, memberships in groups outside the resolved set, a
+    /// local group whose SID could not be looked up (ADR 0066). The engine
+    /// pushes one `GroupResolutionIncomplete` per reason.
+    pub group_resolution_gaps: Vec<String>,
+}
+
+/// Group memberships of a principal plus every reason the set may be
+/// incomplete although the resolution itself succeeded (ADR 0066). A gap is
+/// never dropped silently: it becomes a `GroupResolutionIncomplete` marker
+/// and makes the result not determinable.
+#[derive(Debug, Clone, Default)]
+pub struct GroupMembershipResolution {
+    pub memberships: Vec<GroupMembership>,
+    /// Reader-facing reasons why groups may be missing from `memberships`.
+    pub gaps: Vec<String>,
 }
 
 pub struct PermissionEvaluationInput {
@@ -171,9 +188,12 @@ pub trait IdentityResolver: Send + Sync {
     /// Resolves a SID to a full identity (name, domain, kind, status).
     async fn resolve_identity(&self, sid: &Sid) -> Result<Identity, CoreError>;
 
-    /// Determines all group memberships recursively (direct and transitive).
-    async fn resolve_group_memberships(&self, sid: &Sid)
-        -> Result<Vec<GroupMembership>, CoreError>;
+    /// Determines all group memberships recursively (direct and transitive),
+    /// with every reason the set may be incomplete (ADR 0066).
+    async fn resolve_group_memberships(
+        &self,
+        sid: &Sid,
+    ) -> Result<GroupMembershipResolution, CoreError>;
 }
 
 /// Calculates effective permissions from identity, groups, and ACL entries.

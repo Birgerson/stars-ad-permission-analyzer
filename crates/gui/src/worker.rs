@@ -1314,10 +1314,17 @@ fn collect_local_group_sids_for_path(
         identity,
         &known_member_sids_to_names,
     ) {
-        Ok(memberships) => {
+        Ok(ad_resolver::LocalGroupMemberships { memberships, gaps }) => {
             let sids: Vec<adpa_core::model::Sid> =
                 memberships.iter().map(|m| m.group_sid.clone()).collect();
-            (sids, memberships, LocalGroupEvalStatus::Applied)
+            // ADR 0066: unresolvable local groups keep the evaluation
+            // incomplete; the resolved ones stay in the token.
+            let status = if gaps.is_empty() {
+                LocalGroupEvalStatus::Applied
+            } else {
+                LocalGroupEvalStatus::NotAvailable(gaps.join("; "))
+            };
+            (sids, memberships, status)
         }
         Err(e) => {
             let msg = e.to_string();
@@ -2546,7 +2553,8 @@ async fn resolve_identity_sids(
         Sid::try_new(trimmed).map_err(|e| format!("Invalid SID: {e}"))?
     };
 
-    let (identity, memberships, disabled_known) = sam_resolve_fallback(&sid.0)?;
+    let (identity, memberships, disabled_known, group_resolution_gaps) =
+        sam_resolve_fallback(&sid.0)?;
     let disabled_status = if disabled_known {
         ad_resolver::DisabledStatus::Known(identity.disabled)
     } else {
@@ -2570,15 +2578,21 @@ async fn resolve_identity_sids(
         diagnostics,
         resolved_via_fsp: false,
         resolved_via_global_catalog: false,
+        group_resolution_gaps,
     })
 }
 
-/// Returns `(Identity, memberships, disabled_known)`. The third value
-/// flags whether `Identity.disabled` was confirmed via
-/// `NetUserGetInfo`. When `false` the caller sets
-/// `IdentityResolution::disabled_status_unknown = true`.
+/// `(Identity, memberships, disabled_known, gaps)` of the SAM/LSA path.
+type SamFallback = (Identity, Vec<GroupMembership>, bool, Vec<String>);
+
+/// Returns `(Identity, memberships, disabled_known, gaps)`. The third value
+/// flags whether `Identity.disabled` was confirmed via `NetUserGetInfo`;
+/// when `false` the caller sets the disabled-status-unknown marker. The
+/// gaps name every group that could not be resolved — including a failed
+/// SAM resolution itself (ADR 0066), which used to fall back to a bare SID
+/// with nothing but a log line.
 #[cfg(windows)]
-fn sam_resolve_fallback(sid: &str) -> Result<(Identity, Vec<GroupMembership>, bool), String> {
+fn sam_resolve_fallback(sid: &str) -> Result<SamFallback, String> {
     match ad_resolver::resolve_identity_via_sam(sid) {
         Ok(res) => {
             info!(
@@ -2590,21 +2604,33 @@ fn sam_resolve_fallback(sid: &str) -> Result<(Identity, Vec<GroupMembership>, bo
                 disabled_known = res.disabled_known,
                 "SAM resolution succeeded (no LDAP requested)"
             );
-            Ok((res.identity, res.memberships, res.disabled_known))
+            Ok((res.identity, res.memberships, res.disabled_known, res.gaps))
         }
         Err(e) => {
             warn!(sid, error = %e, "SAM resolution failed — falling back to bare SID identity");
             let (identity, memberships) = bare_sid_identity(sid);
             // Bare SID = we know essentially nothing about the user.
-            Ok((identity, memberships, false))
+            Ok((
+                identity,
+                memberships,
+                false,
+                vec![format!(
+                    "the SAM/LSA resolution of {sid} failed ({e}) — no group could be resolved"
+                )],
+            ))
         }
     }
 }
 
 #[cfg(not(windows))]
-fn sam_resolve_fallback(sid: &str) -> Result<(Identity, Vec<GroupMembership>, bool), String> {
+fn sam_resolve_fallback(sid: &str) -> Result<SamFallback, String> {
     let (identity, memberships) = bare_sid_identity(sid);
-    Ok((identity, memberships, false))
+    Ok((
+        identity,
+        memberships,
+        false,
+        vec!["no SAM/LSA on this platform — no group could be resolved".to_owned()],
+    ))
 }
 
 fn bare_sid_identity(sid: &str) -> (Identity, Vec<GroupMembership>) {

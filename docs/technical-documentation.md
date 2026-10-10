@@ -427,6 +427,18 @@ enum IdentityScopeStatus {
 }
 ```
 
+Group resolution returns `GroupMembershipResolution { memberships, gaps }`
+(ADR 0066): every group the token may lack — a primary group that could not
+be read, a group without a readable SID, `memberOf` DNs outside the resolved
+set, an unresolvable local group — is a gap, carried through
+`PrincipalResolution::group_resolution_gaps` and
+`ResolutionProvenance::group_resolution_gaps` into one
+`GroupResolutionIncomplete` marker each. `memberOf` lists that AD returns in
+ranges (`memberOf;range=0-1499`) are completed with validated range
+retrieval, and binary attributes are read from either ldap3 map
+(`first_bin_attr`), because values such as builtin SIDs are valid UTF-8 and
+land in the text map.
+
 On an LDAP miss plus an LSA miss the backend classifies the SID
 (`SidDomainRelation`, ADR 0064): it reads the domain SID of the base's
 domain root and the domain's trust objects. Only a SID of the configured
@@ -1046,6 +1058,8 @@ enum PermissionDiagnostic {
     IdentityOrphaned,
     // Logon-dependent trustees decide bits — NTFS right is a range (ADR 0065).
     LogonDependentTrustees { sids: Vec<String>, min_mask: u32, max_mask: u32 },
+    // A successful group resolution that may still lack groups (ADR 0066).
+    GroupResolutionIncomplete { reason: String },
 }
 ```
 

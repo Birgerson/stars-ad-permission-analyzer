@@ -416,6 +416,11 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      nobody can log on with it. The rights shown are what a logon");
                 println!("      with this SID would get; an ACE naming it is a dead entry.");
             }
+            PermissionDiagnostic::GroupResolutionIncomplete { reason } => {
+                println!("  [!] Group resolution is incomplete: {reason}.");
+                println!("      The evaluated token may lack these groups. Treat as");
+                println!("      not determinable.");
+            }
             PermissionDiagnostic::LogonDependentTrustees {
                 sids,
                 min_mask,

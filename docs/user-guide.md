@@ -803,6 +803,7 @@ exact wording, lives in
 | `GroupResolutionFailed { reason }` | high | **yes** | Recursive group resolution failed or was skipped (e.g. cross-domain path with no GC crawl). ACEs on domain groups may be missing. `reason` carries the underlying error. |
 | `IdentityNotResolvable { reason }` | high | **yes** | The SID could not be resolved and is **not** proven orphaned — e.g. an account of the trusted domain named in `reason`. Its memberships are unknown, so the computed rights can be too low or too high. |
 | `IdentityOrphaned` | info | no | The account no longer exists in the configured domain. Nobody can log on with the SID; an ACE naming it is a dead entry. |
+| `GroupResolutionIncomplete { reason }` | high | **yes** | The group resolution succeeded, but `reason` names groups that are missing from the evaluated token — a primary group outside the base, groups outside a base that is only an OU, a group without a readable SID, an unresolvable local group. |
 | `LogonDependentTrustees { sids, min_mask, max_mask }` | medium | **yes** | ACEs for SIDs whose presence depends on how the user logs on (This Organization, NTLM authentication, console logon, …) decide bits of this result. The NTFS right lies between `min_mask` and `max_mask`. |
 
 **Risk `incomplete = true`** means: the risk finding is structurally
