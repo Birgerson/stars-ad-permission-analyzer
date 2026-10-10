@@ -729,6 +729,50 @@ same across the GUI, the CLI, and every export format.
 
 ---
 
+## "NOT DETERMINABLE" — when Stars cannot give the answer
+
+When something Stars needs for an exact answer is missing — the group
+memberships of an account from a trusted domain, nested groups without
+LDAP, the local groups of the target server, an unreadable share DACL, an
+ACE type it cannot evaluate, an ACE for a SID whose presence depends on
+how the user logs on — the result is **not stated as a fact**. Instead
+every surface says:
+
+```text
+  NTFS    : NOT DETERMINABLE — the known data alone gives Read (0x00120089); the real right may differ
+  Result  : NOT DETERMINABLE — the known data alone gives Read (0x00120089); the real right may differ
+
+  Why not determinable:
+    - Group resolution used the SAM/LSA fallback (no LDAP); nested domain groups are not resolved recursively, ACEs on them may be missed.
+```
+
+- The value after "known data" is what Stars computed from what it could
+  resolve. It is shown so you can see the partial picture — it is **not**
+  the answer and may be too low or too high.
+- In a **scan**, reasons that apply to every result (identity, groups,
+  local groups, share) are listed once in the header; each row reads
+  `NOT DETERMINABLE (known data: …)`, and the summary counts these rows.
+- **CSV**: the `ntfs_rights`/`share_rights`/`effective_rights` columns use
+  the same wording, the columns `determinable` (`yes`/`no`) and
+  `not_determinable_reasons` carry the verdict and the reasons; the
+  `*_mask_hex` columns keep the computed value.
+- **JSON** (schema v4): each permission has `determinable`
+  (`ntfs`/`share`/`effective`), `uncertainty` (`layer` + `reason`) and
+  `account_status`.
+- **HTML / GUI**: a `NOT DETERMINABLE` badge or label with the computed
+  value as "known data".
+- **ACEs for logon-dependent SIDs** (`This Organization`, `NTLM
+  Authentication`, `Authentication authority asserted identity`, console or
+  remote-interactive logon, …): Stars computes the lowest and the highest
+  possible result. If they are equal the ACE cannot matter and the result
+  stays exact; otherwise the explanation says "the NTFS right lies between
+  … and …" (marker `LogonDependentTrustees`).
+
+How to get an exact answer: configure LDAP (`--server` …) for nested
+groups; analyze accounts of a trusted domain against that domain; make
+sure the analyzing account may query the target server's local groups and
+read the share permissions.
+
 ## Reading findings — diagnostic markers
 
 Every `EffectivePermission` entry in CLI, HTML, or JSON carries a
@@ -759,6 +803,7 @@ exact wording, lives in
 | `GroupResolutionFailed { reason }` | high | **yes** | Recursive group resolution failed or was skipped (e.g. cross-domain path with no GC crawl). ACEs on domain groups may be missing. `reason` carries the underlying error. |
 | `IdentityNotResolvable { reason }` | high | **yes** | The SID could not be resolved and is **not** proven orphaned — e.g. an account of the trusted domain named in `reason`. Its memberships are unknown, so the computed rights can be too low or too high. |
 | `IdentityOrphaned` | info | no | The account no longer exists in the configured domain. Nobody can log on with the SID; an ACE naming it is a dead entry. |
+| `LogonDependentTrustees { sids, min_mask, max_mask }` | medium | **yes** | ACEs for SIDs whose presence depends on how the user logs on (This Organization, NTLM authentication, console logon, …) decide bits of this result. The NTFS right lies between `min_mask` and `max_mask`. |
 
 **Risk `incomplete = true`** means: the risk finding is structurally
 incomplete — the auditor should additionally inspect manually. Note the
@@ -815,9 +860,11 @@ carries both answers:
 Since v1.5.14 **both blocks are also populated in CLI exports**.
 Before that only the GUI produced the path-centric trustee list; the
 CLI export had the field defined but passed it empty. JSON consumers
-find the field under the `path_trustees` key (**schema version 3**
-since v1.5.14); HTML auto-renders the "Trustees per path" table
-whenever the list is not empty.
+find the field under the `path_trustees` key (schema version 3 since
+v1.5.14; **version 4** adds the derived `determinable`, `uncertainty`
+and `account_status` fields to every permission, ADR 0065); HTML
+auto-renders the "Trustees per path" table whenever the list is not
+empty.
 
 #### JSON schema v3 — tagged trustee entries
 

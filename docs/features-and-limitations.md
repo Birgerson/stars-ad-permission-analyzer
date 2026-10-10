@@ -210,6 +210,7 @@ out; the report font is Arial.
 | `PersistedEvidenceDecodeFailed { detail }` | Concern | **yes** | A persisted (historical) row could not be fully decoded; the reconstructed result may be less complete than originally stored. |
 | `IdentityNotResolvable { reason }` | Concern | **yes** | The SID could not be resolved and is **not** proven orphaned — it belongs to a trusted domain (named), another domain, lies outside a base that is only an OU, or its domain could not be determined. Its memberships are unknown; the rights computed for the bare SID can be too low or too high (ADR 0064). |
 | `IdentityOrphaned` | Neutral | no | The SID belongs to the configured domain, the base covers that whole domain, and no object exists: the account no longer exists. Nobody can log on with it; an ACE naming it is a dead entry (ADR 0064). |
+| `LogonDependentTrustees { sids, min_mask, max_mask }` | Notice | **yes** | Applicable ACEs for well-known SIDs whose presence depends on how the user logs on (This Organization, authentication assertion / package, console or remote-interactive logon, local account) decide bits of this result; the NTFS right lies between the two bounds. If the bounds were equal the ACEs could not matter and no marker is attached (ADR 0065). |
 | `MembersViaPrimaryGroupIncluded { count }` | Neutral | no | *(members view)* `count` members were found via their `primaryGroupID` and included — they do not appear in the `member` attribute, so this makes the completeness of the count transparent. |
 | `UniversalGroupCrossDomainMembersNotVisible` | Neutral | **yes** | *(members view)* The group is **universal** and was queried over a plain domain bind; members from other domains of the forest are not visible — use a Global Catalog bind to see them. |
 | `GroupMemberEnumerationIncomplete { reason }` | Concern | **yes** | *(members view)* Member enumeration could not complete (one source search failed); the member list is a **lower bound**. |
@@ -217,6 +218,14 @@ out; the report font is Arial.
 The "Risk `incomplete`?" column reflects `risk_engine::is_incomplete()`:
 `incomplete = true` means the risk finding is structurally incomplete and is
 presented as such (its `confirmed` badge is then dropped).
+
+**Not determinable instead of a wrong value (ADR 0065).** Every marker with
+`incomplete = yes` makes the affected part of the result — NTFS, share or
+both — **not determinable**, and so do an unreadable share DACL and
+unavailable local groups. Such a value is never printed as a fact: the
+CLI, the GUI, the CSV label columns and the HTML badges say `NOT
+DETERMINABLE` and show the computed value only as "known data"; the CSV
+and JSON carry an explicit `determinable` verdict and the reasons.
 
 ---
 

@@ -378,7 +378,11 @@ fn row_severity(perm: &adpa_core::model::EffectivePermission) -> i32 {
     use adpa_core::model::DiagnosticSeverity::{Concern, Notice};
     if perm.diagnostics.iter().any(|d| d.severity() == Concern) {
         2
-    } else if perm.diagnostics.iter().any(|d| d.severity() == Notice) {
+    } else if perm.diagnostics.iter().any(|d| d.severity() == Notice)
+        // ADR 0065: a result that cannot be determined is never shown as an
+        // unremarkable row, even when its markers are expected caveats.
+        || !perm.effective_determinable()
+    {
         1
     } else {
         0
@@ -1441,7 +1445,7 @@ async fn handle_scan(
     );
     if scan_unsupported_share_ace_count > 0 {
         let msg = format!(
-            "{scan_unsupported_share_ace_count} share ACE(s) of unsupported type were skipped — share mask may be incomplete (diagnostic propagated to each result)."
+            "{scan_unsupported_share_ace_count} share ACE(s) could not be evaluated (unsupported type, unreadable trustee or logon-dependent trustee) — share mask may be incomplete (diagnostic propagated to each result)."
         );
         let _ = evt_tx.send(WorkerEvent::ScanError {
             path: root.to_string(),
@@ -1531,7 +1535,12 @@ async fn handle_scan(
             resolution: engine_flags.clone(),
         }) {
             Ok(perm) => {
-                let label = NormalizedRights::new(perm.effective_mask.0).display_name();
+                // ADR 0065: an undeterminable row says so instead of
+                // showing the computed value as a fact.
+                let label = permission_engine::rights_label_compact(
+                    perm.effective_mask.0,
+                    perm.effective_determinable(),
+                );
                 let _ = evt_tx.send(WorkerEvent::ScanItem(ScanRow {
                     path: path.clone(),
                     rights_label: label,

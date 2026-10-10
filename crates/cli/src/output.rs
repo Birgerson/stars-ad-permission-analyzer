@@ -6,9 +6,9 @@
 use adpa_core::model::{
     privileged_group_role, AccountStatus, AceKind, DomainTrust, EffectivePermission,
     FileSystemObject, GroupMembersReport, GroupMembership, MembershipReport, PermissionDiagnostic,
-    RiskFinding, RiskSeverity, ScanError, ScanRun, Share,
+    RiskFinding, RiskSeverity, ScanError, ScanRun, Share, ShareEvalStatus, Uncertainty,
 };
-use permission_engine::NormalizedRights;
+use permission_engine::{rights_statement, NormalizedRights, NOT_DETERMINABLE};
 use share_scanner::{ShareDacl, ShareScanResult};
 
 const W: usize = 65;
@@ -78,8 +78,8 @@ pub fn print_report(
 
     if !ad_connected {
         println!();
-        println!("  [!] No AD connection — group memberships not resolved.");
-        println!("      Results may be incomplete.");
+        println!("  [!] No LDAP connection — only the direct domain groups and the local");
+        println!("      groups were resolved (SAM/LSA); nested domain groups are unknown.");
     }
 
     if !memberships.is_empty() {
@@ -199,16 +199,19 @@ pub fn print_report(
         }
     }
 
+    // ADR 0065: a value that cannot be determined is never printed as a
+    // plain fact — the line says so and the reasons follow.
     section("Effective Rights");
-    let ntfs = NormalizedRights::new(result.ntfs_mask.0);
-    let eff = NormalizedRights::new(result.effective_mask.0);
-
-    println!("  NTFS    : {}", ntfs);
-    match result.share_mask {
-        Some(s) => println!("  Share   : {}", NormalizedRights::new(s.0)),
-        None => println!("  Share   : (not specified)"),
-    }
-    println!("  Result  : {}", eff);
+    println!(
+        "  NTFS    : {}",
+        rights_statement(result.ntfs_mask.0, result.ntfs_determinable())
+    );
+    println!("  Share   : {}", share_line(result));
+    println!(
+        "  Result  : {}",
+        rights_statement(result.effective_mask.0, result.effective_determinable())
+    );
+    print_uncertainty(&result.uncertainty());
 
     section("Explanation Path");
     for (i, step) in result.path_explanation.steps.iter().enumerate() {
@@ -218,6 +221,36 @@ pub fn print_report(
     println!();
     println!("{}", heavy_line());
     println!();
+}
+
+/// The share line of the effective-rights block: the share mask as a
+/// statement when one was applied, otherwise what the share side was.
+fn share_line(result: &EffectivePermission) -> String {
+    match (&result.share_status, result.share_mask) {
+        (ShareEvalStatus::Applied, Some(mask)) => {
+            rights_statement(mask.0, result.share_determinable())
+        }
+        (ShareEvalStatus::ReadFailed(_), _) => {
+            format!("{NOT_DETERMINABLE} — the share permissions could not be read (see below)")
+        }
+        (ShareEvalStatus::Unrestricted, _) => {
+            "no restriction (NULL share DACL) — effective follows NTFS".to_owned()
+        }
+        _ => "(no SMB context — NTFS only)".to_owned(),
+    }
+}
+
+/// "Why not determinable" block under a result (ADR 0065). Silent when the
+/// result is exact.
+pub fn print_uncertainty(uncertainty: &[Uncertainty]) {
+    if uncertainty.is_empty() {
+        return;
+    }
+    println!();
+    println!("  Why not determinable:");
+    for u in uncertainty {
+        println!("    - {}", u.reason);
+    }
 }
 
 /// Short name of a risk severity for console output.
@@ -247,7 +280,10 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      exact but may differ from canonicalized expectations.");
             }
             PermissionDiagnostic::UnsupportedShareAces { count } => {
-                println!("  [!] {count} share ACE(s) of unsupported type were skipped.");
+                println!("  [!] {count} share ACE(s) could not be evaluated (unsupported type,");
+                println!(
+                    "      unreadable trustee, or a trustee whose presence depends on the logon)."
+                );
                 println!("      Share mask is potentially incomplete; risk findings are");
                 println!("      flagged 'incomplete' for this path.");
             }
@@ -379,6 +415,23 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("  [i] Orphaned SID: the account no longer exists in its domain, so");
                 println!("      nobody can log on with it. The rights shown are what a logon");
                 println!("      with this SID would get; an ACE naming it is a dead entry.");
+            }
+            PermissionDiagnostic::LogonDependentTrustees {
+                sids,
+                min_mask,
+                max_mask,
+            } => {
+                println!(
+                    "  [!] ACE(s) for {} apply only for certain logons",
+                    sids.join(", ")
+                );
+                println!("      (authentication type, organization, logon type), which Stars");
+                println!("      does not model. The NTFS right lies between");
+                println!(
+                    "      {} and {}. Treat as not determinable.",
+                    NormalizedRights::new(*min_mask),
+                    NormalizedRights::new(*max_mask)
+                );
             }
         }
     }

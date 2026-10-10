@@ -941,17 +941,95 @@ impl EffectivePermission {
     /// `incomplete` through this, and the GUI uses it to decide whether a row
     /// is a warning (vs. only informational markers).
     pub fn is_incomplete(&self) -> bool {
-        matches!(self.share_status, ShareEvalStatus::ReadFailed(_))
-            || self.unsupported_ace_count > 0
-            || matches!(
-                self.local_group_status,
-                LocalGroupEvalStatus::NotAvailable(_)
-            )
-            || self
-                .diagnostics
-                .iter()
-                .any(PermissionDiagnostic::is_incompleteness_trigger)
+        !self.uncertainty().is_empty()
     }
+
+    /// Every reason why the shown result may differ from what Windows would
+    /// compute, each tagged with the part it affects (ADR 0065). Empty means
+    /// the result is exact. Derived from the stored statuses and markers, so
+    /// persisted rows, exports and every frontend arrive at the same answer.
+    pub fn uncertainty(&self) -> Vec<Uncertainty> {
+        let mut out: Vec<Uncertainty> = Vec::new();
+        if let ShareEvalStatus::ReadFailed(reason) = &self.share_status {
+            out.push(Uncertainty {
+                layer: UncertainLayer::Share,
+                reason: format!("The share permissions could not be read ({reason})."),
+            });
+        }
+        let has_ntfs_marker = self
+            .diagnostics
+            .iter()
+            .any(|d| matches!(d, PermissionDiagnostic::UnsupportedNtfsAces { .. }));
+        if self.unsupported_ace_count > 0 && !has_ntfs_marker {
+            out.push(Uncertainty {
+                layer: UncertainLayer::Ntfs,
+                reason: format!(
+                    "{} NTFS ACE(s) could not be evaluated — a hidden Deny among them could \
+                     change the result.",
+                    self.unsupported_ace_count
+                ),
+            });
+        }
+        if let LocalGroupEvalStatus::NotAvailable(reason) = &self.local_group_status {
+            out.push(Uncertainty {
+                layer: UncertainLayer::Token,
+                reason: format!(
+                    "The local groups of the target server could not be resolved ({reason}) — \
+                     ACEs for local groups may apply to this identity."
+                ),
+            });
+        }
+        for d in &self.diagnostics {
+            if let Some(layer) = d.uncertain_layer() {
+                let reason = d.summary();
+                if !out.iter().any(|u| u.reason == reason) {
+                    out.push(Uncertainty { layer, reason });
+                }
+            }
+        }
+        out
+    }
+
+    /// The NTFS mask is exactly what Windows would compute: nothing makes
+    /// the token or the NTFS walk uncertain.
+    pub fn ntfs_determinable(&self) -> bool {
+        !self
+            .uncertainty()
+            .iter()
+            .any(|u| matches!(u.layer, UncertainLayer::Token | UncertainLayer::Ntfs))
+    }
+
+    /// The share mask is exactly what Windows would compute: nothing makes
+    /// the token or the share evaluation uncertain.
+    pub fn share_determinable(&self) -> bool {
+        !self
+            .uncertainty()
+            .iter()
+            .any(|u| matches!(u.layer, UncertainLayer::Token | UncertainLayer::Share))
+    }
+
+    /// The effective right is exactly what Windows would compute.
+    pub fn effective_determinable(&self) -> bool {
+        self.uncertainty().is_empty()
+    }
+}
+
+/// Which part of a result an uncertainty affects (ADR 0065).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UncertainLayer {
+    /// The evaluated token may lack SIDs — affects NTFS and share alike.
+    Token,
+    /// The NTFS DACL could not be evaluated completely.
+    Ntfs,
+    /// The share DACL could not be evaluated completely.
+    Share,
+}
+
+/// One reason why a result is not determinable, as stated to a reader.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Uncertainty {
+    pub layer: UncertainLayer,
+    pub reason: String,
 }
 
 /// Structured diagnostic marker attached to an effective permission.
@@ -1239,6 +1317,20 @@ pub enum PermissionDiagnostic {
     /// this SID; the rights shown are what a logon with it would get, and an
     /// ACE naming it is a dead entry. Informational (ADR 0064).
     IdentityOrphaned,
+
+    /// The DACL has applicable ACEs for well-known SIDs whose presence in
+    /// the real token depends on how the user logs on — This Organization,
+    /// authentication assertion or package (NTLM / SChannel / Digest),
+    /// remote-interactive or console logon, local account — and those ACEs
+    /// decide bits of this result. Stars does not model them, so the NTFS
+    /// right lies between `min_mask` and `max_mask` (inclusive bounds; the
+    /// shown mask treats them as absent). Until ADR 0065 such ACEs were
+    /// silently treated as not applying. Incompleteness trigger; Notice.
+    LogonDependentTrustees {
+        sids: Vec<String>,
+        min_mask: u32,
+        max_mask: u32,
+    },
 }
 
 /// Account state as it may be stated to a reader — the single source for
@@ -1343,8 +1435,9 @@ impl PermissionDiagnostic {
                  stored order like Windows, may differ from canonical expectations."
             ),
             PermissionDiagnostic::UnsupportedShareAces { count } => format!(
-                "{count} share ACE(s) of an unsupported type were skipped — the share \
-                 mask is potentially incomplete."
+                "{count} share ACE(s) could not be evaluated (unsupported type, unreadable \
+                 trustee, or a trustee whose presence depends on how the user logs on) — \
+                 the share mask is potentially incomplete."
             ),
             PermissionDiagnostic::UnsupportedNtfsAces { count } => format!(
                 "{count} NTFS ACE(s) could not be evaluated (unsupported type, an \
@@ -1446,6 +1539,16 @@ impl PermissionDiagnostic {
                  would get; an ACE naming it is a dead entry."
                     .to_owned()
             }
+            PermissionDiagnostic::LogonDependentTrustees {
+                sids,
+                min_mask,
+                max_mask,
+            } => format!(
+                "ACE(s) for {} apply only for certain logons (authentication type, \
+                 organization, logon type), which Stars does not model — the NTFS right \
+                 lies between 0x{min_mask:08X} and 0x{max_mask:08X}.",
+                sids.join(", ")
+            ),
         }
     }
 
@@ -1460,11 +1563,25 @@ impl PermissionDiagnostic {
     /// deliberately — with a `matches!` list it would silently default to
     /// "complete", the looks-safe-isn't-safe failure mode.
     pub fn is_incompleteness_trigger(&self) -> bool {
+        self.uncertain_layer().is_some()
+    }
+
+    /// Which part of a result this diagnostic makes **not determinable** —
+    /// `None` when the result stays exact. The single source of truth behind
+    /// [`Self::is_incompleteness_trigger`] and
+    /// [`EffectivePermission::uncertainty`] (ADR 0065), so "incomplete" and
+    /// "not determinable" can never disagree. Exhaustive on purpose (core
+    /// review C-2): a new variant must be classified deliberately.
+    pub fn uncertain_layer(&self) -> Option<UncertainLayer> {
         match self {
-            // The computed rights may be wrong or understated.
-            PermissionDiagnostic::UnsupportedShareAces { .. }
-            | PermissionDiagnostic::UnsupportedNtfsAces { .. }
-            | PermissionDiagnostic::DomainGroupRecursionIncomplete
+            // The share mask may be wrong.
+            PermissionDiagnostic::UnsupportedShareAces { .. } => Some(UncertainLayer::Share),
+            // The NTFS walk may be wrong.
+            PermissionDiagnostic::UnsupportedNtfsAces { .. }
+            | PermissionDiagnostic::LogonDependentTrustees { .. } => Some(UncertainLayer::Ntfs),
+            // The evaluated token may lack SIDs (or the whole record is
+            // damaged) — affects the NTFS and the share evaluation alike.
+            PermissionDiagnostic::DomainGroupRecursionIncomplete
             | PermissionDiagnostic::IdentityNotInConfiguredLdapBase
             | PermissionDiagnostic::IdentityLookupFailed { .. }
             | PermissionDiagnostic::GroupResolutionFailed { .. }
@@ -1475,7 +1592,7 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::GroupSidHistoryPresent { .. }
             | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
             | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible
-            | PermissionDiagnostic::IdentityNotResolvable { .. } => true,
+            | PermissionDiagnostic::IdentityNotResolvable { .. } => Some(UncertainLayer::Token),
             // Informational — the result itself is exact.
             PermissionDiagnostic::NonCanonicalDaclOrder { .. }
             | PermissionDiagnostic::IdentityDisabled
@@ -1485,7 +1602,7 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::SidHistoryEvaluated { .. }
             | PermissionDiagnostic::GroupSidHistoryEvaluated { .. }
             | PermissionDiagnostic::MembersViaPrimaryGroupIncluded { .. }
-            | PermissionDiagnostic::IdentityOrphaned => false,
+            | PermissionDiagnostic::IdentityOrphaned => None,
         }
     }
 
@@ -1512,7 +1629,8 @@ impl PermissionDiagnostic {
             // Worth a look — a hidden Deny among skipped ACEs could change the
             // result.
             PermissionDiagnostic::UnsupportedShareAces { .. }
-            | PermissionDiagnostic::UnsupportedNtfsAces { .. } => DiagnosticSeverity::Notice,
+            | PermissionDiagnostic::UnsupportedNtfsAces { .. }
+            | PermissionDiagnostic::LogonDependentTrustees { .. } => DiagnosticSeverity::Notice,
             // Likely a real gap — under-report or a hard resolution failure.
             PermissionDiagnostic::SidHistoryPresent { .. }
             | PermissionDiagnostic::GroupSidHistoryPresent { .. }
@@ -2087,6 +2205,108 @@ mod tests {
         assert_eq!(AccountStatus::Disabled.csv_value(), "true");
         assert_eq!(AccountStatus::NotAnAccount.csv_value(), "n/a");
         assert!(!AccountStatus::Unknown.label().contains("Active"));
+    }
+
+    fn permission() -> EffectivePermission {
+        EffectivePermission {
+            identity: account(IdentityKind::User, false),
+            path: NormalizedPath("C:\\x".to_owned()),
+            ntfs_mask: AccessMask(0x0012_0089),
+            share_mask: Some(AccessMask(0x0012_0089)),
+            effective_mask: AccessMask(0x0012_0089),
+            path_explanation: PermissionPath { steps: vec![] },
+            share_status: ShareEvalStatus::Applied,
+            local_group_status: LocalGroupEvalStatus::Applied,
+            contributing_sids: vec![],
+            unsupported_ace_count: 0,
+            matched_aces: vec![],
+            diagnostics: vec![],
+        }
+    }
+
+    /// ADR 0065: each uncertainty is attributed to the part it affects.
+    #[test]
+    fn uncertainty_is_attributed_to_the_affected_layer() {
+        let clean = permission();
+        assert!(clean.uncertainty().is_empty());
+        assert!(clean.effective_determinable() && !clean.is_incomplete());
+
+        let mut share = permission();
+        share.share_status = ShareEvalStatus::ReadFailed("access denied".to_owned());
+        assert!(
+            share.ntfs_determinable(),
+            "a share failure leaves NTFS exact"
+        );
+        assert!(!share.share_determinable());
+        assert!(!share.effective_determinable());
+
+        let mut ntfs = permission();
+        ntfs.unsupported_ace_count = 2;
+        ntfs.diagnostics = vec![PermissionDiagnostic::UnsupportedNtfsAces { count: 2 }];
+        assert_eq!(
+            ntfs.uncertainty().len(),
+            1,
+            "count and marker are one reason"
+        );
+        assert!(!ntfs.ntfs_determinable());
+        assert!(
+            ntfs.share_determinable(),
+            "an NTFS gap leaves the share mask exact"
+        );
+
+        let mut token = permission();
+        token.local_group_status = LocalGroupEvalStatus::NotAvailable("RPC".to_owned());
+        assert!(!token.ntfs_determinable() && !token.share_determinable());
+
+        let mut informational = permission();
+        informational.diagnostics = vec![
+            PermissionDiagnostic::NonCanonicalDaclOrder { at_index: 0 },
+            PermissionDiagnostic::IdentityOrphaned,
+            PermissionDiagnostic::SidHistoryEvaluated { count: 1 },
+        ];
+        assert!(informational.effective_determinable());
+    }
+
+    #[test]
+    fn incompleteness_trigger_and_uncertain_layer_agree() {
+        let all = [
+            PermissionDiagnostic::NonCanonicalDaclOrder { at_index: 0 },
+            PermissionDiagnostic::UnsupportedShareAces { count: 1 },
+            PermissionDiagnostic::UnsupportedNtfsAces { count: 1 },
+            PermissionDiagnostic::DomainGroupRecursionIncomplete,
+            PermissionDiagnostic::IdentityDisabled,
+            PermissionDiagnostic::IdentityNotInConfiguredLdapBase,
+            PermissionDiagnostic::IdentityDisabledStatusUnknown,
+            PermissionDiagnostic::IdentityLookupFailed { reason: "r".into() },
+            PermissionDiagnostic::GroupResolutionFailed { reason: "r".into() },
+            PermissionDiagnostic::OwnerRightsAceApplied,
+            PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal,
+            PermissionDiagnostic::GroupResolutionViaGlobalCatalog,
+            PermissionDiagnostic::PersistedEvidenceDecodeFailed { detail: "d".into() },
+            PermissionDiagnostic::SidHistoryPresent { count: 1 },
+            PermissionDiagnostic::SidHistoryEvaluated { count: 1 },
+            PermissionDiagnostic::GroupSidHistoryEvaluated {
+                groups: 1,
+                count: 1,
+            },
+            PermissionDiagnostic::GroupSidHistoryPresent { count: 1 },
+            PermissionDiagnostic::TrustBoundaryEffectsNotModeled,
+            PermissionDiagnostic::MembersViaPrimaryGroupIncluded { count: 1 },
+            PermissionDiagnostic::GroupMemberEnumerationIncomplete { reason: "r".into() },
+            PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible,
+            PermissionDiagnostic::IdentityNotResolvable { reason: "r".into() },
+            PermissionDiagnostic::IdentityOrphaned,
+        ];
+        for d in &all {
+            assert_eq!(
+                d.is_incompleteness_trigger(),
+                d.uncertain_layer().is_some(),
+                "{d:?}"
+            );
+            let mut p = permission();
+            p.diagnostics = vec![d.clone()];
+            assert_eq!(p.is_incomplete(), d.is_incompleteness_trigger(), "{d:?}");
+        }
     }
 
     #[test]

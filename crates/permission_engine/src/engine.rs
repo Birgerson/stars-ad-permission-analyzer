@@ -110,6 +110,24 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         };
         ntfs_raw |= owner_implicit_bits;
 
+        // ADR 0065: ACEs for well-known SIDs whose presence in the real token
+        // depends on how the user logs on (This Organization, NTLM
+        // authentication, console logon, …) are not modelled. Instead of
+        // silently treating them as "not in the token", bound the result:
+        // the upper bound counts every such Allow as matching and no such
+        // Deny, the lower bound the opposite. Equal bounds mean those ACEs
+        // cannot change this result — it stays exact.
+        let logon_dependent = if input.file_system_object.null_dacl {
+            None
+        } else {
+            logon_dependent_bounds(
+                &input.file_system_object.dacl,
+                &match_sids,
+                input.access_context,
+                owner_implicit_bits,
+            )
+        };
+
         // Evaluate the share status: NotApplicable → effective = NTFS;
         // Applied → effective = NTFS ∩ Share; ReadFailed → effective = NTFS but
         // the result carries the ReadFailed marker (incomplete).
@@ -145,6 +163,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             share_status: &output_share_status,
             effective_raw,
             sid_names: &input.sid_names,
+            logon_dependent: logon_dependent.as_ref(),
         });
 
         let matched_aces = collect_matched_aces(&input.file_system_object.dacl, &match_sids);
@@ -175,6 +194,14 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if unsupported_ntfs_count > 0 {
             diagnostics.push(PermissionDiagnostic::UnsupportedNtfsAces {
                 count: unsupported_ntfs_count,
+            });
+        }
+        // ADR 0065: logon-dependent trustees that decide bits of this result.
+        if let Some(bounds) = &logon_dependent {
+            diagnostics.push(PermissionDiagnostic::LogonDependentTrustees {
+                sids: bounds.sids.clone(),
+                min_mask: bounds.min,
+                max_mask: bounds.max,
             });
         }
         // Finding 6: SAM fallback without LDAP — nested domain groups are
@@ -467,6 +494,125 @@ fn walk_dacl_stored_order(dacl: &[AceEntry], match_sids: &HashSet<String>) -> Da
     }
 }
 
+/// Well-known SIDs whose presence in a real access token depends on **how**
+/// the user logs on — authentication package, organization of the
+/// authenticating domain, logon type — which Stars does not model
+/// (ADR 0065). An applicable ACE for one of them may or may not apply:
+///
+/// - always: `This Organization` (S-1-5-15), `Other Organization`
+///   (S-1-5-1000), `This Organization Certificate` (S-1-5-65-1), the
+///   authentication-assertion SIDs (S-1-18-*), the authentication-package
+///   SIDs (`NTLM`/`SChannel`/`Digest Authentication`, S-1-5-64-*), `Local
+///   account` (S-1-5-113) and `Local account and member of Administrators`
+///   (S-1-5-114);
+/// - for a local logon (and an unspecified context): `Remote Interactive
+///   Logon` (S-1-5-14), `Console Logon` (S-1-2-1), `Terminal Server User`
+///   (S-1-5-13) — over SMB the logon is a network logon, which never
+///   carries them;
+/// - for an unspecified context additionally `NETWORK`, `INTERACTIVE` and
+///   `LOCAL`, which the modelled contexts decide.
+pub fn is_logon_dependent_sid(sid: &str, context: AccessContext) -> bool {
+    const ALWAYS: [&str; 5] = [
+        "S-1-5-15",
+        "S-1-5-1000",
+        "S-1-5-65-1",
+        "S-1-5-113",
+        "S-1-5-114",
+    ];
+    const LOCAL_LOGON: [&str; 3] = ["S-1-5-14", "S-1-2-1", "S-1-5-13"];
+    const CONTEXT: [&str; 3] = ["S-1-5-2", "S-1-5-4", "S-1-2-0"];
+    if ALWAYS.contains(&sid) || sid.starts_with("S-1-18-") || sid.starts_with("S-1-5-64-") {
+        return true;
+    }
+    match context {
+        AccessContext::RemoteSmb => false,
+        AccessContext::LocalInteractive => LOCAL_LOGON.contains(&sid),
+        AccessContext::Unspecified => LOCAL_LOGON.contains(&sid) || CONTEXT.contains(&sid),
+    }
+}
+
+/// Lower and upper bound of a result that depends on logon-dependent
+/// trustees, with those trustees — see [`logon_dependent_bounds`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogonDependentBounds {
+    /// The logon-dependent trustee SIDs of applicable ACEs, sorted.
+    pub sids: Vec<String>,
+    pub min: u32,
+    pub max: u32,
+}
+
+/// Bounds the stored-order result over the logon-dependent trustees of
+/// `dacl` (ADR 0065). `None` when there are none, or when they cannot
+/// change this result (equal bounds — the result is then exact).
+///
+/// For each bit, the first applicable ACE containing it decides. Counting
+/// every uncertain Allow as matching and no uncertain Deny gives the highest
+/// possible outcome per bit; the opposite gives the lowest. The real token
+/// lies somewhere in between, so the real result is within the bounds. The
+/// owner bits are applied to both, as in the main evaluation.
+pub fn logon_dependent_bounds(
+    dacl: &[AceEntry],
+    match_sids: &HashSet<String>,
+    context: AccessContext,
+    owner_implicit_bits: u32,
+) -> Option<LogonDependentBounds> {
+    let mut uncertain: Vec<String> = dacl
+        .iter()
+        .filter(|ace| ace_applies_to_current_object(ace))
+        .filter(|ace| !match_sids.contains(&ace.sid.0))
+        .filter(|ace| is_logon_dependent_sid(&ace.sid.0, context))
+        .map(|ace| ace.sid.0.clone())
+        .collect();
+    if uncertain.is_empty() {
+        return None;
+    }
+    uncertain.sort();
+    uncertain.dedup();
+    let certain = |sid: &str| match_sids.contains(sid);
+    let maybe = |sid: &str| certain(sid) || uncertain.iter().any(|u| u == sid);
+    let max = walk_granted_with(dacl, &maybe, &certain) | owner_implicit_bits;
+    let min = walk_granted_with(dacl, &certain, &maybe) | owner_implicit_bits;
+    if min == max {
+        return None;
+    }
+    Some(LogonDependentBounds {
+        sids: uncertain,
+        min,
+        max,
+    })
+}
+
+/// Granted bits of a stored-order walk in which Allow ACEs and Deny ACEs
+/// match through different predicates — the building block of the bounds
+/// above. Same per-bit "first decision wins" rule as
+/// [`walk_dacl_stored_order`].
+fn walk_granted_with(
+    dacl: &[AceEntry],
+    allow_matches: &dyn Fn(&str) -> bool,
+    deny_matches: &dyn Fn(&str) -> bool,
+) -> u32 {
+    let mut granted: u32 = 0;
+    let mut denied: u32 = 0;
+    for ace in dacl {
+        if !ace_applies_to_current_object(ace) {
+            continue;
+        }
+        let applies = match ace.kind {
+            AceKind::Allow => allow_matches(&ace.sid.0),
+            AceKind::Deny => deny_matches(&ace.sid.0),
+        };
+        if !applies {
+            continue;
+        }
+        let bits = expand_generic_rights(ace.mask.0) & !(granted | denied);
+        match ace.kind {
+            AceKind::Allow => granted |= bits,
+            AceKind::Deny => denied |= bits,
+        }
+    }
+    granted
+}
+
 /// Collects DACL entries that actually apply to the current object and whose
 /// trustee SID belongs to the match SID set (token plus `S-1-3-4` when the
 /// user is the owner).
@@ -691,6 +837,9 @@ struct ExplanationInput<'a> {
     share_status: &'a ShareEvalStatus,
     effective_raw: u32,
     sid_names: &'a std::collections::BTreeMap<String, String>,
+    /// Bounds over logon-dependent trustees that decide bits of the NTFS
+    /// result (ADR 0065); `None` when there are none.
+    logon_dependent: Option<&'a LogonDependentBounds>,
 }
 
 /// Creates an explainable permission path.
@@ -711,6 +860,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         share_status,
         effective_raw,
         sid_names,
+        logon_dependent,
     } = input;
     let mut steps: Vec<String> = Vec::new();
 
@@ -869,6 +1019,26 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     if unsupported_ntfs_count > 0 {
         steps.push(format!(
             "WARNING: {unsupported_ntfs_count} NTFS ACE(s) on this path could not be evaluated (object / callback / conditional / vendor-specific) — the NTFS effective mask above is a lower-confidence approximation and may be too permissive or too restrictive"
+        ));
+    }
+
+    // 4c. Logon-dependent trustees (ADR 0065): the NTFS result is a range.
+    if let Some(bounds) = logon_dependent {
+        let names: Vec<String> = bounds
+            .sids
+            .iter()
+            .map(|sid| match sid_names.get(sid) {
+                Some(name) => format!("{name} ({sid})"),
+                None => sid.clone(),
+            })
+            .collect();
+        steps.push(format!(
+            "NOT DETERMINABLE: ACE(s) for {} apply only for certain logons (authentication type, organization, logon type), which Stars does not model — the NTFS right lies between {} (0x{:08X}) and {} (0x{:08X})",
+            names.join(", "),
+            NormalizedRights::new(bounds.min).display_name(),
+            bounds.min,
+            NormalizedRights::new(bounds.max).display_name(),
+            bounds.max,
         ));
     }
 
@@ -2764,6 +2934,190 @@ mod tests {
     const SID_INTERACTIVE: &str = "S-1-5-4";
     /// S-1-2-0 = LOCAL
     const SID_LOCAL: &str = "S-1-2-0";
+
+    // --- ADR 0065: logon-dependent trustees bound the result ---
+
+    const THIS_ORGANIZATION: &str = "S-1-5-15";
+    const AUTH_ASSERTED: &str = "S-1-18-1";
+    const REMOTE_INTERACTIVE: &str = "S-1-5-14";
+
+    fn logon_marker(p: &EffectivePermission) -> Option<(Vec<String>, u32, u32)> {
+        p.diagnostics.iter().find_map(|d| match d {
+            PermissionDiagnostic::LogonDependentTrustees {
+                sids,
+                min_mask,
+                max_mask,
+            } => Some((sids.clone(), *min_mask, *max_mask)),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn logon_dependent_allow_makes_the_result_a_range() {
+        let p = eval_with_context(
+            user(USER),
+            vec![],
+            fso(
+                None,
+                vec![
+                    allow_ace(THIS_ORGANIZATION, MASK_MODIFY, true),
+                    allow_ace(USER, MASK_READ, true),
+                ],
+            ),
+            None,
+            AccessContext::RemoteSmb,
+        );
+        // The shown mask treats the ACE as absent …
+        assert_eq!(p.ntfs_mask.0, MASK_READ);
+        // … and says it is only the lower bound.
+        let (sids, min, max) = logon_marker(&p).expect("range marker");
+        assert_eq!(sids, [THIS_ORGANIZATION]);
+        assert_eq!(min, MASK_READ);
+        assert_eq!(max, MASK_MODIFY);
+        assert!(!p.ntfs_determinable() && p.is_incomplete());
+        assert!(
+            p.path_explanation
+                .steps
+                .iter()
+                .any(|s| s.starts_with("NOT DETERMINABLE: ACE(s) for S-1-5-15")),
+            "{:?}",
+            p.path_explanation.steps
+        );
+    }
+
+    #[test]
+    fn logon_dependent_ace_that_cannot_change_the_result_keeps_it_exact() {
+        // Every bit is already decided by the user's own Full Control ACE.
+        let p = eval_with_context(
+            user(USER),
+            vec![],
+            fso(
+                None,
+                vec![
+                    allow_ace(USER, MASK_FULL_CONTROL, false),
+                    allow_ace(THIS_ORGANIZATION, MASK_MODIFY, true),
+                    deny_ace(AUTH_ASSERTED, MASK_WRITE, true),
+                ],
+            ),
+            None,
+            AccessContext::RemoteSmb,
+        );
+        assert_eq!(p.ntfs_mask.0, MASK_FULL_CONTROL);
+        assert!(logon_marker(&p).is_none());
+        assert!(p.ntfs_determinable());
+    }
+
+    #[test]
+    fn logon_dependent_deny_lowers_the_minimum() {
+        let p = eval_with_context(
+            user(USER),
+            vec![],
+            fso(
+                None,
+                vec![
+                    deny_ace(AUTH_ASSERTED, FILE_WRITE_DATA, false),
+                    allow_ace(USER, MASK_MODIFY, false),
+                ],
+            ),
+            None,
+            AccessContext::RemoteSmb,
+        );
+        let (_, min, max) = logon_marker(&p).expect("range marker");
+        assert_eq!(max, MASK_MODIFY);
+        assert_eq!(min, MASK_MODIFY & !FILE_WRITE_DATA);
+        assert_eq!(
+            p.ntfs_mask.0, MASK_MODIFY,
+            "shown mask treats the Deny as absent"
+        );
+    }
+
+    #[test]
+    fn inherit_only_logon_dependent_ace_is_ignored() {
+        let p = eval_with_context(
+            user(USER),
+            vec![],
+            fso(
+                None,
+                vec![
+                    allow_ace_inherit_only(THIS_ORGANIZATION, MASK_MODIFY, false),
+                    allow_ace(USER, MASK_READ, false),
+                ],
+            ),
+            None,
+            AccessContext::RemoteSmb,
+        );
+        assert!(logon_marker(&p).is_none());
+    }
+
+    #[test]
+    fn remote_interactive_ace_depends_on_the_context() {
+        let dacl = vec![
+            allow_ace(REMOTE_INTERACTIVE, MASK_MODIFY, false),
+            allow_ace(USER, MASK_READ, false),
+        ];
+        // Over SMB the logon is a network logon — the SID is certainly absent.
+        let smb = eval_with_context(
+            user(USER),
+            vec![],
+            fso(None, dacl.clone()),
+            None,
+            AccessContext::RemoteSmb,
+        );
+        assert!(logon_marker(&smb).is_none());
+        assert!(smb.ntfs_determinable());
+        // Locally it depends on console vs. remote desktop.
+        let local = eval_with_context(
+            user(USER),
+            vec![],
+            fso(None, dacl),
+            None,
+            AccessContext::LocalInteractive,
+        );
+        assert!(logon_marker(&local).is_some());
+    }
+
+    #[test]
+    fn is_logon_dependent_sid_classifies_the_well_known_set() {
+        for sid in [
+            "S-1-5-15",
+            "S-1-5-1000",
+            "S-1-5-65-1",
+            "S-1-18-1",
+            "S-1-18-2",
+            "S-1-5-64-10",
+            "S-1-5-64-14",
+            "S-1-5-113",
+            "S-1-5-114",
+        ] {
+            for ctx in [
+                AccessContext::RemoteSmb,
+                AccessContext::LocalInteractive,
+                AccessContext::Unspecified,
+            ] {
+                assert!(is_logon_dependent_sid(sid, ctx), "{sid} {ctx:?}");
+            }
+        }
+        for modelled in ["S-1-1-0", "S-1-5-11", "S-1-5-18", "S-1-3-0", "S-1-5-32-544"] {
+            assert!(
+                !is_logon_dependent_sid(modelled, AccessContext::RemoteSmb),
+                "{modelled}"
+            );
+        }
+        assert!(!is_logon_dependent_sid("S-1-5-2", AccessContext::RemoteSmb));
+        assert!(!is_logon_dependent_sid(
+            "S-1-5-2",
+            AccessContext::LocalInteractive
+        ));
+        assert!(is_logon_dependent_sid(
+            "S-1-5-2",
+            AccessContext::Unspecified
+        ));
+        assert!(!is_logon_dependent_sid("S-1-2-1", AccessContext::RemoteSmb));
+        assert!(is_logon_dependent_sid(
+            "S-1-2-1",
+            AccessContext::LocalInteractive
+        ));
+    }
 
     #[test]
     fn network_ace_applies_in_remote_smb_context() {

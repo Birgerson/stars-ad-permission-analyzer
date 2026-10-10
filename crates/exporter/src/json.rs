@@ -14,7 +14,7 @@
 
 use adpa_core::{
     error::CoreError,
-    model::{EffectivePermission, PathTrustees, RiskFinding},
+    model::{AccountStatus, EffectivePermission, PathTrustees, RiskFinding, Uncertainty},
     traits::{AnalysisResult, ExportTarget, Exporter},
 };
 use serde::Serialize;
@@ -26,14 +26,57 @@ use serde::Serialize;
 ///   than a flat `PathTrustee` struct. Diagnostic hints (share DACL not
 ///   readable, NULL DACL) are unambiguously separable from real
 ///   Allow/Deny ACEs.
-pub const JSON_SCHEMA_VERSION: u32 = 3;
+/// * v4 (ADR 0065): every permission additionally carries the derived
+///   `determinable` object (`ntfs`/`share`/`effective`), the `uncertainty`
+///   list (`layer` + `reason`) and `account_status`, so a pipeline never has
+///   to re-derive whether a mask is a fact.
+pub const JSON_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Serialize)]
 struct JsonReport<'a> {
     version: u32,
-    permissions: &'a [EffectivePermission],
+    permissions: Vec<JsonPermission<'a>>,
     risk_findings: &'a [RiskFinding],
     path_trustees: &'a [PathTrustees],
+}
+
+/// One permission plus the derived statements a reader needs (ADR 0065).
+/// `#[serde(flatten)]` keeps every existing field at its v3 place.
+#[derive(Serialize)]
+struct JsonPermission<'a> {
+    #[serde(flatten)]
+    permission: &'a EffectivePermission,
+    /// Whether each mask is exactly what Windows would compute. When
+    /// `false`, the corresponding `*_mask` holds only what the known data
+    /// gives.
+    determinable: JsonDeterminable,
+    /// Every reason a part of the result is not determinable.
+    uncertainty: Vec<Uncertainty>,
+    /// `Active` / `DISABLED` only when known (ADR 0064).
+    account_status: &'static str,
+}
+
+#[derive(Serialize)]
+struct JsonDeterminable {
+    ntfs: bool,
+    share: bool,
+    effective: bool,
+}
+
+impl<'a> JsonPermission<'a> {
+    fn new(permission: &'a EffectivePermission) -> Self {
+        Self {
+            permission,
+            determinable: JsonDeterminable {
+                ntfs: permission.ntfs_determinable(),
+                share: permission.share_determinable(),
+                effective: permission.effective_determinable(),
+            },
+            uncertainty: permission.uncertainty(),
+            account_status: AccountStatus::of(&permission.identity, &permission.diagnostics)
+                .label(),
+        }
+    }
 }
 
 pub struct JsonExporter;
@@ -42,7 +85,7 @@ impl Exporter for JsonExporter {
     fn export(&self, result: &AnalysisResult, target: ExportTarget) -> Result<(), CoreError> {
         let report = JsonReport {
             version: JSON_SCHEMA_VERSION,
-            permissions: &result.permissions,
+            permissions: result.permissions.iter().map(JsonPermission::new).collect(),
             risk_findings: &result.risk_findings,
             path_trustees: &result.path_trustees,
         };
@@ -154,6 +197,31 @@ mod tests {
         assert!(parsed["risk_findings"].is_array());
     }
 
+    /// ADR 0065: every permission carries the derived determinability next
+    /// to its v3 fields (flattened, so existing consumers keep working).
+    #[test]
+    fn export_carries_determinability_and_account_status() {
+        let result = AnalysisResult {
+            permissions: vec![sample_permission(false), sample_permission(true)],
+            ..Default::default()
+        };
+        let body = render(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+        let exact = &parsed["permissions"][0];
+        assert_eq!(exact["effective_mask"], 0x0012_0089);
+        assert_eq!(exact["determinable"]["effective"], true);
+        assert_eq!(exact["uncertainty"].as_array().map(Vec::len), Some(0));
+        assert_eq!(exact["account_status"], "Active");
+        let unsure = &parsed["permissions"][1];
+        assert_eq!(unsure["determinable"]["ntfs"], true);
+        assert_eq!(unsure["determinable"]["share"], false);
+        assert_eq!(unsure["determinable"]["effective"], false);
+        assert_eq!(unsure["uncertainty"][0]["layer"], "Share");
+        assert!(unsure["uncertainty"][0]["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("access denied")));
+    }
+
     #[test]
     fn export_includes_share_status_and_incomplete_marker() {
         let result = AnalysisResult {
@@ -235,8 +303,8 @@ mod tests {
         let body = render(&result);
         let parsed: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
         assert_eq!(
-            parsed["version"], 3,
-            "schema version must be bumped to 3 for tagged trustee union"
+            parsed["version"], 4,
+            "schema v4 carries the derived determinability fields (ADR 0065)"
         );
         let trustees = parsed["path_trustees"]
             .as_array()

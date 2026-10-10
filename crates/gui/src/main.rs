@@ -3465,7 +3465,18 @@ fn apply_analyze_result(
         Ok(perm) => {
             let effective_raw = perm.effective_mask.0;
             let rights = NormalizedRights::new(effective_raw);
-            ui.set_a_rights_label(format!("{} ({})", rights.display_name(), rights.label()).into());
+            // ADR 0065: never present an undeterminable value as the answer.
+            let rights_label = if perm.effective_determinable() {
+                format!("{} ({})", rights.display_name(), rights.label())
+            } else {
+                format!(
+                    "{} — known data: {} ({})",
+                    permission_engine::NOT_DETERMINABLE,
+                    rights.display_name(),
+                    rights.label()
+                )
+            };
+            ui.set_a_rights_label(rights_label.into());
             ui.set_a_mask_hex(format!("0x{effective_raw:08X}").into());
             ui.set_a_share_line(format_share_line(&perm).into());
             let steps: Vec<slint::SharedString> = perm
@@ -3483,14 +3494,24 @@ fn apply_analyze_result(
             // as a confident, clean "Analysis complete." The wording and the
             // severity mapping are the shared ones (`summary()` /
             // `diag_level`), so CLI, GUI and reports say the same thing.
-            let diagnostics: Vec<DiagnosticVm> = perm
-                .diagnostics
-                .iter()
-                .map(|d| DiagnosticVm {
-                    text: d.summary().into(),
-                    level: crate::worker::diag_level_for_ui(d.severity()),
+            // ADR 0065: reasons that come from a status rather than a
+            // marker (share DACL unreadable, local groups unavailable) are
+            // listed first, so every "not determinable" has its reason here.
+            let mut diagnostics: Vec<DiagnosticVm> = perm
+                .uncertainty()
+                .into_iter()
+                .filter(|u| !perm.diagnostics.iter().any(|d| d.summary() == u.reason))
+                .map(|u| DiagnosticVm {
+                    text: u.reason.into(),
+                    level: crate::worker::diag_level_for_ui(
+                        adpa_core::model::DiagnosticSeverity::Concern,
+                    ),
                 })
                 .collect();
+            diagnostics.extend(perm.diagnostics.iter().map(|d| DiagnosticVm {
+                text: d.summary().into(),
+                level: crate::worker::diag_level_for_ui(d.severity()),
+            }));
             ui.set_a_diagnostics(slint::ModelRc::new(slint::VecModel::from(diagnostics)));
             // Analyze results are written to the scan history — required for
             // them to be comparable in the Delta tab.
@@ -3521,14 +3542,15 @@ fn apply_analyze_result(
 }
 
 fn format_share_line(perm: &EffectivePermission) -> String {
-    let ntfs_label = NormalizedRights::new(perm.ntfs_mask.0).label();
+    let ntfs_label =
+        permission_engine::rights_label_compact(perm.ntfs_mask.0, perm.ntfs_determinable());
     match &perm.share_status {
         ShareEvalStatus::NotApplicable => String::new(),
         ShareEvalStatus::Applied => {
             let share_label = perm
                 .share_mask
                 .as_ref()
-                .map(|m| NormalizedRights::new(m.0).label())
+                .map(|m| permission_engine::rights_label_compact(m.0, perm.share_determinable()))
                 .unwrap_or_else(|| "—".to_owned());
             format!(
                 "Share restriction applied: NTFS = {ntfs_label}, Share = {share_label}, effective = NTFS ∩ Share."

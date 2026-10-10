@@ -10,7 +10,7 @@ use adpa_core::{
     model::{AccountStatus, EffectivePermission, LocalGroupEvalStatus, ShareEvalStatus},
     traits::{AnalysisResult, ExportTarget, Exporter},
 };
-use permission_engine::NormalizedRights;
+use permission_engine::rights_label_compact;
 
 const HEADERS: &[&str] = &[
     "path",
@@ -45,6 +45,13 @@ const HEADERS: &[&str] = &[
     // Structured diagnostic markers (follow-up finding 3) — e.g.
     // {"kind":"NonCanonicalDaclOrder","at_index":N}. Empty list: "[]".
     "diagnostics_json",
+    // ADR 0065: "yes" when the effective right is exactly what Windows would
+    // compute, "no" otherwise — then the *_rights columns read
+    // "NOT DETERMINABLE (known data: …)" and the *_mask_hex columns hold only
+    // what the known data gives.
+    "determinable",
+    // The reasons, " | "-separated (empty when determinable).
+    "not_determinable_reasons",
 ];
 
 /// Neutralizes spreadsheet formula injection (CWE-1236) in a CSV cell.
@@ -100,17 +107,22 @@ fn evidence_err(field: &str, e: serde_json::Error) -> csv::Error {
     )))
 }
 
-fn record_for(p: &EffectivePermission) -> csv::Result<[String; 20]> {
+fn record_for(p: &EffectivePermission) -> csv::Result<[String; 22]> {
     let kind = format!("{:?}", p.identity.kind);
-    let ntfs = NormalizedRights::new(p.ntfs_mask.0);
+    // ADR 0065: the label columns never state an undeterminable value as a
+    // fact.
+    let uncertainty = p.uncertainty();
+    let ntfs_label = rights_label_compact(p.ntfs_mask.0, p.ntfs_determinable());
     let (share_hex, share_label) = match p.share_mask {
         Some(m) => (
             format!("0x{:08X}", m.0),
-            NormalizedRights::new(m.0).display_name(),
+            rights_label_compact(m.0, p.share_determinable()),
         ),
         None => ("(none)".to_owned(), "(none)".to_owned()),
     };
-    let eff = NormalizedRights::new(p.effective_mask.0);
+    let eff_label = rights_label_compact(p.effective_mask.0, uncertainty.is_empty());
+    let determinable = if uncertainty.is_empty() { "yes" } else { "no" };
+    let reasons: Vec<&str> = uncertainty.iter().map(|u| u.reason.as_str()).collect();
     let explanation = p.path_explanation.steps.join(" | ");
     let (lg_status, lg_error) = local_group_status_fields(&p.local_group_status);
     let matched_aces_json = matched_aces_to_json(&p.matched_aces)?;
@@ -133,11 +145,11 @@ fn record_for(p: &EffectivePermission) -> csv::Result<[String; 20]> {
             .csv_value()
             .to_owned(),
         format!("0x{:08X}", p.ntfs_mask.0),
-        ntfs.display_name(),
+        ntfs_label,
         share_hex,
         share_label,
         format!("0x{:08X}", p.effective_mask.0),
-        eff.display_name(),
+        eff_label,
         neutralize_spreadsheet_formula(&explanation),
         p.unsupported_ace_count.to_string(),
         share_status_label(&p.share_status),
@@ -146,6 +158,8 @@ fn record_for(p: &EffectivePermission) -> csv::Result<[String; 20]> {
         matched_aces_json,
         contributing_sids_json,
         diagnostics_json,
+        determinable.to_owned(),
+        neutralize_spreadsheet_formula(&reasons.join(" | ")),
     ])
 }
 
@@ -285,7 +299,9 @@ mod tests {
         assert_eq!(rows.len(), 1, "only header row for empty input");
         assert_eq!(rows[0][0], "path");
         assert_eq!(rows[0][1], "user_sid");
-        assert_eq!(rows[0].len(), 20);
+        assert_eq!(rows[0].len(), 22);
+        assert_eq!(rows[0][20], "determinable");
+        assert_eq!(rows[0][21], "not_determinable_reasons");
         assert_eq!(rows[0][13], "unsupported_aces");
         assert_eq!(rows[0][14], "share_status");
         // Finding 9: diagnostic + audit columns.
@@ -410,6 +426,46 @@ mod tests {
         assert_eq!(row[9], "(none)");
         assert_eq!(row[11], "Read");
         assert_eq!(row[12], "User has Read via inherited Allow ACE");
+    }
+
+    /// ADR 0065: a result that cannot be determined is never labelled as a
+    /// fact — the label columns say so and the reasons are exported.
+    #[test]
+    fn undeterminable_result_is_labelled_and_explained() {
+        let mut exact = make_perm(
+            "C:\\A",
+            "S-1-5-21-1-2-3-1000",
+            "u",
+            MASK_READ,
+            None,
+            MASK_READ,
+            vec![],
+        );
+        exact.diagnostics = vec![PermissionDiagnostic::NonCanonicalDaclOrder { at_index: 1 }];
+        let mut unsure = make_perm(
+            "C:\\B",
+            "S-1-5-21-1-2-3-1000",
+            "u",
+            MASK_READ,
+            None,
+            MASK_READ,
+            vec![],
+        );
+        unsure.diagnostics = vec![PermissionDiagnostic::DomainGroupRecursionIncomplete];
+        let mut buf = Vec::new();
+        write_csv(&mut buf, &[exact, unsure]).unwrap();
+        let rows = parse_csv(&buf);
+        // Exact: plain label, determinable, no reasons.
+        assert_eq!(rows[1][7], "Read");
+        assert_eq!(rows[1][11], "Read");
+        assert_eq!(rows[1][20], "yes");
+        assert_eq!(rows[1][21], "");
+        // Not determinable: labels say so, reason exported, hex kept.
+        assert_eq!(rows[2][7], "NOT DETERMINABLE (known data: Read)");
+        assert_eq!(rows[2][11], "NOT DETERMINABLE (known data: Read)");
+        assert_eq!(rows[2][10], "0x00120089");
+        assert_eq!(rows[2][20], "no");
+        assert!(rows[2][21].contains("SAM/LSA fallback"), "{}", rows[2][21]);
     }
 
     /// Lab finding AD3-2: the `disabled` column says true/false only when

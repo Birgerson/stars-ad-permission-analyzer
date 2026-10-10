@@ -62,6 +62,19 @@ export) as variant-tagged data. Risk findings carry
 `incomplete = true` as soon as the underlying computation had a
 structural gap. **No silent skips.**
 
+Since ADR 0065 an incomplete value is also never *worded* as a fact.
+`PermissionDiagnostic::uncertain_layer()` attributes each marker to the
+token, the NTFS walk or the share evaluation;
+`EffectivePermission::uncertainty()` lists every reason (markers plus the
+share-read and local-group statuses), and `ntfs_determinable()` /
+`share_determinable()` / `effective_determinable()` decide whether a
+surface may print the value plainly or must print `NOT DETERMINABLE —
+the known data alone gives …` (`permission_engine::rights_statement` /
+`rights_label_compact`, shared by CLI, GUI and exporters). ACEs for
+logon-dependent well-known SIDs are bounded by two extra stored-order
+walks (`logon_dependent_bounds`); unequal bounds attach
+`LogonDependentTrustees` with the range.
+
 ### 1.3 Modular separation
 
 The domain engine runs **independently of the GUI and CLI**. This
@@ -1031,6 +1044,8 @@ enum PermissionDiagnostic {
     // proven orphaned → informational.
     IdentityNotResolvable { reason: String },
     IdentityOrphaned,
+    // Logon-dependent trustees decide bits — NTFS right is a range (ADR 0065).
+    LogonDependentTrustees { sids: Vec<String>, min_mask: u32, max_mask: u32 },
 }
 ```
 
