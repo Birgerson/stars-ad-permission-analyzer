@@ -267,8 +267,16 @@ This is **Low** because it is rarely a concrete security risk — rather a **man
 
 ```
 password, passwort, pwd, login, credential, credentials, secret, secrets,
-token, api-key, apikey, keyfile, private-key, ssh-key, private_key, ssh_key
+token, api-key, apikey, keyfile, private-key, ssh-key, private_key, ssh_key,
+id_rsa, id_dsa, id_ecdsa, id_ed25519, zugangsdaten, kennwort, kennwoert
+(and the umlaut form), .kdbx, .kdb, .pfx, .p12, .ppk
 ```
+
+The second group (since the lab run 2026-10-07, finding RK3-1) covers the
+default OpenSSH private-key file names, the German words for credentials and
+password, password-manager databases (KeePass) and private-key containers
+(PKCS#12, PuTTY) — names that mark credentials as clearly as the first
+group but were missed.
 
 **Important (anti-false-positive):** The rule reports **only** when `effective_mask > 0`. A path named `passwords.txt` on which the identity is explicitly denied is **not** a finding — otherwise Stars would falsely report a non-access as a risk.
 

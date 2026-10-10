@@ -72,6 +72,24 @@ const SENSITIVE_KEYWORDS: &[&str] = &[
     "ssh-key",
     "private_key",
     "ssh_key",
+    // Lab finding RK3-1: names the list above misses although they mark
+    // credentials as clearly — the default OpenSSH private-key file names,
+    // the German words for "credentials" and "password", password-manager
+    // databases and private-key containers (PKCS#12, PuTTY).
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "zugangsdaten",
+    "kennwort",
+    // The plural with an umlaut, escaped so the repository stays ASCII.
+    "kennw\u{f6}rt",
+    "kennwoert",
+    ".kdbx",
+    ".kdb",
+    ".pfx",
+    ".p12",
+    ".ppk",
 ];
 
 // Author / AGPL attribution marker (see ENGINE_ATTRIBUTION in engine.rs).
@@ -1463,6 +1481,24 @@ mod tests {
             r.is_empty(),
             "What counts is the effective mask, not the raw NTFS mask"
         );
+    }
+
+    /// Lab finding RK3-1: names that clearly mark credentials but were not
+    /// on the list.
+    #[test]
+    fn credential_file_names_of_the_lab_are_flagged() {
+        for path in [
+            r"C:\Data\Special\Sensitive\id_rsa",
+            r"C:\Data\Special\Sensitive\Zugangsdaten_Server.xlsx",
+            r"C:\Data\Special\Sensitive\Kennwortliste.txt",
+            "C:\\Data\\Special\\Sensitive\\Kennw\u{f6}rter.docx",
+            r"C:\Data\IT\vault.kdbx",
+            r"C:\Data\IT\server-cert.pfx",
+            r"C:\Data\IT\deploy.ppk",
+        ] {
+            let r = SensitivePathRule.evaluate(&ctx(vec![perm(USER_SID, MASK_READ, path, vec![])]));
+            assert_eq!(r.len(), 1, "{path} must be flagged");
+        }
     }
 
     #[test]
