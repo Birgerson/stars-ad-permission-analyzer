@@ -10,7 +10,32 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Changed
+
+- **A result Stars cannot determine is never stated as a fact any more**
+  (ADR 0065). Until now an incomplete result was flagged in a diagnostics
+  block or badge, but the value itself was printed as the answer ("Result :
+  No access") — wrong for, e.g., an account of a trusted domain. Every
+  surface now says `NOT DETERMINABLE — the known data alone gives …` (CLI
+  `analyze` with a "Why not determinable" list; CLI `scan` rows, header
+  and summary; the GUI rights label and scan rows; the HTML badges) and
+  the CSV gains the columns `determinable` and `not_determinable_reasons`
+  (label columns in the same wording, hex columns unchanged). JSON schema
+  **v4** adds `determinable`, `uncertainty` and `account_status` to every
+  permission. One classification (`uncertain_layer`) drives the
+  incompleteness flag and the new verdict, so they cannot disagree.
+
 ### Fixed
+
+- **ACEs for logon-dependent well-known SIDs no longer count silently as
+  "not applying"** (ADR 0065). `This Organization`, the
+  authentication-assertion and authentication-package SIDs (`NTLM` /
+  `SChannel` / `Digest Authentication`), console and remote-interactive
+  logon and the local-account SIDs depend on how the user logs on, which
+  Stars does not model. The engine now bounds the result over such ACEs;
+  if they can change it, the new marker `LogonDependentTrustees` states
+  the range and the result is not determinable. Share ACEs of that kind
+  that can change the share mask are counted as not evaluable.
 
 - **The explanation path no longer changes between runs, and it no longer
   implies that one chain is the only route into a group** (lab finding

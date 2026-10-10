@@ -498,6 +498,37 @@ impl From<NormalizedRights> for AccessMask {
     }
 }
 
+/// The prefix every surface uses when a value cannot be stated as fact.
+pub const NOT_DETERMINABLE: &str = "NOT DETERMINABLE";
+
+/// A rights value as it may be stated to a reader (ADR 0065): the exact
+/// label with the raw mask when the value is determinable — otherwise an
+/// explicit "not determinable" that keeps the computed value visible only as
+/// what the known data alone gives. Shared by the CLI, the GUI and the
+/// reports so no surface presents an uncertain value as a fact.
+pub fn rights_statement(mask: u32, determinable: bool) -> String {
+    let label = NormalizedRights::new(mask).display_name();
+    if determinable {
+        format!("{label} (0x{mask:08X})")
+    } else {
+        format!(
+            "{NOT_DETERMINABLE} — the known data alone gives {label} (0x{mask:08X}); \
+             the real right may differ"
+        )
+    }
+}
+
+/// Compact form of [`rights_statement`] for list rows and the CSV label
+/// columns (the raw mask has its own column there).
+pub fn rights_label_compact(mask: u32, determinable: bool) -> String {
+    let label = NormalizedRights::new(mask).display_name();
+    if determinable {
+        label
+    } else {
+        format!("{NOT_DETERMINABLE} (known data: {label})")
+    }
+}
+
 impl std::fmt::Display for NormalizedRights {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} (0x{:08X})", self.display_name(), self.raw)

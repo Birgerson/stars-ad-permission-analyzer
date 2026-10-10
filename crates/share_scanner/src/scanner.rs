@@ -487,8 +487,71 @@ pub fn resolve_share_mask_status(
                     ShareMaskStatus::Unrestricted
                 }
             };
-            (status, scan.unsupported_count)
+            // ADR 0065: a share ACE whose trustee's presence depends on the
+            // logon (This Organization, NTLM authentication, …) and that can
+            // change the share mask cannot be evaluated — count it so the
+            // result is marked not determinable instead of trusting the
+            // "not in the token" assumption.
+            let logon_dependent =
+                logon_dependent_share_aces(&scan.dacl, &user_sids, access_context);
+            if logon_dependent > 0 {
+                warn!(
+                    server = %server,
+                    share = %share,
+                    count = logon_dependent,
+                    "Share DACL has logon-dependent trustees that decide bits — share mask not determinable"
+                );
+            }
+            (status, scan.unsupported_count + logon_dependent)
         }
+    }
+}
+
+/// Number of applicable share ACEs whose trustee is a logon-dependent
+/// well-known SID (see `permission_engine::engine::is_logon_dependent_sid`)
+/// **and** that can change the share mask — `0` when there are none or when
+/// the upper and lower bound of the share walk agree (ADR 0065).
+fn logon_dependent_share_aces(
+    dacl: &ShareDacl,
+    user_sids: &std::collections::HashSet<String>,
+    context: AccessContext,
+) -> usize {
+    let ShareDacl::Acl(perms) = dacl else {
+        return 0;
+    };
+    let uncertain: Vec<&SharePermission> = perms
+        .iter()
+        .filter(|p| !user_sids.contains(&p.sid.0))
+        .filter(|p| permission_engine::engine::is_logon_dependent_sid(&p.sid.0, context))
+        .collect();
+    if uncertain.is_empty() {
+        return 0;
+    }
+    let walk = |allow_extra: bool, deny_extra: bool| -> u32 {
+        let mut granted = 0u32;
+        let mut denied = 0u32;
+        for p in perms {
+            let certain = user_sids.contains(&p.sid.0);
+            let maybe = uncertain.iter().any(|u| u.sid == p.sid);
+            let applies = match p.kind {
+                AceKind::Allow => certain || (allow_extra && maybe),
+                AceKind::Deny => certain || (deny_extra && maybe),
+            };
+            if !applies {
+                continue;
+            }
+            let bits = expand_generic_rights(p.mask.0) & !(granted | denied);
+            match p.kind {
+                AceKind::Allow => granted |= bits,
+                AceKind::Deny => denied |= bits,
+            }
+        }
+        granted
+    };
+    if walk(true, false) == walk(false, true) {
+        0
+    } else {
+        uncertain.len()
     }
 }
 
@@ -1026,6 +1089,41 @@ mod tests {
         assert_eq!(
             classify_share(STYPE_DISKTREE, "Kosten$2026"),
             (false, false)
+        );
+    }
+
+    // --- ADR 0065: logon-dependent share trustees ---
+
+    #[test]
+    fn logon_dependent_share_ace_that_changes_the_mask_is_counted() {
+        // Everyone Read, This Organization Change: whether the share grants
+        // Change depends on the logon.
+        let dacl = ShareDacl::Acl(vec![
+            make_perm("S", "S-1-1-0", 0x0012_00A9, AceKind::Allow),
+            make_perm("S", "S-1-5-15", 0x0013_01BF, AceKind::Allow),
+        ]);
+        let token = sids(&["S-1-5-21-1-2-3-1000", "S-1-1-0", "S-1-5-11", "S-1-5-2"]);
+        assert_eq!(
+            logon_dependent_share_aces(&dacl, &token, AccessContext::RemoteSmb),
+            1
+        );
+    }
+
+    #[test]
+    fn logon_dependent_share_ace_without_effect_is_not_counted() {
+        // Everyone Full Control first decides every bit.
+        let dacl = ShareDacl::Acl(vec![
+            make_perm("S", "S-1-1-0", 0x001F_01FF, AceKind::Allow),
+            make_perm("S", "S-1-5-64-10", 0x0012_00A9, AceKind::Deny),
+        ]);
+        let token = sids(&["S-1-5-21-1-2-3-1000", "S-1-1-0"]);
+        assert_eq!(
+            logon_dependent_share_aces(&dacl, &token, AccessContext::RemoteSmb),
+            0
+        );
+        assert_eq!(
+            logon_dependent_share_aces(&ShareDacl::NullDacl, &token, AccessContext::RemoteSmb),
+            0
         );
     }
 

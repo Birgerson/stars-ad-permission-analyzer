@@ -154,7 +154,7 @@ fn write_summary(
     // least one real gap (parser gap, unreadable share DACL, missing local
     // groups, incompleteness-trigger diagnostic). An audit reader can
     // immediately see how many results must be read cautiously.
-    card(s, incomplete, "Incomplete evaluations", "medium");
+    card(s, incomplete, "Not determinable", "medium");
     s.push_str("</div>\n");
 }
 
@@ -504,6 +504,22 @@ fn write_permissions_table(
                             .to_string(),
                     );
                 }
+                PermissionDiagnostic::LogonDependentTrustees {
+                    sids,
+                    min_mask,
+                    max_mask,
+                } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-medium\" \
+                         title=\"ACE(s) for {} apply only for certain logons \
+                         (authentication type, organization, logon type), which Stars \
+                         does not model.\">⚠ logon-dependent ACE(s) — NTFS between {} \
+                         and {}</span>",
+                        escape_html(&sids.join(", ")),
+                        escape_html(&NormalizedRights::new(*min_mask).display_name()),
+                        escape_html(&NormalizedRights::new(*max_mask).display_name()),
+                    ));
+                }
             }
         }
         let diagnostics = if diag_parts.is_empty() {
@@ -517,10 +533,10 @@ fn write_permissions_table(
             escape_html(&p.path.0),
             escape_html(&p.identity.sid.0),
             escape_html(name),
-            rights_badge_with_mask(eff),
-            rights_badge_with_mask(ntfs),
+            rights_cell(eff, p.effective_determinable()),
+            rights_cell(ntfs, p.ntfs_determinable()),
             share
-                .map(rights_badge_with_mask)
+                .map(|r| rights_cell(r, p.share_determinable()))
                 .unwrap_or_else(|| "—".to_string()),
         ).map_err(|e| CoreError::Export(e.to_string()))?;
     }
@@ -685,6 +701,24 @@ fn rights_badge_with_mask(r: NormalizedRights) -> String {
     format!("{} <code>0x{:08X}</code>", rights_badge(r), r.raw())
 }
 
+/// A permissions-table cell (ADR 0065): the rights badge when the value is
+/// determinable; otherwise an explicit "NOT DETERMINABLE" badge with the
+/// computed value shown only as what the known data gives. The reasons are
+/// in the row's diagnostics column.
+fn rights_cell(r: NormalizedRights, determinable: bool) -> String {
+    if determinable {
+        rights_badge_with_mask(r)
+    } else {
+        format!(
+            "<span class=\"badge badge-high\" title=\"The real right cannot be determined — \
+             see the diagnostics of this row\">NOT DETERMINABLE</span> \
+             <span style=\"color:#9aa4b2\">known data: {} <code>0x{:08X}</code></span>",
+            escape_html(&r.display_name()),
+            r.raw()
+        )
+    }
+}
+
 fn escape_html(s: &str) -> String {
     // The `'` → `&#39;` step is not strictly required today (every attribute
     // in the templates is double-quoted, so an escaped `"` already prevents
@@ -799,6 +833,24 @@ mod tests {
         );
         assert!(!s.contains("non-canonical"));
         assert!(!s.contains("local groups unavailable"));
+    }
+
+    /// ADR 0065: an undeterminable value gets a NOT DETERMINABLE badge; the
+    /// computed value appears only as "known data".
+    #[test]
+    fn permissions_table_marks_undeterminable_values() {
+        let mut p = perm();
+        p.share_status = ShareEvalStatus::ReadFailed("access denied".to_owned());
+        let mut s = String::new();
+        write_permissions_table(&mut s, &[p]).unwrap();
+        assert!(s.contains(">NOT DETERMINABLE</span>"), "{s}");
+        assert!(
+            s.contains("known data: Read <code>0x00120089</code>"),
+            "{s}"
+        );
+        // The NTFS side stays determinable — a share read failure does not
+        // touch the NTFS walk.
+        assert!(s.contains(">Read</span> <code>0x00120089</code>"), "{s}");
     }
 
     /// Lab finding PE3-1: the badge text must be the exact label with the
@@ -923,15 +975,13 @@ mod tests {
 
         let html = super::render_html(&result).expect("render_html must succeed");
         assert!(
-            html.contains(">Incomplete evaluations<"),
-            "summary must contain the Incomplete-evaluations card label, got: {html}"
+            html.contains(">Not determinable<"),
+            "summary must contain the Not-determinable card label, got: {html}"
         );
         // Exactly one path has a real gap → the card must read "1"; the
         // informational-only path must not inflate the count.
         assert!(
-            html.contains(
-                "<div class=\"num\">1</div><div class=\"lbl\">Incomplete evaluations</div>"
-            ),
+            html.contains("<div class=\"num\">1</div><div class=\"lbl\">Not determinable</div>"),
             "card must report count 1 (informational markers excluded), got: {html}"
         );
         // The informational marker itself stays visible in the table.

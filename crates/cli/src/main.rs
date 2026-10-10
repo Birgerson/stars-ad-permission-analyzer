@@ -24,7 +24,7 @@ use chrono::Utc;
 use clap::{Parser, Subcommand};
 use exporter::{CsvExporter, HtmlExporter, JsonExporter};
 use fs_scanner::{read_fso, CancellationToken, WalkConfig};
-use permission_engine::{engine::DefaultPermissionEngine, NormalizedRights};
+use permission_engine::{engine::DefaultPermissionEngine, rights_label_compact};
 use persistence::Database;
 use risk_engine::RuleRegistry;
 use tracing_subscriber::EnvFilter;
@@ -1009,7 +1009,7 @@ async fn run_analyze(
     }
     if unsupported_share_ace_count > 0 {
         println!(
-            "[Warning] {unsupported_share_ace_count} share ACE(s) of unsupported type were skipped — share mask may be incomplete."
+            "[Warning] {unsupported_share_ace_count} share ACE(s) could not be evaluated (unsupported type, unreadable trustee or logon-dependent trustee) — share mask may be incomplete."
         );
     }
     // Build the SID→name table for the explanation text: memberships
@@ -1243,7 +1243,7 @@ async fn run_scan(
     }
     if scan_unsupported_share_ace_count > 0 {
         println!(
-            "[Warning] {scan_unsupported_share_ace_count} share ACE(s) of unsupported type were skipped — share mask may be incomplete (Diagnostic propagated to each result)."
+            "[Warning] {scan_unsupported_share_ace_count} share ACE(s) could not be evaluated (unsupported type, unreadable trustee or logon-dependent trustee) — share mask may be incomplete (Diagnostic propagated to each result)."
         );
     }
 
@@ -1253,13 +1253,22 @@ async fn run_scan(
         _ => None,
     };
 
-    // 5. Print the header.
+    // 5. Print the header. ADR 0065: reasons that make EVERY result of
+    // this scan not determinable (identity, groups, local groups, share) are
+    // stated once, up front; per-path reasons stay in the export.
+    let scan_wide = scan_wide_uncertainty(
+        &resolved,
+        &scan_local_group_status,
+        &scan_share_status,
+        scan_unsupported_share_ace_count,
+    );
     print_scan_header(
         &path,
         &resolved,
         max_depth,
         &run_id,
         scan_share_mask_for_header.as_ref(),
+        &scan_wide,
     );
 
     // 6. Walk the tree.
@@ -1300,6 +1309,7 @@ async fn run_scan(
     let mut all_path_trustees: Vec<adpa_core::model::PathTrustees> = Vec::new();
     let mut scan_errors_for_db: Vec<ScanError> = Vec::new();
     let mut unsupported_ace_paths = 0usize;
+    let mut not_determinable_paths = 0usize;
     let mut object_count = 0usize;
     let mut walk_error_count = 0usize;
 
@@ -1395,17 +1405,21 @@ async fn run_scan(
                     anyhow::anyhow!("Permission evaluation failed for '{path_display}': {e}")
                 })?;
 
-                let rights = NormalizedRights::new(result.effective_mask.0);
+                // ADR 0065: a row whose result cannot be determined says so
+                // instead of printing the computed value as a fact.
+                let determinable = result.effective_determinable();
+                if !determinable {
+                    not_determinable_paths += 1;
+                }
+                let label = rights_label_compact(result.effective_mask.0, determinable);
                 if result.unsupported_ace_count > 0 {
                     unsupported_ace_paths += 1;
                     println!(
                         "  {:14}  {}  [!{} unsupported ACE(s)]",
-                        rights.display_name(),
-                        path_display,
-                        result.unsupported_ace_count
+                        label, path_display, result.unsupported_ace_count
                     );
                 } else {
-                    println!("  {:14}  {}", rights.display_name(), path_display);
+                    println!("  {:14}  {}", label, path_display);
                 }
 
                 all_permissions.push(result);
@@ -1448,6 +1462,7 @@ async fn run_scan(
         object_count,
         walk_error_count,
         unsupported_ace_paths,
+        not_determinable_paths,
         duration,
         db_path.as_deref(),
         &run_id,
@@ -2210,6 +2225,7 @@ fn print_scan_header(
     max_depth: Option<u32>,
     run_id: &Uuid,
     share_mask: Option<&adpa_core::model::AccessMask>,
+    scan_wide_uncertainty: &[String],
 ) {
     println!();
     println!("{}", heavy());
@@ -2238,22 +2254,76 @@ fn print_scan_header(
         max_depth.map_or("unlimited".to_owned(), |d| d.to_string())
     );
     if let Some(m) = share_mask {
-        let rights = NormalizedRights::new(m.0);
-        println!("  Share mask: {} (0x{:08X})", rights.display_name(), m.0);
+        // ADR 0065: with a scan-wide uncertainty the share mask is not a fact.
+        println!(
+            "  Share mask: {}",
+            permission_engine::rights_statement(m.0, scan_wide_uncertainty.is_empty())
+        );
     }
     println!("  Scan ID   : {run_id}");
+    // AD3-2 / ADR 0064: the status only when known.
+    println!(
+        "  Status    : {}",
+        adpa_core::model::AccountStatus::of(
+            &resolved.resolution.identity,
+            &resolved.resolution.membership_diagnostics()
+        )
+        .label()
+    );
     if !resolved.ad_connected {
-        println!("  [!] No AD connection — group memberships not resolved.");
+        println!(
+            "  [!] No LDAP connection — only the direct domain groups and the local groups \
+             were resolved (SAM/LSA); nested domain groups are unknown."
+        );
+    }
+    if !scan_wide_uncertainty.is_empty() {
+        println!();
+        println!("  [!] Every result below is NOT DETERMINABLE:");
+        for reason in scan_wide_uncertainty {
+            println!("      - {reason}");
+        }
     }
     println!();
     println!("  {:14}  Path", "Rights");
     println!("  {}", light().chars().take(W - 2).collect::<String>());
 }
 
+/// Reasons that make every result of a scan not determinable — the
+/// identity-level markers plus the local-group and share status, worded as
+/// in each result's own uncertainty list (ADR 0065).
+fn scan_wide_uncertainty(
+    resolved: &ResolvedIdentity,
+    local_group_status: &adpa_core::model::LocalGroupEvalStatus,
+    share_status: &adpa_core::model::ShareMaskStatus,
+    unsupported_share_ace_count: usize,
+) -> Vec<String> {
+    let mut reasons: Vec<String> = Vec::new();
+    for d in resolved.resolution.membership_diagnostics() {
+        if d.uncertain_layer().is_some() {
+            reasons.push(d.summary());
+        }
+    }
+    if let adpa_core::model::LocalGroupEvalStatus::NotAvailable(msg) = local_group_status {
+        reasons.push(format!(
+            "The local groups of the target server could not be resolved ({msg})."
+        ));
+    }
+    if let adpa_core::model::ShareMaskStatus::ReadFailed(msg) = share_status {
+        reasons.push(format!("The share permissions could not be read ({msg})."));
+    }
+    if unsupported_share_ace_count > 0 {
+        reasons.push(format!(
+            "{unsupported_share_ace_count} share ACE(s) could not be evaluated."
+        ));
+    }
+    reasons
+}
+
 fn print_scan_summary(
     total: usize,
     errors: usize,
     unsupported_ace_paths: usize,
+    not_determinable_paths: usize,
     duration_ms: i64,
     db_path: Option<&str>,
     run_id: &Uuid,
@@ -2266,6 +2336,13 @@ fn print_scan_summary(
         println!(
             "  [!] Unsupported : {unsupported_ace_paths} path(s) had ACE types that could \
              not be evaluated — results may be incomplete."
+        );
+    }
+    if not_determinable_paths > 0 {
+        println!(
+            "  [!] {not_determinable_paths} of {total} result(s) are NOT DETERMINABLE — the \
+             value shown for them is only what the known data gives (reasons above and in \
+             the export)."
         );
     }
     println!("  Duration      : {duration_ms} ms");

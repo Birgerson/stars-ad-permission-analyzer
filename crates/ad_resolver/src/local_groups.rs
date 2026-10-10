@@ -194,7 +194,7 @@ pub fn resolve_local_group_sids_for_identity(
     let candidates = format_account_candidates_for_local_groups(identity);
     if candidates.is_empty() {
         return Err(CoreError::Validation(format!(
-            "Local groups: no usable account name form derivable from identity {}",
+            "{} has no account name, so its local group memberships on the target server cannot be looked up",
             identity.sid.0
         )));
     }
@@ -557,7 +557,7 @@ pub fn resolve_local_group_chains_for_identity(
     let candidates = format_account_candidates_for_local_groups(identity);
     if candidates.is_empty() {
         return Err(CoreError::Validation(format!(
-            "Local group chains: no usable account name form derivable from identity {}",
+            "{} has no account name, so its local group memberships on the target server cannot be looked up",
             identity.sid.0
         )));
     }
