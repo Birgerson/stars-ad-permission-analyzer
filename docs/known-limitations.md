@@ -662,8 +662,10 @@ be built and live-tested together, plus user-guide examples.
 
 ## L14 — Junction cycles are not detected when scanning over UNC
 
+**Status: closed 2026-10-10** (ADR 0062) — kept here for the record.
+
 **Priority:** Medium — found by the corp.test lab run 2026-10-07
-(finding FS3-1). Bounded, but it inflates results.
+(finding FS3-1). Bounded, but it inflated results.
 
 ### Problem
 
@@ -671,10 +673,14 @@ The walker detects a reparse-point cycle by comparing the canonical
 identity of each directory with the active traversal chain (ADR 0058).
 On a local path that identity is the resolved target, so a junction that
 points to its own ancestor is stopped at once (unit test
-`walker_detects_junction_loop_and_emits_visible_error`). Over SMB the
-**server** resolves the junction; seen from the client, every level of
-`\\server\share\Loop\back\back\…` has a new, distinct path, so the
-cycle is not recognised.
+`walker_detects_junction_loop_and_emits_visible_error`). Over SMB,
+`GetFinalPathNameByHandleW` returns the junction's resolved target only
+while the client has not enumerated the junction's parent; afterwards —
+and the walker always lists the parent first — it returns the path the
+junction was opened through. Every level of `\\server\share\Loop\back\…`
+then looked new. Whether the client cache was warm depended on timing, so
+the failure was intermittent (reliably reproducible right after the
+server's SMB service restarts).
 
 ### Effect
 
@@ -689,11 +695,16 @@ Scanning the same tree via its local path on the server is not affected.
 
 ### Resolution
 
-Planned: identify directories by volume serial number + file ID
-(`GetFileInformationByHandle`), which SMB reports consistently for the
-same server-side directory, instead of by canonical path when the scan
-root is a UNC path — then cycle and duplicate-target detection work over
-SMB as they do locally. Must be lab-verified over UNC.
+Closed by ADR 0062: for scans with a UNC root the walker identifies each
+directory by volume serial + 128-bit file ID from
+`GetFileInformationByHandleEx(FileIdInfo)`, which the server reports
+identically for a directory no matter which route led to it. (The older
+`GetFileInformationByHandle` was ruled out: it reports a volume serial of
+0 over SMB.) Lab acceptance in the reproduced failure state: the loop is
+stopped after 3 paths in 3 of 3 runs, the share scans 90 paths instead of
+216, and a junction into another subtree of the same scan is now reported
+as a duplicate target. Directories for which a server returns no usable
+identity fall back to the previous path comparison.
 
 ---
 
@@ -745,7 +756,7 @@ or the trusted domain's DC when one is configured.
 | L11 — Engine module size | Low | n/a | optional refactor (readability only, not a defect) |
 | L12 — Manual updates / `update_manager` extension point | Low | n/a | by design; fail-closed seam, implement a real verifier only if in-app updates are required |
 | L13 — IPv6 literals rejected as server addresses | Low | n/a (explicit validation error) | yes — bracket handling (LDAP) + `ipv6-literal.net` (UNC/NetAPI), must be built and lab-verified together |
-| L14 — Junction cycles over UNC | Medium | partial (visible error, wrong cause) | yes — file-ID based directory identity for UNC scans |
+| L14 — Junction cycles over UNC | Medium | **yes** (ReparseCycle / ReparseDuplicateTarget, as locally) | **closed 2026-10-10** (ADR 0062: volume serial + file ID on UNC scans) |
 | L15 — Trusted-domain SID reported as orphaned | Medium | partial (generic "incomplete") | yes — classify via trust inventory + resolve via GC / trusted DC |
 
 ## Contribution policy

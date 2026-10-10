@@ -10,7 +10,30 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-_No open changes._
+### Fixed
+
+- **Junction cycles and duplicate junction targets are now detected
+  reliably on scans over SMB** (known limitation L14, lab finding FS3-1,
+  ADR 0062). Once the SMB client had listed a junction's parent directory,
+  `GetFinalPathNameByHandleW` reported the path the junction was opened
+  through instead of its target, so every level of a loop looked new and
+  the walk only stopped at Windows' limit of 63 reparse traversals, with
+  a misleading "target could not be resolved" error. Timing-dependent,
+  hence intermittent. For scans with a UNC root the walker now identifies
+  each directory by volume serial + file ID (`FILE_ID_INFO`), which the
+  server reports identically regardless of the route; local scans are
+  unchanged. The cycle diagnostic now names the real ancestor directory.
+  Lab acceptance in the reproduced failure state: loop stopped after 3
+  paths in 3 of 3 runs (before: 129), the share holding it 90 paths
+  instead of 216, and a junction into another subtree of the same scan is
+  now reported as a duplicate target instead of being enumerated twice.
+
+### Documentation
+
+- Screenshots of the Trusts and Shares tabs (README); user guide notes
+  that share account names are resolved via the local LSA and that
+  `Get-SmbShareAccess` displays an empty share DACL as "Everyone Deny
+  Full"; the ADR index lists ADRs 0055–0062.
 
 ---
 

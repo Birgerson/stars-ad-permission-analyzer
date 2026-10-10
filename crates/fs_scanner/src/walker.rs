@@ -166,6 +166,25 @@ fn canonicalize_path(path: &str) -> Option<String> {
         .map(|p| p.to_string_lossy().to_string().to_ascii_lowercase())
 }
 
+/// `true` when `path` is reached over SMB (a UNC path, with or without the
+/// `\\?\UNC\` long-path prefix).
+fn is_remote_path(path: &str) -> bool {
+    validation::path::to_windows_api_path(path)
+        .get(..8)
+        .is_some_and(|p| p.eq_ignore_ascii_case(r"\\?\UNC\"))
+}
+
+/// Chooses the key the loop detector compares (ADR 0062). Remote scans use
+/// the volume-serial + file-ID identity when the server provides one;
+/// otherwise — and always for local scans — the canonical path, exactly as
+/// before. Pure, so the selection rule is unit-testable.
+fn select_loop_key(remote: bool, file_identity: Option<String>, canonical: &str) -> String {
+    match (remote, file_identity) {
+        (true, Some(id)) => id,
+        _ => canonical.to_owned(),
+    }
+}
+
 /// The walk's decision for a directory about to be descended into —
 /// produced by [`LoopDetector::enter`].
 #[derive(Debug, PartialEq, Eq)]
@@ -174,9 +193,12 @@ enum DescendDecision {
     /// caller must pair it with [`LoopDetector::leave`] when the subtree
     /// (or the depth-limited stop) is done.
     Fresh,
-    /// The canonical identity is an **ancestor on the active recursion
-    /// chain** — descending would recurse forever. A real cycle.
-    Cycle,
+    /// The identity is an **ancestor on the active recursion chain** —
+    /// descending would recurse forever. A real cycle. `ancestor_path` is
+    /// the namespace path of that ancestor, so the diagnostic can name the
+    /// real target even when the link's own resolved path is unreliable
+    /// (over SMB — ADR 0062).
+    Cycle { ancestor_path: String },
     /// The canonical identity was **already enumerated in this scan**
     /// under `first_path` — a second namespace route (junction/symlink)
     /// to the same directory, not a cycle.
@@ -198,7 +220,8 @@ enum DescendDecision {
 ///   stored path makes the diagnostic explainable ("already enumerated
 ///   under …").
 struct LoopDetector {
-    chain: Vec<String>,
+    /// `(identity, namespace path)` of each directory on the active chain.
+    chain: Vec<(String, String)>,
     seen_first_path: HashMap<String, String>,
 }
 
@@ -214,18 +237,21 @@ impl LoopDetector {
     /// given canonical identity, reached via `namespace_path`. Records the
     /// entry when `Fresh` — the caller must call [`Self::leave`] after the
     /// subtree completes (and only then).
-    fn enter(&mut self, canonical: &str, namespace_path: &str) -> DescendDecision {
-        if self.chain.iter().any(|c| c == canonical) {
-            return DescendDecision::Cycle;
+    fn enter(&mut self, identity: &str, namespace_path: &str) -> DescendDecision {
+        if let Some((_, ancestor)) = self.chain.iter().find(|(id, _)| id == identity) {
+            return DescendDecision::Cycle {
+                ancestor_path: ancestor.clone(),
+            };
         }
-        if let Some(first) = self.seen_first_path.get(canonical) {
+        if let Some(first) = self.seen_first_path.get(identity) {
             return DescendDecision::DuplicateTarget {
                 first_path: first.clone(),
             };
         }
         self.seen_first_path
-            .insert(canonical.to_owned(), namespace_path.to_owned());
-        self.chain.push(canonical.to_owned());
+            .insert(identity.to_owned(), namespace_path.to_owned());
+        self.chain
+            .push((identity.to_owned(), namespace_path.to_owned()));
         DescendDecision::Fresh
     }
 
@@ -289,6 +315,9 @@ fn walk_dir(
     detector: &mut LoopDetector,
     sd_cache: &mut crate::acl::SdCache,
 ) {
+    // Decided once per walk from the root: everything below a UNC root is
+    // reached over SMB too.
+    let remote = is_remote_path(path);
     let mut stack = vec![WalkWork::Visit {
         path: path.to_owned(),
         parent_canonical: parent_canonical.map(str::to_owned),
@@ -385,17 +414,29 @@ fn walk_dir(
                     }
                 };
 
-                match detector.enter(&canonical, &path) {
-                    DescendDecision::Cycle => {
+                // Over SMB the canonical path of a junction is unreliable
+                // (ADR 0062), so remote scans key directories by volume
+                // serial + file ID; `canonical` stays the display form.
+                let file_identity = if remote {
+                    crate::file_id::directory_identity(&path)
+                } else {
+                    None
+                };
+                let loop_key = select_loop_key(remote, file_identity, &canonical);
+                debug!(path, canonical = %canonical, key = %loop_key, "Directory loop identity");
+
+                match detector.enter(&loop_key, &path) {
+                    DescendDecision::Cycle { ancestor_path } => {
+                        let ancestor = validation::path::strip_long_path_prefix(&ancestor_path);
                         info!(
                             path,
-                            target = %canonical,
+                            target = %ancestor,
                             "Reparse point target is an ancestor of the active chain — cycle, recursion stopped"
                         );
                         on_item(WalkItem::Error(WalkError {
                             path: path.clone(),
                             error: CoreError::ReparseCycle(format!(
-                                "Reparse point target is an ancestor of the current traversal chain — descending would loop forever; recursion stopped at this junction/link. Target: {canonical}. The object itself is in the result with its DACL."
+                                "Reparse point target is an ancestor of the current traversal chain — descending would loop forever; recursion stopped at this junction/link. Target: {ancestor}. The object itself is in the result with its DACL."
                             )),
                         }));
                         continue;
@@ -1008,6 +1049,58 @@ mod tests {
         }
     }
 
+    // --- ADR 0062 / FS3-1: loop identity for scans over SMB ---
+
+    #[test]
+    fn remote_path_detection() {
+        assert!(super::is_remote_path(r"\\server\share\dir"));
+        assert!(super::is_remote_path(r"\\?\UNC\server\share\dir"));
+        assert!(super::is_remote_path(r"\\?\unc\server\share"));
+        assert!(!super::is_remote_path(r"C:\Data"));
+        assert!(!super::is_remote_path(r"\\?\C:\Data"));
+    }
+
+    /// Remote scans key by file identity when the server provides one; in
+    /// every other case the canonical path is used, exactly as before.
+    #[test]
+    fn loop_key_selection() {
+        let fid = Some("fid:9c6e99436e9916dc:000000000000000200000000000071c3".to_owned());
+        assert_eq!(
+            super::select_loop_key(true, fid.clone(), r"\\?\unc\srv\s\loop\back"),
+            "fid:9c6e99436e9916dc:000000000000000200000000000071c3"
+        );
+        assert_eq!(
+            super::select_loop_key(true, None, r"\\?\unc\srv\s\loop"),
+            r"\\?\unc\srv\s\loop",
+            "no file identity from the server → path fallback"
+        );
+        assert_eq!(
+            super::select_loop_key(false, fid, r"c:\loop"),
+            r"c:\loop",
+            "local scans keep the proven path identity"
+        );
+    }
+
+    /// The lab failure mode (FS3-1): over SMB the junction's canonical path
+    /// is the path it was opened through, so every level looks new — but
+    /// the file identity repeats. Keyed by file identity the detector stops
+    /// at the first repetition, and names the real ancestor.
+    #[test]
+    fn file_identity_catches_a_cycle_the_paths_hide() {
+        let id = "fid:9c6e99436e9916dc:000000000000000200000000000071c3";
+        let mut d = super::LoopDetector::new();
+        assert_eq!(
+            d.enter(id, r"\\?\UNC\srv\share\loop"),
+            super::DescendDecision::Fresh
+        );
+        assert_eq!(
+            d.enter(id, r"\\?\UNC\srv\share\loop\back"),
+            super::DescendDecision::Cycle {
+                ancestor_path: r"\\?\UNC\srv\share\loop".to_owned()
+            }
+        );
+    }
+
     #[test]
     fn loop_detector_ancestor_on_active_chain_is_cycle() {
         let mut d = super::LoopDetector::new();
@@ -1018,8 +1111,11 @@ mod tests {
         );
         assert_eq!(
             d.enter("c:\\a", "C:\\a\\b\\link"),
-            super::DescendDecision::Cycle,
-            "re-entering an ancestor of the ACTIVE chain is a real cycle"
+            super::DescendDecision::Cycle {
+                ancestor_path: "C:\\a".to_owned()
+            },
+            "re-entering an ancestor of the ACTIVE chain is a real cycle, \
+             and the decision names that ancestor's namespace path"
         );
     }
 

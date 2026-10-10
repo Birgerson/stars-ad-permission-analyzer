@@ -5,6 +5,7 @@
 
 pub mod acl;
 pub mod cancel;
+mod file_id;
 pub mod scanner;
 pub mod walker;
 
