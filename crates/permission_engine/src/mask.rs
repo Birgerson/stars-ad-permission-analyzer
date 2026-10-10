@@ -115,6 +115,184 @@ pub const MASK_READ: u32 = 0x0012_0089;
 /// W — Write (FILE_GENERIC_WRITE)
 pub const MASK_WRITE: u32 = 0x0012_0116;
 
+/// ACCESS_SYSTEM_SECURITY — read/write the SACL (WinNT.h).
+pub const ACCESS_SYSTEM_SECURITY: u32 = 0x0100_0000;
+/// MAXIMUM_ALLOWED — request bit, not a right (WinNT.h).
+pub const MAXIMUM_ALLOWED: u32 = 0x0200_0000;
+
+/// The standard permission levels of the Windows basic-permissions dialog,
+/// highest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandardLevel {
+    FullControl,
+    Modify,
+    ReadExecute,
+    ReadWrite,
+    Read,
+    Write,
+}
+
+/// Highest first — `base_level` takes the first fully contained one.
+const STANDARD_LEVELS: [StandardLevel; 6] = [
+    StandardLevel::FullControl,
+    StandardLevel::Modify,
+    StandardLevel::ReadExecute,
+    StandardLevel::ReadWrite,
+    StandardLevel::Read,
+    StandardLevel::Write,
+];
+
+impl StandardLevel {
+    /// The level's composite access mask.
+    pub fn mask(self) -> u32 {
+        match self {
+            StandardLevel::FullControl => MASK_FULL_CONTROL,
+            StandardLevel::Modify => MASK_MODIFY,
+            StandardLevel::ReadExecute => MASK_READ_EXECUTE,
+            StandardLevel::ReadWrite => MASK_READ | MASK_WRITE,
+            StandardLevel::Read => MASK_READ,
+            StandardLevel::Write => MASK_WRITE,
+        }
+    }
+
+    /// Long name as shown by Windows.
+    pub fn name(self) -> &'static str {
+        match self {
+            StandardLevel::FullControl => "Full Control",
+            StandardLevel::Modify => "Modify",
+            StandardLevel::ReadExecute => "Read & Execute",
+            StandardLevel::ReadWrite => "Read & Write",
+            StandardLevel::Read => "Read",
+            StandardLevel::Write => "Write",
+        }
+    }
+
+    /// `icacls` short name.
+    pub fn short(self) -> &'static str {
+        match self {
+            StandardLevel::FullControl => "F",
+            StandardLevel::Modify => "M",
+            StandardLevel::ReadExecute => "RX",
+            StandardLevel::ReadWrite => "RW",
+            StandardLevel::Read => "R",
+            StandardLevel::Write => "W",
+        }
+    }
+}
+
+/// One access-right bit with the wording of the Windows advanced security
+/// dialog and its `icacls` abbreviation.
+struct NamedBit {
+    bit: u32,
+    name: &'static str,
+    short: &'static str,
+}
+
+/// Every bit a label may have to name, in the order of the Windows advanced
+/// security dialog, followed by the bits that dialog does not show.
+const NAMED_BITS: &[NamedBit] = &[
+    NamedBit {
+        bit: FILE_EXECUTE,
+        name: "Traverse folder / execute file",
+        short: "X",
+    },
+    NamedBit {
+        bit: FILE_READ_DATA,
+        name: "List folder / read data",
+        short: "RD",
+    },
+    NamedBit {
+        bit: FILE_READ_ATTRIBUTES,
+        name: "Read attributes",
+        short: "RA",
+    },
+    NamedBit {
+        bit: FILE_READ_EA,
+        name: "Read extended attributes",
+        short: "REA",
+    },
+    NamedBit {
+        bit: FILE_WRITE_DATA,
+        name: "Create files / write data",
+        short: "WD",
+    },
+    NamedBit {
+        bit: FILE_APPEND_DATA,
+        name: "Create folders / append data",
+        short: "AD",
+    },
+    NamedBit {
+        bit: FILE_WRITE_ATTRIBUTES,
+        name: "Write attributes",
+        short: "WA",
+    },
+    NamedBit {
+        bit: FILE_WRITE_EA,
+        name: "Write extended attributes",
+        short: "WEA",
+    },
+    NamedBit {
+        bit: FILE_DELETE_CHILD,
+        name: "Delete subfolders and files",
+        short: "DC",
+    },
+    NamedBit {
+        bit: FILE_DELETE,
+        name: "Delete",
+        short: "DE",
+    },
+    NamedBit {
+        bit: FILE_READ_CONTROL,
+        name: "Read permissions",
+        short: "RC",
+    },
+    NamedBit {
+        bit: FILE_WRITE_DAC,
+        name: "Change permissions",
+        short: "WDAC",
+    },
+    NamedBit {
+        bit: FILE_WRITE_OWNER,
+        name: "Take ownership",
+        short: "WO",
+    },
+    NamedBit {
+        bit: FILE_SYNCHRONIZE,
+        name: "Synchronize",
+        short: "S",
+    },
+    NamedBit {
+        bit: ACCESS_SYSTEM_SECURITY,
+        name: "Access system security (SACL)",
+        short: "AS",
+    },
+    NamedBit {
+        bit: MAXIMUM_ALLOWED,
+        name: "Maximum allowed",
+        short: "MA",
+    },
+    NamedBit {
+        bit: GENERIC_ALL,
+        name: "Generic all",
+        short: "GA",
+    },
+    NamedBit {
+        bit: GENERIC_EXECUTE,
+        name: "Generic execute",
+        short: "GE",
+    },
+    NamedBit {
+        bit: GENERIC_WRITE,
+        name: "Generic write",
+        short: "GW",
+    },
+    NamedBit {
+        bit: GENERIC_READ,
+        name: "Generic read",
+        short: "GR",
+    },
+];
+
 // ---------------------------------------------------------------------------
 // NormalizedRights
 // ---------------------------------------------------------------------------
@@ -211,43 +389,88 @@ impl NormalizedRights {
         self.raw & (GENERIC_ALL | GENERIC_EXECUTE | GENERIC_WRITE | GENERIC_READ) != 0
     }
 
-    /// Returns the highest matching icacls short name.
-    ///
-    /// Order: F > M > RX > R, W > (special)
-    pub fn label(&self) -> &'static str {
-        if self.is_full_control() {
-            "F"
-        } else if self.is_modify() {
-            "M"
-        } else if self.is_read_execute() {
-            "RX"
-        } else if self.is_read() && self.is_write() {
-            "RW"
-        } else if self.is_read() {
-            "R"
-        } else if self.is_write() {
-            "W"
-        } else {
-            "(special)"
+    /// The highest standard level (Full Control > Modify > Read & Execute >
+    /// Read & Write > Read > Write) whose bits are **all** contained in the
+    /// mask, or `None` when no standard level is complete.
+    pub fn base_level(&self) -> Option<StandardLevel> {
+        STANDARD_LEVELS
+            .iter()
+            .copied()
+            .find(|level| self.raw & level.mask() == level.mask())
+    }
+
+    /// Splits the mask into its base level and the **extra** rights beyond
+    /// it, so a label never hides a bit (lab finding PE3-1): `0x001E0089`
+    /// is Read **plus** Change permissions and Take ownership — not "Read".
+    /// On top of Read & Execute, a complete Write set is named as "Write"
+    /// (the Windows basic-permissions dialog shows both boxes); every other
+    /// extra bit is named individually in the order of the Windows advanced
+    /// security dialog; bits outside the named set are reported as "other
+    /// bits" with their hex value.
+    fn decompose(&self) -> (Option<StandardLevel>, Vec<(&'static str, String)>) {
+        let base = self.base_level();
+        let mut rest = self.raw & !base.map(StandardLevel::mask).unwrap_or(0);
+        let mut extras: Vec<(&'static str, String)> = Vec::new();
+        if base == Some(StandardLevel::ReadExecute) && self.raw & MASK_WRITE == MASK_WRITE {
+            extras.push(("Write", "W".to_owned()));
+            rest &= !MASK_WRITE;
+        }
+        for named in NAMED_BITS {
+            if rest & named.bit != 0 {
+                extras.push((named.name, named.short.to_owned()));
+                rest &= !named.bit;
+            }
+        }
+        if rest != 0 {
+            extras.push(("other bits", format!("0x{rest:X}")));
+        }
+        (base, extras)
+    }
+
+    /// Exact short label in the style of `icacls`: the base level alone when
+    /// the mask is exactly that level (`R`, `RX`, `M`, `F`, …), the base level
+    /// plus the abbreviations of every extra right (`R+WDAC,WO`), the
+    /// parenthesised bit list when no standard level is complete
+    /// (`(RC,WDAC)`), and `none` for an empty mask.
+    pub fn label(&self) -> String {
+        if self.raw == 0 {
+            return "none".to_owned();
+        }
+        let (base, extras) = self.decompose();
+        let shorts: Vec<&str> = extras.iter().map(|(_, s)| s.as_str()).collect();
+        match base {
+            Some(level) if shorts.is_empty() => level.short().to_owned(),
+            Some(level) => format!("{}+{}", level.short(), shorts.join(",")),
+            None => format!("({})", shorts.join(",")),
         }
     }
 
-    /// Returns a human-readable long form (for reports / CLI).
-    pub fn display_name(&self) -> &'static str {
-        if self.is_full_control() {
-            "Full Control"
-        } else if self.is_modify() {
-            "Modify"
-        } else if self.is_read_execute() {
-            "Read & Execute"
-        } else if self.is_read() && self.is_write() {
-            "Read & Write"
-        } else if self.is_read() {
-            "Read"
-        } else if self.is_write() {
-            "Write"
-        } else {
-            "Special"
+    /// Exact human-readable long form (reports / CLI / GUI): the base level
+    /// alone when the mask is exactly that level, otherwise the base level
+    /// plus every extra right by name ("Read + Change permissions, Take
+    /// ownership"), "Special: …" with the named rights when no standard
+    /// level is complete, and "No access" for an empty mask. The previous
+    /// form named only the highest complete level, so `0x001E0089` read as
+    /// plain "Read" and an empty mask as "Special" (lab finding PE3-1).
+    pub fn display_name(&self) -> String {
+        if self.raw == 0 {
+            return "No access".to_owned();
+        }
+        let (base, extras) = self.decompose();
+        let names: Vec<String> = extras
+            .iter()
+            .map(|(name, short)| {
+                if *name == "other bits" {
+                    format!("other bits {short}")
+                } else {
+                    (*name).to_owned()
+                }
+            })
+            .collect();
+        match base {
+            Some(level) if names.is_empty() => level.name().to_owned(),
+            Some(level) => format!("{} + {}", level.name(), names.join(", ")),
+            None => format!("Special: {}", names.join(", ")),
         }
     }
 
@@ -331,19 +554,116 @@ mod tests {
     }
 
     #[test]
-    fn special_for_single_bit() {
+    fn single_bit_is_named_not_hidden_behind_special() {
         let r = rights(FILE_READ_DATA);
         assert!(!r.is_read());
         assert!(!r.is_full_control());
-        assert_eq!(r.label(), "(special)");
+        assert_eq!(r.label(), "(RD)");
+        assert_eq!(r.display_name(), "Special: List folder / read data");
     }
 
     #[test]
-    fn zero_mask_is_special() {
+    fn zero_mask_is_no_access_not_special() {
+        // Lab finding PE3-1: an empty mask used to read "Special", which
+        // suggests some right exists.
         let r = rights(0);
-        assert_eq!(r.label(), "(special)");
+        assert_eq!(r.label(), "none");
+        assert_eq!(r.display_name(), "No access");
         assert!(!r.read_data());
         assert!(!r.delete());
+    }
+
+    #[test]
+    fn exact_levels_keep_their_plain_names() {
+        for (mask, name, short) in [
+            (MASK_FULL_CONTROL, "Full Control", "F"),
+            (MASK_MODIFY, "Modify", "M"),
+            (MASK_READ_EXECUTE, "Read & Execute", "RX"),
+            (MASK_READ | MASK_WRITE, "Read & Write", "RW"),
+            (MASK_READ, "Read", "R"),
+            (MASK_WRITE, "Write", "W"),
+        ] {
+            assert_eq!(rights(mask).display_name(), name, "{mask:#X}");
+            assert_eq!(rights(mask).label(), short, "{mask:#X}");
+        }
+    }
+
+    #[test]
+    fn extra_rights_beyond_the_base_level_are_named() {
+        // Lab case S7: Read + WRITE_DAC + WRITE_OWNER was labelled "Read".
+        let s7 = rights(0x001E_0089);
+        assert_eq!(
+            s7.display_name(),
+            "Read + Change permissions, Take ownership"
+        );
+        assert_eq!(s7.label(), "R+WDAC,WO");
+        // Lab case A1: Full Control minus the write bits was labelled
+        // "Read & Execute".
+        let a1 = rights(0x001F_00E9);
+        assert_eq!(
+            a1.display_name(),
+            "Read & Execute + Delete subfolders and files, Delete, Change permissions, \
+             Take ownership"
+        );
+        assert_eq!(a1.label(), "RX+DC,DE,WDAC,WO");
+        // Lab case S14: Read & Execute + Delete.
+        assert_eq!(
+            rights(0x0013_00A9).display_name(),
+            "Read & Execute + Delete"
+        );
+        // Read & Execute with a complete Write set reads like the basic
+        // dialog: both boxes.
+        let rxw = rights(MASK_READ_EXECUTE | MASK_WRITE);
+        assert_eq!(rxw.display_name(), "Read & Execute + Write");
+        assert_eq!(rxw.label(), "RX+W");
+        // Modify plus WRITE_DAC.
+        assert_eq!(
+            rights(MASK_MODIFY | FILE_WRITE_DAC).display_name(),
+            "Modify + Change permissions"
+        );
+    }
+
+    #[test]
+    fn masks_without_a_standard_level_list_every_bit() {
+        // Owner bits only (lab cases S1/S17): READ_CONTROL + WRITE_DAC.
+        let owner = rights(FILE_READ_CONTROL | FILE_WRITE_DAC);
+        assert_eq!(
+            owner.display_name(),
+            "Special: Read permissions, Change permissions"
+        );
+        assert_eq!(owner.label(), "(RC,WDAC)");
+        // Lab case D3: Modify without the read bits (RD, REA, RA, RC) —
+        // Traverse/execute stays, it is not a read bit.
+        let d3 = rights(0x0011_0136);
+        assert_eq!(
+            d3.display_name(),
+            "Special: Traverse folder / execute file, Create files / write data, \
+             Create folders / append data, Write attributes, Write extended attributes, \
+             Delete, Synchronize"
+        );
+        assert_eq!(d3.label(), "(X,WD,AD,WA,WEA,DE,S)");
+    }
+
+    #[test]
+    fn unnamed_bits_are_reported_with_their_value() {
+        // Windows grants the reserved specific bits 0xFE00 on a NULL DACL.
+        let r = rights(MASK_FULL_CONTROL | 0x0000_FE00);
+        assert_eq!(r.display_name(), "Full Control + other bits 0xFE00");
+        assert_eq!(r.label(), "F+0xFE00");
+        let generic = rights(GENERIC_READ);
+        assert_eq!(generic.display_name(), "Special: Generic read");
+        assert_eq!(rights(ACCESS_SYSTEM_SECURITY).label(), "(AS)");
+    }
+
+    #[test]
+    fn base_level_is_the_highest_complete_level() {
+        assert_eq!(
+            rights(MASK_FULL_CONTROL).base_level(),
+            Some(StandardLevel::FullControl)
+        );
+        assert_eq!(rights(0x001E_0089).base_level(), Some(StandardLevel::Read));
+        assert_eq!(rights(FILE_READ_CONTROL).base_level(), None);
+        assert_eq!(rights(0).base_level(), None);
     }
 
     // --- Einzelne Bits / individual bits ---

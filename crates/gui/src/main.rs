@@ -3529,7 +3529,7 @@ fn format_share_line(perm: &EffectivePermission) -> String {
                 .share_mask
                 .as_ref()
                 .map(|m| NormalizedRights::new(m.0).label())
-                .unwrap_or("—");
+                .unwrap_or_else(|| "—".to_owned());
             format!(
                 "Share restriction applied: NTFS = {ntfs_label}, Share = {share_label}, effective = NTFS ∩ Share."
             )

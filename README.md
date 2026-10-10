@@ -59,9 +59,9 @@ Stars shows each effective right as a long form plus a short label, e.g. `Read &
 | `RW` | Read & Write | read + write, **without** the execute right |
 | `R` | Read | read only |
 | `W` | Write | write only |
-| `(special)` | Special | a partial / custom access mask that matches none of the above — inspect the raw mask (`0x…`) |
+| `none` | No access | the mask is empty |
 
-Stars always reports the **highest** matching level (precedence `F > M > RX > RW > R > W > (special)`); a higher level implies the lower ones (Full Control implies Modify, which implies Read & Execute, …). The full per-bit detail is preserved in the raw mask shown next to the label. See the [user guide](docs/user-guide.md#rights-labels--what-f-rx-rw-mean) for the same table with context.
+A level stands alone only when the mask is **exactly** that level; every right beyond it is named, so a label never hides a bit: `0x001E0089` reads `Read + Change permissions, Take ownership` (`R+WDAC,WO`), owner-only bits read `Special: Read permissions, Change permissions` (`(RC,WDAC)`). The base is the highest complete level (`F > M > RX > RW > R > W`), and the raw mask is shown next to the label. See the [user guide](docs/user-guide.md#rights-labels--what-f-rx-rw-mean) for details.
 
 ### Can Stars help you? — 30-second overview
 

@@ -496,9 +496,11 @@ fn write_permissions_table(
             escape_html(&p.path.0),
             escape_html(&p.identity.sid.0),
             escape_html(name),
-            rights_badge(eff),
-            rights_badge(ntfs),
-            share.map(rights_badge).unwrap_or_else(|| "—".to_string()),
+            rights_badge_with_mask(eff),
+            rights_badge_with_mask(ntfs),
+            share
+                .map(rights_badge_with_mask)
+                .unwrap_or_else(|| "—".to_string()),
         ).map_err(|e| CoreError::Export(e.to_string()))?;
     }
     s.push_str("</tbody></table>\n");
@@ -634,23 +636,32 @@ fn severity_badge(sev: &RiskSeverity) -> String {
     format!("<span class=\"badge {cls}\">{label}</span>")
 }
 
+/// Rights badge: the colour follows the highest complete standard level,
+/// the text is the **exact** label — every right beyond that level is named
+/// (lab finding PE3-1). Until v1.9.0 the badge text was the bare level, so
+/// Read & Execute read "Read", Read + WRITE_DAC + WRITE_OWNER read "Read"
+/// and owner-only bits read "Special".
 fn rights_badge(r: NormalizedRights) -> String {
-    let (cls, label) = if r.is_full_control() {
-        ("badge-fc", "Full Control")
-    } else if r.is_modify() {
-        ("badge-modify", "Modify")
-    } else if r.is_read() && r.is_write() {
-        ("badge-write", "Read+Write")
-    } else if r.is_read() {
-        ("badge-read", "Read")
-    } else if r.is_write() {
-        ("badge-write", "Write")
-    } else if r.raw() == 0 {
-        ("badge-none", "None")
-    } else {
-        ("badge-special", "Special")
+    use permission_engine::mask::StandardLevel;
+    let cls = match r.base_level() {
+        Some(StandardLevel::FullControl) => "badge-fc",
+        Some(StandardLevel::Modify) => "badge-modify",
+        Some(StandardLevel::ReadWrite) | Some(StandardLevel::Write) => "badge-write",
+        Some(StandardLevel::ReadExecute) | Some(StandardLevel::Read) => "badge-read",
+        None if r.raw() == 0 => "badge-none",
+        None => "badge-special",
     };
-    format!("<span class=\"badge {cls}\">{label}</span>")
+    format!(
+        "<span class=\"badge {cls}\" title=\"0x{:08X}\">{}</span>",
+        r.raw(),
+        escape_html(&r.display_name())
+    )
+}
+
+/// Rights badge followed by the raw mask, for the permissions table (the
+/// trustee table carries the mask in its own column).
+fn rights_badge_with_mask(r: NormalizedRights) -> String {
+    format!("{} <code>0x{:08X}</code>", rights_badge(r), r.raw())
 }
 
 fn escape_html(s: &str) -> String {
@@ -767,6 +778,36 @@ mod tests {
         );
         assert!(!s.contains("non-canonical"));
         assert!(!s.contains("local groups unavailable"));
+    }
+
+    /// Lab finding PE3-1: the badge text must be the exact label with the
+    /// raw mask next to it — never the bare level, never "Special" for an
+    /// empty mask.
+    #[test]
+    fn permissions_table_badges_carry_exact_labels_and_masks() {
+        let mut p = perm();
+        p.ntfs_mask = AccessMask(0x001E_0089);
+        p.effective_mask = AccessMask(0x0012_00A9);
+        let mut s = String::new();
+        write_permissions_table(&mut s, &[p]).unwrap();
+        assert!(
+            s.contains(">Read + Change permissions, Take ownership</span> <code>0x001E0089</code>"),
+            "NTFS badge must name the extra rights: {s}"
+        );
+        assert!(
+            s.contains(">Read &amp; Execute</span> <code>0x001200A9</code>"),
+            "Read & Execute must not read as plain Read: {s}"
+        );
+        let mut none = perm();
+        none.ntfs_mask = AccessMask(0);
+        none.effective_mask = AccessMask(0);
+        let mut s = String::new();
+        write_permissions_table(&mut s, &[none]).unwrap();
+        assert!(
+            s.contains("badge-none\" title=\"0x00000000\">No access</span>"),
+            "{s}"
+        );
+        assert!(!s.contains(">Special<"), "{s}");
     }
 
     /// Follow-up finding 3: NonCanonicalDaclOrder must appear as an HTML badge.
