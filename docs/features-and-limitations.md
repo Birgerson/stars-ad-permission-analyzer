@@ -350,7 +350,11 @@ permanently not part of the product:
 - **When:** The scan hits reparse points (NTFS links to other
   directories or volumes).
 - **What happens:** The walker follows reparse points and detects
-  loops via path identity — infinite loops are ruled out.
+  loops — infinite loops are ruled out. Locally it compares the resolved
+  path; for scans over SMB it compares each directory's volume serial +
+  file ID, because the SMB client does not reliably resolve a junction's
+  path (ADR 0062). A second route to an already scanned directory is
+  reported as a duplicate target and not enumerated twice.
 - **How visible:** Reparse-point hits and detected loops are
   visibly marked in the GUI hit list; the HTML report has its own
   note.

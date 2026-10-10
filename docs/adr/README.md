@@ -64,3 +64,11 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0052 | SID history (L3) & cross-forest trust (L4) visibility markers |
 | 0053 | Standalone group-membership view (identity → groups) |
 | 0054 | GUI LDAP timeout control (GUI/CLI parity) |
+| 0055 | Group → Members (reverse / downward view), v1 direct members |
+| 0056 | Evaluate the user's `sIDHistory` SIDs into the access token |
+| 0057 | SemVer pre-release precedence in the update version policy |
+| 0058 | Reparse handling: real cycles vs duplicate targets |
+| 0059 | Evaluate the groups' `sIDHistory` SIDs into the access token |
+| 0060 | Read-only trust-topology inventory (`trustAttributes` / `trustDirection`) |
+| 0061 | Manual, read-only update check with a configurable, validated source |
+| 0062 | Directory identity by volume serial + file ID for scans over SMB |

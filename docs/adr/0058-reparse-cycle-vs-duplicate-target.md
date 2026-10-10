@@ -1,6 +1,11 @@
 # ADR 0058 — Reparse handling: real cycles vs duplicate targets
 
-**Status:** Accepted (2026-07-04)
+**Status:** Accepted (2026-07-04) — **refined 2026-10-10 by ADR 0062**: for
+scans over SMB the detector compares volume serial + file ID instead of the
+canonical path, which the SMB client does not reliably resolve for
+junctions; the cycle diagnostic names the ancestor's path. The decisions
+below (chain vs. scan-wide map, enumerate once, report every further
+route) are unchanged.
 **References:** ADR 0049 (streaming walk), deep review 2026-07-04
 findings F2 + F5, feedback rule "no silent skips"
 
