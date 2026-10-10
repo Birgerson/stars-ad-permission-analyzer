@@ -10,8 +10,9 @@ path varies between runs).
 Every group membership in Stars carries a `MembershipPath`: one concrete
 chain `user → group → … → target` that the explanation path and the
 membership views show. The lab campaign of 2026-10-10 ran the same scan
-(32 identities over `\\192.168.11.147\Daten$`) twice and compared every CSV
-column. The effective masks were identical; the explanation text was not:
+(32 identities over the lab's hidden data share on DC-01) twice and
+compared every CSV column. The effective masks were identical; the
+explanation text was not:
 for `u00030` all 663 explanations differed, e.g. `g00100` reached once via
 `g00229` and once via `g00211`, both chains real and equally short.
 
