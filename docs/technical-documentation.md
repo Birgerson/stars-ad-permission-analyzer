@@ -232,11 +232,18 @@ struct EffectivePermission {
     path_explanation: PermissionPath,
     share_status: ShareEvalStatus,
     local_group_status: LocalGroupEvalStatus,
-    contributing_sids: Vec<Sid>,        // which token SIDs hit ACEs?
+    contributing_sids: Vec<ContributingAce>, // Allow-ACE SID + the exact bits it decided
     unsupported_ace_count: usize,
+    matched_aces: Vec<AceEntry>,        // applicable ACEs whose trustee is in the token
     diagnostics: Vec<PermissionDiagnostic>,
 }
 ```
+
+`contributing_sids` lists each Allow trustee with exactly the bits that
+trustee decided during the stored-order walk, in the DACL order of its
+first contribution — the order in which `AccessCheck` reached it. (Up to
+v1.9.0 the list came out of a `HashMap`, so its order changed from run to
+run.)
 
 `PermissionPath::steps` is a `Vec<String>` of explanation lines —
 the human-readable proof of *why* the effective right came out the

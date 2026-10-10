@@ -456,7 +456,19 @@ pub fn resolve_local_group_chains(
             ),
         ));
     }
+    sort_local_group_chains(&mut out);
     Ok(out)
+}
+
+/// Orders local-group chains by display name (case-insensitive), then SID,
+/// so the explanation path does not depend on the order in which
+/// `NetUserGetLocalGroups` happened to list the groups (ADR 0063).
+fn sort_local_group_chains(chains: &mut [(Sid, Option<String>, MembershipPath)]) {
+    chains.sort_by(|(a_sid, a_name, _), (b_sid, b_name, _)| {
+        let an = a_name.as_deref().unwrap_or("").to_lowercase();
+        let bn = b_name.as_deref().unwrap_or("").to_lowercase();
+        an.cmp(&bn).then_with(|| a_sid.0.cmp(&b_sid.0))
+    });
 }
 
 /// Builds the membership path into one local group from its direct members.
@@ -936,6 +948,37 @@ mod tests {
         assert!(p.complete);
         let also: Vec<&str> = p.also_via.iter().map(|h| h.sid.0.as_str()).collect();
         assert_eq!(also, ["S-1-5-21-1-2-3-512"]);
+    }
+
+    #[test]
+    fn local_group_chains_are_sorted_by_name_then_sid() {
+        let path = |sid: &str| MembershipPath {
+            nodes: vec![Sid(USER_SID.to_owned()), Sid(sid.to_owned())],
+            names: vec![None, None],
+            source: MembershipPathSource::LocalGroup,
+            complete: true,
+            also_via: Vec::new(),
+        };
+        let mut chains = vec![
+            (
+                Sid("S-1-5-32-545".to_owned()),
+                Some(r"BUILTIN\Users".to_owned()),
+                path("S-1-5-32-545"),
+            ),
+            (
+                Sid("S-1-5-32-544".to_owned()),
+                Some(r"BUILTIN\Administrators".to_owned()),
+                path("S-1-5-32-544"),
+            ),
+            (
+                Sid("S-1-5-32-555".to_owned()),
+                Some(r"builtin\Remote Desktop Users".to_owned()),
+                path("S-1-5-32-555"),
+            ),
+        ];
+        sort_local_group_chains(&mut chains);
+        let order: Vec<&str> = chains.iter().map(|(s, _, _)| s.0.as_str()).collect();
+        assert_eq!(order, ["S-1-5-32-544", "S-1-5-32-555", "S-1-5-32-545"]);
     }
 
     #[test]
