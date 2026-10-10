@@ -275,6 +275,58 @@ pub async fn search_by_dn(
     Ok(rs.into_iter().next().map(RawEntry::from_search_entry))
 }
 
+/// Reads the `objectSid` of the domain head object at `domain_root_dn`
+/// (base-scope search) — the domain SID that every account SID of that
+/// domain starts with. `Ok(None)` when the object has no readable SID.
+/// Used to classify a SID the directory has no object for: only when the
+/// SID belongs to this domain does a miss prove the account no longer
+/// exists (lab finding AD3-1).
+pub async fn search_domain_sid(
+    ldap: &mut Ldap,
+    domain_root_dn: &str,
+) -> Result<Option<String>, CoreError> {
+    debug!("LDAP domain SID lookup: base={domain_root_dn}");
+    let (rs, _res) = ldap
+        .search(
+            domain_root_dn,
+            Scope::Base,
+            "(objectClass=*)",
+            vec!["objectSid"],
+        )
+        .await
+        .map_err(|e| CoreError::LdapQuery(format!("domain SID search failed: {e}")))?
+        .success()
+        .map_err(|e| CoreError::LdapQuery(format!("domain SID search result error: {e}")))?;
+    let Some(entry) = rs.into_iter().next().map(RawEntry::from_search_entry) else {
+        return Ok(None);
+    };
+    Ok(entry
+        .first_bin_attr("objectSid")
+        .and_then(|b| crate::sid_util::bytes_to_sid_str(b).ok()))
+}
+
+/// Domain SIDs of every domain head object (`domainDNS`) visible under
+/// `base_dn` — on a Global Catalog bind with an empty base, every domain of
+/// the forest. Paged, so a large forest is not truncated.
+pub async fn search_forest_domain_sids(
+    ldap: &mut Ldap,
+    base_dn: &str,
+) -> Result<Vec<String>, CoreError> {
+    let entries = search_paged_with_limit(
+        ldap,
+        base_dn,
+        "(objectClass=domainDNS)",
+        &["objectSid"],
+        None,
+    )
+    .await?;
+    Ok(entries
+        .iter()
+        .filter_map(|e| e.first_bin_attr("objectSid"))
+        .filter_map(|b| crate::sid_util::bytes_to_sid_str(b).ok())
+        .collect())
+}
+
 /// Reads the domain's `trustedDomain` objects for the read-only trust
 /// inventory (L4). Trust objects live under `CN=System,<domain DN>`, so a
 /// subtree search from the domain-root `base_dn` finds them. Returns the raw

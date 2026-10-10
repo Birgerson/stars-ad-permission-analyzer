@@ -7,7 +7,7 @@ use std::io::Write;
 
 use adpa_core::{
     error::CoreError,
-    model::{EffectivePermission, LocalGroupEvalStatus, ShareEvalStatus},
+    model::{AccountStatus, EffectivePermission, LocalGroupEvalStatus, ShareEvalStatus},
     traits::{AnalysisResult, ExportTarget, Exporter},
 };
 use permission_engine::NormalizedRights;
@@ -128,7 +128,10 @@ fn record_for(p: &EffectivePermission) -> csv::Result<[String; 20]> {
         neutralize_spreadsheet_formula(&p.identity.name.clone().unwrap_or_default()),
         neutralize_spreadsheet_formula(&p.identity.domain.clone().unwrap_or_default()),
         kind,
-        p.identity.disabled.to_string(),
+        // Lab finding AD3-2: true/false only when the state is known.
+        AccountStatus::of(&p.identity, &p.diagnostics)
+            .csv_value()
+            .to_owned(),
         format!("0x{:08X}", p.ntfs_mask.0),
         ntfs.display_name(),
         share_hex,
@@ -215,8 +218,8 @@ fn contributing_sids_to_json(sids: &[adpa_core::model::ContributingAce]) -> csv:
 mod tests {
     use adpa_core::error::CoreError;
     use adpa_core::model::{
-        AccessMask, EffectivePermission, Identity, IdentityKind, NormalizedPath, PermissionPath,
-        Sid,
+        AccessMask, EffectivePermission, Identity, IdentityKind, NormalizedPath,
+        PermissionDiagnostic, PermissionPath, Sid,
     };
     use adpa_core::traits::{AnalysisResult, ExportTarget};
     use permission_engine::mask::MASK_READ;
@@ -407,6 +410,48 @@ mod tests {
         assert_eq!(row[9], "(none)");
         assert_eq!(row[11], "Read");
         assert_eq!(row[12], "User has Read via inherited Allow ACE");
+    }
+
+    /// Lab finding AD3-2: the `disabled` column says true/false only when
+    /// the account state is known.
+    #[test]
+    fn disabled_column_is_unknown_when_the_state_is_unknown() {
+        let mut unknown = make_perm(
+            "C:\\A",
+            "S-1-5-21-1-2-3-1000",
+            "u",
+            MASK_READ,
+            None,
+            MASK_READ,
+            vec![],
+        );
+        unknown.diagnostics = vec![PermissionDiagnostic::IdentityDisabledStatusUnknown];
+        let mut group = make_perm(
+            "C:\\B",
+            "S-1-5-21-1-2-3-2000",
+            "g",
+            MASK_READ,
+            None,
+            MASK_READ,
+            vec![],
+        );
+        group.identity.kind = IdentityKind::Group;
+        let mut orphan = make_perm(
+            "C:\\C",
+            "S-1-5-21-1-2-3-3000",
+            "",
+            MASK_READ,
+            None,
+            MASK_READ,
+            vec![],
+        );
+        orphan.identity.kind = IdentityKind::Orphaned;
+        let mut buf = Vec::new();
+        write_csv(&mut buf, &[unknown, group, orphan]).unwrap();
+        let rows = parse_csv(&buf);
+        assert_eq!(rows[1][5], "unknown");
+        assert_eq!(rows[2][5], "n/a");
+        assert_eq!(rows[3][5], "n/a");
     }
 
     #[test]

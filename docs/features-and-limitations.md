@@ -208,6 +208,8 @@ out; the report font is Arial.
 | `IdentityLookupFailed { reason }` | Concern | **yes** | LDAP identity lookup failed (bind / timeout / DC / query); analysis ran with a placeholder identity — domain-group ACEs may be missing. `reason` carries the original error. |
 | `GroupResolutionFailed { reason }` | Concern | **yes** | Recursive group resolution failed or was skipped; domain-group ACEs may be missing. `reason` carries the original error. |
 | `PersistedEvidenceDecodeFailed { detail }` | Concern | **yes** | A persisted (historical) row could not be fully decoded; the reconstructed result may be less complete than originally stored. |
+| `IdentityNotResolvable { reason }` | Concern | **yes** | The SID could not be resolved and is **not** proven orphaned — it belongs to a trusted domain (named), another domain, lies outside a base that is only an OU, or its domain could not be determined. Its memberships are unknown; the rights computed for the bare SID can be too low or too high (ADR 0064). |
+| `IdentityOrphaned` | Neutral | no | The SID belongs to the configured domain, the base covers that whole domain, and no object exists: the account no longer exists. Nobody can log on with it; an ACE naming it is a dead entry (ADR 0064). |
 | `MembersViaPrimaryGroupIncluded { count }` | Neutral | no | *(members view)* `count` members were found via their `primaryGroupID` and included — they do not appear in the `member` attribute, so this makes the completeness of the count transparent. |
 | `UniversalGroupCrossDomainMembersNotVisible` | Neutral | **yes** | *(members view)* The group is **universal** and was queried over a plain domain bind; members from other domains of the forest are not visible — use a Global Catalog bind to see them. |
 | `GroupMemberEnumerationIncomplete { reason }` | Concern | **yes** | *(members view)* Member enumeration could not complete (one source search failed); the member list is a **lower bound**. |
@@ -374,8 +376,13 @@ permanently not part of the product:
   consumers see "SID exists in the DACL but no longer has a bearer".
 - **Important:** A SID that exists in **another domain** (which the
   configured LDAP simply does not index) is **not** an orphan — it
-  now appears with name + the marker
-  `IdentityNotInConfiguredLdapBase`. See limitation 2.
+  appears with name + the marker `IdentityNotInConfiguredLdapBase` when
+  the local LSA resolves it, and as **not resolvable** (marker
+  `IdentityNotResolvable`, naming the trusted or foreign domain) when
+  nothing can resolve it. `Orphaned` requires evidence: a SID of the
+  configured domain with a base that covers the whole domain (ADR 0064).
+  The account status reads "unknown" whenever it was not read — never
+  "Active" by default.
 
 ### 9. Local groups on the target server
 

@@ -91,10 +91,71 @@ pub enum IdentityScopeStatus {
     /// LDAP miss, but LSA resolved the SID — typical in multi-domain
     /// forests / trusts.
     OutsideConfiguredLdapBase,
-    /// LDAP miss AND LSA miss. Truly orphaned SID.
+    /// LDAP miss AND LSA miss, and the SID belongs to the configured domain
+    /// whose whole namespace the base covers: the account no longer exists.
     OrphanedSid,
+    /// LDAP miss AND LSA miss, but the evidence does not prove the account
+    /// gone — trusted or other domain, partial base, unknown domain
+    /// (ADR 0064). `reason` is the reader-facing explanation.
+    Unresolvable { reason: String },
     /// LDAP connection itself failed.
     LookupFailed { reason: String },
+}
+
+/// What the configured directory can tell about a SID it holds no object
+/// for — the evidence that decides between "orphaned" and "not resolvable"
+/// (ADR 0064, lab finding AD3-1). Until v1.9.0 every SID that neither LDAP
+/// nor the local LSA resolved was reported as orphaned, including valid
+/// accounts of a trusted domain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SidDomainRelation {
+    /// The SID belongs to the configured domain (or, on a Global Catalog
+    /// bind, to a domain of the forest) and the configured base covers that
+    /// whole domain: no object means the account no longer exists.
+    ConfiguredDomainWholeBase,
+    /// The SID belongs to the configured domain, but the configured base
+    /// covers only part of it — the account may exist outside the base.
+    ConfiguredDomainPartialBase { base_dn: String },
+    /// The SID belongs to a domain the configured domain trusts.
+    TrustedDomain { partner: String },
+    /// The SID belongs to another domain that is neither the configured one
+    /// nor listed among its trusts.
+    OtherDomain { domain_sid: String },
+    /// The relation could not be determined.
+    Unknown { reason: String },
+}
+
+impl SidDomainRelation {
+    /// Reader-facing reason for an unresolvable SID, `None` for the one case
+    /// that proves the account gone.
+    pub fn unresolvable_reason(&self, sid: &Sid) -> Option<String> {
+        match self {
+            SidDomainRelation::ConfiguredDomainWholeBase => None,
+            SidDomainRelation::ConfiguredDomainPartialBase { base_dn } => Some(format!(
+                "SID {} belongs to the configured domain but has no object under the \
+                 configured LDAP base '{base_dn}', which does not cover the whole domain — \
+                 whether the account exists elsewhere in the domain is unknown",
+                sid.0
+            )),
+            SidDomainRelation::TrustedDomain { partner } => Some(format!(
+                "SID {} belongs to the trusted domain {partner}; Stars resolves accounts and \
+                 group memberships only in the configured domain, so this account's \
+                 memberships in {partner} are unknown",
+                sid.0
+            )),
+            SidDomainRelation::OtherDomain { domain_sid } => Some(format!(
+                "SID {} belongs to domain {domain_sid}, which is neither the configured domain \
+                 nor one of its trusts — the account and its memberships are unknown",
+                sid.0
+            )),
+            SidDomainRelation::Unknown { reason } => Some(format!(
+                "SID {} has no object under the configured LDAP base, the local LSA cannot \
+                 resolve it, and its domain could not be determined ({reason}) — whether the \
+                 account exists is unknown",
+                sid.0
+            )),
+        }
+    }
 }
 
 /// Status of the group resolution.
@@ -173,14 +234,24 @@ impl PrincipalResolution {
             }
             _ => None,
         };
+        let identity_unresolvable_reason = match &self.scope_status {
+            IdentityScopeStatus::Unresolvable { reason } => Some(reason.clone()),
+            _ => None,
+        };
         EngineFlags {
+            identity_unresolvable_reason,
             identity_not_in_configured_ldap_base: matches!(
                 self.scope_status,
                 IdentityScopeStatus::OutsideConfiguredLdapBase
             ),
+            // An orphaned SID has no account whose state could be unknown —
+            // `IdentityOrphaned` says what there is to say.
             identity_disabled_status_unknown: matches!(
                 self.disabled_status,
                 DisabledStatus::Unknown
+            ) && !matches!(
+                self.scope_status,
+                IdentityScopeStatus::OrphanedSid
             ),
             group_resolution_via_sam_fallback: matches!(
                 self.group_resolution_status,
@@ -218,6 +289,13 @@ impl PrincipalResolution {
         }
         if let Some(reason) = flags.group_resolution_failure_reason {
             d.push(PermissionDiagnostic::GroupResolutionFailed { reason });
+        }
+        // Same order and source as the engine (ADR 0064).
+        if let Some(reason) = flags.identity_unresolvable_reason {
+            d.push(PermissionDiagnostic::IdentityNotResolvable { reason });
+        }
+        if self.identity.kind == IdentityKind::Orphaned {
+            d.push(PermissionDiagnostic::IdentityOrphaned);
         }
         if flags.identity_resolved_via_fsp {
             d.push(PermissionDiagnostic::IdentityResolvedViaForeignSecurityPrincipal);
@@ -311,6 +389,15 @@ pub trait IdentityBackend: Send + Sync {
     fn is_forest_wide(&self) -> bool {
         false
     }
+
+    /// Classifies a SID the directory holds no object for (ADR 0064).
+    /// Default: unknown — a backend that cannot read the directory context
+    /// must never let a miss count as proof that the account is gone.
+    async fn classify_unresolved_sid(&self, _sid: &Sid) -> SidDomainRelation {
+        SidDomainRelation::Unknown {
+            reason: "the identity backend cannot read the directory context".to_owned(),
+        }
+    }
 }
 
 /// LSA backend for Windows reverse lookups.
@@ -380,6 +467,10 @@ impl IdentityBackend for LdapIdentityBackend {
 
     fn is_forest_wide(&self) -> bool {
         self.inner.is_global_catalog()
+    }
+
+    async fn classify_unresolved_sid(&self, sid: &Sid) -> SidDomainRelation {
+        self.inner.classify_unresolved_sid(sid).await
     }
 }
 
@@ -629,16 +720,30 @@ where
         }
     }
 
+    /// LDAP miss and LSA miss: decide from the directory context whether
+    /// the miss proves the account gone (orphaned) or only that Stars cannot
+    /// see it (ADR 0064, lab finding AD3-1).
+    async fn classify_unresolved(&self, sid: &Sid) -> PrincipalResolution {
+        let relation = self.identity_backend.classify_unresolved_sid(sid).await;
+        match relation.unresolvable_reason(sid) {
+            None => {
+                debug!(sid = %sid.0, "LDAP + LSA miss in the fully covered domain — orphaned");
+                self.orphaned_resolution(sid.clone())
+            }
+            Some(reason) => {
+                debug!(sid = %sid.0, ?relation, "LDAP + LSA miss — not resolvable");
+                self.unresolvable_resolution(sid.clone(), reason)
+            }
+        }
+    }
+
     /// LDAP miss + LSA cross-check.
     async fn fall_back_to_lsa(&self, sid: &Sid) -> Result<PrincipalResolution, CoreError> {
         let lsa = match self.lsa_backend.as_ref() {
             Some(b) => b,
             None => {
-                debug!(
-                    sid = %sid.0,
-                    "LDAP miss and no LSA backend — emitting OrphanedSid"
-                );
-                return Ok(self.orphaned_resolution(sid.clone()));
+                debug!(sid = %sid.0, "LDAP miss and no LSA backend — classifying the SID");
+                return Ok(self.classify_unresolved(sid).await);
             }
         };
 
@@ -679,9 +784,9 @@ where
                     resolved_via_global_catalog: false,
                 })
             }
-            Err(_) => {
-                debug!(sid = %sid.0, "LDAP miss and LSA miss — OrphanedSid");
-                Ok(self.orphaned_resolution(sid.clone()))
+            Err(e) => {
+                debug!(sid = %sid.0, error = %e, "LDAP miss and LSA miss — classifying the SID");
+                Ok(self.classify_unresolved(sid).await)
             }
         }
     }
@@ -813,6 +918,32 @@ where
         }
     }
 
+    /// A SID nobody could resolve and that is not proven orphaned: kind
+    /// `Unknown`, memberships unknown, state unknown (ADR 0064).
+    fn unresolvable_resolution(&self, sid: Sid, reason: String) -> PrincipalResolution {
+        let identity = Identity {
+            sid: sid.clone(),
+            name: None,
+            domain: None,
+            kind: IdentityKind::Unknown,
+            disabled: false,
+            user_principal_name: None,
+            sid_history_count: 0,
+            sid_history: Vec::new(),
+        };
+        PrincipalResolution {
+            sid,
+            identity,
+            memberships: Vec::new(),
+            scope_status: IdentityScopeStatus::Unresolvable { reason },
+            group_resolution_status: GroupResolutionStatus::NotAttempted,
+            disabled_status: DisabledStatus::Unknown,
+            diagnostics: vec![PermissionDiagnostic::IdentityDisabledStatusUnknown],
+            resolved_via_fsp: false,
+            resolved_via_global_catalog: false,
+        }
+    }
+
     fn failed_lookup_resolution(&self, sid: Sid, reason: String) -> PrincipalResolution {
         let identity = Identity {
             sid: sid.clone(),
@@ -873,6 +1004,9 @@ mod tests {
         by_sam: HashMap<String, Vec<(Sid, Identity)>>,
         memberships: HashMap<String, Vec<GroupMembership>>,
         force_error: Mutex<Option<CoreError>>,
+        /// Directory-context answer for unresolved SIDs; `None` keeps the
+        /// trait default (unknown).
+        relation: Option<SidDomainRelation>,
     }
 
     impl FakeLdapBackend {
@@ -883,6 +1017,14 @@ mod tests {
                 by_sam: HashMap::new(),
                 memberships: HashMap::new(),
                 force_error: Mutex::new(None),
+                relation: None,
+            }
+        }
+
+        fn with_relation(relation: SidDomainRelation) -> Self {
+            Self {
+                relation: Some(relation),
+                ..Self::new()
             }
         }
     }
@@ -912,6 +1054,14 @@ mod tests {
 
         async fn resolve_memberships(&self, sid: &Sid) -> Result<Vec<GroupMembership>, CoreError> {
             Ok(self.memberships.get(&sid.0).cloned().unwrap_or_default())
+        }
+
+        async fn classify_unresolved_sid(&self, _sid: &Sid) -> SidDomainRelation {
+            self.relation
+                .clone()
+                .unwrap_or_else(|| SidDomainRelation::Unknown {
+                    reason: "test backend without directory context".to_owned(),
+                })
         }
     }
 
@@ -1110,8 +1260,10 @@ mod tests {
     /// 6) Unknown SID — both miss: real Orphaned.
     #[tokio::test]
     async fn unknown_sid_with_no_lsa_match_is_orphaned() {
+        // Orphaned only with evidence: the SID belongs to the configured
+        // domain and the base covers that whole domain (ADR 0064).
         let sid = Sid("S-1-5-21-1-1-1-99999".to_owned());
-        let ldap = FakeLdapBackend::new();
+        let ldap = FakeLdapBackend::with_relation(SidDomainRelation::ConfiguredDomainWholeBase);
         let lsa = FakeLsaBackend::new(); // does not know the SID
 
         let resolver = PrincipalResolver::new(ldap, Some(lsa));
@@ -1127,7 +1279,88 @@ mod tests {
         );
         let flags = res.engine_flags();
         assert!(!flags.identity_not_in_configured_ldap_base);
+        assert!(flags.identity_unresolvable_reason.is_none());
+        // No account → no "disabled status unknown"; the orphan marker
+        // says what there is to say.
+        assert!(!flags.identity_disabled_status_unknown);
+        let diags = res.membership_diagnostics();
+        assert!(diags.contains(&PermissionDiagnostic::IdentityOrphaned));
+        assert!(!diags.contains(&PermissionDiagnostic::IdentityDisabledStatusUnknown));
+    }
+
+    async fn resolve_unresolved(relation: Option<SidDomainRelation>) -> PrincipalResolution {
+        let sid = Sid("S-1-5-21-7-7-7-1104".to_owned());
+        let ldap = match relation {
+            Some(r) => FakeLdapBackend::with_relation(r),
+            None => FakeLdapBackend::new(),
+        };
+        let resolver = PrincipalResolver::new(ldap, Some(FakeLsaBackend::new()));
+        resolver
+            .resolve(PrincipalInput::Sid(sid))
+            .await
+            .expect("resolution must succeed")
+    }
+
+    fn assert_unresolvable(res: &PrincipalResolution, reason_part: &str) {
+        let IdentityScopeStatus::Unresolvable { reason } = &res.scope_status else {
+            panic!("expected Unresolvable, got {:?}", res.scope_status);
+        };
+        assert!(reason.contains(reason_part), "reason: {reason}");
+        assert_eq!(res.identity.kind, IdentityKind::Unknown, "never Orphaned");
+        let flags = res.engine_flags();
+        assert_eq!(
+            flags.identity_unresolvable_reason.as_deref(),
+            Some(reason.as_str())
+        );
         assert!(flags.identity_disabled_status_unknown);
+        let diags = res.membership_diagnostics();
+        assert!(diags
+            .iter()
+            .any(|d| matches!(d, PermissionDiagnostic::IdentityNotResolvable { .. })));
+        assert!(!diags.contains(&PermissionDiagnostic::IdentityOrphaned));
+        assert!(
+            diags
+                .iter()
+                .any(PermissionDiagnostic::is_incompleteness_trigger),
+            "an unresolvable identity must make the result incomplete"
+        );
+    }
+
+    /// Lab finding AD3-1: `EXT\ext_partner04` (a valid account of the
+    /// trusted domain ext.test) was reported as Orphaned with a confident
+    /// result of 0.
+    #[tokio::test]
+    async fn unresolved_sid_of_a_trusted_domain_is_not_orphaned() {
+        let res = resolve_unresolved(Some(SidDomainRelation::TrustedDomain {
+            partner: "ext.test".to_owned(),
+        }))
+        .await;
+        assert_unresolvable(&res, "trusted domain ext.test");
+    }
+
+    #[tokio::test]
+    async fn unresolved_sid_of_another_domain_is_not_orphaned() {
+        let res = resolve_unresolved(Some(SidDomainRelation::OtherDomain {
+            domain_sid: "S-1-5-21-7-7-7".to_owned(),
+        }))
+        .await;
+        assert_unresolvable(&res, "S-1-5-21-7-7-7");
+    }
+
+    #[tokio::test]
+    async fn unresolved_sid_under_a_partial_base_is_not_orphaned() {
+        let res = resolve_unresolved(Some(SidDomainRelation::ConfiguredDomainPartialBase {
+            base_dn: "OU=Lab,DC=corp,DC=test".to_owned(),
+        }))
+        .await;
+        assert_unresolvable(&res, "OU=Lab,DC=corp,DC=test");
+    }
+
+    #[tokio::test]
+    async fn unresolved_sid_without_directory_context_is_not_orphaned() {
+        // The trait default must never let a miss count as proof.
+        let res = resolve_unresolved(None).await;
+        assert_unresolvable(&res, "could not be determined");
     }
 
     /// LDAP-disabled account: `IdentityDisabled` marker, no Unknown.
@@ -1157,13 +1390,25 @@ mod tests {
     #[tokio::test]
     async fn ldap_miss_without_lsa_backend_is_orphaned() {
         let sid = Sid("S-1-5-21-1-1-1-1006".to_owned());
-        let ldap = FakeLdapBackend::new();
+        let ldap = FakeLdapBackend::with_relation(SidDomainRelation::ConfiguredDomainWholeBase);
         let resolver: PrincipalResolver<_, FakeLsaBackend> = PrincipalResolver::new(ldap, None);
         let res = resolver
             .resolve(PrincipalInput::Sid(sid))
             .await
             .expect("resolution must succeed");
         assert_eq!(res.scope_status, IdentityScopeStatus::OrphanedSid);
+    }
+
+    #[tokio::test]
+    async fn ldap_miss_without_lsa_backend_and_without_evidence_is_unresolvable() {
+        let sid = Sid("S-1-5-21-1-1-1-1006".to_owned());
+        let resolver: PrincipalResolver<_, FakeLsaBackend> =
+            PrincipalResolver::new(FakeLdapBackend::new(), None);
+        let res = resolver
+            .resolve(PrincipalInput::Sid(sid))
+            .await
+            .expect("resolution must succeed");
+        assert_unresolvable(&res, "could not be determined");
     }
 
     /// LDAP-Bind-/Verbindungsfehler: ScopeStatus = LookupFailed,

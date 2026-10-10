@@ -408,9 +408,21 @@ a real DC.
 enum IdentityScopeStatus {
     InsideConfiguredLdapBase,           // LDAP hit
     OutsideConfiguredLdapBase,          // LDAP miss + LSA hit (trust)
-    OrphanedSid,                        // LDAP miss + LSA miss
+    OrphanedSid,                        // LDAP + LSA miss, SID of the fully covered domain
+    Unresolvable { reason: String },    // LDAP + LSA miss, not proven gone (ADR 0064)
     LookupFailed { reason: String },    // LDAP connection error
 }
+```
+
+On an LDAP miss plus an LSA miss the backend classifies the SID
+(`SidDomainRelation`, ADR 0064): it reads the domain SID of the base's
+domain root and the domain's trust objects. Only a SID of the configured
+domain, searched with a base covering that whole domain, becomes
+`OrphanedSid`; a trusted-domain, other-domain or partial-base SID becomes
+`Unresolvable` with a reason and the incompleteness marker
+`IdentityNotResolvable`.
+
+```rust
 
 enum GroupResolutionStatus {
     LdapRecursive,                      // LDAP_MATCHING_RULE_IN_CHAIN
@@ -1015,6 +1027,10 @@ enum PermissionDiagnostic {
     MembersViaPrimaryGroupIncluded { count: usize },
     GroupMemberEnumerationIncomplete { reason: String },
     UniversalGroupCrossDomainMembersNotVisible,
+    // Unresolved SIDs (ADR 0064): not proven orphaned → incompleteness;
+    // proven orphaned → informational.
+    IdentityNotResolvable { reason: String },
+    IdentityOrphaned,
 }
 ```
 

@@ -209,6 +209,15 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if let Some(reason) = input.resolution.group_resolution_failure_reason {
             diagnostics.push(PermissionDiagnostic::GroupResolutionFailed { reason });
         }
+        // ADR 0064 (lab finding AD3-1): a SID that could not be resolved is
+        // only called orphaned when the evidence shows the account no longer
+        // exists; otherwise its memberships are unknown — incompleteness.
+        if let Some(reason) = input.resolution.identity_unresolvable_reason {
+            diagnostics.push(PermissionDiagnostic::IdentityNotResolvable { reason });
+        }
+        if input.identity.kind == adpa_core::model::IdentityKind::Orphaned {
+            diagnostics.push(PermissionDiagnostic::IdentityOrphaned);
+        }
         // Engine review 2026-06-09 finding 1: OWNER RIGHTS (S-1-3-4)
         // governed the owner's rights instead of the implicit grant.
         // Informational, not an incompleteness trigger.
@@ -3768,6 +3777,58 @@ mod tests {
         assert!(
             found.contains("timed out"),
             "reason must carry the underlying message, got: {found}"
+        );
+    }
+
+    /// ADR 0064 (lab finding AD3-1): an unresolvable SID makes the result
+    /// incomplete; an orphaned SID gets the informational marker only.
+    #[test]
+    fn engine_marks_unresolvable_identity_incomplete_and_orphaned_informational() {
+        let eval_with = |identity: Identity, provenance: ResolutionProvenance| {
+            DefaultPermissionEngine
+                .evaluate(PermissionEvaluationInput {
+                    identity,
+                    group_memberships: vec![],
+                    file_system_object: fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+                    share_status: ShareMaskStatus::NotApplicable,
+                    local_group_sids: vec![],
+                    local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                    access_context: AccessContext::Unspecified,
+                    unsupported_share_ace_count: 0,
+                    sid_names: std::collections::BTreeMap::new(),
+                    resolution: provenance,
+                })
+                .unwrap()
+        };
+        let unresolvable = eval_with(
+            Identity {
+                kind: IdentityKind::Unknown,
+                ..user(USER)
+            },
+            ResolutionProvenance {
+                identity_unresolvable_reason: Some("belongs to the trusted domain ext.test".into()),
+                ..Default::default()
+            },
+        );
+        assert!(unresolvable.diagnostics.iter().any(|d| matches!(
+            d,
+            PermissionDiagnostic::IdentityNotResolvable { reason } if reason.contains("ext.test")
+        )));
+        assert!(unresolvable.is_incomplete());
+
+        let orphaned = eval_with(
+            Identity {
+                kind: IdentityKind::Orphaned,
+                ..user(USER)
+            },
+            ResolutionProvenance::default(),
+        );
+        assert!(orphaned
+            .diagnostics
+            .contains(&PermissionDiagnostic::IdentityOrphaned));
+        assert!(
+            !orphaned.is_incomplete(),
+            "orphaned SID: evaluation is exact"
         );
     }
 

@@ -757,6 +757,8 @@ exact wording, lives in
 | `TrustBoundaryEffectsNotModeled` | info | no | The identity was resolved across a domain / trust boundary. **If** that boundary is a forest trust, SID filtering and Selective Authentication may reduce the actual access — these runtime trust effects are not modelled (see [known-limitations.md L4](known-limitations.md)). |
 | `IdentityLookupFailed { reason }` | high | **yes** | LDAP identity lookup failed with a technical error (bind, timeout, DC unreachable). The analysis ran with a placeholder identity and an empty token — ACEs targeting domain groups may be missing. `reason` carries the underlying error. |
 | `GroupResolutionFailed { reason }` | high | **yes** | Recursive group resolution failed or was skipped (e.g. cross-domain path with no GC crawl). ACEs on domain groups may be missing. `reason` carries the underlying error. |
+| `IdentityNotResolvable { reason }` | high | **yes** | The SID could not be resolved and is **not** proven orphaned — e.g. an account of the trusted domain named in `reason`. Its memberships are unknown, so the computed rights can be too low or too high. |
+| `IdentityOrphaned` | info | no | The account no longer exists in the configured domain. Nobody can log on with the SID; an ACE naming it is a dead entry. |
 
 **Risk `incomplete = true`** means: the risk finding is structurally
 incomplete — the auditor should additionally inspect manually. Note the
@@ -1078,15 +1080,22 @@ Up to v1.4.1 trust users could appear as `Orphaned` depending on the
 input form. Since v1.5.0 the pipeline is uniform across input forms;
 a trust user is now flagged `OutsideConfiguredLdapBase`.
 
+Since ADR 0064 Stars calls a SID `Orphaned` **only with evidence**: the SID
+belongs to the configured domain, the configured LDAP base covers that
+whole domain (or it is a Global Catalog bind), and the directory has no
+object for it. Every other unresolvable SID — an account of a trusted
+domain, of another domain, or one outside a base that is only an OU — is
+reported as **not resolvable** (`Kind: Unknown`, marker
+`IdentityNotResolvable` naming the reason, e.g. the trusted domain), and
+the result is marked incomplete.
+
 If you still see `Orphaned`, check:
 
 - Is the SID typed correctly? Whitespace is trimmed since v1.5.2, but
   a typo remains a typo.
-- Does the account actually exist on this system? `whoami /user` or
-  `Get-ADUser -Identity ...` for cross-check.
-- If the account lives in a trust domain: does your configured LDAP
-  bind index the trust domain at all? (see
-  `IdentityNotInConfiguredLdapBase`).
+- Does the account still exist? `Get-ADUser -Identity <SID>` (or
+  `Get-ADObject -Filter "objectSid -eq '<SID>'" -IncludeDeletedObjects`)
+  on a DC of the configured domain.
 
 ### "Why do CLI and GUI show different rights?"
 

@@ -1136,17 +1136,10 @@ fn membership_report_to_view(report: &adpa_core::model::MembershipReport) -> Gro
         // Enabled/disabled is a user-account concept; a group has no such
         // state, so leave the status empty for non-account kinds (the GUI then
         // shows just the kind).
-        status: if matches!(
-            report.identity.kind,
-            IdentityKind::User | IdentityKind::Computer
-        ) {
-            if report.identity.disabled {
-                "DISABLED".to_owned()
-            } else {
-                "Active".to_owned()
-            }
-        } else {
-            String::new()
+        // Lab finding AD3-2: "Active" only when the state is actually known.
+        status: match adpa_core::model::AccountStatus::of(&report.identity, &report.diagnostics) {
+            adpa_core::model::AccountStatus::NotAnAccount => String::new(),
+            status => status.label().to_owned(),
         },
         kind: format!("{:?}", report.identity.kind),
         ad_connected: report.ad_connected,
