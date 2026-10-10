@@ -16,7 +16,7 @@
 //!   The primary group of a user is handled separately because it is
 //!   modelled via `primaryGroupID` (not `member`).
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -26,8 +26,8 @@ use tracing::{debug, warn};
 use adpa_core::{
     error::CoreError,
     model::{
-        GroupMembership, Identity, IdentityKind, MemberNode, MemberVia, MembershipPath,
-        MembershipPathSource, Sid,
+        GroupMembership, Identity, IdentityKind, MemberNode, MemberVia, MembershipHop,
+        MembershipPath, MembershipPathSource, Sid,
     },
     traits::IdentityResolver,
 };
@@ -300,20 +300,18 @@ impl LdapResolver {
         Ok(identity)
     }
 
-    ///
-    /// `complete = false` with source [`MembershipPathSource::LdapMatchingRule`]
-    ///
     /// Resolves all group memberships transitively — server-side via
     /// `LDAP_MATCHING_RULE_IN_CHAIN`, plus the primary group (which is not
     /// linked via `member`) and its transitive parents.
     ///
     /// In addition, each membership carries a concrete
-    /// [`MembershipPath`] reconstructed from the `memberOf` edges:
-    /// starting from the user's direct `memberOf` set, a BFS through each
-    /// group's `memberOf` finds the shortest chain to the target group.
-    /// When reconstruction is not possible (e.g. because an intermediate
-    /// group's `memberOf` was truncated by the server), the path stays
-    /// two SIDs long and is marked `complete = false` with source
+    /// [`MembershipPath`] reconstructed from the `memberOf` edges: one
+    /// shortest chain, chosen by a fixed rule so repeated runs show the same
+    /// chain, plus every further group through which the principal also
+    /// enters the target (`also_via`, ADR 0063). When reconstruction is not
+    /// possible (e.g. because an intermediate group's `memberOf` was
+    /// truncated by the server), the path stays two SIDs long and is marked
+    /// `complete = false` with source
     /// [`MembershipPathSource::LdapMatchingRule`] — transitive membership
     /// is certain, the concrete route is not.
     async fn resolve_memberships_internal(
@@ -381,258 +379,351 @@ impl LdapResolver {
 
         ldap_client::disconnect(ldap).await;
 
-        // 5) Build the forward graph: group_dn → list of parent DNs (from
-        //    its `memberOf` attribute). Edge G_x → G_y means "G_x is a
-        //    direct member of G_y", i.e. "G_y contains G_x". SID and name
-        //    indices kept in parallel.
-        let mut forward: HashMap<String, Vec<String>> = HashMap::new();
-        let mut dn_to_sid: HashMap<String, Sid> = HashMap::new();
-        let mut dn_to_name: HashMap<String, Option<String>> = HashMap::new();
+        // 5)–8) Assemble the memberships with concrete, reproducible chains
+        //       (ADR 0063). Pure function — no LDAP — so the route choice is
+        //       unit-tested independently of server answer order.
+        let primary = primary_group_sid.map(|pg_sid| (pg_sid, pg_entry.as_ref()));
+        Ok(assemble_memberships(
+            sid,
+            &entry,
+            primary,
+            &transitive_groups,
+            &pg_parents,
+        ))
+    }
+}
 
-        let mut register_group_entry = |g: &ldap_client::RawEntry| {
-            let dn_key = g.dn.to_ascii_lowercase();
-            if dn_to_sid.contains_key(&dn_key) {
-                return;
+/// Display name of a directory entry: `sAMAccountName`, else `cn`.
+fn entry_display_name(entry: &RawEntry) -> Option<String> {
+    entry
+        .first_attr("sAMAccountName")
+        .or_else(|| entry.first_attr("cn"))
+        .map(str::to_owned)
+}
+
+/// Lower-cased, sorted, de-duplicated `memberOf` DNs of an entry — the
+/// outgoing "is a direct member of" edges of the membership graph. Sorting
+/// here is what makes the route reconstruction independent of the order in
+/// which the server returns attribute values (ADR 0063).
+fn sorted_member_of(entry: &RawEntry) -> Vec<String> {
+    let set: BTreeSet<String> = entry
+        .all_attr("memberOf")
+        .iter()
+        .map(|dn| dn.to_ascii_lowercase())
+        .collect();
+    set.into_iter().collect()
+}
+
+/// One group of the principal's membership closure.
+struct ClosureGroup<'a> {
+    entry: &'a RawEntry,
+    sid: Sid,
+    name: Option<String>,
+    /// Lower-cased DNs of the groups this group is a direct member of.
+    parents: Vec<String>,
+}
+
+/// Hop distances, chosen predecessors and reverse edges over the
+/// principal's membership closure — the deterministic route table of
+/// ADR 0063.
+#[derive(Debug, Default)]
+struct RouteTable {
+    /// Hops from the principal (direct groups and the primary group = 1).
+    dist: BTreeMap<String, usize>,
+    /// Chosen predecessor per reached group; `None` = the principal itself.
+    pred: BTreeMap<String, Option<String>>,
+    /// Reverse edges: group DN → sorted DNs of the closure groups that are
+    /// direct members of it.
+    children: BTreeMap<String, Vec<String>>,
+}
+
+impl RouteTable {
+    /// Builds the table from the closure (DN → group) and the hop-1 seeds.
+    ///
+    /// Root cause of the run-to-run variation fixed here (lab campaign
+    /// 2026-10-10): the previous breadth-first search took its start nodes
+    /// from a `HashSet`, whose iteration order is randomised per process.
+    /// When a group was reachable through several equally short chains, the
+    /// chain that happened to be expanded first won — a different, equally
+    /// valid chain on every run. Now distances come from a plain BFS (order
+    /// does not affect distances), and the predecessor of each group is
+    /// chosen by an explicit rule: among the member groups exactly one hop
+    /// closer to the principal, the one with the alphabetically first
+    /// (lower-cased) distinguished name.
+    fn build(closure: &BTreeMap<String, ClosureGroup<'_>>, seeds: &BTreeSet<String>) -> Self {
+        let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (dn, group) in closure {
+            for parent in &group.parents {
+                if closure.contains_key(parent) {
+                    children.entry(parent.clone()).or_default().push(dn.clone());
+                }
             }
-            if let Some(sid) = extract_sid_from_entry(g) {
-                let name = g
-                    .first_attr("sAMAccountName")
-                    .or_else(|| g.first_attr("cn"))
-                    .map(str::to_owned);
-                dn_to_sid.insert(dn_key.clone(), sid);
-                dn_to_name.insert(dn_key.clone(), name);
-                let parents: Vec<String> = g
-                    .all_attr("memberOf")
-                    .iter()
-                    .map(|d| d.to_ascii_lowercase())
-                    .collect();
-                forward.insert(dn_key, parents);
-            }
-        };
-
-        for g in &transitive_groups {
-            register_group_entry(g);
         }
-        for g in &pg_parents {
-            register_group_entry(g);
-        }
-        if let Some(ref e) = pg_entry {
-            register_group_entry(e);
+        // `closure` iterates in DN order, so every child list is already
+        // sorted; sort + dedup anyway so the invariant does not hinge on it.
+        for list in children.values_mut() {
+            list.sort();
+            list.dedup();
         }
 
-        // 6) BFS starting nodes: the user's direct groups (`memberOf` of
-        //    the principal) plus the primary group (if known). Both count
-        //    as hop 1 from the user.
-        let direct_dns_lc: HashSet<String> = entry
-            .all_attr("memberOf")
-            .iter()
-            .map(|dn| dn.to_ascii_lowercase())
-            .collect();
-
-        let primary_dn_lc: Option<String> = pg_entry.as_ref().map(|e| e.dn.to_ascii_lowercase());
-
-        //    reconstruct the concrete DN chains.
-        // 7) Multi-source BFS — track each reached DN's predecessor in
-        //    `came_from`. Concrete DN chains can then be reconstructed.
-        let mut came_from: HashMap<String, Option<String>> = HashMap::new();
+        let mut dist: BTreeMap<String, usize> = BTreeMap::new();
         let mut queue: VecDeque<String> = VecDeque::new();
-        for d in direct_dns_lc.iter() {
-            if dn_to_sid.contains_key(d) {
-                came_from.insert(d.clone(), None);
-                queue.push_back(d.clone());
-            }
-        }
-        if let Some(ref d) = primary_dn_lc {
-            if dn_to_sid.contains_key(d) && !came_from.contains_key(d) {
-                came_from.insert(d.clone(), None);
-                queue.push_back(d.clone());
+        for seed in seeds {
+            if closure.contains_key(seed) && !dist.contains_key(seed) {
+                dist.insert(seed.clone(), 1);
+                queue.push_back(seed.clone());
             }
         }
         while let Some(node) = queue.pop_front() {
-            if let Some(parents) = forward.get(&node) {
-                for p in parents {
-                    if !dn_to_sid.contains_key(p) {
-                        continue;
-                    }
-                    if came_from.contains_key(p) {
-                        continue;
-                    }
-                    came_from.insert(p.clone(), Some(node.clone()));
-                    queue.push_back(p.clone());
+            let Some(d) = dist.get(&node).copied() else {
+                continue;
+            };
+            let Some(group) = closure.get(&node) else {
+                continue;
+            };
+            for parent in &group.parents {
+                if closure.contains_key(parent) && !dist.contains_key(parent) {
+                    dist.insert(parent.clone(), d + 1);
+                    queue.push_back(parent.clone());
                 }
             }
         }
 
-        // 8) Assemble memberships and attach paths.
-        let mut memberships = Vec::new();
-        let mut visited: HashSet<String> = HashSet::new();
-        visited.insert(sid.0.clone());
-
-        let user_name = entry
-            .first_attr("sAMAccountName")
-            .or_else(|| entry.first_attr("cn"))
-            .map(str::to_owned);
-
-        // Helper closure: reconstruct the BFS path to group_dn as a SID
-        // chain prefixed with the user. Returns None when group_dn was
-        // not reached.
-        let reconstruct = |group_dn_lc: &str| -> Option<(Vec<Sid>, Vec<Option<String>>)> {
-            if !came_from.contains_key(group_dn_lc) {
-                return None;
-            }
-            let mut chain_dns: Vec<String> = Vec::new();
-            let mut cur = group_dn_lc.to_owned();
-            chain_dns.push(cur.clone());
-            while let Some(Some(prev)) = came_from.get(&cur) {
-                chain_dns.push(prev.clone());
-                cur = prev.clone();
-            }
-            chain_dns.reverse(); // now hop-1 → ... → target
-            let mut nodes = Vec::with_capacity(chain_dns.len() + 1);
-            let mut names = Vec::with_capacity(chain_dns.len() + 1);
-            nodes.push(sid.clone());
-            names.push(user_name.clone());
-            for d in &chain_dns {
-                // `?`: if any hop's DN has no known SID the chain cannot be
-                // reconstructed, so the whole path is None (clippy::question_mark).
-                let s = dn_to_sid.get(d)?;
-                nodes.push(s.clone());
-                names.push(dn_to_name.get(d).cloned().flatten());
-            }
-            Some((nodes, names))
-        };
-
-        // 8a) Primary group as its own membership (direct).
-        if let Some(ref pg_sid) = primary_group_sid {
-            if visited.insert(pg_sid.0.clone()) {
-                let pg_name = pg_entry
-                    .as_ref()
-                    .and_then(|e| {
-                        e.first_attr("sAMAccountName")
-                            .or_else(|| e.first_attr("cn"))
-                    })
-                    .map(str::to_owned);
-                // ADR 0059: the group's own historical SIDs go into the
-                // token like the user's.
-                let (gh_count, gh_values) = pg_entry
-                    .as_ref()
-                    .map(parse_sid_history)
-                    .unwrap_or((0, Vec::new()));
-                memberships.push(GroupMembership {
-                    member_sid: sid.clone(),
-                    group_sid: pg_sid.clone(),
-                    direct: true,
-                    group_name: pg_name.clone(),
-                    path: Some(MembershipPath {
-                        nodes: vec![sid.clone(), pg_sid.clone()],
-                        names: vec![user_name.clone(), pg_name],
-                        source: MembershipPathSource::PrimaryGroup,
-                        complete: true,
-                    }),
-                    group_sid_history_count: gh_count,
-                    group_sid_history: gh_values,
-                });
-            }
-        }
-
-        // 8b) Transitive memberships of the principal.
-        for group_entry in &transitive_groups {
-            let group_sid = match extract_sid_from_entry(group_entry) {
-                Some(s) => s,
-                None => continue,
-            };
-            if !visited.insert(group_sid.0.clone()) {
+        let mut pred: BTreeMap<String, Option<String>> = BTreeMap::new();
+        for (dn, d) in &dist {
+            if *d == 1 {
+                pred.insert(dn.clone(), None);
                 continue;
             }
-            let dn_lc = group_entry.dn.to_ascii_lowercase();
-            let direct = direct_dns_lc.contains(&dn_lc);
-            let group_name = group_entry
-                .first_attr("sAMAccountName")
-                .or_else(|| group_entry.first_attr("cn"))
-                .map(str::to_owned);
+            // Distances are exact, so at least one member group sits at
+            // d - 1; `children` is sorted, so the first hit is the
+            // alphabetically first DN.
+            let chosen = children.get(dn).and_then(|kids| {
+                kids.iter()
+                    .find(|kid| dist.get(*kid).copied() == Some(d - 1))
+                    .cloned()
+            });
+            pred.insert(dn.clone(), chosen);
+        }
 
-            let path = match reconstruct(&dn_lc) {
-                Some((nodes, names)) => MembershipPath {
-                    nodes,
-                    names,
-                    source: MembershipPathSource::DomainGroup,
-                    complete: true,
-                },
-                None => {
-                    // Transitive membership is certain (it is in the
-                    // result set) but intermediate hops are unknown —
-                    // typically due to a truncated memberOf in an
-                    // intermediate group.
-                    debug!(
-                        target_dn = %group_entry.dn,
-                        "could not reconstruct concrete membership path"
-                    );
-                    MembershipPath {
-                        nodes: vec![sid.clone(), group_sid.clone()],
-                        names: vec![user_name.clone(), group_name.clone()],
-                        source: MembershipPathSource::LdapMatchingRule,
-                        complete: false,
+        Self {
+            dist,
+            pred,
+            children,
+        }
+    }
+
+    /// DN chain from hop 1 to `target` (inclusive), or `None` when `target`
+    /// was not reached from the principal's direct groups.
+    fn chain_to(&self, target: &str) -> Option<Vec<String>> {
+        let mut chain = vec![target.to_owned()];
+        let mut current = target.to_owned();
+        loop {
+            match self.pred.get(&current)? {
+                None => break,
+                Some(prev) => {
+                    // Distances strictly decrease along `pred`, so this
+                    // terminates; the length bound is a defensive guard.
+                    if chain.len() > self.dist.len() {
+                        return None;
                     }
+                    chain.push(prev.clone());
+                    current = prev.clone();
                 }
-            };
+            }
+        }
+        chain.reverse();
+        Some(chain)
+    }
 
-            // ADR 0059: group history from the transitive search entry.
-            let (gh_count, gh_values) = parse_sid_history(group_entry);
+    /// Closure groups that are direct members of `target`, except `skip`
+    /// (the last hop of the shown chain) — the further routes into the group.
+    fn other_entries(&self, target: &str, skip: Option<&str>) -> Vec<String> {
+        self.children
+            .get(target)
+            .map(|kids| {
+                kids.iter()
+                    .filter(|kid| Some(kid.as_str()) != skip)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// Assembles the principal's group memberships from the raw LDAP results:
+/// the primary group, every group of the transitive closure, and for each a
+/// concrete chain plus the further routes into it (ADR 0063).
+///
+/// Deterministic by construction — every collection that influences the
+/// output is ordered (`BTreeMap`/`BTreeSet`, sorted vectors), so the same
+/// directory state always yields byte-identical memberships, whatever order
+/// the server returned entries or attribute values in. Output order: the
+/// primary group first, then by hop distance, then by name
+/// (case-insensitive) and DN; groups whose chain could not be reconstructed
+/// come last.
+fn assemble_memberships(
+    sid: &Sid,
+    principal: &RawEntry,
+    primary: Option<(Sid, Option<&RawEntry>)>,
+    transitive_groups: &[RawEntry],
+    pg_parents: &[RawEntry],
+) -> Vec<GroupMembership> {
+    // Closure: every group the principal is in, keyed by lower-cased DN.
+    let mut closure: BTreeMap<String, ClosureGroup<'_>> = BTreeMap::new();
+    let primary_entry = primary.as_ref().and_then(|(_, e)| *e);
+    for entry in transitive_groups
+        .iter()
+        .chain(pg_parents.iter())
+        .chain(primary_entry)
+    {
+        let dn = entry.dn.to_ascii_lowercase();
+        if closure.contains_key(&dn) {
+            continue;
+        }
+        let Some(group_sid) = extract_sid_from_entry(entry) else {
+            continue;
+        };
+        // A cyclic nesting returns the principal as its own "group"; it is
+        // not a membership.
+        if group_sid == *sid {
+            continue;
+        }
+        closure.insert(
+            dn,
+            ClosureGroup {
+                entry,
+                sid: group_sid,
+                name: entry_display_name(entry),
+                parents: sorted_member_of(entry),
+            },
+        );
+    }
+
+    // Hop-1 seeds: the principal's direct groups plus the primary group.
+    let direct_dns: BTreeSet<String> = sorted_member_of(principal).into_iter().collect();
+    let primary_dn: Option<String> = primary_entry.map(|e| e.dn.to_ascii_lowercase());
+    let mut seeds = direct_dns.clone();
+    if let Some(dn) = &primary_dn {
+        seeds.insert(dn.clone());
+    }
+    let routes = RouteTable::build(&closure, &seeds);
+
+    let principal_name = entry_display_name(principal);
+    let hops = |dns: &[String]| -> Vec<MembershipHop> {
+        dns.iter()
+            .filter_map(|dn| closure.get(dn))
+            .map(|g| MembershipHop {
+                sid: g.sid.clone(),
+                name: g.name.clone(),
+            })
+            .collect()
+    };
+
+    let mut memberships = Vec::new();
+
+    // Primary group: its own membership via `primaryGroupID`, listed first.
+    let primary_sid = primary.as_ref().map(|(s, _)| s.clone());
+    if let Some(pg_sid) = &primary_sid {
+        if *pg_sid != *sid {
+            let pg_name = primary_entry.and_then(entry_display_name);
+            let (gh_count, gh_values) = primary_entry
+                .map(parse_sid_history)
+                .unwrap_or((0, Vec::new()));
+            let also_via = primary_dn
+                .as_deref()
+                .map(|dn| hops(&routes.other_entries(dn, None)))
+                .unwrap_or_default();
             memberships.push(GroupMembership {
                 member_sid: sid.clone(),
-                group_sid,
-                direct,
-                group_name,
-                path: Some(path),
+                group_sid: pg_sid.clone(),
+                direct: true,
+                group_name: pg_name.clone(),
+                path: Some(MembershipPath {
+                    nodes: vec![sid.clone(), pg_sid.clone()],
+                    names: vec![principal_name.clone(), pg_name],
+                    source: MembershipPathSource::PrimaryGroup,
+                    complete: true,
+                    also_via,
+                }),
                 group_sid_history_count: gh_count,
                 group_sid_history: gh_values,
             });
         }
+    }
 
-        // 8c) Transitive parents of the primary group (separate chain
-        //     that runs through the primary group).
-        for parent_entry in &pg_parents {
-            let parent_sid = match extract_sid_from_entry(parent_entry) {
-                Some(s) => s,
-                None => continue,
-            };
-            if !visited.insert(parent_sid.0.clone()) {
-                continue;
-            }
-            let dn_lc = parent_entry.dn.to_ascii_lowercase();
-            let group_name = parent_entry
-                .first_attr("sAMAccountName")
-                .or_else(|| parent_entry.first_attr("cn"))
-                .map(str::to_owned);
-            let path = match reconstruct(&dn_lc) {
-                Some((nodes, names)) => MembershipPath {
+    // Every other closure group, ordered by distance, name, DN.
+    let mut rest: Vec<(&String, &ClosureGroup<'_>)> = closure
+        .iter()
+        .filter(|(_, g)| Some(&g.sid) != primary_sid.as_ref())
+        .collect();
+    rest.sort_by(|(a_dn, a), (b_dn, b)| {
+        let a_dist = routes.dist.get(*a_dn).copied().unwrap_or(usize::MAX);
+        let b_dist = routes.dist.get(*b_dn).copied().unwrap_or(usize::MAX);
+        let a_name = a.name.as_deref().unwrap_or("").to_lowercase();
+        let b_name = b.name.as_deref().unwrap_or("").to_lowercase();
+        a_dist
+            .cmp(&b_dist)
+            .then_with(|| a_name.cmp(&b_name))
+            .then_with(|| a_dn.cmp(b_dn))
+    });
+
+    for (dn, group) in rest {
+        let direct = direct_dns.contains(dn);
+        let path = match routes.chain_to(dn) {
+            Some(chain) => {
+                let mut nodes = Vec::with_capacity(chain.len() + 1);
+                let mut names = Vec::with_capacity(chain.len() + 1);
+                nodes.push(sid.clone());
+                names.push(principal_name.clone());
+                for hop in &chain {
+                    // Every chain DN comes from the route table, which only
+                    // holds closure DNs.
+                    if let Some(g) = closure.get(hop) {
+                        nodes.push(g.sid.clone());
+                        names.push(g.name.clone());
+                    }
+                }
+                let last_hop = chain.len().checked_sub(2).and_then(|i| chain.get(i));
+                MembershipPath {
                     nodes,
                     names,
                     source: MembershipPathSource::DomainGroup,
                     complete: true,
-                },
-                None => MembershipPath {
-                    nodes: vec![sid.clone(), parent_sid.clone()],
-                    names: vec![user_name.clone(), group_name.clone()],
+                    also_via: hops(&routes.other_entries(dn, last_hop.map(String::as_str))),
+                }
+            }
+            None => {
+                // Membership is certain (in the transitive result set), the
+                // hops are not — typically a truncated `memberOf` on an
+                // intermediate group.
+                debug!(
+                    target_dn = %group.entry.dn,
+                    "could not reconstruct concrete membership path"
+                );
+                MembershipPath {
+                    nodes: vec![sid.clone(), group.sid.clone()],
+                    names: vec![principal_name.clone(), group.name.clone()],
                     source: MembershipPathSource::LdapMatchingRule,
                     complete: false,
-                },
-            };
-            // ADR 0059: group history from the parent-group entry.
-            let (gh_count, gh_values) = parse_sid_history(parent_entry);
-            memberships.push(GroupMembership {
-                member_sid: sid.clone(),
-                group_sid: parent_sid,
-                direct: false,
-                group_name,
-                path: Some(path),
-                group_sid_history_count: gh_count,
-                group_sid_history: gh_values,
-            });
-        }
-
-        Ok(memberships)
+                    also_via: hops(&routes.other_entries(dn, None)),
+                }
+            }
+        };
+        // ADR 0059: the group's own historical SIDs go into the token.
+        let (gh_count, gh_values) = parse_sid_history(group.entry);
+        memberships.push(GroupMembership {
+            member_sid: sid.clone(),
+            group_sid: group.sid.clone(),
+            direct,
+            group_name: group.name.clone(),
+            path: Some(path),
+            group_sid_history_count: gh_count,
+            group_sid_history: gh_values,
+        });
     }
+
+    memberships
 }
 
 #[async_trait]
@@ -1169,6 +1260,252 @@ mod tests {
             },
             via,
             children: vec![],
+        }
+    }
+
+    // --- Membership assembly: deterministic routes (ADR 0063), no LDAP ---
+
+    const DOM: [u32; 4] = [21, 1, 2, 3];
+
+    fn dn_of(name: &str) -> String {
+        format!("CN={name},OU=Groups,DC=corp,DC=test")
+    }
+
+    fn sid_of(rid: u32) -> Sid {
+        Sid(format!("S-1-5-21-1-2-3-{rid}"))
+    }
+
+    /// Group (or principal) entry with a decodable objectSid and the given
+    /// `memberOf` parents (by CN, in exactly the given order).
+    fn graph_entry(name: &str, rid: u32, member_of: &[&str]) -> RawEntry {
+        let mut attrs = HashMap::new();
+        attrs.insert("sAMAccountName".to_string(), vec![name.to_string()]);
+        if !member_of.is_empty() {
+            attrs.insert(
+                "memberOf".to_string(),
+                member_of.iter().map(|p| dn_of(p)).collect(),
+            );
+        }
+        let mut bin = HashMap::new();
+        let mut subauths = DOM.to_vec();
+        subauths.push(rid);
+        bin.insert("objectSid".to_string(), vec![sid_bytes(&subauths)]);
+        RawEntry {
+            dn: dn_of(name),
+            attrs,
+            bin_attrs: bin,
+        }
+    }
+
+    fn membership_for(ms: &[GroupMembership], rid: u32) -> &GroupMembership {
+        let sid = sid_of(rid);
+        ms.iter()
+            .find(|m| m.group_sid == sid)
+            .unwrap_or_else(|| panic!("no membership for RID {rid}"))
+    }
+
+    fn chain_names(m: &GroupMembership) -> Vec<String> {
+        m.path
+            .as_ref()
+            .expect("path")
+            .names
+            .iter()
+            .map(|n| n.clone().unwrap_or_default())
+            .collect()
+    }
+
+    fn also_via_names(m: &GroupMembership) -> Vec<String> {
+        m.path
+            .as_ref()
+            .expect("path")
+            .also_via
+            .iter()
+            .map(|h| h.name.clone().unwrap_or_default())
+            .collect()
+    }
+
+    #[test]
+    fn equal_length_routes_choose_the_same_chain_whatever_the_input_order() {
+        // Root cause of the lab finding: u → {gA, gB} → gTarget offers two
+        // equally short chains. Every permutation of the server's answer
+        // (entry order and memberOf value order) must yield the same output:
+        // the alphabetically first predecessor (gA), with gB disclosed as a
+        // further route.
+        let orders: [(&[&str], [usize; 3]); 4] = [
+            (&["gA", "gB"], [0, 1, 2]),
+            (&["gB", "gA"], [2, 1, 0]),
+            (&["gA", "gB"], [1, 2, 0]),
+            (&["gB", "gA"], [2, 0, 1]),
+        ];
+        let mut rendered: Vec<String> = Vec::new();
+        for (user_member_of, perm) in orders {
+            let user = graph_entry("u", 1000, user_member_of);
+            let groups = [
+                graph_entry("gA", 1101, &["gTarget"]),
+                graph_entry("gB", 1102, &["gTarget"]),
+                graph_entry("gTarget", 1200, &[]),
+            ];
+            let mut ordered: Vec<RawEntry> = Vec::new();
+            let mut pool: Vec<Option<RawEntry>> = groups.into_iter().map(Some).collect();
+            for i in perm {
+                ordered.push(pool[i].take().expect("each index once"));
+            }
+            let ms = assemble_memberships(&sid_of(1000), &user, None, &ordered, &[]);
+            let target = membership_for(&ms, 1200);
+            assert_eq!(chain_names(target), ["u", "gA", "gTarget"]);
+            assert_eq!(also_via_names(target), ["gB"]);
+            assert!(!target.direct);
+            rendered.push(format!("{ms:?}"));
+        }
+        assert!(
+            rendered.windows(2).all(|w| w[0] == w[1]),
+            "output must not depend on server answer order"
+        );
+    }
+
+    #[test]
+    fn also_via_includes_longer_routes_into_the_target() {
+        // gTarget is two hops away via gA, and four hops away via
+        // gC → gD → gE. The longer route is still a real route: removing
+        // the user from gA does not remove the membership.
+        let user = graph_entry("u", 1000, &["gA", "gC"]);
+        let groups = vec![
+            graph_entry("gA", 1101, &["gTarget"]),
+            graph_entry("gC", 1103, &["gD"]),
+            graph_entry("gD", 1104, &["gE"]),
+            graph_entry("gE", 1105, &["gTarget"]),
+            graph_entry("gTarget", 1200, &[]),
+        ];
+        let ms = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]);
+        let target = membership_for(&ms, 1200);
+        assert_eq!(chain_names(target), ["u", "gA", "gTarget"]);
+        assert_eq!(also_via_names(target), ["gE"]);
+        let e = membership_for(&ms, 1105);
+        assert_eq!(chain_names(e), ["u", "gC", "gD", "gE"]);
+        assert!(also_via_names(e).is_empty());
+    }
+
+    #[test]
+    fn direct_membership_also_reached_through_nesting_names_the_nested_route() {
+        let user = graph_entry("u", 1000, &["gTarget", "gA"]);
+        let groups = vec![
+            graph_entry("gA", 1101, &["gTarget"]),
+            graph_entry("gTarget", 1200, &[]),
+        ];
+        let ms = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]);
+        let target = membership_for(&ms, 1200);
+        assert!(target.direct);
+        assert_eq!(chain_names(target), ["u", "gTarget"]);
+        assert_eq!(also_via_names(target), ["gA"]);
+    }
+
+    #[test]
+    fn primary_group_comes_first_and_carries_its_parents() {
+        // Primary group "Domain Users" (not in memberOf) is nested in gX;
+        // gX must be reached through it.
+        let user = graph_entry("u", 1000, &["gB"]);
+        let du = graph_entry("Domain Users", 513, &["gX"]);
+        let groups = vec![graph_entry("gB", 1102, &[])];
+        let parents = vec![graph_entry("gX", 1300, &[])];
+        let ms = assemble_memberships(
+            &sid_of(1000),
+            &user,
+            Some((sid_of(513), Some(&du))),
+            &groups,
+            &parents,
+        );
+        assert_eq!(ms[0].group_sid, sid_of(513));
+        assert_eq!(
+            ms[0].path.as_ref().expect("path").source,
+            MembershipPathSource::PrimaryGroup
+        );
+        assert!(ms[0].direct);
+        let x = membership_for(&ms, 1300);
+        assert_eq!(chain_names(x), ["u", "Domain Users", "gX"]);
+        assert!(!x.direct);
+        // Hop-1 groups before hop-2 groups.
+        let order: Vec<Sid> = ms.iter().map(|m| m.group_sid.clone()).collect();
+        assert_eq!(order, [sid_of(513), sid_of(1102), sid_of(1300)]);
+    }
+
+    #[test]
+    fn group_without_reconstructable_chain_is_marked_incomplete() {
+        // gOrphanChain is in the transitive result, but no memberOf edge
+        // leads there (e.g. a truncated memberOf on an intermediate group).
+        let user = graph_entry("u", 1000, &["gA"]);
+        let groups = vec![
+            graph_entry("gA", 1101, &[]),
+            graph_entry("gOrphanChain", 1400, &[]),
+        ];
+        let ms = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]);
+        let m = membership_for(&ms, 1400);
+        let path = m.path.as_ref().expect("path");
+        assert!(!path.complete);
+        assert_eq!(path.source, MembershipPathSource::LdapMatchingRule);
+        // Unreachable groups sort after every reachable one.
+        assert_eq!(ms.last().map(|m| &m.group_sid), Some(&sid_of(1400)));
+    }
+
+    #[test]
+    fn cyclic_nesting_terminates_and_never_lists_the_principal_itself() {
+        // Group principal gP ∈ gA ∈ gP: the transitive search returns gP
+        // itself; that is not a membership.
+        let principal = graph_entry("gP", 1500, &["gA"]);
+        let groups = vec![
+            graph_entry("gA", 1101, &["gP"]),
+            graph_entry("gP", 1500, &["gA"]),
+        ];
+        let ms = assemble_memberships(&sid_of(1500), &principal, None, &groups, &[]);
+        assert_eq!(ms.len(), 1);
+        assert_eq!(chain_names(&ms[0]), ["gP", "gA"]);
+    }
+
+    #[test]
+    fn many_permutations_of_a_dense_graph_give_identical_output() {
+        // 24 groups, 3–4 parents each, many equal-length alternatives. A
+        // fixed-seed shuffle of entry order and memberOf value order must
+        // never change the result.
+        let names: Vec<String> = (0..24).map(|i| format!("g{i:02}")).collect();
+        let parents_of = |i: usize| -> Vec<String> {
+            [i + 3, i + 5, i + 7, i + 11]
+                .iter()
+                .filter(|p| **p < 24)
+                .map(|p| names[*p].clone())
+                .collect()
+        };
+        let mut seed: u64 = 0x5EED;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) as usize
+        };
+        let mut reference: Option<String> = None;
+        for _ in 0..40 {
+            let mut idx: Vec<usize> = (0..24).collect();
+            for k in (1..idx.len()).rev() {
+                idx.swap(k, next() % (k + 1));
+            }
+            let entries: Vec<RawEntry> = idx
+                .iter()
+                .map(|&i| {
+                    let mut ps = parents_of(i);
+                    let rot = if ps.is_empty() { 0 } else { next() % ps.len() };
+                    ps.rotate_left(rot);
+                    let refs: Vec<&str> = ps.iter().map(String::as_str).collect();
+                    graph_entry(&names[i], 2000 + i as u32, &refs)
+                })
+                .collect();
+            let mut direct = vec!["g00", "g01", "g02"];
+            direct.rotate_left(next() % 3);
+            let user = graph_entry("u", 1000, &direct);
+            let ms = assemble_memberships(&sid_of(1000), &user, None, &entries, &[]);
+            assert_eq!(ms.len(), 24);
+            let rendered = format!("{ms:?}");
+            match &reference {
+                None => reference = Some(rendered),
+                Some(r) => assert_eq!(r, &rendered, "permutation changed the output"),
+            }
         }
     }
 

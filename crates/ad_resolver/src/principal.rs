@@ -244,37 +244,23 @@ impl PrincipalResolution {
     ///
     /// Group memberships are deduplicated by group SID. When a group is
     /// reachable via several entries, the **most informative** one is kept —
-    /// ranked by [`membership_rank`]: a direct membership beats a nested one, a
-    /// complete path beats an incomplete one, more resolved names beat fewer,
-    /// and a named group beats an unnamed one. This prevents the report from
-    /// showing `nested` (or an incomplete path, or an undercounted "direct"
-    /// total) when a better entry for the same group existed but happened to
-    /// come later in the resolver's output (review 2026-07-01 finding 2). The
-    /// first-appearance order of each group SID is preserved for deterministic
-    /// output.
+    /// ranked by [`GroupMembership::informativeness_rank`]: a direct
+    /// membership beats a nested one, a complete path beats an incomplete one,
+    /// more resolved names beat fewer, and a named group beats an unnamed one.
+    /// This prevents the report from showing `nested` (or an incomplete path,
+    /// or an undercounted "direct" total) when a better entry for the same
+    /// group existed but happened to come later in the resolver's output
+    /// (review 2026-07-01 finding 2). The first-appearance order of each group
+    /// SID is preserved for deterministic output. The same helper
+    /// ([`adpa_core::model::best_membership_per_group`]) drives the
+    /// explanation path, so both views pick the same entry.
     pub fn into_membership_report(self, ad_connected: bool) -> MembershipReport {
         let diagnostics = self.membership_diagnostics();
-        let mut order: Vec<String> = Vec::new();
-        let mut best: std::collections::HashMap<String, GroupMembership> =
-            std::collections::HashMap::new();
-        for m in self.memberships {
-            let key = m.group_sid.0.clone();
-            match best.get(&key) {
-                None => {
-                    order.push(key.clone());
-                    best.insert(key, m);
-                }
-                Some(existing) if membership_rank(&m) > membership_rank(existing) => {
-                    best.insert(key, m);
-                }
-                Some(_) => {}
-            }
-        }
-        // filter_map instead of map+expect: the invariant (every key in `order`
-        // was inserted into `best`) holds, but production logic stays free of
-        // panic paths entirely (AGENTS error-handling rule 1).
         let memberships: Vec<GroupMembership> =
-            order.into_iter().filter_map(|k| best.remove(&k)).collect();
+            adpa_core::model::best_membership_per_group(&self.memberships)
+                .into_iter()
+                .cloned()
+                .collect();
         MembershipReport {
             identity: self.identity,
             ad_connected,
@@ -282,19 +268,6 @@ impl PrincipalResolution {
             diagnostics,
         }
     }
-}
-
-/// Ranks a group membership by how informative it is, for deduplication in
-/// [`PrincipalResolution::into_membership_report`]. Higher is better, compared
-/// lexicographically: **direct** beats nested, a **complete path** beats an
-/// incomplete one, **more resolved names** beat fewer, and a **named** group
-/// beats an unnamed one.
-fn membership_rank(m: &GroupMembership) -> (bool, bool, usize, bool) {
-    let (complete, resolved_names) = match &m.path {
-        Some(p) => (p.complete, p.names.iter().filter(|n| n.is_some()).count()),
-        None => (false, 0),
-    };
-    (m.direct, complete, resolved_names, m.group_name.is_some())
 }
 
 /// Flag bundle fed into `PermissionEvaluationInput`. Re-export of the shared
@@ -1789,6 +1762,7 @@ mod tests {
                 names,
                 source: MembershipPathSource::DomainGroup,
                 complete,
+                also_via: Vec::new(),
             }),
             group_sid_history_count: 0,
             group_sid_history: Vec::new(),

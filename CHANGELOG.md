@@ -12,6 +12,22 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **The explanation path no longer changes between runs, and it no longer
+  implies that one chain is the only route into a group** (lab finding
+  DET-1, ADR 0063). Root cause: the LDAP group resolution seeded its
+  breadth-first search from a `HashSet`, whose iteration order is random
+  per process; when a group was reachable through several equally short
+  chains, a different chain won on each run (lab: all 663 explanations of
+  one identity differed between two runs, while every effective mask was
+  identical). The chain is now chosen by a fixed rule — among the member
+  groups one hop closer to the user, the alphabetically first
+  distinguished name — and every further group through which the user
+  also reaches the target is named in the same step ("also a member
+  through …"), in the membership views and in the new `origin` column of
+  the membership CSV. Local-group chains no longer depend on the member
+  order returned by `NetLocalGroupGetMembers`. A chain that cannot be
+  reconstructed no longer claims "transitive" — it reads "membership
+  confirmed, exact chain unknown".
 - **Junction cycles and duplicate junction targets are now detected
   reliably on scans over SMB** (known limitation L14, lab finding FS3-1,
   ADR 0062). Once the SMB client had listed a junction's parent directory,

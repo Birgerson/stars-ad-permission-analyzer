@@ -19,9 +19,9 @@ use std::collections::{HashMap, HashSet};
 use adpa_core::{
     error::CoreError,
     model::{
-        AccessContext, AccessMask, AceEntry, AceKind, ContributingAce, EffectivePermission,
-        GroupMembership, Identity, MembershipPathSource, PermissionDiagnostic, PermissionPath,
-        ShareEvalStatus, ShareMaskStatus, Sid,
+        format_also_via, AccessContext, AccessMask, AceEntry, AceKind, ContributingAce,
+        EffectivePermission, GroupMembership, Identity, MembershipHop, MembershipPathSource,
+        PermissionDiagnostic, PermissionPath, ShareEvalStatus, ShareMaskStatus, Sid,
     },
     traits::{PermissionEvaluationInput, PermissionEvaluator},
 };
@@ -552,6 +552,30 @@ fn format_membership_step(
     sid_names: &std::collections::BTreeMap<String, String>,
 ) -> String {
     let mut step = format_membership_step_base(gm, sid_names);
+    // ADR 0063: the chain above is one shortest route. When the identity
+    // also enters the group through other groups, say so — otherwise the
+    // step reads as if removing the shown route removed the membership.
+    if let Some(path) = gm.path.as_ref() {
+        if !path.also_via.is_empty() {
+            let hops: Vec<MembershipHop> = path
+                .also_via
+                .iter()
+                .map(|h| MembershipHop {
+                    sid: h.sid.clone(),
+                    name: h
+                        .name
+                        .clone()
+                        .filter(|n| !n.is_empty())
+                        .or_else(|| sid_names.get(&h.sid.0).cloned()),
+                })
+                .collect();
+            if let Some(list) = format_also_via(&hops) {
+                step.push_str(&format!(
+                    " [also a member through {list} — the shown chain is not the only route]"
+                ));
+            }
+        }
+    }
     // ADR 0059: when the group itself carries evaluated historical SIDs,
     // say so on the membership line — an ACE further down that matches
     // the group's old SID is then explainable from the step list alone.
@@ -587,11 +611,13 @@ fn format_membership_step_base(
     let source = source_label(&path.source);
 
     if !path.complete {
-        // Transitive membership confirmed, exact route not
-        // reconstructable — flag explicitly so audits can tell apart
-        // from a fully reconstructed chain.
+        // Membership confirmed, exact route not reconstructable — flag
+        // explicitly so audits can tell it apart from a fully reconstructed
+        // chain. Deliberately no "direct"/"transitive" claim: when the
+        // route is unknown (unreadable local-group members, a truncated
+        // memberOf), whether the membership is direct is unknown too.
         return format!(
-            "Member of {target_display} [transitive, exact chain unknown — source: {source}, possibly truncated memberOf]"
+            "Member of {target_display} [membership confirmed, exact chain unknown — source: {source}; the route could not be reconstructed (e.g. truncated memberOf, unreadable or nested local group)]"
         );
     }
 
@@ -2900,6 +2926,7 @@ mod tests {
                 ],
                 source: MembershipPathSource::DomainGroup,
                 complete: true,
+                also_via: Vec::new(),
             }),
             group_sid_history_count: 0,
             group_sid_history: Vec::new(),
@@ -2923,6 +2950,7 @@ mod tests {
                 names: vec![Some(user_name.into()), Some(group_name.into())],
                 source,
                 complete: true,
+                also_via: Vec::new(),
             }),
             group_sid_history_count: 0,
             group_sid_history: Vec::new(),
@@ -2945,6 +2973,7 @@ mod tests {
                 names: vec![Some(user_name.into()), Some(group_name.into())],
                 source: MembershipPathSource::LdapMatchingRule,
                 complete: false,
+                also_via: Vec::new(),
             }),
             group_sid_history_count: 0,
             group_sid_history: Vec::new(),
@@ -3019,6 +3048,88 @@ mod tests {
             chain_step.contains("DomainGroup"),
             "source label must be present in chain step:\n{chain_step}"
         );
+        // A single-route membership must not claim further routes.
+        assert!(
+            !chain_step.contains("also a member through"),
+            "no alternative route exists here:\n{chain_step}"
+        );
+    }
+
+    #[test]
+    fn explanation_discloses_further_routes_into_a_group() {
+        // ADR 0063: the shown chain is one shortest route; further entries
+        // into the group (here GRP_C, nameless in the path → name from the
+        // SID table) must be named in the same step.
+        const GROUP_C: &str = "S-1-5-21-1000-1000-1000-1300";
+        let mut gm = nested_membership(USER, "max.mustermann", GROUP_A, "GRP_A", GROUP_B, "GRP_B");
+        if let Some(path) = gm.path.as_mut() {
+            path.also_via = vec![MembershipHop {
+                sid: Sid(GROUP_C.into()),
+                name: None,
+            }];
+        }
+        let mut sid_names = std::collections::BTreeMap::new();
+        sid_names.insert(GROUP_C.to_owned(), "EXAMPLE\\GRP_C".to_owned());
+        let result = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![gm],
+                file_system_object: fso_with_dacl(vec![allow_ace(
+                    GROUP_B,
+                    FILE_GENERIC_READ,
+                    true,
+                )]),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                access_context: AccessContext::Unspecified,
+                unsupported_share_ace_count: 0,
+                sid_names,
+                resolution: ResolutionProvenance::default(),
+            })
+            .expect("evaluate");
+        let step = result
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("Member of") && s.contains("GRP_B"))
+            .expect("membership step");
+        assert!(
+            step.contains("also a member through EXAMPLE\\GRP_C (S-1-5-21-1000-1000-1000-1300)"),
+            "further route must be named with its resolved name:\n{step}"
+        );
+        assert!(step.contains("not the only route"), "{step}");
+    }
+
+    #[test]
+    fn explanation_summarises_long_route_lists() {
+        let mut gm = nested_membership(USER, "max.mustermann", GROUP_A, "GRP_A", GROUP_B, "GRP_B");
+        if let Some(path) = gm.path.as_mut() {
+            path.also_via = (0..8)
+                .map(|i| MembershipHop {
+                    sid: Sid(format!("S-1-5-21-1000-1000-1000-{}", 5000 + i)),
+                    name: Some(format!("G{i}")),
+                })
+                .collect();
+        }
+        let result = eval(
+            user(USER),
+            vec![gm],
+            fso_with_dacl(vec![allow_ace(GROUP_B, FILE_GENERIC_READ, true)]),
+            None,
+        );
+        let step = result
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("Member of") && s.contains("GRP_B"))
+            .expect("membership step");
+        assert!(step.contains("G4 (S-1-5-21-1000-1000-1000-5004)"), "{step}");
+        assert!(
+            !step.contains("G5 ("),
+            "only the first five are spelled out:\n{step}"
+        );
+        assert!(step.contains("(+3 more)"), "{step}");
     }
 
     #[test]
@@ -3701,6 +3812,7 @@ mod tests {
                 ],
                 source: MembershipPathSource::LocalGroup,
                 complete: true,
+                also_via: Vec::new(),
             }),
             group_sid_history_count: 0,
             group_sid_history: Vec::new(),
@@ -3759,6 +3871,7 @@ mod tests {
                 names: vec![None, Some("BUILTIN\\Administrators".to_owned())],
                 source: MembershipPathSource::LocalGroup,
                 complete: false,
+                also_via: Vec::new(),
             }),
             group_sid_history_count: 0,
             group_sid_history: Vec::new(),
