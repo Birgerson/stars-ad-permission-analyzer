@@ -70,9 +70,11 @@ The raw Discretionary Access Control List of the path is read directly via Win32
 * explicit or inherited
 * inheritance and propagation flags
 
-The raw access mask is summarized into a readable label (`F`, `M`, `RX`,
-`RW`, `R`, `W`, or `(special)`) that matches the Windows `icacls`
-notation; the raw mask is always kept alongside it. The full legend is in
+The raw access mask is summarized into a readable label in the Windows
+`icacls` notation (`F`, `M`, `RX`, `RW`, `R`, `W`, `none`); every right
+beyond the base level is named (`R+WDAC,WO` — "Read + Change permissions,
+Take ownership"), and a mask without a complete standard level lists its
+bits (`(RC,WDAC)`). The raw mask is always kept alongside it. The full legend is in
 the [user guide](user-guide.md#rights-labels--what-f-rx-rw-mean).
 
 ##### 2.4 SMB share DACL (optional)

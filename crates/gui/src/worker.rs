@@ -1538,9 +1538,7 @@ async fn handle_scan(
             resolution: engine_flags.clone(),
         }) {
             Ok(perm) => {
-                let label = NormalizedRights::new(perm.effective_mask.0)
-                    .display_name()
-                    .to_string();
+                let label = NormalizedRights::new(perm.effective_mask.0).display_name();
                 let _ = evt_tx.send(WorkerEvent::ScanItem(ScanRow {
                     path: path.clone(),
                     rights_label: label,

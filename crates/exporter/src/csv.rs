@@ -106,7 +106,7 @@ fn record_for(p: &EffectivePermission) -> csv::Result<[String; 20]> {
     let (share_hex, share_label) = match p.share_mask {
         Some(m) => (
             format!("0x{:08X}", m.0),
-            NormalizedRights::new(m.0).display_name().to_owned(),
+            NormalizedRights::new(m.0).display_name(),
         ),
         None => ("(none)".to_owned(), "(none)".to_owned()),
     };
@@ -130,11 +130,11 @@ fn record_for(p: &EffectivePermission) -> csv::Result<[String; 20]> {
         kind,
         p.identity.disabled.to_string(),
         format!("0x{:08X}", p.ntfs_mask.0),
-        ntfs.display_name().to_owned(),
+        ntfs.display_name(),
         share_hex,
         share_label,
         format!("0x{:08X}", p.effective_mask.0),
-        eff.display_name().to_owned(),
+        eff.display_name(),
         neutralize_spreadsheet_formula(&explanation),
         p.unsupported_ace_count.to_string(),
         share_status_label(&p.share_status),

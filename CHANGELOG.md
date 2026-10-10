@@ -36,6 +36,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   trustee's first contribution. Local server groups and the direct
   domain groups of the SAM/LSA path are listed by name instead of in the
   order the NetAPI call returned them.
+- **Rights labels name every right instead of the highest level only**
+  (lab finding PE3-1). `0x001E0089` (Read + WRITE_DAC + WRITE_OWNER) was
+  labelled "Read", `0x001F00E9` "Read & Execute", owner-only bits and an
+  empty mask "Special" — a reader who looked at the label alone
+  underestimated the right. The long form is now the base level plus
+  every extra right by its Windows dialog name ("Read + Change
+  permissions, Take ownership"), "Special: …" when no standard level is
+  complete, and "No access" for an empty mask; the short form follows
+  `icacls` (`R+WDAC,WO`, `(RC,WDAC)`, `none`). This applies to the CLI,
+  the GUI, the explanation path, the CSV `*_rights` columns and the HTML
+  report, whose badges previously used their own coarser logic (Read &
+  Execute read "Read") and now also print the raw mask.
 - **Junction cycles and duplicate junction targets are now detected
   reliably on scans over SMB** (known limitation L14, lab finding FS3-1,
   ADR 0062). Once the SMB client had listed a junction's parent directory,

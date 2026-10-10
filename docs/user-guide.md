@@ -692,19 +692,36 @@ the same as in the tools you already use on the file server.
 | `RW` | Read & Write | Read + write, but **without** the execute right. |
 | `R` | Read | Read only. |
 | `W` | Write | Write only. |
-| `(special)` | Special | A partial or custom access mask that matches none of the levels above. Inspect the raw mask (`0x…`) shown next to the label for the exact bits. |
+| `none` | No access | The mask is empty — no right at all. |
 
-Two things to keep in mind when reading these:
+A level is shown **alone only when the mask is exactly that level**. Every
+right beyond it is named — the label never hides a bit:
 
-- **Highest level wins.** Stars reports the highest matching level with
-  the precedence `F > M > RX > RW > R > W > (special)`. A higher level
-  implies the lower ones: Full Control implies Modify, which implies
-  Read & Execute, which implies Read. So a row showing `Modify (M)` also
-  has read and write — it just is not Full Control.
-- **Nothing is lost.** The label is a readable summary; the exact
-  per-bit access mask is always preserved in the raw hex value
-  (`0x001F01FF` etc.) next to it and in the CSV/JSON export, so special
-  permissions stay visible.
+| Mask | Long form | Short |
+| --- | --- | --- |
+| `0x001200A9` | Read & Execute | `RX` |
+| `0x001E0089` | Read + Change permissions, Take ownership | `R+WDAC,WO` |
+| `0x001300A9` | Read & Execute + Delete | `RX+DE` |
+| `0x001201BF` | Read & Execute + Write | `RX+W` |
+| `0x00060000` | Special: Read permissions, Change permissions | `(RC,WDAC)` |
+
+How to read this:
+
+- **The base is the highest complete level** with the precedence
+  `F > M > RX > RW > R > W`; a higher level implies the lower ones (Full
+  Control implies Modify, which implies Read & Execute, which implies
+  Read). The extra rights carry the names of the Windows *Advanced
+  Security Settings* dialog (Traverse folder / execute file, List folder /
+  read data, …, Change permissions, Take ownership) and the `icacls`
+  abbreviations (`X`, `RD`, …, `WDAC`, `WO`).
+- **`Special: …`** means no standard level is complete; the named bits
+  are the entire right.
+- **Bits outside the named set** (reserved bits, `ACCESS_SYSTEM_SECURITY`,
+  generic bits in a raw ACE) appear as such, e.g. `Full Control + other
+  bits 0xFE00`.
+- The raw hex value is shown next to the label and kept in the CSV/JSON
+  export. Up to v1.9.0 the label named only the base level, so
+  `0x001E0089` read as plain `Read` and an empty mask as `Special`.
 
 This mapping comes from a single place in the engine
 (`NormalizedRights` in `crates/permission_engine/src/mask.rs`) and is the
