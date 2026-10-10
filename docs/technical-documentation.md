@@ -146,8 +146,8 @@ directed — higher layers depend on lower ones, never the reverse:
 | `persistence` | SQLite schema + migrations (v1–v8) + `ScanStore`, delta comparison | `scan_store.rs`, `migrations.rs`, `delta.rs`, `db.rs` |
 | `exporter` | CSV / JSON / HTML renderers + the shared path-centric trustee view | `csv.rs`, `json.rs`, `html.rs`, `trustees.rs` |
 | `update_manager` | Fail-closed seam for signature-checked updates (L12) + the manual read-only update check (ADR 0061) | `checker.rs`, `manager.rs`, `manifest.rs`, `verifier.rs`, `version.rs` |
-| `cli` | Command-line front-end (`adpa.exe`): `analyze`, `scan`, `groups`, `members`, `shares`, `trusts` | `main.rs`, `output.rs` |
-| `gui` | Slint-based GUI (`adpa-gui.exe`); the UI is currently declared inline via `slint!{}` in `main.rs` (extraction to external `.slint` files is planned) | `main.rs`, `worker.rs` |
+| `cli` | Command-line front-end (`adpa.exe`): `analyze`, `scan`, `groups`, `members`, `shares`, `runs`, `errors`, `check-update`, `trusts` | `main.rs`, `output.rs` |
+| `gui` | Slint-based GUI (`adpa-gui.exe`) with seven tabs (Analyze, Groups, Scan Tree, Delta, Trusts, Shares, Info); the UI is currently declared inline via `slint!{}` in `main.rs` (extraction to external `.slint` files is planned) | `main.rs`, `worker.rs` |
 
 ### Workspace configuration
 
