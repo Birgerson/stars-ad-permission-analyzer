@@ -62,6 +62,12 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 - **A NULL DACL no longer reads "Inheritance: Active"** (lab finding
   CLI3-2): `adpa analyze` prints "n/a (NULL DACL — no ACL, nothing is
   inherited)".
+- **`SENSITIVE_PATH` recognises more credential file names** (lab finding
+  RK3-1): the default OpenSSH private-key names (`id_rsa`, `id_dsa`,
+  `id_ecdsa`, `id_ed25519`), the German words for credentials and password
+  (`Zugangsdaten`, `Kennwort`), KeePass databases (`.kdbx`, `.kdb`) and
+  private-key containers (`.pfx`, `.p12`, `.ppk`). As before, only the name
+  is looked at — Stars never opens such a file.
 
 - **The explanation path no longer changes between runs, and it no longer
   implies that one chain is the only route into a group** (lab finding
