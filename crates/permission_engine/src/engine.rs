@@ -14,7 +14,7 @@
 //! Final effective right = the more restrictive combination of NTFS and share
 //! (bitwise AND).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use adpa_core::{
     error::CoreError,
@@ -410,11 +410,14 @@ struct DaclWalkOutcome {
 /// decided by Deny". `contributions` records, per Allow-ACE SID, exactly
 /// the bits that ACE flipped from undecided to granted (review
 /// 2026-06-08 finding 2: provenance must follow stored order, not mask
-/// overlap).
+/// overlap). They are listed in the DACL order of each SID's first
+/// contribution — the order in which `AccessCheck` reached them. Until
+/// v1.9.0 they came out of a `HashMap` in a random order per process, so
+/// two runs over the same DACL listed them differently (lab finding DET-2).
 fn walk_dacl_stored_order(dacl: &[AceEntry], match_sids: &HashSet<String>) -> DaclWalkOutcome {
     let mut granted: u32 = 0;
     let mut denied: u32 = 0;
-    let mut by_sid: HashMap<String, u32> = HashMap::new();
+    let mut contributions: Vec<ContributingAce> = Vec::new();
     let mut decided_per_ace = vec![0u32; dacl.len()];
     for (idx, ace) in dacl.iter().enumerate() {
         if !ace_applies_to_current_object(ace) {
@@ -434,7 +437,15 @@ fn walk_dacl_stored_order(dacl: &[AceEntry], match_sids: &HashSet<String>) -> Da
         match ace.kind {
             AceKind::Allow => {
                 granted |= bits;
-                *by_sid.entry(ace.sid.0.clone()).or_insert(0) |= bits;
+                // DACLs are short; a linear lookup keeps the first-seen
+                // order without a second index structure.
+                match contributions.iter_mut().find(|c| c.sid.0 == ace.sid.0) {
+                    Some(existing) => existing.mask.0 |= bits,
+                    None => contributions.push(ContributingAce {
+                        sid: Sid(ace.sid.0.clone()),
+                        mask: AccessMask(bits),
+                    }),
+                }
             }
             AceKind::Deny => denied |= bits,
         }
@@ -442,13 +453,7 @@ fn walk_dacl_stored_order(dacl: &[AceEntry], match_sids: &HashSet<String>) -> Da
     DaclWalkOutcome {
         granted,
         denied,
-        contributions: by_sid
-            .into_iter()
-            .map(|(sid_str, mask)| ContributingAce {
-                sid: Sid(sid_str),
-                mask: AccessMask(mask),
-            })
-            .collect(),
+        contributions,
         decided_per_ace,
     }
 }
@@ -2208,6 +2213,59 @@ mod tests {
             .collect();
         assert_eq!(cs_group.len(), 1);
         assert_eq!(cs_group[0].mask.0, MASK_MODIFY);
+    }
+
+    /// Lab finding DET-2: `contributing_sids` came out of a `HashMap`, so
+    /// two runs over the same DACL listed the contributors in a different
+    /// order. They must follow the DACL order of each SID's first
+    /// contribution, with later bits of the same SID merged into its entry.
+    #[test]
+    fn contributing_sids_follow_dacl_order_and_merge_per_sid() {
+        const G1: &str = "S-1-5-21-1000-1000-1000-6001";
+        const G2: &str = "S-1-5-21-1000-1000-1000-6002";
+        const G3: &str = "S-1-5-21-1000-1000-1000-6003";
+        let memberships = vec![
+            membership(USER, G3),
+            membership(USER, G1),
+            membership(USER, G2),
+        ];
+        let dacl = vec![
+            allow_ace(G2, FILE_READ_DATA, false),
+            allow_ace(G3, FILE_WRITE_DATA, false),
+            allow_ace(G1, FILE_EXECUTE, true),
+            allow_ace(G2, FILE_READ_ATTRIBUTES, true),
+        ];
+        let first = eval(
+            user(USER),
+            memberships.clone(),
+            fso(None, dacl.clone()),
+            None,
+        );
+        let order: Vec<(&str, u32)> = first
+            .contributing_sids
+            .iter()
+            .map(|c| (c.sid.0.as_str(), c.mask.0))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                (G2, FILE_READ_DATA | FILE_READ_ATTRIBUTES),
+                (G3, FILE_WRITE_DATA),
+                (G1, FILE_EXECUTE),
+            ]
+        );
+        for _ in 0..20 {
+            let again = eval(
+                user(USER),
+                memberships.clone(),
+                fso(None, dacl.clone()),
+                None,
+            );
+            assert_eq!(
+                format!("{:?}", again.contributing_sids),
+                format!("{:?}", first.contributing_sids)
+            );
+        }
     }
 
     /// Allow Everyone Read first, then Allow specific group Modify. Stored

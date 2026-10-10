@@ -28,6 +28,14 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   order returned by `NetLocalGroupGetMembers`. A chain that cannot be
   reconstructed no longer claims "transitive" — it reads "membership
   confirmed, exact chain unknown".
+- **`contributing_sids` and the group lists are listed in a reproducible
+  order** (lab finding DET-2). The contributing trustees came out of a
+  `HashMap` in a random order per process (lab: the CSV column
+  `contributing_sids_json` differed between two runs, e.g. `S-1-1-0` and
+  `S-1-5-32-544` swapped). They now follow the DACL order of each
+  trustee's first contribution. Local server groups and the direct
+  domain groups of the SAM/LSA path are listed by name instead of in the
+  order the NetAPI call returned them.
 - **Junction cycles and duplicate junction targets are now detected
   reliably on scans over SMB** (known limitation L14, lab finding FS3-1,
   ADR 0062). Once the SMB client had listed a junction's parent directory,

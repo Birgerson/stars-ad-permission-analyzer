@@ -407,7 +407,10 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
     let mut memberships: Vec<GroupMembership> = Vec::new();
     if matches!(account_kind, IdentityKind::User) {
         match user_global_group_names(None, &account.name) {
-            Ok(names) => {
+            Ok(mut names) => {
+                // Name order (case-insensitive) instead of NetAPI order, so
+                // the output is reproducible (ADR 0063).
+                names.sort_by_key(|n| n.to_lowercase());
                 for group_name in names {
                     match lookup_sid_for_account(None, &group_name) {
                         Ok(group_sid) => {
