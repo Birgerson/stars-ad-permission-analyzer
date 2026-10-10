@@ -421,9 +421,13 @@ Output:
 
 #### `Trusts` tab
 
+![Stars Trusts tab (v1.9.0) — Plain LDAP to the lab DC of corp.test, one trust found: ext.test (NetBIOS EXT), direction bidirectional, attributes "SID-filtering (quarantined)" with the raw mask 0x00000004 and the partner's domain SID, plus the orange callout that historical / foreign SIDs across this trust are dropped at runtime, so a finding relying on one may over-report](docs/screenshots/stars-trusts-tab.png)
+
 The GUI counterpart to `adpa trusts`: the domain's Active Directory trusts with direction and decoded `trustAttributes`, read over LDAP (base DN = domain root). **SID filtering** and **Selective Authentication** get an explicit ⚠ callout — both can make a finding read higher than the real runtime access, which Stars does not model (known-limitations L4). Read-only.
 
 #### `Shares` tab
+
+![Stars Shares tab (v1.9.0) — the lab DC's shares with administrative shares hidden (11 shown, 3 hidden): a $-named data share flagged "hidden data share ($) — not listed when browsing, NOT administrative", a share with share-level Read entries, a share with an empty DACL ("no access via this share"), a share with a share-level Deny shown in red, each share with its UNC path, local target, and Allow/Deny entries with rights label and raw mask](docs/screenshots/stars-shares-tab.png)
 
 The GUI counterpart to `adpa shares`: a server's SMB shares with their share-level permissions. NULL DACL (no share restriction), empty DACL (no access) and an ACE list stay visibly distinct; account names are resolved where possible; administrative shares are hidden unless the checkbox is ticked; unreadable shares and unevaluated ACEs are shown, not dropped. Read-only.
 

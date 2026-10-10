@@ -388,6 +388,17 @@ mean opposite things are kept apart:
   the share layer and NTFS alone decides (shown as a warning);
 - **empty DACL** — no access via this share.
 
+Account names come from the **local LSA** of the machine Stars runs on.
+On a domain-joined machine (or on the DC itself) domain groups appear
+by name; on a machine outside the domain they appear as their SID
+(e.g. `S-1-5-21-…-513` for Domain Users), while well-known accounts
+such as `Everyone` or `BUILTIN\Administrators` are always named. The
+Shares tab does not use the LDAP connection for this.
+
+> Note: `Get-SmbShareAccess` displays a share with an empty DACL as
+> "Everyone — Deny — Full". Stars reads the stored security descriptor
+> itself and reports it as what it is: an empty DACL.
+
 Share ACEs Stars could not evaluate are flagged as **incomplete**, and a
 share whose permissions could not be read is listed with its reason
 instead of being dropped. If the server's shares cannot be enumerated
