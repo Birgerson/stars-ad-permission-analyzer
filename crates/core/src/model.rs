@@ -544,6 +544,77 @@ pub fn best_membership_per_group(memberships: &[GroupMembership]) -> Vec<&GroupM
         .collect()
 }
 
+/// Like [`best_membership_per_group`], but **merges** the routes of the
+/// entries that are dropped: the kept entry's `also_via` gains the last hop
+/// of every other entry for the same group (when it differs) and their own
+/// `also_via` entries. So a domain-local or builtin group that arrives from
+/// LDAP *and* from the local-group lookup is listed once without losing a
+/// route the second source knew (lab finding CLI3-1, ADR 0063). Output order
+/// and the kept entry follow `best_membership_per_group`; `also_via` is
+/// sorted by name (case-insensitive), then SID.
+pub fn merged_memberships_per_group(memberships: &[GroupMembership]) -> Vec<GroupMembership> {
+    let mut merged: Vec<GroupMembership> = best_membership_per_group(memberships)
+        .into_iter()
+        .cloned()
+        .collect();
+    for kept in merged.iter_mut() {
+        let Some(path) = kept.path.as_mut() else {
+            continue;
+        };
+        let kept_last_hop = path
+            .nodes
+            .len()
+            .checked_sub(2)
+            .and_then(|i| path.nodes.get(i))
+            .cloned();
+        let mut extra: Vec<MembershipHop> = Vec::new();
+        for other in memberships.iter().filter(|m| m.group_sid == kept.group_sid) {
+            let Some(other_path) = other.path.as_ref() else {
+                continue;
+            };
+            if other_path.nodes.len() >= 3 {
+                let i = other_path.nodes.len() - 2;
+                let hop = &other_path.nodes[i];
+                if Some(hop) != kept_last_hop.as_ref() && *hop != other.member_sid {
+                    extra.push(MembershipHop {
+                        sid: hop.clone(),
+                        name: other_path.names.get(i).cloned().flatten(),
+                    });
+                }
+            }
+            extra.extend(other_path.also_via.iter().cloned());
+        }
+        if extra.is_empty() {
+            // Single source: keep the resolver's order untouched.
+            continue;
+        }
+        // One hop per SID, a named occurrence preferred; the kept chain's
+        // own last hop is not a "further" route.
+        let mut by_sid: std::collections::BTreeMap<String, MembershipHop> =
+            std::collections::BTreeMap::new();
+        for hop in path.also_via.drain(..).chain(extra) {
+            if Some(&hop.sid) == kept_last_hop.as_ref() {
+                continue;
+            }
+            match by_sid.get_mut(&hop.sid.0) {
+                Some(existing) if existing.name.is_none() => existing.name = hop.name,
+                Some(_) => {}
+                None => {
+                    by_sid.insert(hop.sid.0.clone(), hop);
+                }
+            }
+        }
+        let mut hops: Vec<MembershipHop> = by_sid.into_values().collect();
+        hops.sort_by(|a, b| {
+            let an = a.name.as_deref().unwrap_or("").to_lowercase();
+            let bn = b.name.as_deref().unwrap_or("").to_lowercase();
+            an.cmp(&bn).then_with(|| a.sid.0.cmp(&b.sid.0))
+        });
+        path.also_via = hops;
+    }
+    merged
+}
+
 /// Well-known **privileged** role name if `sid` is a built-in or
 /// default-domain privileged group — `None` otherwise. Built-in aliases are
 /// matched by their constant SID, domain groups by their well-known RID
@@ -2151,6 +2222,79 @@ mod tests {
         assert!(text.contains("g4 (S-1-5-21-9-9-9-3004)"), "{text}");
         assert!(!text.contains("g5"), "{text}");
         assert!(text.ends_with("(+2 more)"), "{text}");
+    }
+
+    fn chain(
+        group: &str,
+        via: &str,
+        via_name: &str,
+        source: MembershipPathSource,
+    ) -> GroupMembership {
+        let user = Sid("S-1-5-21-9-9-9-1000".to_owned());
+        GroupMembership {
+            member_sid: user.clone(),
+            group_sid: Sid(group.to_owned()),
+            direct: false,
+            group_name: Some("BUILTIN\\Users".to_owned()),
+            path: Some(MembershipPath {
+                nodes: vec![user, Sid(via.to_owned()), Sid(group.to_owned())],
+                names: vec![
+                    Some("u".to_owned()),
+                    Some(via_name.to_owned()),
+                    Some("BUILTIN\\Users".to_owned()),
+                ],
+                source,
+                complete: true,
+                also_via: Vec::new(),
+            }),
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
+        }
+    }
+
+    /// Lab finding CLI3-1: a group from LDAP and from the local-group lookup
+    /// is listed once; a mediator only the second source knew is kept as a
+    /// further route.
+    #[test]
+    fn merged_memberships_keep_one_entry_and_every_route() {
+        let ldap = chain(
+            "S-1-5-32-545",
+            "S-1-5-21-9-9-9-513",
+            "Domain Users",
+            MembershipPathSource::DomainGroup,
+        );
+        let local_same = chain(
+            "S-1-5-32-545",
+            "S-1-5-21-9-9-9-513",
+            "Domain Users",
+            MembershipPathSource::LocalGroup,
+        );
+        let local_other = chain(
+            "S-1-5-32-545",
+            "S-1-5-21-9-9-9-512",
+            "Domain Admins",
+            MembershipPathSource::LocalGroup,
+        );
+        let merged = merged_memberships_per_group(&[ldap.clone(), local_same]);
+        assert_eq!(merged.len(), 1);
+        assert!(
+            merged[0]
+                .path
+                .as_ref()
+                .is_some_and(|p| p.also_via.is_empty()),
+            "the same mediator is not a further route"
+        );
+        let merged = merged_memberships_per_group(&[ldap, local_other]);
+        assert_eq!(merged.len(), 1);
+        let path = merged[0].path.as_ref().expect("path");
+        assert_eq!(
+            path.source,
+            MembershipPathSource::DomainGroup,
+            "first source kept"
+        );
+        assert_eq!(path.also_via.len(), 1);
+        assert_eq!(path.also_via[0].sid.0, "S-1-5-21-9-9-9-512");
+        assert_eq!(path.also_via[0].name.as_deref(), Some("Domain Admins"));
     }
 
     #[test]

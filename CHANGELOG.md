@@ -54,6 +54,14 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   read as empty — direct memberships counted as nested; it is now completed
   through validated range retrieval (lab: 1601 direct memberships read
   completely, before 0).
+- **A group that arrives from two sources is listed once** (lab finding
+  CLI3-1). On a domain controller a domain-local or builtin group comes from
+  LDAP and from the local-group lookup; the explanation printed it twice
+  with different sources. One step per group now, and a mediator only the
+  second source knew is kept as "also a member through …".
+- **A NULL DACL no longer reads "Inheritance: Active"** (lab finding
+  CLI3-2): `adpa analyze` prints "n/a (NULL DACL — no ACL, nothing is
+  inherited)".
 
 - **The explanation path no longer changes between runs, and it no longer
   implies that one chain is the only route into a group** (lab finding

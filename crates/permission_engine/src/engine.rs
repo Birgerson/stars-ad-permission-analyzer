@@ -892,10 +892,17 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     // otherwise print the exact same "Member of …" line twice and read like
     // two distinct memberships (lab hard-test finding F2). Collapsing steps
     // that render identically loses no information; the effective mask is
-    // unaffected (token building already uses a set). Distinct via-chains to
-    // the same group format differently and are therefore all kept.
+    // unaffected (token building already uses a set).
+    //
+    // Lab finding CLI3-1: on a domain controller a domain-local or builtin
+    // group arrives twice — from LDAP and from the local-group lookup — with
+    // different sources, so the lines differed and both were printed. One
+    // step per group SID now; the routes the second source knew are merged
+    // into the kept step's "also a member through" list (ADR 0063), so no
+    // route is lost.
+    let merged = adpa_core::model::merged_memberships_per_group(memberships);
     let mut seen_membership_steps: HashSet<String> = HashSet::new();
-    for gm in memberships {
+    for gm in &merged {
         let step = format_membership_step(gm, sid_names);
         if seen_membership_steps.insert(step.clone()) {
             steps.push(step);
@@ -1705,6 +1712,51 @@ mod tests {
             member_steps, 1,
             "an identical membership edge must appear exactly once; got: {:?}",
             p.path_explanation.steps
+        );
+    }
+
+    /// Lab finding CLI3-1: the same group from LDAP (DomainGroup) and from
+    /// the local-group lookup (LocalGroup) is one step; a mediator only the
+    /// local source knew is named as a further route.
+    #[test]
+    fn explanation_lists_a_group_from_two_sources_once() {
+        const DOMAIN_ADMINS: &str = "S-1-5-21-1000-1000-1000-512";
+        let ldap = direct_membership_with_path(
+            USER,
+            "alice",
+            GROUP_A,
+            "DL_Finance_RW",
+            MembershipPathSource::DomainGroup,
+        );
+        let mut local = nested_membership(
+            USER,
+            "alice",
+            DOMAIN_ADMINS,
+            "Domain Admins",
+            GROUP_A,
+            "DL_Finance_RW",
+        );
+        if let Some(path) = local.path.as_mut() {
+            path.source = MembershipPathSource::LocalGroup;
+        }
+        let p = eval(
+            user(USER),
+            vec![ldap, local],
+            fso(None, vec![allow_ace(GROUP_A, MASK_READ, false)]),
+            None,
+        );
+        let steps: Vec<&String> = p
+            .path_explanation
+            .steps
+            .iter()
+            .filter(|s| s.starts_with("Member of") && s.contains(GROUP_A))
+            .collect();
+        assert_eq!(steps.len(), 1, "{:?}", p.path_explanation.steps);
+        assert!(steps[0].contains("source: DomainGroup"), "{}", steps[0]);
+        assert!(
+            steps[0].contains("also a member through Domain Admins (S-1-5-21-1000-1000-1000-512)"),
+            "{}",
+            steps[0]
         );
     }
 
