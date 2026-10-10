@@ -73,3 +73,4 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0061 | Manual, read-only update check with a configurable, validated source |
 | 0062 | Directory identity by volume serial + file ID for scans over SMB |
 | 0063 | Deterministic membership routes and disclosure of further routes |
+| 0064 | Orphaned only with evidence; unresolvable SIDs are incomplete |

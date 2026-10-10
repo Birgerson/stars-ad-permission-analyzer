@@ -35,6 +35,7 @@ use adpa_core::{
 use crate::{
     config::LdapConfig,
     ldap_client::{self, RawEntry},
+    principal::SidDomainRelation,
     sid_util::bytes_to_sid_str,
 };
 
@@ -229,6 +230,100 @@ impl LdapResolver {
             },
         )
         .await
+    }
+
+    /// Classifies a SID the directory holds no object for (ADR 0064, lab
+    /// finding AD3-1): does it belong to the configured domain — and does
+    /// the configured base cover that domain completely — to a trusted
+    /// domain, or to another domain? Read-only (a base search for the
+    /// domain SID, a subtree search for the trust objects). Every read
+    /// problem yields `Unknown`, so a miss never counts as proof that an
+    /// account is gone unless the directory confirmed the domain.
+    pub async fn classify_unresolved_sid(&self, sid: &Sid) -> SidDomainRelation {
+        let Some(sid_domain) = account_domain_of(sid) else {
+            return SidDomainRelation::Unknown {
+                reason: format!("{} is not a domain account SID", sid.0),
+            };
+        };
+        let result = ldap_client::with_timeout(
+            "classify_unresolved_sid",
+            ldap_client::ldap_timeout(&self.config),
+            async {
+                let mut ldap = ldap_client::connect(&self.config).await?;
+                let relation = self.classify_with(&mut ldap, &sid_domain).await;
+                ldap_client::disconnect(ldap).await;
+                relation
+            },
+        )
+        .await;
+        match result {
+            Ok(relation) => relation,
+            Err(e) => SidDomainRelation::Unknown {
+                reason: format!("the directory context could not be read: {e}"),
+            },
+        }
+    }
+
+    async fn classify_with(
+        &self,
+        ldap: &mut ldap3::Ldap,
+        sid_domain: &str,
+    ) -> Result<SidDomainRelation, CoreError> {
+        if self.config.global_catalog {
+            // Forest-wide bind: the identity search already covered every
+            // domain of the forest, so a SID of a forest domain is gone.
+            let forest = ldap_client::search_forest_domain_sids(ldap, &self.config.base_dn).await?;
+            if forest
+                .iter()
+                .filter(|d| is_domain_sid(d))
+                .any(|d| d.eq_ignore_ascii_case(sid_domain))
+            {
+                return Ok(SidDomainRelation::ConfiguredDomainWholeBase);
+            }
+            return Ok(SidDomainRelation::OtherDomain {
+                domain_sid: sid_domain.to_owned(),
+            });
+        }
+        let Some(root) = domain_root_dn(&self.config.base_dn) else {
+            return Ok(SidDomainRelation::Unknown {
+                reason: format!(
+                    "the configured base '{}' names no domain (no DC= components)",
+                    self.config.base_dn
+                ),
+            });
+        };
+        let domain_sid = ldap_client::search_domain_sid(ldap, &root)
+            .await?
+            .filter(|d| is_domain_sid(d));
+        let Some(domain_sid) = domain_sid else {
+            return Ok(SidDomainRelation::Unknown {
+                reason: format!("the domain SID of '{root}' could not be read"),
+            });
+        };
+        if domain_sid.eq_ignore_ascii_case(sid_domain) {
+            return Ok(if dn_eq(&self.config.base_dn, &root) {
+                SidDomainRelation::ConfiguredDomainWholeBase
+            } else {
+                SidDomainRelation::ConfiguredDomainPartialBase {
+                    base_dn: self.config.base_dn.clone(),
+                }
+            });
+        }
+        let trusts = ldap_client::search_domain_trusts(ldap, &root).await?;
+        for trust in trusts.iter().filter_map(crate::trusts::parse_trust) {
+            if trust
+                .sid
+                .as_ref()
+                .is_some_and(|s| s.0.eq_ignore_ascii_case(sid_domain))
+            {
+                return Ok(SidDomainRelation::TrustedDomain {
+                    partner: trust.partner,
+                });
+            }
+        }
+        Ok(SidDomainRelation::OtherDomain {
+            domain_sid: sid_domain.to_owned(),
+        })
     }
 
     /// `true` when the configuration targets the Global Catalog.
@@ -972,6 +1067,67 @@ pub fn extract_sid_from_entry(entry: &RawEntry) -> Option<Sid> {
     }
 }
 
+/// Domain part of a domain-account SID (`S-1-5-21-a-b-c-RID` →
+/// `S-1-5-21-a-b-c`), `None` for any other SID shape. Validates every
+/// component as a number so a malformed value never classifies.
+fn account_domain_of(sid: &Sid) -> Option<String> {
+    let parts: Vec<&str> = sid.0.split('-').collect();
+    if parts.len() != 8 || !parts[0].eq_ignore_ascii_case("S") || parts[1..4] != ["1", "5", "21"] {
+        return None;
+    }
+    if !parts[4..]
+        .iter()
+        .all(|p| !p.is_empty() && p.parse::<u32>().is_ok())
+    {
+        return None;
+    }
+    Some(parts[..7].join("-"))
+}
+
+/// `true` for a domain SID of the shape `S-1-5-21-a-b-c`.
+fn is_domain_sid(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('-').collect();
+    parts.len() == 7
+        && parts[0].eq_ignore_ascii_case("S")
+        && parts[1..4] == ["1", "5", "21"]
+        && parts[4..]
+            .iter()
+            .all(|p| !p.is_empty() && p.parse::<u32>().is_ok())
+}
+
+/// The domain-root DN of a base DN — its `DC=` components
+/// (`OU=Lab,DC=corp,DC=test` → `DC=corp,DC=test`). `None` without any.
+fn domain_root_dn(base_dn: &str) -> Option<String> {
+    let dcs: Vec<&str> = base_dn
+        .split(',')
+        .map(str::trim)
+        .filter(|rdn| {
+            rdn.get(..3)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("DC="))
+        })
+        .collect();
+    if dcs.is_empty() {
+        None
+    } else {
+        Some(dcs.join(","))
+    }
+}
+
+/// Case- and whitespace-insensitive DN comparison (RDN by RDN).
+fn dn_eq(a: &str, b: &str) -> bool {
+    let norm = |dn: &str| -> Vec<String> {
+        dn.split(',')
+            .map(|rdn| {
+                rdn.trim()
+                    .replace(" =", "=")
+                    .replace("= ", "=")
+                    .to_ascii_lowercase()
+            })
+            .collect()
+    };
+    norm(a) == norm(b)
+}
+
 /// Extracts the domain name from a distinguished name.
 ///
 /// "CN=User,CN=Users,DC=testdomain,DC=local" → Some("testdomain.local")
@@ -1261,6 +1417,60 @@ mod tests {
             via,
             children: vec![],
         }
+    }
+
+    // --- Unresolved-SID classification helpers (ADR 0064), no LDAP ---
+
+    #[test]
+    fn account_domain_of_accepts_only_domain_account_sids() {
+        assert_eq!(
+            account_domain_of(&Sid("S-1-5-21-111-222-333-1104".into())).as_deref(),
+            Some("S-1-5-21-111-222-333")
+        );
+        for not_an_account in [
+            "S-1-5-32-544",             // builtin alias
+            "S-1-5-18",                 // SYSTEM
+            "S-1-5-21-111-222-333",     // a domain SID, not an account
+            "S-1-5-21-111-222-333-x",   // malformed RID
+            "S-1-5-80-1-2-3-4-5",       // service SID
+            "S-1-5-21-111-222-333-1-2", // too many parts
+        ] {
+            assert_eq!(
+                account_domain_of(&Sid(not_an_account.into())),
+                None,
+                "{not_an_account}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_domain_sid_validates_shape_and_numbers() {
+        assert!(is_domain_sid("S-1-5-21-111-222-333"));
+        assert!(!is_domain_sid("S-1-5-21-111-222"));
+        assert!(!is_domain_sid("S-1-5-21-111-222-333-500"));
+        assert!(!is_domain_sid("S-1-5-21-111-abc-333"));
+        assert!(!is_domain_sid(""));
+    }
+
+    #[test]
+    fn domain_root_dn_keeps_only_dc_components() {
+        assert_eq!(
+            domain_root_dn("OU=Lab,DC=corp,DC=test").as_deref(),
+            Some("DC=corp,DC=test")
+        );
+        assert_eq!(
+            domain_root_dn("dc=corp, dc=test").as_deref(),
+            Some("dc=corp,dc=test")
+        );
+        assert_eq!(domain_root_dn("OU=Lab"), None);
+        assert_eq!(domain_root_dn(""), None);
+    }
+
+    #[test]
+    fn dn_eq_ignores_case_and_spacing() {
+        assert!(dn_eq("DC=corp,DC=test", "dc=corp, dc=test"));
+        assert!(dn_eq("DC = corp,DC=test", "dc=corp,dc=test"));
+        assert!(!dn_eq("OU=Lab,DC=corp,DC=test", "DC=corp,DC=test"));
     }
 
     // --- Membership assembly: deterministic routes (ADR 0063), no LDAP ---

@@ -48,6 +48,21 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   the GUI, the explanation path, the CSV `*_rights` columns and the HTML
   report, whose badges previously used their own coarser logic (Read &
   Execute read "Read") and now also print the raw mask.
+- **A SID nobody can resolve is called orphaned only with evidence**
+  (lab findings AD3-1/AD3-2, ADR 0064, narrows L15). A valid account of
+  the trusted domain `ext.test`, analyzed by SID, was reported as
+  `Kind: Orphaned` with a confident "no access", because the local LSA of
+  a host outside the domain resolves no domain SID. Stars now reads the
+  domain SID of the configured base and the domain's trusts on such a
+  miss: only a SID of the configured domain, searched with a base that
+  covers the whole domain, is orphaned (new informational marker
+  `IdentityOrphaned`); every other case is **not resolvable** — new marker
+  `IdentityNotResolvable` naming the reason (trusted domain, other domain,
+  partial base, unknown) — and the result is incomplete. The account
+  status no longer says "Active" when the state is unknown: status lines
+  read `unknown`, `n/a (not an account)` or `does not exist (orphaned
+  SID)`, and the CSV `disabled` column carries `true`/`false`/`unknown`/
+  `n/a`.
 - **Junction cycles and duplicate junction targets are now detected
   reliably on scans over SMB** (known limitation L14, lab finding FS3-1,
   ADR 0062). Once the SMB client had listed a junction's parent directory,

@@ -4,8 +4,8 @@
 //! Formatted console output for the analyze command.
 
 use adpa_core::model::{
-    privileged_group_role, AceKind, DomainTrust, EffectivePermission, FileSystemObject,
-    GroupMembersReport, GroupMembership, IdentityKind, MembershipReport, PermissionDiagnostic,
+    privileged_group_role, AccountStatus, AceKind, DomainTrust, EffectivePermission,
+    FileSystemObject, GroupMembersReport, GroupMembership, MembershipReport, PermissionDiagnostic,
     RiskFinding, RiskSeverity, ScanError, ScanRun, Share,
 };
 use permission_engine::NormalizedRights;
@@ -71,11 +71,8 @@ pub fn print_report(
         .unwrap_or_default();
     println!("  User      : {domain_prefix}{user_name}");
     println!("            : ({})", result.identity.sid.0);
-    let status = if result.identity.disabled {
-        "DISABLED"
-    } else {
-        "Active"
-    };
+    // Lab finding AD3-2: "Active" only when the state is actually known.
+    let status = AccountStatus::of(&result.identity, &result.diagnostics).label();
     let kind = format!("{:?}", result.identity.kind);
     println!("  Status    : {status}  ·  Kind: {kind}");
 
@@ -372,6 +369,17 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      Members from other domains of the forest are not visible");
                 println!("      here — in a multi-domain forest the list may be incomplete.");
             }
+            PermissionDiagnostic::IdentityNotResolvable { reason } => {
+                println!("  [!] The identity could not be resolved: {reason}.");
+                println!("      Its group memberships are unknown — the rights computed for");
+                println!("      the bare SID can be too low or too high. Treat as");
+                println!("      incomplete.");
+            }
+            PermissionDiagnostic::IdentityOrphaned => {
+                println!("  [i] Orphaned SID: the account no longer exists in its domain, so");
+                println!("      nobody can log on with it. The rights shown are what a logon");
+                println!("      with this SID would get; an ACE naming it is a dead entry.");
+            }
         }
     }
 }
@@ -397,15 +405,9 @@ pub fn print_membership_report(report: &MembershipReport, user_input: &str) {
     // Enabled/disabled is a *user account* concept (userAccountControl); a
     // group has no such state, so only accounts get a Status line.
     let kind = &report.identity.kind;
-    if matches!(kind, IdentityKind::User | IdentityKind::Computer) {
-        let status = if report.identity.disabled {
-            "DISABLED"
-        } else {
-            "Active"
-        };
-        println!("  Status    : {status}  \u{00B7}  Kind: {kind:?}");
-    } else {
-        println!("  Kind      : {kind:?}");
+    match AccountStatus::of(&report.identity, &report.diagnostics) {
+        AccountStatus::NotAnAccount => println!("  Kind      : {kind:?}"),
+        status => println!("  Status    : {}  \u{00B7}  Kind: {kind:?}", status.label()),
     }
     if report.identity.sid_history_count > 0 {
         println!(

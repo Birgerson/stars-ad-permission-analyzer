@@ -483,6 +483,27 @@ fn write_permissions_table(
                             .to_string(),
                     );
                 }
+                PermissionDiagnostic::IdentityNotResolvable { reason } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-high\" \
+                         title=\"The identity could not be resolved: {}. Its group \
+                         memberships are unknown — the rights computed for the bare \
+                         SID can be too low or too high.\">⚠ identity not resolvable \
+                         — memberships unknown</span>",
+                        escape_html(reason)
+                    ));
+                }
+                PermissionDiagnostic::IdentityOrphaned => {
+                    diag_parts.push(
+                        "<span class=\"badge badge-neutral\" \
+                         title=\"The SID has no account in its domain any more \
+                         (orphaned / deleted account): nobody can log on with it. \
+                         The rights shown are what a logon with this SID would get; \
+                         an ACE naming it is a dead entry.\">ℹ orphaned SID — account \
+                         no longer exists</span>"
+                            .to_string(),
+                    );
+                }
             }
         }
         let diagnostics = if diag_parts.is_empty() {

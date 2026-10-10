@@ -1220,6 +1220,93 @@ pub enum PermissionDiagnostic {
     /// counterpart. Incompleteness trigger, but Neutral — an expected
     /// bind-scope caveat, not an error (ADR 0055, review 2026-07-03 F2).
     UniversalGroupCrossDomainMembersNotVisible,
+
+    /// The analyzed SID could not be resolved — no object under the
+    /// configured LDAP base, not resolvable by the local LSA — and the
+    /// available evidence does **not** show that the account no longer
+    /// exists: the SID belongs to a trusted or another domain, or the
+    /// configured base covers only part of the domain, or the domain could
+    /// not be determined. `reason` says which. The account's group
+    /// memberships are unknown, so the rights computed for the bare SID can
+    /// be too low or too high. Before ADR 0064 such SIDs were reported as
+    /// `Orphaned` with a confident result (lab finding AD3-1).
+    /// Incompleteness trigger; Concern.
+    IdentityNotResolvable { reason: String },
+
+    /// The SID belongs to the configured domain, the configured base covers
+    /// that whole domain, and the directory has no object for it: the
+    /// account no longer exists (orphaned / deleted). Nobody can log on with
+    /// this SID; the rights shown are what a logon with it would get, and an
+    /// ACE naming it is a dead entry. Informational (ADR 0064).
+    IdentityOrphaned,
+}
+
+/// Account state as it may be stated to a reader — the single source for
+/// every "Status" line and the CSV `disabled` column, so no surface claims
+/// "Active" when the state is unknown (lab finding AD3-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountStatus {
+    /// Account known to be enabled.
+    Active,
+    /// Account known to be disabled.
+    Disabled,
+    /// Account exists (or may exist), but its state could not be read.
+    Unknown,
+    /// Not an account (group, well-known principal) — no enabled state.
+    NotAnAccount,
+    /// The SID has no account any more (orphaned).
+    DoesNotExist,
+}
+
+impl AccountStatus {
+    /// Derives the status from the identity and the diagnostics attached to
+    /// the result or report. A `disabled = false` flag counts as "Active"
+    /// only when no marker says the state is unknown and the identity was
+    /// actually resolved.
+    pub fn of(identity: &Identity, diagnostics: &[PermissionDiagnostic]) -> Self {
+        match identity.kind {
+            IdentityKind::Orphaned => return AccountStatus::DoesNotExist,
+            IdentityKind::Group | IdentityKind::WellKnown => return AccountStatus::NotAnAccount,
+            IdentityKind::Unknown => return AccountStatus::Unknown,
+            _ => {}
+        }
+        if diagnostics.iter().any(|d| {
+            matches!(
+                d,
+                PermissionDiagnostic::IdentityDisabledStatusUnknown
+                    | PermissionDiagnostic::IdentityNotResolvable { .. }
+                    | PermissionDiagnostic::IdentityLookupFailed { .. }
+            )
+        }) {
+            return AccountStatus::Unknown;
+        }
+        if identity.disabled {
+            AccountStatus::Disabled
+        } else {
+            AccountStatus::Active
+        }
+    }
+
+    /// Human-readable label for status lines.
+    pub fn label(&self) -> &'static str {
+        match self {
+            AccountStatus::Active => "Active",
+            AccountStatus::Disabled => "DISABLED",
+            AccountStatus::Unknown => "unknown (could not be determined)",
+            AccountStatus::NotAnAccount => "n/a (not an account)",
+            AccountStatus::DoesNotExist => "does not exist (orphaned SID)",
+        }
+    }
+
+    /// Value of the CSV `disabled` column: `true`/`false` only when known.
+    pub fn csv_value(&self) -> &'static str {
+        match self {
+            AccountStatus::Active => "false",
+            AccountStatus::Disabled => "true",
+            AccountStatus::Unknown => "unknown",
+            AccountStatus::NotAnAccount | AccountStatus::DoesNotExist => "n/a",
+        }
+    }
 }
 
 /// **Visual attention** of a [`PermissionDiagnostic`] — "do I need to look?".
@@ -1349,6 +1436,16 @@ impl PermissionDiagnostic {
                  list may be incomplete."
                     .to_owned()
             }
+            PermissionDiagnostic::IdentityNotResolvable { reason } => format!(
+                "The identity could not be resolved: {reason}. Its group memberships are \
+                 unknown, so the rights computed for the bare SID can be too low or too high."
+            ),
+            PermissionDiagnostic::IdentityOrphaned => {
+                "The SID has no account in its domain any more (orphaned / deleted account): \
+                 nobody can log on with it. The rights shown are what a logon with this SID \
+                 would get; an ACE naming it is a dead entry."
+                    .to_owned()
+            }
         }
     }
 
@@ -1377,7 +1474,8 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::SidHistoryPresent { .. }
             | PermissionDiagnostic::GroupSidHistoryPresent { .. }
             | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
-            | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible => true,
+            | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible
+            | PermissionDiagnostic::IdentityNotResolvable { .. } => true,
             // Informational — the result itself is exact.
             PermissionDiagnostic::NonCanonicalDaclOrder { .. }
             | PermissionDiagnostic::IdentityDisabled
@@ -1386,7 +1484,8 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::TrustBoundaryEffectsNotModeled
             | PermissionDiagnostic::SidHistoryEvaluated { .. }
             | PermissionDiagnostic::GroupSidHistoryEvaluated { .. }
-            | PermissionDiagnostic::MembersViaPrimaryGroupIncluded { .. } => false,
+            | PermissionDiagnostic::MembersViaPrimaryGroupIncluded { .. }
+            | PermissionDiagnostic::IdentityOrphaned => false,
         }
     }
 
@@ -1408,7 +1507,8 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible
             | PermissionDiagnostic::SidHistoryEvaluated { .. }
             | PermissionDiagnostic::GroupSidHistoryEvaluated { .. }
-            | PermissionDiagnostic::GroupResolutionViaGlobalCatalog => DiagnosticSeverity::Neutral,
+            | PermissionDiagnostic::GroupResolutionViaGlobalCatalog
+            | PermissionDiagnostic::IdentityOrphaned => DiagnosticSeverity::Neutral,
             // Worth a look — a hidden Deny among skipped ACEs could change the
             // result.
             PermissionDiagnostic::UnsupportedShareAces { .. }
@@ -1419,9 +1519,8 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::IdentityLookupFailed { .. }
             | PermissionDiagnostic::GroupResolutionFailed { .. }
             | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
-            | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. } => {
-                DiagnosticSeverity::Concern
-            }
+            | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
+            | PermissionDiagnostic::IdentityNotResolvable { .. } => DiagnosticSeverity::Concern,
         }
     }
 }
@@ -1932,6 +2031,77 @@ mod tests {
         let order: Vec<&str> = best.iter().map(|m| m.group_sid.0.as_str()).collect();
         assert_eq!(order, ["S-1-5-21-9-9-9-4001", "S-1-5-21-9-9-9-4002"]);
         assert!(best[0].path.as_ref().is_some_and(|p| p.complete));
+    }
+
+    fn account(kind: IdentityKind, disabled: bool) -> Identity {
+        Identity {
+            sid: Sid("S-1-5-21-9-9-9-1000".to_owned()),
+            name: Some("u".to_owned()),
+            domain: None,
+            kind,
+            disabled,
+            user_principal_name: None,
+            sid_history_count: 0,
+            sid_history: Vec::new(),
+        }
+    }
+
+    /// Lab finding AD3-2: "Active" only when the state is known.
+    #[test]
+    fn account_status_says_active_only_when_known() {
+        let user = account(IdentityKind::User, false);
+        assert_eq!(AccountStatus::of(&user, &[]), AccountStatus::Active);
+        assert_eq!(
+            AccountStatus::of(&account(IdentityKind::User, true), &[]),
+            AccountStatus::Disabled
+        );
+        for unknown_marker in [
+            PermissionDiagnostic::IdentityDisabledStatusUnknown,
+            PermissionDiagnostic::IdentityNotResolvable {
+                reason: "r".to_owned(),
+            },
+            PermissionDiagnostic::IdentityLookupFailed {
+                reason: "r".to_owned(),
+            },
+        ] {
+            assert_eq!(
+                AccountStatus::of(&user, std::slice::from_ref(&unknown_marker)),
+                AccountStatus::Unknown,
+                "{unknown_marker:?}"
+            );
+        }
+        assert_eq!(
+            AccountStatus::of(&account(IdentityKind::Unknown, false), &[]),
+            AccountStatus::Unknown
+        );
+        assert_eq!(
+            AccountStatus::of(&account(IdentityKind::Orphaned, false), &[]),
+            AccountStatus::DoesNotExist
+        );
+        assert_eq!(
+            AccountStatus::of(&account(IdentityKind::Group, false), &[]),
+            AccountStatus::NotAnAccount
+        );
+        assert_eq!(AccountStatus::Unknown.csv_value(), "unknown");
+        assert_eq!(AccountStatus::Active.csv_value(), "false");
+        assert_eq!(AccountStatus::Disabled.csv_value(), "true");
+        assert_eq!(AccountStatus::NotAnAccount.csv_value(), "n/a");
+        assert!(!AccountStatus::Unknown.label().contains("Active"));
+    }
+
+    #[test]
+    fn unresolvable_identity_is_incomplete_orphaned_is_informational() {
+        let unresolvable = PermissionDiagnostic::IdentityNotResolvable {
+            reason: "trusted domain".to_owned(),
+        };
+        assert!(unresolvable.is_incompleteness_trigger());
+        assert_eq!(unresolvable.severity(), DiagnosticSeverity::Concern);
+        assert!(unresolvable.summary().contains("trusted domain"));
+        assert!(!PermissionDiagnostic::IdentityOrphaned.is_incompleteness_trigger());
+        assert_eq!(
+            PermissionDiagnostic::IdentityOrphaned.severity(),
+            DiagnosticSeverity::Neutral
+        );
     }
 
     #[test]

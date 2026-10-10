@@ -732,10 +732,18 @@ FSP-backed group membership in the resource domain (L1) is not affected.
 
 ### Resolution
 
-Planned: recognise SIDs whose domain part belongs to a trusted domain
-(trust inventory, ADR 0060), report them as foreign rather than orphaned,
-add an explicit marker, and resolve their groups via the Global Catalog
-or the trusted domain's DC when one is configured.
+**Partly closed 2026-10-10 (ADR 0064).** Stars now reads the domain SID of
+the configured base and the domain's trust objects when a SID cannot be
+resolved. A SID of a trusted domain is reported as **not resolvable** with
+the trust partner named (marker `IdentityNotResolvable`, incompleteness
+trigger) — never as orphaned; the result is marked incomplete. Only a SID
+of the configured domain, searched with a base that covers the whole
+domain, is still called orphaned.
+
+**Remaining:** the account's group memberships in the trusted domain are
+not resolved, so the rights computed for it stay incomplete. That needs a
+second directory connection (Global Catalog of the trusted forest or a DC
+of the trusted domain).
 
 ---
 
@@ -757,7 +765,7 @@ or the trusted domain's DC when one is configured.
 | L12 — Manual updates / `update_manager` extension point | Low | n/a | by design; fail-closed seam, implement a real verifier only if in-app updates are required |
 | L13 — IPv6 literals rejected as server addresses | Low | n/a (explicit validation error) | yes — bracket handling (LDAP) + `ipv6-literal.net` (UNC/NetAPI), must be built and lab-verified together |
 | L14 — Junction cycles over UNC | Medium | **yes** (ReparseCycle / ReparseDuplicateTarget, as locally) | **closed 2026-10-10** (ADR 0062: volume serial + file ID on UNC scans) |
-| L15 — Trusted-domain SID reported as orphaned | Medium | partial (generic "incomplete") | yes — classify via trust inventory + resolve via GC / trusted DC |
+| L15 — Trusted-domain SID reported as orphaned | Medium | **yes** (IdentityNotResolvable, names the trust partner) | **classification closed 2026-10-10** (ADR 0064); resolving the memberships via GC / trusted DC still open |
 
 ## Contribution policy
 

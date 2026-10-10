@@ -70,6 +70,12 @@ pub struct ResolutionProvenance {
     /// engine pushes `GroupResolutionViaGlobalCatalog`. Closes
     /// known-limitations entry L2.
     pub group_resolution_via_global_catalog: bool,
+    /// `Some(reason)` when the SID could not be resolved and the evidence
+    /// does not show that the account no longer exists (trusted or other
+    /// domain, partial LDAP base, domain unknown). The engine pushes
+    /// `IdentityNotResolvable`; the result is incomplete (ADR 0064, lab
+    /// finding AD3-1).
+    pub identity_unresolvable_reason: Option<String>,
 }
 
 pub struct PermissionEvaluationInput {
