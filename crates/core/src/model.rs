@@ -345,6 +345,13 @@ pub fn group_sid_history_diagnostics(memberships: &[GroupMembership]) -> Vec<Per
 /// `memberOf` of an intermediate group entry was truncated by the
 /// server, so the chain could not be walked further. Renderers then
 /// label the path "chain not fully reconstructed".
+///
+/// `nodes` shows **one** shortest route. Which one is chosen when several
+/// equally short routes exist is deterministic (ADR 0063): walking back
+/// from the target, each hop takes the member group with the
+/// alphabetically first distinguished name among those one hop closer to
+/// the identity. All *other* entries into the target are listed in
+/// `also_via`, so a reader never mistakes the shown route for the only one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MembershipPath {
     pub nodes: Vec<Sid>,
@@ -352,6 +359,64 @@ pub struct MembershipPath {
     pub names: Vec<Option<String>>,
     pub source: MembershipPathSource,
     pub complete: bool,
+    /// Further groups through which `nodes[0]` **also** reaches the target
+    /// group, besides the last hop shown in `nodes`. Each entry is a group
+    /// the identity is itself (directly or transitively) a member of and
+    /// that is a direct member of the target. Non-empty means the identity
+    /// keeps the target membership even if the shown route is removed —
+    /// the explanation says so instead of implying a single route
+    /// (ADR 0063). Sorted for reproducible output. Empty when the shown
+    /// route is the only entry the resolver could see, and for rows
+    /// written before this field existed (`#[serde(default)]`).
+    #[serde(default)]
+    pub also_via: Vec<MembershipHop>,
+}
+
+/// One further entry into a target group — see [`MembershipPath::also_via`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MembershipHop {
+    pub sid: Sid,
+    /// Display name when the resolver knew one.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+impl MembershipHop {
+    /// `name (SID)` when a name is known, the bare SID otherwise.
+    pub fn display(&self) -> String {
+        match self.name.as_deref().filter(|n| !n.is_empty()) {
+            Some(name) => format!("{name} ({})", self.sid.0),
+            None => self.sid.0.clone(),
+        }
+    }
+}
+
+/// How many `also_via` entries renderers spell out before summarising the
+/// rest as "+N more" — keeps a step readable for a group that is reached
+/// through dozens of nested groups, while the full list stays in the data
+/// model (JSON export).
+pub const ALSO_VIA_DISPLAY_LIMIT: usize = 5;
+
+/// Renders `also_via` as `A (SID), B (SID) (+3 more)`, or `None` when the
+/// list is empty. Shared by the explanation path and the membership views
+/// so both word alternative routes identically.
+pub fn format_also_via(also_via: &[MembershipHop]) -> Option<String> {
+    if also_via.is_empty() {
+        return None;
+    }
+    let shown: Vec<String> = also_via
+        .iter()
+        .take(ALSO_VIA_DISPLAY_LIMIT)
+        .map(MembershipHop::display)
+        .collect();
+    let mut text = shown.join(", ");
+    if also_via.len() > ALSO_VIA_DISPLAY_LIMIT {
+        text.push_str(&format!(
+            " (+{} more)",
+            also_via.len() - ALSO_VIA_DISPLAY_LIMIT
+        ));
+    }
+    Some(text)
 }
 
 /// Source of a reconstructed membership chain.
@@ -374,11 +439,45 @@ pub enum MembershipPathSource {
 }
 
 impl GroupMembership {
+    /// How informative this entry is, for picking **one** entry per group SID
+    /// when the same group arrives through several resolution sources (e.g.
+    /// a domain-local group on a domain controller comes from LDAP *and* from
+    /// the local-group lookup). Higher is better, compared lexicographically:
+    /// **direct** beats nested, a **complete path** beats an incomplete one,
+    /// **more resolved names** beat fewer, and a **named** group beats an
+    /// unnamed one. Single source of truth for the membership report and the
+    /// explanation path (review 2026-07-01 finding 2, lab finding CLI3-1).
+    pub fn informativeness_rank(&self) -> (bool, bool, usize, bool) {
+        let (complete, resolved_names) = match &self.path {
+            Some(p) => (p.complete, p.names.iter().filter(|n| n.is_some()).count()),
+            None => (false, 0),
+        };
+        (
+            self.direct,
+            complete,
+            resolved_names,
+            self.group_name.is_some(),
+        )
+    }
+
     /// Human-readable description of how this membership arose — `"primary
     /// group"`, `"local group"`, `"direct"`, `"nested"`, or the resolved
-    /// chain `"via A → B"`. Shared by the CLI and GUI membership views so both
-    /// word it identically.
+    /// chain `"via A → B"` — followed by any further routes into the group
+    /// (`"; also through C"`, ADR 0063). Shared by the CLI and GUI membership
+    /// views so both word it identically.
     pub fn origin_label(&self) -> String {
+        let base = self.origin_label_base();
+        match self
+            .path
+            .as_ref()
+            .and_then(|p| format_also_via(&p.also_via))
+        {
+            Some(also) => format!("{base}; also a member through {also}"),
+            None => base,
+        }
+    }
+
+    fn origin_label_base(&self) -> String {
         if let Some(p) = &self.path {
             match p.source {
                 MembershipPathSource::PrimaryGroup => return "primary group".to_owned(),
@@ -412,6 +511,37 @@ impl GroupMembership {
             None => "nested".to_owned(),
         }
     }
+}
+
+/// One entry per group SID, keeping the most informative entry
+/// ([`GroupMembership::informativeness_rank`]) and the first-appearance
+/// order of each group SID for deterministic output. Used wherever the same
+/// group can arrive twice — the AD/LDAP memberships plus the target server's
+/// local-group memberships — so a group is listed once instead of once per
+/// source (lab finding CLI3-1). The token itself is a set and unaffected.
+pub fn best_membership_per_group(memberships: &[GroupMembership]) -> Vec<&GroupMembership> {
+    let mut order: Vec<&str> = Vec::new();
+    let mut best: std::collections::HashMap<&str, &GroupMembership> =
+        std::collections::HashMap::new();
+    for m in memberships {
+        let key = m.group_sid.0.as_str();
+        match best.get(key) {
+            None => {
+                order.push(key);
+                best.insert(key, m);
+            }
+            Some(existing) if m.informativeness_rank() > existing.informativeness_rank() => {
+                best.insert(key, m);
+            }
+            Some(_) => {}
+        }
+    }
+    // `order` drives the output; the map is only a lookup, so its iteration
+    // order never reaches the result.
+    order
+        .into_iter()
+        .filter_map(|k| best.get(k).copied())
+        .collect()
 }
 
 /// Well-known **privileged** role name if `sid` is a built-in or
@@ -1674,6 +1804,7 @@ mod tests {
                     names: names.into_iter().map(|n| n.map(str::to_owned)).collect(),
                     source,
                     complete,
+                    also_via: Vec::new(),
                 }),
                 ..base.clone()
             };
@@ -1722,6 +1853,85 @@ mod tests {
             "via S-1 \u{2192} S-3 (chain not fully reconstructed)"
         );
         assert_eq!(base.origin_label(), "nested");
+    }
+
+    fn hop(sid: &str, name: Option<&str>) -> MembershipHop {
+        MembershipHop {
+            sid: Sid(sid.to_owned()),
+            name: name.map(str::to_owned),
+        }
+    }
+
+    fn gm(
+        group: &str,
+        direct: bool,
+        complete: bool,
+        also_via: Vec<MembershipHop>,
+    ) -> GroupMembership {
+        GroupMembership {
+            member_sid: Sid("S-1-5-21-9-9-9-1000".to_owned()),
+            group_sid: Sid(group.to_owned()),
+            direct,
+            group_name: None,
+            path: Some(MembershipPath {
+                nodes: vec![Sid("S-1-5-21-9-9-9-1000".to_owned()), Sid(group.to_owned())],
+                names: vec![Some("u".to_owned()), Some("G".to_owned())],
+                source: MembershipPathSource::DomainGroup,
+                complete,
+                also_via,
+            }),
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn origin_label_names_further_routes() {
+        let m = gm(
+            "S-1-5-21-9-9-9-2000",
+            true,
+            true,
+            vec![
+                hop("S-1-5-21-9-9-9-2001", Some("gB")),
+                hop("S-1-5-21-9-9-9-2002", None),
+            ],
+        );
+        assert_eq!(
+            m.origin_label(),
+            "direct; also a member through gB (S-1-5-21-9-9-9-2001), S-1-5-21-9-9-9-2002"
+        );
+        let single = gm("S-1-5-21-9-9-9-2000", true, true, vec![]);
+        assert_eq!(single.origin_label(), "direct");
+    }
+
+    #[test]
+    fn format_also_via_spells_out_five_and_counts_the_rest() {
+        assert_eq!(format_also_via(&[]), None);
+        let hops: Vec<MembershipHop> = (0..7)
+            .map(|i| {
+                hop(
+                    &format!("S-1-5-21-9-9-9-{}", 3000 + i),
+                    Some(&format!("g{i}")),
+                )
+            })
+            .collect();
+        let text = format_also_via(&hops).expect("non-empty");
+        assert!(text.starts_with("g0 (S-1-5-21-9-9-9-3000), g1"), "{text}");
+        assert!(text.contains("g4 (S-1-5-21-9-9-9-3004)"), "{text}");
+        assert!(!text.contains("g5"), "{text}");
+        assert!(text.ends_with("(+2 more)"), "{text}");
+    }
+
+    #[test]
+    fn best_membership_per_group_keeps_the_best_entry_in_first_seen_order() {
+        let a_incomplete = gm("S-1-5-21-9-9-9-4001", false, false, vec![]);
+        let b = gm("S-1-5-21-9-9-9-4002", false, true, vec![]);
+        let a_complete = gm("S-1-5-21-9-9-9-4001", false, true, vec![]);
+        let list = vec![a_incomplete, b, a_complete];
+        let best = best_membership_per_group(&list);
+        let order: Vec<&str> = best.iter().map(|m| m.group_sid.0.as_str()).collect();
+        assert_eq!(order, ["S-1-5-21-9-9-9-4001", "S-1-5-21-9-9-9-4002"]);
+        assert!(best[0].path.as_ref().is_some_and(|p| p.complete));
     }
 
     #[test]

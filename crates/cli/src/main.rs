@@ -2090,7 +2090,9 @@ fn group_members_csv(report: &adpa_core::model::GroupMembersReport) -> String {
 }
 
 fn membership_csv(report: &adpa_core::model::MembershipReport) -> String {
-    let mut s = String::from("group_name,group_sid,direct,source,privileged_role\n");
+    // `origin` carries the chain and, since ADR 0063, every further route
+    // into the group — the same wording as the console and the GUI.
+    let mut s = String::from("group_name,group_sid,direct,source,privileged_role,origin\n");
     for m in &report.memberships {
         let source = m
             .path
@@ -2099,12 +2101,13 @@ fn membership_csv(report: &adpa_core::model::MembershipReport) -> String {
             .unwrap_or_default();
         let role = adpa_core::model::privileged_group_role(&m.group_sid).unwrap_or("");
         s.push_str(&format!(
-            "{},{},{},{},{}\n",
+            "{},{},{},{},{},{}\n",
             csv_field(m.group_name.as_deref().unwrap_or("")),
             csv_field(&m.group_sid.0),
             m.direct,
             csv_field(&source),
             csv_field(role),
+            csv_field(&m.origin_label()),
         ));
     }
     s
@@ -2362,6 +2365,61 @@ mod tests {
         let content = std::fs::read_to_string(&path).expect("read back");
         assert!(content.starts_with("group_name,"), "CSV written: {content}");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn membership_csv_origin_column_names_further_routes() {
+        use adpa_core::model::{
+            GroupMembership, Identity, IdentityKind, MembershipHop, MembershipPath,
+            MembershipPathSource, MembershipReport, Sid,
+        };
+        let user = Sid("S-1-5-21-1-2-3-1104".to_owned());
+        let group = Sid("S-1-5-21-1-2-3-2000".to_owned());
+        let report = MembershipReport {
+            identity: Identity {
+                sid: user.clone(),
+                name: Some("alice".to_owned()),
+                domain: None,
+                kind: IdentityKind::User,
+                disabled: false,
+                user_principal_name: None,
+                sid_history_count: 0,
+                sid_history: Vec::new(),
+            },
+            ad_connected: true,
+            memberships: vec![GroupMembership {
+                member_sid: user.clone(),
+                group_sid: group.clone(),
+                direct: true,
+                group_name: Some("GG_Finance".to_owned()),
+                path: Some(MembershipPath {
+                    nodes: vec![user, group],
+                    names: vec![Some("alice".to_owned()), Some("GG_Finance".to_owned())],
+                    source: MembershipPathSource::DomainGroup,
+                    complete: true,
+                    also_via: vec![MembershipHop {
+                        sid: Sid("S-1-5-21-1-2-3-2001".to_owned()),
+                        name: Some("GG_Nested".to_owned()),
+                    }],
+                }),
+                group_sid_history_count: 0,
+                group_sid_history: Vec::new(),
+            }],
+            diagnostics: vec![],
+        };
+        let csv = super::membership_csv(&report);
+        let mut lines = csv.lines();
+        assert_eq!(
+            lines.next(),
+            Some("group_name,group_sid,direct,source,privileged_role,origin")
+        );
+        assert_eq!(
+            lines.next(),
+            Some(
+                "GG_Finance,S-1-5-21-1-2-3-2000,true,DomainGroup,,\
+                 direct; also a member through GG_Nested (S-1-5-21-1-2-3-2001)"
+            )
+        );
     }
 
     // --- Members command boundaries (reviews 2026-07-03: ChatGPT C1/C2, Fable) ---

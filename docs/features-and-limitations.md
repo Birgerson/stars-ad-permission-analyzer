@@ -33,7 +33,9 @@ that applies.
 - **Standalone group-membership view** (`adpa groups` / the GUI
   `Groups` tab): the recursive memberships of an identity on their own,
   with **no** path/ACL/rights, each membership labelled by how it arose
-  ("direct", "primary group", "local group", "via A → B"), and
+  ("direct", "primary group", "local group", "via A → B") plus every
+  further route into the group ("also a member through C"; the chain
+  shown is reproducible from run to run, ADR 0063), and
   membership in a well-known **privileged** group (Administrators,
   Domain/Enterprise/Schema Admins, GPO Creator Owners, Key Admins,
   built-in Operators) flagged as the high-value audit signal. It carries

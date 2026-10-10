@@ -561,7 +561,17 @@ pipeline above and stop at the resolution:
   classification.
 - `GroupMembership::origin_label()` (in `adpa_core`) renders how a
   membership arose ("direct", "primary group", "local group", or the
-  chain "via A → B") for both surfaces.
+  chain "via A → B") for both surfaces, followed by every further route
+  into the group ("; also a member through C, D", ADR 0063).
+- **Route reconstruction is deterministic (ADR 0063).** The resolver builds
+  the membership graph from the transitive result set and each group's
+  sorted `memberOf`, computes hop distances by BFS, and picks each group's
+  predecessor by a fixed rule: among the member groups one hop closer to
+  the identity, the alphabetically first distinguished name. All other
+  entries into the group are kept in `MembershipPath::also_via`. Until
+  v1.9.0 the search was seeded from a `HashSet` (random order per process),
+  so a group reachable through several equally short chains showed a
+  different chain on each run.
 - `privileged_group_role(&Sid)` flags membership in a well-known
   privileged group — built-in aliases by their constant SID
   (`S-1-5-32-544` …) and domain groups by their well-known RID suffix
@@ -763,12 +773,17 @@ chapter 10).
 `PermissionPath::steps` is populated in parallel with mask computation:
 
 ```text
-- User S-1-5-21-...-1001 (CORP\alice)
-- Member of S-1-5-21-...-1100 (CORP\Domain Users) [direct, source: LDAP_MATCHING_RULE_IN_CHAIN]
-- Member of S-1-5-32-545 (BUILTIN\Users) [via local server group chain]
-- Allow ACE for S-1-5-32-545 → Read,Execute (inherited from C:\)
-- Effective: Read,Execute (0x001200A9)
+- User: alice (S-1-5-21-...-1001)
+- Member of Domain Users (S-1-5-21-...-513) [direct, source: PrimaryGroup]
+- Member of GG_Finance (S-1-5-21-...-1100) [via alice → GG_Team → GG_Finance, source: DomainGroup] [also a member through GG_Audit (S-1-5-21-...-1102) — the shown chain is not the only route]
+- Member of BUILTIN\Users (S-1-5-32-545) [via alice → Domain Users → BUILTIN\Users, source: LocalGroup]
+- Allow ACE [inherited] for BUILTIN\Users (S-1-5-32-545) → Read & Execute (0x001200A9) [granted Read & Execute (0x001200A9)]
+- NTFS effective: Read & Execute (0x001200A9)
 ```
+
+The chain of each membership step is reproducible (ADR 0063): one shortest
+route chosen by a fixed rule, with every further entry into the group named
+in the same step.
 
 `sid_names` is built up front from the membership names and the
 DACL trustee SIDs — one LSA call per unique SID, deduplicated across

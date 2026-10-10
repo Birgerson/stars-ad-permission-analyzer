@@ -169,7 +169,11 @@ user can effectively do there.
 - effective right (Read / Write / Modify / Full Control),
 - NTFS and share rights separately,
 - explainable permission path
-  (`User → Group → … → ACE → normalized right`),
+  (`User → Group → … → ACE → normalized right`). Each membership step
+  shows one shortest chain — the same one on every run — and names every
+  further group through which the user also reaches that group
+  ("also a member through …"). If such a note is present, removing the
+  user from the shown chain alone does **not** remove the membership,
 - **all diagnostic markers of this result**, listed under
   *Diagnostics* with the same wording the CLI and the reports use —
   informational ones with `ℹ`, warnings with `⚠` in the attention
@@ -218,7 +222,10 @@ panel; this tab answers the question directly.
   signal, shown in the *concern* colour;
 - the recursive group list, each entry showing **how the membership
   arose** ("direct", "primary group", "local group", or the chain
-  "via A → B");
+  "via A → B"), plus every further route into the group ("also a member
+  through C") — so a membership that is reachable twice is never shown as
+  if one route were the only one. The CSV export carries the same text in
+  its `origin` column;
 - the same diagnostic markers as elsewhere (SAM/LSA fallback, FSP,
   Global Catalog, outside-base, `sIDHistory`, a resolution timeout), so
   an incomplete list never looks complete.

@@ -16,7 +16,7 @@ use std::os::windows::ffi::OsStrExt;
 
 use adpa_core::{
     error::CoreError,
-    model::{GroupMembership, Identity, MembershipPath, MembershipPathSource, Sid},
+    model::{GroupMembership, Identity, MembershipHop, MembershipPath, MembershipPathSource, Sid},
 };
 use tracing::{debug, warn};
 use win_safe::netapi::NetApiBuffer;
@@ -436,66 +436,100 @@ pub fn resolve_local_group_chains(
                         names: vec![user_name.map(str::to_owned), Some(lg_display.clone())],
                         source: MembershipPathSource::LocalGroup,
                         complete: false,
+                        also_via: Vec::new(),
                     },
                 ));
                 continue;
             }
         };
 
-        //   1. user_sid direct → chain with 2 nodes
-        //      chain with 3 nodes (user → mediator → L)
-        // Candidate member SIDs in order of preference:
-        //   1. user_sid directly → 2-node chain
-        //   2. a known token SID (own or a domain group) → 3-node chain
-        //      (user → mediator → L)
-        let mut chain_via_self = false;
-        let mut mediator: Option<(Sid, Option<String>)> = None;
-        for m in &members {
-            let Some(ref msid) = m.sid else { continue };
-            if msid.0 == user_sid.0 {
-                chain_via_self = true;
-                break;
-            }
-            if mediator.is_none() {
-                if let Some(name) = known_member_sids_to_names.get(&msid.0) {
-                    mediator = Some((msid.clone(), Some(name.clone())));
-                }
-            }
-        }
-
-        let path = if chain_via_self {
-            MembershipPath {
-                nodes: vec![user_sid.clone(), lg.sid.clone()],
-                names: vec![user_name.map(str::to_owned), Some(lg_display.clone())],
-                source: MembershipPathSource::LocalGroup,
-                complete: true,
-            }
-        } else if let Some((med_sid, med_name)) = mediator {
-            MembershipPath {
-                nodes: vec![user_sid.clone(), med_sid.clone(), lg.sid.clone()],
-                names: vec![
-                    user_name.map(str::to_owned),
-                    med_name,
-                    Some(lg_display.clone()),
-                ],
-                source: MembershipPathSource::LocalGroup,
-                complete: true,
-            }
-        } else {
-            // ehrlich als incomplete kennzeichnen.
-            // Likely nested via another local group — honestly flag as
-            // incomplete.
-            MembershipPath {
-                nodes: vec![user_sid.clone(), lg.sid.clone()],
-                names: vec![user_name.map(str::to_owned), Some(lg_display.clone())],
-                source: MembershipPathSource::LocalGroup,
-                complete: false,
-            }
-        };
-
-        out.push((lg.sid, Some(lg_display), path));
+        out.push((
+            lg.sid.clone(),
+            Some(lg_display.clone()),
+            local_group_path(
+                user_sid,
+                user_name,
+                &lg.sid,
+                &lg_display,
+                &members,
+                known_member_sids_to_names,
+            ),
+        ));
     }
     Ok(out)
+}
+
+/// Builds the membership path into one local group from its direct members.
+///
+/// Every member that is the user or one of the user's known token groups is
+/// a real entry into the group. Preference for the shown chain: the user
+/// itself (2-node chain) — otherwise the known group with the
+/// alphabetically first name, then SID (3-node chain `user → group →
+/// local group`). All further entries go into `also_via`, sorted the same
+/// way, so neither the member order the API returned nor the order of the
+/// lookup map can change the output (ADR 0063). No entry at all — the user
+/// is probably nested via another local group — yields an honestly
+/// incomplete 2-node path.
+fn local_group_path(
+    user_sid: &Sid,
+    user_name: Option<&str>,
+    group_sid: &Sid,
+    group_display: &str,
+    members: &[LocalGroupMember],
+    known_member_sids_to_names: &std::collections::HashMap<String, String>,
+) -> MembershipPath {
+    let via_self = members
+        .iter()
+        .any(|m| m.sid.as_ref().is_some_and(|s| s.0 == user_sid.0));
+    let mut mediators: Vec<MembershipHop> = members
+        .iter()
+        .filter_map(|m| m.sid.as_ref())
+        .filter(|s| s.0 != user_sid.0)
+        .filter_map(|s| {
+            known_member_sids_to_names
+                .get(&s.0)
+                .map(|name| MembershipHop {
+                    sid: s.clone(),
+                    name: Some(name.clone()),
+                })
+        })
+        .collect();
+    mediators.sort_by(|a, b| {
+        let an = a.name.as_deref().unwrap_or("").to_lowercase();
+        let bn = b.name.as_deref().unwrap_or("").to_lowercase();
+        an.cmp(&bn).then_with(|| a.sid.0.cmp(&b.sid.0))
+    });
+    mediators.dedup_by(|a, b| a.sid == b.sid);
+
+    let user_label = user_name.map(str::to_owned);
+    if via_self {
+        return MembershipPath {
+            nodes: vec![user_sid.clone(), group_sid.clone()],
+            names: vec![user_label, Some(group_display.to_owned())],
+            source: MembershipPathSource::LocalGroup,
+            complete: true,
+            also_via: mediators,
+        };
+    }
+    let mut rest = mediators.into_iter();
+    match rest.next() {
+        Some(first) => MembershipPath {
+            nodes: vec![user_sid.clone(), first.sid.clone(), group_sid.clone()],
+            names: vec![user_label, first.name, Some(group_display.to_owned())],
+            source: MembershipPathSource::LocalGroup,
+            complete: true,
+            also_via: rest.collect(),
+        },
+        // Likely nested via another local group — honestly flag as
+        // incomplete.
+        None => MembershipPath {
+            nodes: vec![user_sid.clone(), group_sid.clone()],
+            names: vec![user_label, Some(group_display.to_owned())],
+            source: MembershipPathSource::LocalGroup,
+            complete: false,
+            also_via: Vec::new(),
+        },
+    }
 }
 
 /// Identity-aware variant of [`resolve_local_group_chains`] using the
@@ -821,5 +855,93 @@ mod tests {
         );
         let candidates = format_account_candidates_for_local_groups(&id);
         assert_eq!(candidates[0], "alice@trusted.example");
+    }
+
+    // --- local_group_path: deterministic mediator choice (ADR 0063) ---
+
+    const USER_SID: &str = "S-1-5-21-1-2-3-1000";
+    const LOCAL_ADMINS: &str = "S-1-5-32-544";
+
+    fn member(sid: &str) -> LocalGroupMember {
+        LocalGroupMember {
+            sid: Some(Sid(sid.to_owned())),
+            display_name: None,
+        }
+    }
+
+    fn known() -> std::collections::HashMap<String, String> {
+        let mut m = std::collections::HashMap::new();
+        m.insert(USER_SID.to_owned(), "alice".to_owned());
+        m.insert("S-1-5-21-1-2-3-512".to_owned(), "Domain Admins".to_owned());
+        m.insert(
+            "S-1-5-21-1-2-3-519".to_owned(),
+            "Enterprise Admins".to_owned(),
+        );
+        m.insert("S-1-5-21-1-2-3-1500".to_owned(), "Admins-Tier0".to_owned());
+        m
+    }
+
+    fn path_for(members: &[LocalGroupMember]) -> MembershipPath {
+        local_group_path(
+            &Sid(USER_SID.to_owned()),
+            Some("alice"),
+            &Sid(LOCAL_ADMINS.to_owned()),
+            "BUILTIN\\Administrators",
+            members,
+            &known(),
+        )
+    }
+
+    #[test]
+    fn local_group_mediator_choice_ignores_member_order() {
+        let orders = [
+            [
+                "S-1-5-21-1-2-3-519",
+                "S-1-5-21-1-2-3-512",
+                "S-1-5-21-1-2-3-1500",
+            ],
+            [
+                "S-1-5-21-1-2-3-1500",
+                "S-1-5-21-1-2-3-519",
+                "S-1-5-21-1-2-3-512",
+            ],
+            [
+                "S-1-5-21-1-2-3-512",
+                "S-1-5-21-1-2-3-1500",
+                "S-1-5-21-1-2-3-519",
+            ],
+        ];
+        let paths: Vec<MembershipPath> = orders
+            .iter()
+            .map(|o| path_for(&o.iter().map(|s| member(s)).collect::<Vec<_>>()))
+            .collect();
+        assert!(paths.windows(2).all(|w| w[0] == w[1]));
+        let p = &paths[0];
+        assert!(p.complete);
+        // Alphabetically first name wins the shown chain …
+        assert_eq!(p.nodes[1], Sid("S-1-5-21-1-2-3-1500".to_owned()));
+        // … and the other two are disclosed as further routes.
+        let also: Vec<&str> = p.also_via.iter().map(|h| h.sid.0.as_str()).collect();
+        assert_eq!(also, ["S-1-5-21-1-2-3-512", "S-1-5-21-1-2-3-519"]);
+    }
+
+    #[test]
+    fn direct_local_membership_still_lists_mediating_groups() {
+        let p = path_for(&[
+            member("S-1-5-21-1-2-3-512"),
+            member(USER_SID),
+            member("S-1-5-21-9-9-9-777"), // unknown to the token: no route
+        ]);
+        assert_eq!(p.nodes.len(), 2, "direct chain");
+        assert!(p.complete);
+        let also: Vec<&str> = p.also_via.iter().map(|h| h.sid.0.as_str()).collect();
+        assert_eq!(also, ["S-1-5-21-1-2-3-512"]);
+    }
+
+    #[test]
+    fn local_group_without_known_member_is_incomplete() {
+        let p = path_for(&[member("S-1-5-21-9-9-9-777")]);
+        assert!(!p.complete);
+        assert!(p.also_via.is_empty());
     }
 }

@@ -433,6 +433,7 @@ pub fn resolve_identity_via_sam(sid_str: &str) -> Result<SamResolution, CoreErro
                                     ],
                                     source: MembershipPathSource::DomainGroup,
                                     complete: true,
+                                    also_via: Vec::new(),
                                 }),
                                 // The SAM/NetAPI path cannot read sIDHistory;
                                 // that gap is covered by the
