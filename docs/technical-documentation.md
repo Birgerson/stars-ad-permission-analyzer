@@ -827,7 +827,10 @@ chapter 10).
 
 The chain of each membership step is reproducible (ADR 0063): one shortest
 route chosen by a fixed rule, with every further entry into the group named
-in the same step.
+in the same step. A group that arrives from two sources (LDAP and the
+local-group lookup on a domain controller) is one step;
+`merged_memberships_per_group` keeps the most informative entry and adds the
+other source's mediator to its further routes.
 
 `sid_names` is built up front from the membership names and the
 DACL trustee SIDs — one LSA call per unique SID, deduplicated across

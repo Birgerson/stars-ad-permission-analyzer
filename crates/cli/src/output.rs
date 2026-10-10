@@ -50,6 +50,19 @@ pub(crate) fn dacl_state_label(null_dacl: bool, dacl_is_empty: bool) -> Option<&
     }
 }
 
+/// Inheritance line of the DACL block. Lab finding CLI3-2: a NULL DACL has
+/// no ACEs, so nothing is inherited — "Active (inheriting from parent)" was
+/// wrong there.
+pub(crate) fn inheritance_label(null_dacl: bool, inheritance_disabled: bool) -> &'static str {
+    if null_dacl {
+        "n/a (NULL DACL — no ACL, nothing is inherited)"
+    } else if inheritance_disabled {
+        "Protected (inheritance disabled)"
+    } else {
+        "Active (inheriting from parent)"
+    }
+}
+
 pub fn print_report(
     fso: &FileSystemObject,
     user_input: &str,
@@ -101,11 +114,7 @@ pub fn print_report(
         .as_ref()
         .map(|s| s.0.as_str())
         .unwrap_or("(unknown)");
-    let inherit = if fso.inheritance_disabled {
-        "Protected (inheritance disabled)"
-    } else {
-        "Active (inheriting from parent)"
-    };
+    let inherit = inheritance_label(fso.null_dacl, fso.inheritance_disabled);
     println!("  Owner       : {owner}");
     println!("  Inheritance : {inherit}");
 
@@ -874,7 +883,7 @@ pub fn print_run_errors(run: &ScanRun, errors: &[ScanError]) {
 
 #[cfg(test)]
 mod tests {
-    use super::dacl_state_label;
+    use super::{dacl_state_label, inheritance_label};
 
     #[test]
     fn null_dacl_is_full_control() {
@@ -895,6 +904,26 @@ mod tests {
         assert_eq!(
             dacl_state_label(false, true),
             Some("(empty DACL — no access)")
+        );
+    }
+
+    #[test]
+    fn null_dacl_inheritance_is_not_claimed_active() {
+        assert_eq!(
+            inheritance_label(true, false),
+            "n/a (NULL DACL — no ACL, nothing is inherited)"
+        );
+        assert_eq!(
+            inheritance_label(true, true),
+            "n/a (NULL DACL — no ACL, nothing is inherited)"
+        );
+        assert_eq!(
+            inheritance_label(false, true),
+            "Protected (inheritance disabled)"
+        );
+        assert_eq!(
+            inheritance_label(false, false),
+            "Active (inheriting from parent)"
         );
     }
 
