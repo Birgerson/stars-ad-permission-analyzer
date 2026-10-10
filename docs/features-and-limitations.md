@@ -29,7 +29,13 @@ that applies.
   completed through range retrieval when AD returns them in 1500-value
   chunks, and every group the resolution could not include (primary group
   outside the base, groups outside the resolved set, groups without a
-  readable SID) is reported instead of dropped (ADR 0066).
+  readable SID) is reported instead of dropped (ADR 0066). Only
+  **security** groups count — distribution groups and groups reached only
+  through one are left out, as Windows does — and the resolved set is
+  cross-checked against the account's `tokenGroups` on the domain
+  controller; every difference is reported (ADR 0067). An account in more
+  than 1,015 groups cannot log on (Windows token limit) and is reported as
+  not determinable.
 - **Primary group** is evaluated separately via `primaryGroupID`.
 - **`disabled` status** is read in the LDAP path via
   `userAccountControl` and in the SAM path via `NetUserGetInfo`
@@ -215,6 +221,7 @@ out; the report font is Arial.
 | `IdentityNotResolvable { reason }` | Concern | **yes** | The SID could not be resolved and is **not** proven orphaned — it belongs to a trusted domain (named), another domain, lies outside a base that is only an OU, or its domain could not be determined. Its memberships are unknown; the rights computed for the bare SID can be too low or too high (ADR 0064). |
 | `IdentityOrphaned` | Neutral | no | The SID belongs to the configured domain, the base covers that whole domain, and no object exists: the account no longer exists. Nobody can log on with it; an ACE naming it is a dead entry (ADR 0064). |
 | `GroupResolutionIncomplete { reason }` | Concern | **yes** | A successful group resolution may still lack groups — a primary group that could not be read, a group without a readable SID, memberships in groups outside the resolved set (e.g. outside a base that is only an OU), an unresolvable local group. `reason` names them (ADR 0066). |
+| `NonSecurityGroupsExcluded { groups }` | Neutral | no | Distribution groups and groups reached only through one are not in the Windows token (lab-confirmed via the DC's `tokenGroups` and Authz); they were left out of the evaluated token and are named here (ADR 0067). |
 | `LogonDependentTrustees { sids, min_mask, max_mask }` | Notice | **yes** | Applicable ACEs for well-known SIDs whose presence depends on how the user logs on (This Organization, authentication assertion / package, console or remote-interactive logon, local account) decide bits of this result; the NTFS right lies between the two bounds. If the bounds were equal the ACEs could not matter and no marker is attached (ADR 0065). |
 | `MembersViaPrimaryGroupIncluded { count }` | Neutral | no | *(members view)* `count` members were found via their `primaryGroupID` and included — they do not appear in the `member` attribute, so this makes the completeness of the count transparent. |
 | `UniversalGroupCrossDomainMembersNotVisible` | Neutral | **yes** | *(members view)* The group is **universal** and was queried over a plain domain bind; members from other domains of the forest are not visible — use a Global Catalog bind to see them. |

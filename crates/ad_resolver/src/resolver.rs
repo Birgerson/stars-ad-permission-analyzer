@@ -443,6 +443,7 @@ impl LdapResolver {
                      no group membership could be resolved",
                     sid.0, self.config.base_dn
                 )],
+                excluded_groups: Vec::new(),
             });
         };
 
@@ -485,6 +486,22 @@ impl LdapResolver {
             ldap_client::complete_ranged_attribute(&mut ldap, pg_entry, "memberOf").await?;
         }
 
+        // ADR 0067: the DC's own token group list, for the cross-check. A GC
+        // bind sees only the global/universal part, so it is not compared.
+        let token_groups = if self.config.global_catalog {
+            None
+        } else {
+            match ldap_client::search_token_groups(&mut ldap, &entry.dn).await {
+                Ok(t) => t,
+                Err(e) => {
+                    gaps.push(format!(
+                        "the account's tokenGroups could not be read for the cross-check ({e})"
+                    ));
+                    None
+                }
+            }
+        };
+
         ldap_client::disconnect(ldap).await;
 
         // 5)–8) Assemble the memberships with concrete, reproducible chains
@@ -496,9 +513,15 @@ impl LdapResolver {
         let assembled =
             assemble_memberships(sid, &entry, primary_ref, &transitive_groups, &pg_parents);
         gaps.extend(assembled.gaps);
+        gaps.extend(token_size_gap(&assembled.memberships));
+        match &token_groups {
+            Some(token) => gaps.extend(token_groups_gaps(&assembled.memberships, token)),
+            None => debug!(sid = %sid.0, "tokenGroups not available — no cross-check"),
+        }
         Ok(GroupMembershipResolution {
             memberships: assembled.memberships,
             gaps,
+            excluded_groups: assembled.excluded,
         })
     }
 }
@@ -540,12 +563,26 @@ fn sorted_member_of(entry: &RawEntry) -> Vec<String> {
 }
 
 /// One group of the principal's membership closure.
+#[derive(Clone)]
 struct ClosureGroup<'a> {
     entry: &'a RawEntry,
     sid: Sid,
     name: Option<String>,
     /// Lower-cased DNs of the groups this group is a direct member of.
     parents: Vec<String>,
+    /// `Some(true)` security group, `Some(false)` distribution group, `None`
+    /// when `groupType` is not readable (AD4-4).
+    security: Option<bool>,
+}
+
+/// Security bit of `groupType` (0x80000000; the attribute is signed, so a
+/// security group is negative). `None` when the attribute is missing or not a
+/// number — then whether the group is in the token is unknown.
+fn group_is_security(entry: &RawEntry) -> Option<bool> {
+    entry
+        .first_attr("groupType")
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .map(|gt| gt & 0x8000_0000 != 0)
 }
 
 /// Hop distances, chosen predecessors and reverse edges over the
@@ -718,6 +755,12 @@ fn assemble_memberships(
         if group_sid == *sid {
             continue;
         }
+        // The primary group is always a security group (AD enforces it).
+        let security = if primary_entry.is_some_and(|p| std::ptr::eq(p, entry)) {
+            Some(true)
+        } else {
+            group_is_security(entry)
+        };
         closure.insert(
             dn,
             ClosureGroup {
@@ -725,9 +768,59 @@ fn assemble_memberships(
                 sid: group_sid,
                 name: entry_display_name(entry),
                 parents: sorted_member_of(entry),
+                security,
             },
         );
     }
+
+    // AD4-4 (lab-confirmed 2026-10-10): Windows puts only **security**
+    // groups into the token, and nesting through a distribution group does
+    // not make anyone a member of the groups above it — the DC's
+    // `tokenGroups` of a user in distribution group D ∈ security group S
+    // contain neither D nor S. The transitive LDAP search returns both, so
+    // keep only groups reachable from the principal through security groups.
+    let direct_dns_all: BTreeSet<String> = sorted_member_of(principal).into_iter().collect();
+    let primary_dn_all: Option<String> = primary_entry.map(|e| e.dn.to_ascii_lowercase());
+    let mut seeds_all = direct_dns_all.clone();
+    if let Some(dn) = &primary_dn_all {
+        seeds_all.insert(dn.clone());
+    }
+    let full_routes = RouteTable::build(&closure, &seeds_all);
+    let candidates: BTreeMap<String, ClosureGroup<'_>> = closure
+        .iter()
+        .filter(|(_, g)| g.security != Some(false))
+        .map(|(dn, g)| (dn.clone(), g.clone()))
+        .collect();
+    let security_routes = RouteTable::build(&candidates, &seeds_all);
+    let mut excluded: Vec<String> = Vec::new();
+    let mut unknown_type: BTreeSet<String> = BTreeSet::new();
+    for (dn, g) in &closure {
+        let label = match &g.name {
+            Some(n) => format!("{n} ({})", g.entry.dn),
+            None => g.entry.dn.clone(),
+        };
+        if g.security == Some(false) {
+            excluded.push(format!("{label} — distribution group"));
+        } else if !security_routes.dist.contains_key(dn) && full_routes.dist.contains_key(dn) {
+            excluded.push(format!(
+                "{label} — reached only through a distribution group"
+            ));
+        } else if g.security.is_none() {
+            unknown_type.insert(g.entry.dn.clone());
+        }
+    }
+    let excluded_dns: BTreeSet<String> = closure
+        .iter()
+        .filter(|(dn, g)| {
+            g.security == Some(false)
+                || (!security_routes.dist.contains_key(*dn) && full_routes.dist.contains_key(*dn))
+        })
+        .map(|(dn, _)| dn.clone())
+        .collect();
+    let closure: BTreeMap<String, ClosureGroup<'_>> = candidates
+        .into_iter()
+        .filter(|(dn, _)| !excluded_dns.contains(dn))
+        .collect();
 
     // ADR 0066: memberships in groups that are not part of the resolved
     // set — typically outside the configured LDAP base or in another
@@ -745,6 +838,7 @@ fn assemble_memberships(
         .chain(closure.values().flat_map(|g| g.parents.iter()))
     {
         if !closure.contains_key(dn)
+            && !excluded_dns.contains(dn)
             && *dn != principal_dn
             && !without_sid.iter().any(|w| w.eq_ignore_ascii_case(dn))
         {
@@ -752,6 +846,14 @@ fn assemble_memberships(
         }
     }
     let mut gaps: Vec<String> = Vec::new();
+    if !unknown_type.is_empty() {
+        gaps.push(format!(
+            "the groupType of {} group(s) is not readable, so whether they are security \
+             groups (and in the token) is unknown; they were counted: {}",
+            unknown_type.len(),
+            summarize_dns(&unknown_type)
+        ));
+    }
     if !without_sid.is_empty() {
         gaps.push(format!(
             "{} group(s) of the transitive result have no readable objectSid and are not \
@@ -893,13 +995,89 @@ fn assemble_memberships(
         });
     }
 
-    AssembledMemberships { memberships, gaps }
+    AssembledMemberships {
+        memberships,
+        gaps,
+        excluded,
+    }
 }
 
-/// Memberships plus the gaps found while assembling them (ADR 0066).
+/// Memberships plus the gaps found while assembling them (ADR 0066) and the
+/// groups left out because Windows would not put them into the token
+/// (AD4-4, ADR 0067).
 struct AssembledMemberships {
     memberships: Vec<GroupMembership>,
     gaps: Vec<String>,
+    excluded: Vec<String>,
+}
+
+/// Compares the reconstructed group set with the DC's own `tokenGroups`
+/// (ADR 0067). Every difference is a gap: a group Stars counts that the DC
+/// leaves out could over-report, a group the DC lists that Stars missed
+/// could under-report. Historical SIDs of the counted groups count as
+/// counted (the token carries them as well).
+fn token_groups_gaps(memberships: &[GroupMembership], token_groups: &[String]) -> Vec<String> {
+    let counted: BTreeSet<String> = memberships
+        .iter()
+        .flat_map(|m| std::iter::once(&m.group_sid).chain(m.group_sid_history.iter()))
+        .map(|s| s.0.to_ascii_uppercase())
+        .collect();
+    let primary_counted: BTreeSet<String> = memberships
+        .iter()
+        .map(|m| m.group_sid.0.to_ascii_uppercase())
+        .collect();
+    let token: BTreeSet<String> = token_groups
+        .iter()
+        .map(|s| s.to_ascii_uppercase())
+        .collect();
+    let extra: BTreeSet<String> = primary_counted.difference(&token).cloned().collect();
+    let missing: BTreeSet<String> = token.difference(&counted).cloned().collect();
+    let mut gaps = Vec::new();
+    if !extra.is_empty() {
+        gaps.push(format!(
+            "{} group(s) were resolved but are not in the account's tokenGroups on the domain \
+             controller — the computed rights may be too high: {}",
+            extra.len(),
+            summarize_dns(&extra)
+        ));
+    }
+    if !missing.is_empty() {
+        gaps.push(format!(
+            "the account's tokenGroups on the domain controller contain {} group SID(s) the \
+             group resolution did not find — the computed rights may be too low: {}",
+            missing.len(),
+            summarize_dns(&missing)
+        ));
+    }
+    gaps
+}
+
+/// Most group SIDs a Windows logon token can carry: a token holds at most
+/// 1,024 SIDs, of which the logon itself adds several well-known ones, so an
+/// account in more than 1,015 groups (SID history included) fails to log on
+/// ("too many security IDs", Microsoft KB 328889).
+const MAX_TOKEN_GROUP_SIDS: usize = 1015;
+
+/// A gap when the resolved groups exceed what fits into a logon token
+/// (ADR 0067). Such an account cannot log on at all, and the DC's own
+/// `tokenGroups` is then not the full set either (lab: 3,201 security groups
+/// in the transitive closure, 2,049 in `tokenGroups`) — so neither the
+/// computed rights nor the cross-check describe a real access.
+fn token_size_gap(memberships: &[GroupMembership]) -> Option<String> {
+    let sids: BTreeSet<String> = memberships
+        .iter()
+        .flat_map(|m| std::iter::once(&m.group_sid).chain(m.group_sid_history.iter()))
+        .map(|s| s.0.to_ascii_uppercase())
+        .collect();
+    (sids.len() > MAX_TOKEN_GROUP_SIDS).then(|| {
+        format!(
+            "the account is in {} security group SID(s) (SID history included) — more than \
+             the {MAX_TOKEN_GROUP_SIDS} that fit into a Windows logon token; a logon of this \
+             account fails (\"too many security IDs\"), so its real access cannot be derived \
+             from the group set",
+            sids.len()
+        )
+    })
 }
 
 /// First three DNs of a set, then "(+N more)" — keeps a gap reason short
@@ -1631,6 +1809,8 @@ mod tests {
                 member_of.iter().map(|p| dn_of(p)).collect(),
             );
         }
+        // Global security group (ADS_GROUP_TYPE_GLOBAL | SECURITY_ENABLED).
+        attrs.insert("groupType".to_string(), vec!["-2147483646".to_string()]);
         let mut bin = HashMap::new();
         let mut subauths = DOM.to_vec();
         subauths.push(rid);
@@ -1640,6 +1820,99 @@ mod tests {
             attrs,
             bin_attrs: bin,
         }
+    }
+
+    /// Global **distribution** group (groupType 2).
+    fn dist_entry(name: &str, rid: u32, member_of: &[&str]) -> RawEntry {
+        let mut e = graph_entry(name, rid, member_of);
+        e.attrs
+            .insert("groupType".to_string(), vec!["2".to_string()]);
+        e
+    }
+
+    // --- AD4-4 / ADR 0067: distribution groups are not in the token ---
+
+    #[test]
+    fn distribution_group_and_groups_reached_only_through_it_are_excluded() {
+        // The lab case: u ∈ dDist (distribution) ∈ gSecOver (security).
+        // gBoth is reached through dDist AND through the security group gA —
+        // it stays, via the security route only.
+        let user = graph_entry("u", 1000, &["dDist", "gA"]);
+        let groups = vec![
+            dist_entry("dDist", 1100, &["gSecOver", "gBoth"]),
+            graph_entry("gSecOver", 1200, &[]),
+            graph_entry("gA", 1300, &["gBoth"]),
+            graph_entry("gBoth", 1400, &[]),
+        ];
+        let a = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]);
+        let sids: Vec<Sid> = a.memberships.iter().map(|m| m.group_sid.clone()).collect();
+        assert_eq!(sids, [sid_of(1300), sid_of(1400)], "only gA and gBoth");
+        let both = membership_for(&a.memberships, 1400);
+        assert_eq!(chain_names(both), ["u", "gA", "gBoth"]);
+        assert!(
+            also_via_names(both).is_empty(),
+            "dDist is not a route into the token"
+        );
+        assert_eq!(a.excluded.len(), 2, "{:?}", a.excluded);
+        assert!(a
+            .excluded
+            .iter()
+            .any(|e| e.starts_with("dDist") && e.ends_with("distribution group")));
+        assert!(a.excluded.iter().any(|e| e.starts_with("gSecOver")
+            && e.ends_with("reached only through a distribution group")));
+        assert!(a.gaps.is_empty(), "{:?}", a.gaps);
+    }
+
+    #[test]
+    fn unreadable_group_type_is_a_gap_not_a_guess() {
+        let user = graph_entry("u", 1000, &["gX"]);
+        let mut gx = graph_entry("gX", 1100, &[]);
+        gx.attrs.remove("groupType");
+        let a = assemble_memberships(&sid_of(1000), &user, None, &[gx], &[]);
+        assert_eq!(a.memberships.len(), 1, "counted");
+        assert!(a
+            .gaps
+            .iter()
+            .any(|g| g.contains("groupType of 1 group(s) is not readable")));
+    }
+
+    #[test]
+    fn token_groups_cross_check_names_both_directions() {
+        let user = graph_entry("u", 1000, &["gA", "gB"]);
+        let groups = vec![graph_entry("gA", 1100, &[]), graph_entry("gB", 1200, &[])];
+        let a = assemble_memberships(&sid_of(1000), &user, None, &groups, &[]);
+        // Exact match → no gap.
+        let same = vec![sid_of(1100).0, sid_of(1200).0];
+        assert!(token_groups_gaps(&a.memberships, &same).is_empty());
+        // gB missing from tokenGroups, an unknown SID present.
+        let differing = vec![sid_of(1100).0, sid_of(1999).0];
+        let gaps = token_groups_gaps(&a.memberships, &differing);
+        assert_eq!(gaps.len(), 2, "{gaps:?}");
+        assert!(gaps[0].contains("not in the account's tokenGroups") && gaps[0].contains("-1200"));
+        assert!(gaps[1].contains("did not find") && gaps[1].contains("-1999"));
+    }
+
+    #[test]
+    fn more_groups_than_a_token_can_hold_is_a_gap() {
+        let names: Vec<String> = (0..=MAX_TOKEN_GROUP_SIDS)
+            .map(|i| format!("g{i}"))
+            .collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let user = graph_entry("u", 1, &refs);
+        let groups: Vec<RawEntry> = names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| graph_entry(n, 100_000 + i as u32, &[]))
+            .collect();
+        let a = assemble_memberships(&sid_of(1), &user, None, &groups, &[]);
+        assert_eq!(a.memberships.len(), MAX_TOKEN_GROUP_SIDS + 1);
+        let gap = token_size_gap(&a.memberships).expect("over the limit");
+        assert!(
+            gap.contains("1016 security group SID(s)") && gap.contains("fails"),
+            "{gap}"
+        );
+        // Exactly at the limit: no gap.
+        assert!(token_size_gap(&a.memberships[..MAX_TOKEN_GROUP_SIDS]).is_none());
     }
 
     fn membership_for(ms: &[GroupMembership], rid: u32) -> &GroupMembership {

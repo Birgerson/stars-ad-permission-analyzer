@@ -504,6 +504,16 @@ fn write_permissions_table(
                             .to_string(),
                     );
                 }
+                PermissionDiagnostic::NonSecurityGroupsExcluded { groups } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-neutral\" \
+                         title=\"Not in the token and left out — Windows ignores distribution \
+                         groups and nesting through them: {}\">ℹ {} non-security group(s) \
+                         excluded</span>",
+                        escape_html(&groups.join("; ")),
+                        groups.len()
+                    ));
+                }
                 PermissionDiagnostic::GroupResolutionIncomplete { reason } => {
                     diag_parts.push(format!(
                         "<span class=\"badge badge-high\" \

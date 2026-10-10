@@ -82,6 +82,11 @@ pub struct ResolutionProvenance {
     /// local group whose SID could not be looked up (ADR 0066). The engine
     /// pushes one `GroupResolutionIncomplete` per reason.
     pub group_resolution_gaps: Vec<String>,
+    /// Groups of the transitive directory result that are **not** in the
+    /// token: distribution groups and groups reached only through one
+    /// (ADR 0067). The engine pushes `NonSecurityGroupsExcluded` so the
+    /// exclusion is visible.
+    pub excluded_non_security_groups: Vec<String>,
 }
 
 /// Group memberships of a principal plus every reason the set may be
@@ -93,6 +98,9 @@ pub struct GroupMembershipResolution {
     pub memberships: Vec<GroupMembership>,
     /// Reader-facing reasons why groups may be missing from `memberships`.
     pub gaps: Vec<String>,
+    /// Groups left out because Windows does not put them into the token —
+    /// distribution groups and groups reached only through one (ADR 0067).
+    pub excluded_groups: Vec<String>,
 }
 
 pub struct PermissionEvaluationInput {

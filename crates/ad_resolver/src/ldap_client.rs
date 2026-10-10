@@ -87,6 +87,9 @@ const MEMBERSHIP_ATTRS: &[&str] = &[
     "sAMAccountName",
     "memberOf",
     "distinguishedName",
+    // Security bit (0x80000000): only security groups go into the token, and
+    // nesting through a distribution group confers no membership (AD4-4).
+    "groupType",
     // Binary, multi-valued: the group's own historical SIDs. The PAC
     // includes the history SIDs of the token groups, so these are parsed
     // and evaluated into the token like the user's (ADR 0059).
@@ -692,6 +695,40 @@ pub async fn complete_ranged_attribute(
     debug!(dn = %entry.dn, attr, count = values.len(), "Ranged attribute completed");
     entry.attrs.insert(attr.to_owned(), values);
     Ok(true)
+}
+
+/// The SIDs of the constructed `tokenGroups` attribute of `dn` — the
+/// security groups the domain controller itself puts into the account's
+/// token (transitive, incl. the primary group and builtin groups of the
+/// domain). Base search only; `Ok(None)` when the attribute is not returned
+/// (no permission, or not a security principal). Used to cross-check the
+/// reconstructed group set (ADR 0067).
+pub async fn search_token_groups(
+    ldap: &mut Ldap,
+    dn: &str,
+) -> Result<Option<Vec<String>>, CoreError> {
+    let (rs, _res) = ldap
+        .search(dn, Scope::Base, "(objectClass=*)", vec!["tokenGroups"])
+        .await
+        .map_err(|e| CoreError::LdapQuery(format!("tokenGroups search failed: {e}")))?
+        .success()
+        .map_err(|e| CoreError::LdapQuery(format!("tokenGroups search result error: {e}")))?;
+    let Some(entry) = rs.into_iter().next().map(RawEntry::from_search_entry) else {
+        return Ok(None);
+    };
+    if entry.value_count("tokenGroups") == 0 {
+        return Ok(None);
+    }
+    let mut sids = Vec::new();
+    for bytes in entry.all_values("tokenGroups") {
+        // Validate every value: a SID the DC returns that does not parse is
+        // an error, not something to skip.
+        let sid = crate::sid_util::bytes_to_sid_str(bytes).map_err(|e| {
+            CoreError::LdapQuery(format!("tokenGroups of {dn}: unreadable SID value ({e})"))
+        })?;
+        sids.push(sid);
+    }
+    Ok(Some(sids))
 }
 
 /// Terminates the LDAP connection properly.

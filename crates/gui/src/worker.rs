@@ -2579,6 +2579,7 @@ async fn resolve_identity_sids(
         resolved_via_fsp: false,
         resolved_via_global_catalog: false,
         group_resolution_gaps,
+        excluded_groups: Vec::new(),
     })
 }
 

@@ -240,6 +240,12 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         for reason in input.resolution.group_resolution_gaps {
             diagnostics.push(PermissionDiagnostic::GroupResolutionIncomplete { reason });
         }
+        // ADR 0067: groups left out of the token — visible, never silent.
+        if !input.resolution.excluded_non_security_groups.is_empty() {
+            diagnostics.push(PermissionDiagnostic::NonSecurityGroupsExcluded {
+                groups: input.resolution.excluded_non_security_groups,
+            });
+        }
         // ADR 0064 (lab finding AD3-1): a SID that could not be resolved is
         // only called orphaned when the evidence shows the account no longer
         // exists; otherwise its memberships are unknown — incompleteness.

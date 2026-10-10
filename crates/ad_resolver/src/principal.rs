@@ -210,6 +210,9 @@ pub struct PrincipalResolution {
     /// group resolution succeeded (ADR 0066) — each becomes a
     /// `GroupResolutionIncomplete` marker.
     pub group_resolution_gaps: Vec<String>,
+    /// Groups left out of the token (distribution groups and groups reached
+    /// only through one, ADR 0067).
+    pub excluded_groups: Vec<String>,
 }
 
 impl PrincipalResolution {
@@ -246,6 +249,7 @@ impl PrincipalResolution {
         EngineFlags {
             identity_unresolvable_reason,
             group_resolution_gaps: self.group_resolution_gaps.clone(),
+            excluded_non_security_groups: self.excluded_groups.clone(),
             identity_not_in_configured_ldap_base: matches!(
                 self.scope_status,
                 IdentityScopeStatus::OutsideConfiguredLdapBase
@@ -299,6 +303,11 @@ impl PrincipalResolution {
         // ADR 0066: same source and order as the engine.
         for reason in flags.group_resolution_gaps {
             d.push(PermissionDiagnostic::GroupResolutionIncomplete { reason });
+        }
+        if !flags.excluded_non_security_groups.is_empty() {
+            d.push(PermissionDiagnostic::NonSecurityGroupsExcluded {
+                groups: flags.excluded_non_security_groups,
+            });
         }
         // Same order and source as the engine (ADR 0064).
         if let Some(reason) = flags.identity_unresolvable_reason {
@@ -600,7 +609,8 @@ where
     async fn resolve_by_upn(&self, upn: &str) -> Result<PrincipalResolution, CoreError> {
         match self.identity_backend.lookup_identity_by_upn(upn).await? {
             Some((sid, identity)) => {
-                let (memberships, group_status, group_gaps) = self.resolve_groups(&sid).await;
+                let (memberships, group_status, group_gaps, excluded_groups) =
+                    self.resolve_groups(&sid).await;
                 let disabled_status = disabled_from_ldap(&identity);
                 let mut diagnostics = Vec::with_capacity(2);
                 push_diagnostics(
@@ -620,6 +630,7 @@ where
                     resolved_via_fsp: false,
                     resolved_via_global_catalog: self.identity_backend.is_forest_wide(),
                     group_resolution_gaps: group_gaps,
+                    excluded_groups,
                 })
             }
             None => {
@@ -657,7 +668,8 @@ where
         }
         match entries.into_iter().next() {
             Some((sid, identity)) => {
-                let (memberships, group_status, group_gaps) = self.resolve_groups(&sid).await;
+                let (memberships, group_status, group_gaps, excluded_groups) =
+                    self.resolve_groups(&sid).await;
                 let disabled_status = disabled_from_ldap(&identity);
                 let mut diagnostics = Vec::with_capacity(2);
                 push_diagnostics(
@@ -677,6 +689,7 @@ where
                     resolved_via_fsp: false,
                     resolved_via_global_catalog: self.identity_backend.is_forest_wide(),
                     group_resolution_gaps: group_gaps,
+                    excluded_groups,
                 })
             }
             None => Err(CoreError::Validation(format!(
@@ -698,7 +711,8 @@ where
                 if identity.kind == IdentityKind::ForeignSecurityPrincipal {
                     return self.resolve_fsp_hit(sid, identity).await;
                 }
-                let (memberships, group_status, group_gaps) = self.resolve_groups(&sid).await;
+                let (memberships, group_status, group_gaps, excluded_groups) =
+                    self.resolve_groups(&sid).await;
                 let disabled_status = disabled_from_ldap(&identity);
                 let mut diagnostics = Vec::with_capacity(2);
                 push_diagnostics(
@@ -718,6 +732,7 @@ where
                     resolved_via_fsp: false,
                     resolved_via_global_catalog: self.identity_backend.is_forest_wide(),
                     group_resolution_gaps: group_gaps,
+                    excluded_groups,
                 })
             }
             Ok(None) => self.fall_back_to_lsa(&sid).await,
@@ -796,6 +811,7 @@ where
                     resolved_via_fsp: false,
                     resolved_via_global_catalog: false,
                     group_resolution_gaps: Vec::new(),
+                    excluded_groups: Vec::new(),
                 })
             }
             Err(e) => {
@@ -831,7 +847,8 @@ where
         fsp_identity: Identity,
     ) -> Result<PrincipalResolution, CoreError> {
         // Home-domain memberships via the FSP object's DN.
-        let (memberships, group_status, group_gaps) = self.resolve_groups(&sid).await;
+        let (memberships, group_status, group_gaps, excluded_groups) =
+            self.resolve_groups(&sid).await;
 
         // LSA enrichment: real name / domain / kind from the trust.
         let identity = match self.lsa_backend.as_ref() {
@@ -890,6 +907,7 @@ where
             resolved_via_fsp: true,
             resolved_via_global_catalog: self.identity_backend.is_forest_wide(),
             group_resolution_gaps: group_gaps,
+            excluded_groups,
         })
     }
 
@@ -897,13 +915,23 @@ where
     async fn resolve_groups(
         &self,
         sid: &Sid,
-    ) -> (Vec<GroupMembership>, GroupResolutionStatus, Vec<String>) {
+    ) -> (
+        Vec<GroupMembership>,
+        GroupResolutionStatus,
+        Vec<String>,
+        Vec<String>,
+    ) {
         match self.identity_backend.resolve_memberships(sid).await {
             Ok(r) => {
                 for gap in &r.gaps {
                     warn!(sid = %sid.0, gap = %gap, "Group resolution incomplete");
                 }
-                (r.memberships, GroupResolutionStatus::LdapRecursive, r.gaps)
+                (
+                    r.memberships,
+                    GroupResolutionStatus::LdapRecursive,
+                    r.gaps,
+                    r.excluded_groups,
+                )
             }
             Err(e) => {
                 warn!(sid = %sid.0, error = %e, "Group resolution failed");
@@ -912,6 +940,7 @@ where
                     GroupResolutionStatus::Failed {
                         reason: e.to_string(),
                     },
+                    Vec::new(),
                     Vec::new(),
                 )
             }
@@ -940,6 +969,7 @@ where
             resolved_via_fsp: false,
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
+            excluded_groups: Vec::new(),
         }
     }
 
@@ -967,6 +997,7 @@ where
             resolved_via_fsp: false,
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
+            excluded_groups: Vec::new(),
         }
     }
 
@@ -992,6 +1023,7 @@ where
             resolved_via_fsp: false,
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
+            excluded_groups: Vec::new(),
         }
     }
 }
@@ -1086,6 +1118,7 @@ mod tests {
             Ok(GroupMembershipResolution {
                 memberships: self.memberships.get(&sid.0).cloned().unwrap_or_default(),
                 gaps: Vec::new(),
+                excluded_groups: Vec::new(),
             })
         }
 
@@ -1514,6 +1547,7 @@ mod tests {
                 Ok(GroupMembershipResolution {
                     memberships: Vec::new(),
                     gaps: vec!["the primary group S-1-5-21-1-1-1-513 was not found".to_owned()],
+                    excluded_groups: Vec::new(),
                 })
             }
         }
@@ -1942,6 +1976,7 @@ mod tests {
             resolved_via_fsp: false,
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
+            excluded_groups: Vec::new(),
         };
         let d = res.membership_diagnostics();
         assert!(
@@ -1973,6 +2008,7 @@ mod tests {
             resolved_via_fsp: false,
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
+            excluded_groups: Vec::new(),
         };
         let d = res.membership_diagnostics();
         assert!(
@@ -2012,6 +2048,7 @@ mod tests {
             resolved_via_fsp: false,
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
+            excluded_groups: Vec::new(),
         };
         let d = res.membership_diagnostics();
         assert!(
@@ -2050,6 +2087,7 @@ mod tests {
             resolved_via_fsp: false,
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
+            excluded_groups: Vec::new(),
         };
         let report = res.into_membership_report(true);
         assert_eq!(
@@ -2087,6 +2125,7 @@ mod tests {
             resolved_via_fsp: false,
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
+            excluded_groups: Vec::new(),
         };
         let report = res.into_membership_report(true);
         assert_eq!(report.memberships.len(), 1);
@@ -2135,6 +2174,7 @@ mod tests {
             resolved_via_fsp: false,
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
+            excluded_groups: Vec::new(),
         };
         let report = res.into_membership_report(true);
         assert_eq!(report.memberships.len(), 1);

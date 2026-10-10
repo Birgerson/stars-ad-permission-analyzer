@@ -425,6 +425,16 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      nobody can log on with it. The rights shown are what a logon");
                 println!("      with this SID would get; an ACE naming it is a dead entry.");
             }
+            PermissionDiagnostic::NonSecurityGroupsExcluded { groups } => {
+                println!(
+                    "  [i] {} group(s) are not in the token and were left out — Windows",
+                    groups.len()
+                );
+                println!("      ignores distribution groups and nesting through them:");
+                for g in groups {
+                    println!("        - {g}");
+                }
+            }
             PermissionDiagnostic::GroupResolutionIncomplete { reason } => {
                 println!("  [!] Group resolution is incomplete: {reason}.");
                 println!("      The evaluated token may lack these groups. Treat as");
