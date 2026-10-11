@@ -49,7 +49,7 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0037 | Validated wrappers propagated |
 | 0038 | Share trustees in the scan output |
 | 0039 | Failed-resolution diagnostics |
-| 0040 | Local-group candidate name list |
+| 0040 | Local-group candidate name list (superseded by 0068) |
 | 0041 | Local-group memberships in the explanation path |
 | 0042 | Deny aggregation step in the explanation path |
 | 0043 | Effective access context with SMB hints |
@@ -77,3 +77,4 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0065 | Results that cannot be determined are never stated as facts |
 | 0066 | No silent drops in group resolution |
 | 0067 | Only security groups count; cross-check against tokenGroups |
+| 0068 | Local groups of the target server expanded by SID |

@@ -54,6 +54,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   read as empty — direct memberships counted as nested; it is now completed
   through validated range retrieval (lab: 1601 direct memberships read
   completely, before 0).
+- **Local groups of the target server are complete** (lab finding MS-1,
+  ADR 0068). Stars took them from `NetUserGetLocalGroups`, which on a domain
+  member omits groups entered through a nested domain group, a domain local
+  group, `Everyone` or `Authenticated Users` — rights were shown too low as a
+  fact (lab: "No access" where Windows grants Modify) — and which fails for
+  every domain account from a machine outside the domain. The server's local
+  groups are now read by SID and expanded like a logon does; a group
+  reachable only through a logon-dependent SID bounds the result. Verified
+  against the Windows Authz oracle on a new member server: 0 differences.
 - **Distribution groups no longer count as access** (lab finding AD4-4,
   ADR 0067). The transitive LDAP search also returns distribution groups,
   and Stars put them — and every group reached through them — into the

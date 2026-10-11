@@ -16,74 +16,23 @@ use std::os::windows::ffi::OsStrExt;
 
 use adpa_core::{
     error::CoreError,
-    model::{GroupMembership, Identity, MembershipHop, MembershipPath, MembershipPathSource, Sid},
+    model::{
+        GroupMembership, Identity, LocalGroupDescriptor, LocalGroupEntry, MembershipHop,
+        MembershipPath, MembershipPathSource, Sid,
+    },
 };
 use tracing::{debug, warn};
 use win_safe::netapi::NetApiBuffer;
-use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, FALSE, NO_ERROR};
+use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_MORE_DATA, FALSE, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
-    NetLocalGroupGetMembers, NetUserGetLocalGroups, LG_INCLUDE_INDIRECT, LOCALGROUP_MEMBERS_INFO_2,
-    LOCALGROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH,
+    NetLocalGroupEnum, NetLocalGroupGetMembers, NetUserGetLocalGroups, LG_INCLUDE_INDIRECT,
+    LOCALGROUP_INFO_0, LOCALGROUP_MEMBERS_INFO_2, LOCALGROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH,
 };
 use windows_sys::Win32::Security::LookupAccountNameW;
 
 /// NERR_UserNotFound status code from lmerr.h.
 const NERR_USER_NOT_FOUND: u32 = 2221;
 
-/// Heuristic: does the domain string look like a DNS suffix (contains a
-/// dot)? In trust / multi-domain scenarios LSA usually returns the NetBIOS
-/// name (`TRUSTED`); `name@TRUSTED` is NOT a valid account reference for
-/// `NetUserGetLocalGroups` — only DNS-style suffixes (`corp.local`) work
-/// as UPN suffixes.
-fn looks_like_dns_domain(domain: &str) -> bool {
-    domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
-}
-
-///
-/// Returns a **candidate list** of account names for
-/// `NetUserGetLocalGroups`, in preference order. The caller iterates
-/// until one form is recognized by the target server.
-///
-/// Closes review 2026-06-04 round 5 finding 1.
-pub fn format_account_candidates_for_local_groups(identity: &Identity) -> Vec<String> {
-    let mut candidates: Vec<String> = Vec::new();
-    if let Some(upn) = identity
-        .user_principal_name
-        .as_deref()
-        .filter(|s| !s.is_empty())
-    {
-        candidates.push(upn.to_string());
-    }
-    let name = match identity.name.as_deref().filter(|s| !s.is_empty()) {
-        Some(n) => n,
-        None => return candidates,
-    };
-    if let Some(domain) = identity.domain.as_deref().filter(|s| !s.is_empty()) {
-        let domain_backslash_name = format!("{domain}\\{name}");
-        if !candidates.contains(&domain_backslash_name) {
-            candidates.push(domain_backslash_name);
-        }
-        // Only as UPN construction when the domain looks DNS-style.
-        if looks_like_dns_domain(domain) {
-            let upn_form = format!("{name}@{domain}");
-            if !candidates.contains(&upn_form) {
-                candidates.push(upn_form);
-            }
-        }
-    }
-    if !candidates.contains(&name.to_string()) {
-        candidates.push(name.to_string());
-    }
-    candidates
-}
-
-pub fn format_account_for_local_groups(identity: &Identity) -> Option<String> {
-    format_account_candidates_for_local_groups(identity)
-        .into_iter()
-        .next()
-}
-
-/// (review round 5 finding 1).
 /// `NetUserGetLocalGroups` outcome — separates **"user not found"**
 /// from **"user found but has no group memberships"**.
 #[derive(Debug, Clone)]
@@ -94,20 +43,15 @@ pub enum LocalGroupLookupOutcome {
     UserNotFoundOnServer,
 }
 
-// NOTE: a lossy `resolve_local_group_sids` wrapper existed here until the
-// ad_resolver review 2026-07-25 (AD-1). It returned `Vec<Sid>` and mapped
-// `UserNotFoundOnServer` to an empty vector — silently conflating "the
-// account is unknown on this server" with "the account has no local
-// groups". That is exactly the silent-omission class this project rejects,
-// and it had no production caller (a stale comment claimed the GUI used
-// it; the GUI uses `resolve_local_group_chains_for_identity`).
-//
-// Use instead:
-//   * `resolve_local_group_sids_strict` — same lookup, but the
-//     not-found case stays visible via `LocalGroupLookupOutcome`.
-//   * `resolve_local_group_chains_for_identity` — the richer variant that
-//     also yields group names and membership paths for the explanation,
-//     and derives the account name form from the `Identity` itself.
+// NOTE (ADR 0068): `NetUserGetLocalGroups` is NOT a complete source of an
+// account's local groups. On a domain member it omits groups entered through
+// a nested domain group, a domain local group, `Everyone` or `Authenticated
+// Users`, and from a machine outside the domain it fails for every domain
+// account (status 1355). The analysis path therefore reads the server's
+// local groups by SID ([`read_local_group_table`]) and expands them like a
+// logon does (`permission_engine::engine::expand_local_groups`). The
+// name-based functions below remain only for the SAM fallback, whose results
+// are always marked not determinable.
 
 /// Strict variant — distinguishes "not found" from "found, no groups".
 pub fn resolve_local_group_sids_strict(
@@ -181,51 +125,6 @@ pub fn resolve_local_group_sids_strict(
 
     Ok(LocalGroupLookupOutcome::WithGroups(sids))
     // `buf` is dropped here, calling NetApiBufferFree.
-}
-
-/// Tries to resolve local groups for `identity` on `server`, iterating
-/// over candidate account name forms
-/// ([`format_account_candidates_for_local_groups`]). Returns `Err(...)`
-/// on technical failures (Access Denied, NetAPI errors).
-pub fn resolve_local_group_sids_for_identity(
-    server: Option<&str>,
-    identity: &Identity,
-) -> Result<Vec<Sid>, CoreError> {
-    let candidates = format_account_candidates_for_local_groups(identity);
-    if candidates.is_empty() {
-        return Err(CoreError::Validation(format!(
-            "{} has no account name, so its local group memberships on the target server cannot be looked up",
-            identity.sid.0
-        )));
-    }
-    let mut tried: Vec<String> = Vec::with_capacity(candidates.len());
-    for candidate in &candidates {
-        tried.push(candidate.clone());
-        match resolve_local_group_sids_strict(server, candidate)? {
-            LocalGroupLookupOutcome::WithGroups(sids) => {
-                debug!(
-                    ?server,
-                    account = %candidate,
-                    count = sids.len(),
-                    "Local groups resolved via candidate"
-                );
-                return Ok(sids);
-            }
-            LocalGroupLookupOutcome::UserNotFoundOnServer => {
-                debug!(
-                    ?server,
-                    account = %candidate,
-                    "Candidate not known on server, trying next"
-                );
-            }
-        }
-    }
-    Err(CoreError::Validation(format!(
-        "NetUserGetLocalGroups: account for identity {} not known on {server:?} \
-         (tried forms: {:?}). Local server group memberships are not available; \
-         the result is marked incomplete.",
-        identity.sid.0, tried
-    )))
 }
 
 /// Entry in the `NetUserGetLocalGroups` response with both name and SID. The
@@ -398,6 +297,244 @@ pub fn get_local_group_members(
     // `buf` is dropped here, calling NetApiBufferFree.
 }
 
+/// `SID_NAME_USE::SidTypeAlias` — a local group (alias), builtin or not.
+const SID_TYPE_ALIAS: i32 = 4;
+
+/// Every local group of `server` (`None` = this machine) with its direct
+/// members as SIDs, plus the reader-facing gaps (ADR 0068).
+#[derive(Debug, Clone, Default)]
+pub struct LocalGroupTable {
+    pub groups: Vec<LocalGroupDescriptor>,
+    /// Groups whose SID or members could not be read completely. Callers
+    /// must mark the local-group evaluation as not complete when non-empty.
+    pub gaps: Vec<String>,
+}
+
+/// Reads all local groups of `server` and their members by SID (ADR 0068):
+/// `NetLocalGroupEnum` → `LookupAccountNameW` on the server (the SID must
+/// be an alias) → `NetLocalGroupGetMembers`. No account names of the
+/// analysed identity are involved, so this works from a machine outside the
+/// domain as well — `NetUserGetLocalGroups` fails there for every domain
+/// account (status 1355), and on a domain member it omits groups entered
+/// through nested domain groups, domain local groups and well-known SIDs.
+///
+/// Every value is validated; a group that cannot be read completely is a
+/// gap, never a silently shorter table. Enumeration failure is an error.
+pub fn read_local_group_table(server: Option<&str>) -> Result<LocalGroupTable, CoreError> {
+    let names = enumerate_local_group_names(server)?;
+    let mut table = LocalGroupTable::default();
+    let mut account_domains: std::collections::BTreeSet<String> = Default::default();
+    for name in names {
+        let sid = match lookup_account_sid_with_use(server, &name) {
+            Some((sid, SID_TYPE_ALIAS)) => match validation::sid::validate_sid(&sid) {
+                Ok(_) => Sid(sid),
+                Err(e) => {
+                    table.gaps.push(format!(
+                        "the local group '{name}' returned an invalid SID ({e})"
+                    ));
+                    continue;
+                }
+            },
+            Some((sid, other)) => {
+                table.gaps.push(format!(
+                    "the name of the local group '{name}' resolves to {sid}, which is not a \
+                     local group (SID type {other})"
+                ));
+                continue;
+            }
+            None => {
+                table.gaps.push(format!(
+                    "the SID of the local group '{name}' could not be read"
+                ));
+                continue;
+            }
+        };
+        if !sid.0.starts_with("S-1-5-32-") {
+            if let Some((domain, _rid)) = sid.0.rsplit_once('-') {
+                account_domains.insert(domain.to_owned());
+            }
+        }
+        let members = match get_local_group_members(server, &name) {
+            Ok(m) => m,
+            Err(e) => {
+                table.gaps.push(format!(
+                    "the members of the local group '{name}' could not be read ({e})"
+                ));
+                continue;
+            }
+        };
+        let mut member_sids = Vec::with_capacity(members.len());
+        let mut unreadable = 0usize;
+        for m in &members {
+            match &m.sid {
+                Some(s) if validation::sid::validate_sid(&s.0).is_ok() => {
+                    member_sids.push(s.clone())
+                }
+                _ => unreadable += 1,
+            }
+        }
+        if unreadable > 0 {
+            table.gaps.push(format!(
+                "{unreadable} member(s) of the local group '{name}' have no readable SID"
+            ));
+        }
+        member_sids.sort_by(|a, b| a.0.cmp(&b.0));
+        member_sids.dedup();
+        table.groups.push(LocalGroupDescriptor {
+            sid,
+            name,
+            members: member_sids,
+        });
+    }
+    // All non-builtin local groups belong to the server's own account
+    // domain. More than one domain means a name resolved to something else
+    // (e.g. a domain group of the same name) — a gap, not a guess.
+    if account_domains.len() > 1 {
+        table.gaps.push(format!(
+            "the local groups resolve to {} different account domains ({}) — a group name \
+             may have resolved to a non-local group",
+            account_domains.len(),
+            account_domains.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    table.groups.sort_by(|a, b| a.sid.0.cmp(&b.sid.0));
+    debug!(
+        ?server,
+        groups = table.groups.len(),
+        gaps = table.gaps.len(),
+        "Local group table read"
+    );
+    Ok(table)
+}
+
+/// Upper bound for `NetLocalGroupEnum` pages — a server has a few dozen
+/// local groups; a server that keeps answering "more data" is an error.
+const MAX_LOCAL_GROUP_PAGES: usize = 10_000;
+
+/// All local group names of `server` via `NetLocalGroupEnum` level 0,
+/// following the resume handle until the server reports the end.
+fn enumerate_local_group_names(server: Option<&str>) -> Result<Vec<String>, CoreError> {
+    let server_w = server.map(to_wide_null);
+    let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+    let mut resume: usize = 0;
+    let mut names: Vec<String> = Vec::new();
+    for _ in 0..MAX_LOCAL_GROUP_PAGES {
+        let mut buf: NetApiBuffer<LOCALGROUP_INFO_0> = NetApiBuffer::null();
+        let mut entries_read: u32 = 0;
+        let mut total_entries: u32 = 0;
+        // SAFETY: server_ptr is null or a valid null-terminated wide string;
+        // NetApi allocates the buffer, the guard frees it on drop.
+        let status = unsafe {
+            NetLocalGroupEnum(
+                server_ptr,
+                0,
+                buf.out_ptr().cast(),
+                MAX_PREFERRED_LENGTH,
+                &mut entries_read,
+                &mut total_entries,
+                &mut resume,
+            )
+        };
+        if status != NO_ERROR && status != ERROR_MORE_DATA {
+            return Err(match status {
+                ERROR_ACCESS_DENIED => CoreError::AccessDenied(format!(
+                    "NetLocalGroupEnum: access denied on {server:?}"
+                )),
+                _ => CoreError::LdapQuery(format!(
+                    "NetLocalGroupEnum on {server:?} failed with status {status}"
+                )),
+            });
+        }
+        if !buf.is_null() && entries_read > 0 {
+            // SAFETY: NetApi returns exactly `entries_read` consecutive structs.
+            let entries =
+                unsafe { std::slice::from_raw_parts(buf.as_ptr(), entries_read as usize) };
+            for e in entries {
+                // SAFETY: lgrpi0_name is a null-terminated wide string in the buffer.
+                let name = unsafe { wide_ptr_to_string(e.lgrpi0_name) };
+                if name.is_empty() {
+                    return Err(CoreError::LdapQuery(format!(
+                        "NetLocalGroupEnum on {server:?} returned a local group without a name"
+                    )));
+                }
+                names.push(name);
+            }
+        }
+        if status == NO_ERROR {
+            names.sort();
+            names.dedup();
+            return Ok(names);
+        }
+    }
+    Err(CoreError::LdapQuery(format!(
+        "NetLocalGroupEnum on {server:?} did not finish after {MAX_LOCAL_GROUP_PAGES} pages"
+    )))
+}
+
+/// Builds the explanation memberships for the local groups an account is in
+/// (ADR 0068): `account → local group` when the account itself is a member,
+/// otherwise `account → token SID → local group` through the first entry of
+/// `via`; the other entries go into `also_via`. `names` labels the SIDs;
+/// a SID without a label there is looked up through LSA on this machine.
+pub fn local_group_memberships(
+    identity: &Identity,
+    entries: &[LocalGroupEntry],
+    names: &std::collections::HashMap<String, String>,
+) -> Vec<GroupMembership> {
+    // Names the caller knows win; anything else (well-known SIDs such as
+    // `Everyone`) is looked up once through LSA on this machine.
+    let label = |sid: &Sid| {
+        names
+            .get(&sid.0)
+            .cloned()
+            .or_else(|| lookup_account_for_sid_display(&sid.0))
+    };
+    entries
+        .iter()
+        .map(|e| {
+            let via_self = e.via.first().is_some_and(|s| *s == identity.sid);
+            let mut rest: Vec<MembershipHop> = e
+                .via
+                .iter()
+                .filter(|s| **s != identity.sid)
+                .map(|s| MembershipHop {
+                    sid: s.clone(),
+                    name: label(s),
+                })
+                .collect();
+            let user_label = identity.name.clone();
+            let path = if via_self || rest.is_empty() {
+                MembershipPath {
+                    nodes: vec![identity.sid.clone(), e.group.clone()],
+                    names: vec![user_label, Some(e.name.clone())],
+                    source: MembershipPathSource::LocalGroup,
+                    complete: true,
+                    also_via: rest,
+                }
+            } else {
+                let first = rest.remove(0);
+                MembershipPath {
+                    nodes: vec![identity.sid.clone(), first.sid.clone(), e.group.clone()],
+                    names: vec![user_label, first.name, Some(e.name.clone())],
+                    source: MembershipPathSource::LocalGroup,
+                    complete: true,
+                    also_via: rest,
+                }
+            };
+            GroupMembership {
+                member_sid: identity.sid.clone(),
+                group_sid: e.group.clone(),
+                direct: path.nodes.len() == 2,
+                group_name: Some(e.name.clone()),
+                path: Some(path),
+                // Local server groups have no sIDHistory — 0 is exact (ADR 0059).
+                group_sid_history_count: 0,
+                group_sid_history: Vec::new(),
+            }
+        })
+        .collect()
+}
+
 /// Reconstructs concrete membership chains for every local group in which
 /// `user_sid` is a direct or transitive member.
 ///
@@ -486,15 +623,6 @@ pub struct LocalGroupChains {
     pub gaps: Vec<String>,
 }
 
-/// Local-group memberships of an identity plus the gaps found (ADR 0066).
-#[derive(Debug, Clone)]
-pub struct LocalGroupMemberships {
-    pub memberships: Vec<GroupMembership>,
-    /// Reader-facing reasons why local groups are missing; callers must mark
-    /// the local-group evaluation as not complete when this is non-empty.
-    pub gaps: Vec<String>,
-}
-
 /// Orders local-group chains by display name (case-insensitive), then SID,
 /// so the explanation path does not depend on the order in which
 /// `NetUserGetLocalGroups` happened to list the groups (ADR 0063).
@@ -579,87 +707,6 @@ fn local_group_path(
     }
 }
 
-/// Identity-aware variant of [`resolve_local_group_chains`] using the
-/// same candidate-list loop as [`resolve_local_group_sids_for_identity`].
-/// Returns `Vec<GroupMembership>` with
-/// `MembershipPathSource::LocalGroup` so the explanation path renders
-/// each local server group as a `Member of …` step.
-pub fn resolve_local_group_chains_for_identity(
-    server: Option<&str>,
-    identity: &Identity,
-    known_member_sids_to_names: &std::collections::HashMap<String, String>,
-) -> Result<LocalGroupMemberships, CoreError> {
-    let candidates = format_account_candidates_for_local_groups(identity);
-    if candidates.is_empty() {
-        return Err(CoreError::Validation(format!(
-            "{} has no account name, so its local group memberships on the target server cannot be looked up",
-            identity.sid.0
-        )));
-    }
-    let user_name = identity.name.as_deref();
-    let mut tried: Vec<String> = Vec::with_capacity(candidates.len());
-    let mut last_err: Option<CoreError> = None;
-    for candidate in &candidates {
-        tried.push(candidate.clone());
-        // Probe via the strict variant first to separate
-        // UserNotFoundOnServer from "found, no groups".
-        match resolve_local_group_sids_strict(server, candidate) {
-            Ok(LocalGroupLookupOutcome::UserNotFoundOnServer) => continue,
-            Ok(LocalGroupLookupOutcome::WithGroups(_)) => {
-                // Account-Bezug laeuft.
-                // Account known — reconstruct chains with the same name.
-                match resolve_local_group_chains(
-                    server,
-                    &identity.sid,
-                    user_name,
-                    known_member_sids_to_names,
-                    candidate,
-                ) {
-                    Ok(LocalGroupChains { chains, gaps }) => {
-                        let memberships: Vec<GroupMembership> = chains
-                            .into_iter()
-                            .map(|(group_sid, group_name, path)| GroupMembership {
-                                member_sid: identity.sid.clone(),
-                                group_sid,
-                                // direct = 2-node complete path; mediator
-                                // chain (3 nodes) is transitive.
-                                direct: path.nodes.len() == 2 && path.complete,
-                                group_name,
-                                path: Some(path),
-                                // Local server groups have no sIDHistory —
-                                // 0 is exact, not unknown (ADR 0059).
-                                group_sid_history_count: 0,
-                                group_sid_history: Vec::new(),
-                            })
-                            .collect();
-                        return Ok(LocalGroupMemberships { memberships, gaps });
-                    }
-                    Err(e) => {
-                        last_err = Some(e);
-                        // chains call failed for this candidate (e.g.
-                        // NetLocalGroupGetMembers error); try next.
-                        continue;
-                    }
-                }
-            }
-            Err(e) => {
-                last_err = Some(e);
-                continue;
-            }
-        }
-    }
-    // No candidate matched — propagate technical error if any.
-    if let Some(e) = last_err {
-        return Err(e);
-    }
-    Err(CoreError::Validation(format!(
-        "Local group chains: no account form for identity {} known on {server:?} \
-         (tried: {:?}). Local server group memberships are not available; the result \
-         is marked incomplete.",
-        identity.sid.0, tried
-    )))
-}
-
 /// Returns the `DOMAIN\name` form of a SID via LookupAccountSidW — small
 /// variant just for the local group's display label.
 fn lookup_account_for_sid_display(sid_str: &str) -> Option<String> {
@@ -693,6 +740,12 @@ unsafe fn wide_ptr_to_string(p: *const u16) -> String {
 /// Looks up an account name on the given system and returns its SID as the
 /// canonical S-R-I-... string.
 fn lookup_account_sid(system: Option<&str>, name: &str) -> Option<String> {
+    lookup_account_sid_with_use(system, name).map(|(sid, _)| sid)
+}
+
+/// Like [`lookup_account_sid`], plus the `SID_NAME_USE` of the account so a
+/// caller can check what kind of object the name resolved to (ADR 0068).
+fn lookup_account_sid_with_use(system: Option<&str>, name: &str) -> Option<(String, i32)> {
     let system_w = system.map(to_wide_null);
     let system_ptr = system_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let name_w = to_wide_null(name);
@@ -741,7 +794,9 @@ fn lookup_account_sid(system: Option<&str>, name: &str) -> Option<String> {
     // the shared helper owns the OS string via LocalFreeGuard and also
     // covers the null double-check this site previously missed
     // (win_safe review 2026-07-25, W-1/W-2).
-    unsafe { win_safe::sid::sid_to_string_lossy(sid_buf.as_ptr().cast()) }.ok()
+    unsafe { win_safe::sid::sid_to_string_lossy(sid_buf.as_ptr().cast()) }
+        .ok()
+        .map(|sid| (sid, sid_use))
 }
 
 #[cfg(test)]
@@ -790,118 +845,97 @@ mod tests {
         );
     }
 
-    use adpa_core::model::IdentityKind;
+    // --- ADR 0068: local groups read by SID ---
 
-    fn identity_with(name: Option<&str>, domain: Option<&str>, upn: Option<&str>) -> Identity {
+    const DOMAIN_ADMINS: &str = "S-1-5-21-1-2-3-512";
+
+    /// Reads this machine's local groups. Every Windows machine has
+    /// BUILTIN\Administrators and BUILTIN\Users; every SID read must be
+    /// valid and every group an alias.
+    #[test]
+    fn local_group_table_of_this_machine_is_complete_and_valid() {
+        let table = read_local_group_table(None).expect("NetLocalGroupEnum on this machine");
+        let sids: Vec<&str> = table.groups.iter().map(|g| g.sid.0.as_str()).collect();
+        assert!(sids.contains(&"S-1-5-32-544"), "{sids:?}");
+        assert!(sids.contains(&"S-1-5-32-545"), "{sids:?}");
+        for g in &table.groups {
+            assert!(
+                validation::sid::validate_sid(&g.sid.0).is_ok(),
+                "{}",
+                g.sid.0
+            );
+            for m in &g.members {
+                assert!(validation::sid::validate_sid(&m.0).is_ok(), "{}", m.0);
+            }
+        }
+        // Sorted by SID — deterministic regardless of enumeration order.
+        let mut sorted = sids.clone();
+        sorted.sort();
+        assert_eq!(sids, sorted);
+    }
+
+    fn entry(group: &str, name: &str, via: &[&str]) -> LocalGroupEntry {
+        LocalGroupEntry {
+            group: Sid(group.into()),
+            name: name.into(),
+            via: via.iter().map(|s| Sid((*s).into())).collect(),
+        }
+    }
+
+    fn account() -> Identity {
         Identity {
-            sid: Sid("S-1-5-21-1-2-3-1000".into()),
-            name: name.map(String::from),
-            domain: domain.map(String::from),
-            kind: IdentityKind::User,
+            sid: Sid(USER_SID.into()),
+            name: Some("alice".into()),
+            domain: None,
+            kind: adpa_core::model::IdentityKind::User,
             disabled: false,
-            user_principal_name: upn.map(String::from),
+            user_principal_name: None,
             sid_history_count: 0,
             sid_history: Vec::new(),
         }
     }
 
     #[test]
-    fn format_prefers_upn_when_present() {
-        let id = identity_with(
-            Some("max.mustermann"),
-            Some("testdomain.local"),
-            Some("max@corp.example"),
+    fn local_group_membership_via_the_account_itself_is_direct() {
+        let ms = local_group_memberships(
+            &account(),
+            &[entry(
+                LOCAL_ADMINS,
+                "Administrators",
+                &[USER_SID, DOMAIN_ADMINS],
+            )],
+            &known(),
         );
+        assert_eq!(ms.len(), 1);
+        let path = ms[0].path.as_ref().unwrap();
+        assert!(ms[0].direct && path.complete);
         assert_eq!(
-            format_account_for_local_groups(&id).as_deref(),
-            Some("max@corp.example")
+            path.nodes,
+            vec![Sid(USER_SID.into()), Sid(LOCAL_ADMINS.into())]
         );
+        assert_eq!(path.also_via.len(), 1);
+        assert_eq!(path.also_via[0].sid, Sid(DOMAIN_ADMINS.into()));
     }
 
-    /// auftauchen.
-    /// Round 5 finding 1: without UPN, prefer `DOMAIN\name`; DNS suffixes
-    /// still get a UPN-style fallback in the candidate list.
     #[test]
-    fn format_falls_back_to_domain_backslash_name_for_dns_domain() {
-        let id = identity_with(Some("max.mustermann"), Some("testdomain.local"), None);
-        let candidates = format_account_candidates_for_local_groups(&id);
-        assert_eq!(candidates[0], "testdomain.local\\max.mustermann");
-        assert!(
-            candidates.contains(&"max.mustermann@testdomain.local".to_string()),
-            "DNS-style domain must also produce the UPN-form fallback; got {candidates:?}"
+    fn local_group_membership_via_a_token_sid_names_the_mediator() {
+        let ms = local_group_memberships(
+            &account(),
+            &[entry(LOCAL_ADMINS, "Administrators", &[DOMAIN_ADMINS])],
+            &known(),
         );
+        let path = ms[0].path.as_ref().unwrap();
+        assert!(!ms[0].direct && path.complete);
         assert_eq!(
-            format_account_for_local_groups(&id).as_deref(),
-            Some("testdomain.local\\max.mustermann")
+            path.nodes,
+            vec![
+                Sid(USER_SID.into()),
+                Sid(DOMAIN_ADMINS.into()),
+                Sid(LOCAL_ADMINS.into())
+            ]
         );
-    }
-
-    /// Round 5 finding 1: NetBIOS domain must NOT produce a `name@domain`
-    /// candidate — that exact form was the production bug.
-    #[test]
-    fn format_netbios_domain_only_emits_domain_backslash_form() {
-        let id = identity_with(Some("alice"), Some("TRUSTED"), None);
-        let candidates = format_account_candidates_for_local_groups(&id);
-        assert!(
-            candidates.contains(&"TRUSTED\\alice".to_string()),
-            "NetBIOS domain must produce DOMAIN\\name candidate; got {candidates:?}"
-        );
-        assert!(
-            !candidates.contains(&"alice@TRUSTED".to_string()),
-            "NetBIOS domain must NOT produce the misleading UPN-style form 'alice@TRUSTED' — that was the round 5 finding 1 bug; got {candidates:?}"
-        );
-    }
-
-    #[test]
-    fn format_returns_plain_name_without_domain() {
-        let id = identity_with(Some("Administrator"), None, None);
-        let candidates = format_account_candidates_for_local_groups(&id);
-        assert_eq!(candidates, vec!["Administrator".to_string()]);
-        assert_eq!(
-            format_account_for_local_groups(&id).as_deref(),
-            Some("Administrator")
-        );
-    }
-
-    #[test]
-    fn format_returns_empty_without_name() {
-        let id = identity_with(None, Some("testdomain.local"), None);
-        assert!(format_account_candidates_for_local_groups(&id).is_empty());
-        assert_eq!(format_account_for_local_groups(&id), None);
-    }
-
-    #[test]
-    fn format_ignores_empty_upn() {
-        let id = identity_with(Some("Administrator"), Some("testdomain.local"), Some(""));
-        // Empty UPN is skipped; DOMAIN\name comes first.
-        assert_eq!(
-            format_account_for_local_groups(&id).as_deref(),
-            Some("testdomain.local\\Administrator")
-        );
-    }
-
-    /// Heuristic: NetBIOS names have no dot; DNS suffixes do.
-    #[test]
-    fn looks_like_dns_domain_distinguishes_netbios_and_dns() {
-        assert!(looks_like_dns_domain("corp.local"));
-        assert!(looks_like_dns_domain("ad.example.com"));
-        assert!(!looks_like_dns_domain("TRUSTED"));
-        assert!(!looks_like_dns_domain("CORP"));
-        assert!(!looks_like_dns_domain(".trailing"));
-        assert!(!looks_like_dns_domain("leading."));
-        assert!(!looks_like_dns_domain(""));
-    }
-
-    /// UPN takes absolute priority.
-    #[test]
-    fn format_upn_wins_over_domain_form() {
-        let id = identity_with(
-            Some("alice"),
-            Some("TRUSTED"),
-            Some("alice@trusted.example"),
-        );
-        let candidates = format_account_candidates_for_local_groups(&id);
-        assert_eq!(candidates[0], "alice@trusted.example");
+        assert_eq!(path.names[1].as_deref(), Some("Domain Admins"));
+        assert!(path.also_via.is_empty());
     }
 
     // --- local_group_path: deterministic mediator choice (ADR 0063) ---

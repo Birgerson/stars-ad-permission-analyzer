@@ -454,6 +454,7 @@ pub fn resolve_share_mask_status(
     sid_history: &[Sid],
     memberships: &[GroupMembership],
     local_group_sids: &[Sid],
+    logon_dependent_group_sids: &[Sid],
     access_context: AccessContext,
 ) -> (ShareMaskStatus, usize) {
     let smb_ctx = match validation::path::SmbAuditContext::resolve(path, smb_server, share_name) {
@@ -492,8 +493,17 @@ pub fn resolve_share_mask_status(
             // change the share mask cannot be evaluated — count it so the
             // result is marked not determinable instead of trusting the
             // "not in the token" assumption.
-            let logon_dependent =
-                logon_dependent_share_aces(&scan.dacl, &user_sids, access_context);
+            let logon_dependent_groups: std::collections::HashSet<String> =
+                logon_dependent_group_sids
+                    .iter()
+                    .map(|s| s.0.clone())
+                    .collect();
+            let logon_dependent = logon_dependent_share_aces(
+                &scan.dacl,
+                &user_sids,
+                &logon_dependent_groups,
+                access_context,
+            );
             if logon_dependent > 0 {
                 warn!(
                     server = %server,
@@ -514,6 +524,7 @@ pub fn resolve_share_mask_status(
 fn logon_dependent_share_aces(
     dacl: &ShareDacl,
     user_sids: &std::collections::HashSet<String>,
+    logon_dependent_groups: &std::collections::HashSet<String>,
     context: AccessContext,
 ) -> usize {
     let ShareDacl::Acl(perms) = dacl else {
@@ -522,7 +533,10 @@ fn logon_dependent_share_aces(
     let uncertain: Vec<&SharePermission> = perms
         .iter()
         .filter(|p| !user_sids.contains(&p.sid.0))
-        .filter(|p| permission_engine::engine::is_logon_dependent_sid(&p.sid.0, context))
+        .filter(|p| {
+            permission_engine::engine::is_logon_dependent_sid(&p.sid.0, context)
+                || logon_dependent_groups.contains(&p.sid.0)
+        })
         .collect();
     if uncertain.is_empty() {
         return 0;
@@ -824,6 +838,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             AccessContext::LocalInteractive,
         );
         assert!(
@@ -1104,7 +1119,12 @@ mod tests {
         ]);
         let token = sids(&["S-1-5-21-1-2-3-1000", "S-1-1-0", "S-1-5-11", "S-1-5-2"]);
         assert_eq!(
-            logon_dependent_share_aces(&dacl, &token, AccessContext::RemoteSmb),
+            logon_dependent_share_aces(
+                &dacl,
+                &token,
+                &Default::default(),
+                AccessContext::RemoteSmb
+            ),
             1
         );
     }
@@ -1118,11 +1138,47 @@ mod tests {
         ]);
         let token = sids(&["S-1-5-21-1-2-3-1000", "S-1-1-0"]);
         assert_eq!(
-            logon_dependent_share_aces(&dacl, &token, AccessContext::RemoteSmb),
+            logon_dependent_share_aces(
+                &dacl,
+                &token,
+                &Default::default(),
+                AccessContext::RemoteSmb
+            ),
             0
         );
         assert_eq!(
-            logon_dependent_share_aces(&ShareDacl::NullDacl, &token, AccessContext::RemoteSmb),
+            logon_dependent_share_aces(
+                &ShareDacl::NullDacl,
+                &token,
+                &Default::default(),
+                AccessContext::RemoteSmb
+            ),
+            0
+        );
+    }
+
+    /// ADR 0068: a share ACE for a local group the account is in only
+    /// through a logon-dependent SID is uncertain the same way.
+    #[test]
+    fn share_ace_for_a_logon_dependent_local_group_is_counted() {
+        let local_group = "S-1-5-21-7-7-7-1008";
+        let dacl = ShareDacl::Acl(vec![
+            make_perm("S", "S-1-1-0", 0x0012_00A9, AceKind::Allow),
+            make_perm("S", local_group, 0x0013_01BF, AceKind::Allow),
+        ]);
+        let token = sids(&["S-1-5-21-1-2-3-1000", "S-1-1-0", "S-1-5-11", "S-1-5-2"]);
+        let groups: std::collections::HashSet<String> = [local_group.to_string()].into();
+        assert_eq!(
+            logon_dependent_share_aces(&dacl, &token, &groups, AccessContext::RemoteSmb),
+            1
+        );
+        assert_eq!(
+            logon_dependent_share_aces(
+                &dacl,
+                &token,
+                &Default::default(),
+                AccessContext::RemoteSmb
+            ),
             0
         );
     }

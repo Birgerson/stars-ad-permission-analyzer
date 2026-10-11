@@ -20,8 +20,9 @@ use adpa_core::{
     error::CoreError,
     model::{
         format_also_via, AccessContext, AccessMask, AceEntry, AceKind, ContributingAce,
-        EffectivePermission, GroupMembership, Identity, MembershipHop, MembershipPathSource,
-        PermissionDiagnostic, PermissionPath, ShareEvalStatus, ShareMaskStatus, Sid,
+        EffectivePermission, GroupMembership, Identity, LocalGroupDescriptor, LocalGroupEntry,
+        LocalGroupExpansion, MembershipHop, MembershipPathSource, PermissionDiagnostic,
+        PermissionPath, ShareEvalStatus, ShareMaskStatus, Sid,
     },
     traits::{PermissionEvaluationInput, PermissionEvaluator},
 };
@@ -120,10 +121,16 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         let logon_dependent = if input.file_system_object.null_dacl {
             None
         } else {
+            let logon_dependent_groups: HashSet<String> = input
+                .logon_dependent_group_sids
+                .iter()
+                .map(|s| s.0.clone())
+                .collect();
             logon_dependent_bounds(
                 &input.file_system_object.dacl,
                 &match_sids,
                 input.access_context,
+                &logon_dependent_groups,
                 owner_implicit_bits,
             )
         };
@@ -391,6 +398,78 @@ pub fn build_token_sids_with_context(
     sids
 }
 
+/// Which local groups of a target server an account is in (ADR 0068) —
+/// the way Windows builds a logon token: a local group is added when one of
+/// its direct members is a SID already in the token (the account, its SID
+/// history, its domain groups and their SID history, `Everyone`,
+/// `Authenticated Users` and the well-knowns of the access context). Local
+/// groups cannot contain local groups, so one level is exact.
+///
+/// Until ADR 0068 the local groups came from `NetUserGetLocalGroups`, which
+/// in the lab missed groups entered through a nested domain group, a domain
+/// local group, `Everyone` and `Authenticated Users` — rights were shown too
+/// low, as a fact. A group reachable only through a logon-dependent SID
+/// ([`is_logon_dependent_sid`]) is returned in `logon_dependent`, not as a
+/// membership.
+pub fn expand_local_groups(
+    user_sid: &str,
+    sid_history: &[Sid],
+    memberships: &[GroupMembership],
+    groups: &[LocalGroupDescriptor],
+    access_context: AccessContext,
+) -> LocalGroupExpansion {
+    let token =
+        build_token_sids_with_context(user_sid, sid_history, memberships, &[], access_context);
+    let mut out = LocalGroupExpansion::default();
+    for group in groups {
+        let mut certain: Vec<Sid> = group
+            .members
+            .iter()
+            .filter(|m| token.contains(&m.0))
+            .cloned()
+            .collect();
+        let mut uncertain: Vec<Sid> = group
+            .members
+            .iter()
+            .filter(|m| !token.contains(&m.0) && is_logon_dependent_sid(&m.0, access_context))
+            .cloned()
+            .collect();
+        let sort_via = |via: &mut Vec<Sid>| {
+            via.sort_by(|a, b| {
+                (a.0 != user_sid)
+                    .cmp(&(b.0 != user_sid))
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            via.dedup();
+        };
+        if !certain.is_empty() {
+            sort_via(&mut certain);
+            out.certain.push(LocalGroupEntry {
+                group: group.sid.clone(),
+                name: group.name.clone(),
+                via: certain,
+            });
+        } else if !uncertain.is_empty() {
+            sort_via(&mut uncertain);
+            out.logon_dependent.push(LocalGroupEntry {
+                group: group.sid.clone(),
+                name: group.name.clone(),
+                via: uncertain,
+            });
+        }
+    }
+    // Deterministic output order regardless of the server's enumeration order.
+    let by_name = |a: &LocalGroupEntry, b: &LocalGroupEntry| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.group.0.cmp(&b.group.0))
+    };
+    out.certain.sort_by(by_name);
+    out.logon_dependent.sort_by(by_name);
+    out
+}
+
 fn collect_user_sids(
     identity: &Identity,
     memberships: &[GroupMembership],
@@ -560,17 +639,24 @@ pub struct LogonDependentBounds {
 /// possible outcome per bit; the opposite gives the lowest. The real token
 /// lies somewhere in between, so the real result is within the bounds. The
 /// owner bits are applied to both, as in the main evaluation.
+///
+/// `logon_dependent_groups` are local groups the account is in only through
+/// a logon-dependent SID (ADR 0068); their ACEs are uncertain the same way.
 pub fn logon_dependent_bounds(
     dacl: &[AceEntry],
     match_sids: &HashSet<String>,
     context: AccessContext,
+    logon_dependent_groups: &HashSet<String>,
     owner_implicit_bits: u32,
 ) -> Option<LogonDependentBounds> {
     let mut uncertain: Vec<String> = dacl
         .iter()
         .filter(|ace| ace_applies_to_current_object(ace))
         .filter(|ace| !match_sids.contains(&ace.sid.0))
-        .filter(|ace| is_logon_dependent_sid(&ace.sid.0, context))
+        .filter(|ace| {
+            is_logon_dependent_sid(&ace.sid.0, context)
+                || logon_dependent_groups.contains(&ace.sid.0)
+        })
         .map(|ace| ace.sid.0.clone())
         .collect();
     if uncertain.is_empty() {
@@ -1240,6 +1326,7 @@ mod tests {
                 share_status: to_share_status(share_mask),
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -1263,6 +1350,7 @@ mod tests {
                 share_status: to_share_status(share_mask),
                 local_group_sids,
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -1286,6 +1374,7 @@ mod tests {
                 share_status: to_share_status(share_mask),
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -1309,6 +1398,7 @@ mod tests {
                 share_status,
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2187,6 +2277,7 @@ mod tests {
                 share_status: ShareMaskStatus::ReadFailed("access denied".to_owned()),
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2214,6 +2305,7 @@ mod tests {
                 share_status: ShareMaskStatus::Applied(AccessMask(MASK_READ)),
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2237,6 +2329,7 @@ mod tests {
                 share_status: ShareMaskStatus::Unrestricted,
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2801,6 +2894,7 @@ mod tests {
                 share_status: ShareMaskStatus::Applied(AccessMask(MASK_READ)),
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 4,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2827,6 +2921,7 @@ mod tests {
                 share_status: ShareMaskStatus::Applied(AccessMask(MASK_READ)),
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2886,6 +2981,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -2921,6 +3017,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -3565,6 +3662,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -3713,6 +3811,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3746,6 +3845,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3778,6 +3878,7 @@ mod tests {
             share_status: ShareMaskStatus::NotApplicable,
             local_group_sids: vec![],
             local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+            logon_dependent_group_sids: Vec::new(),
             access_context: AccessContext::Unspecified,
             unsupported_share_ace_count: 0,
             sid_names: std::collections::BTreeMap::new(),
@@ -4133,6 +4234,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4171,6 +4273,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4208,6 +4311,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4242,6 +4346,7 @@ mod tests {
                     share_status: ShareMaskStatus::NotApplicable,
                     local_group_sids: vec![],
                     local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                    logon_dependent_group_sids: Vec::new(),
                     access_context: AccessContext::Unspecified,
                     unsupported_share_ace_count: 0,
                     sid_names: std::collections::BTreeMap::new(),
@@ -4294,6 +4399,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4325,6 +4431,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4394,6 +4501,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![Sid(BUILTIN_ADMINS.to_owned())],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -4453,6 +4561,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: vec![Sid(BUILTIN_ADMINS.to_owned())],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4498,6 +4607,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: Vec::new(),
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4546,6 +4656,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: Vec::new(),
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4582,6 +4693,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: Vec::new(),
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 // Key setting: local-looking input, explicit RemoteSmb —
                 // mirrors what CLI/GUI now produce via for_path_with_smb
                 // when --smb-server / --share-name is provided.
@@ -4612,6 +4724,7 @@ mod tests {
                 share_status: ShareMaskStatus::NotApplicable,
                 local_group_sids: Vec::new(),
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
+                logon_dependent_group_sids: Vec::new(),
                 access_context: AccessContext::LocalInteractive,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4623,5 +4736,181 @@ mod tests {
             "NETWORK Allow must NOT take effect under LocalInteractive (got 0x{:08X})",
             result.effective_mask.0
         );
+    }
+
+    // --- ADR 0068: local groups expanded by SID like a logon does ---
+
+    const LG_DIRECT: &str = "S-1-5-21-7-7-7-1003";
+    const LG_DOMGRP: &str = "S-1-5-21-7-7-7-1004";
+    const LG_AUTH: &str = "S-1-5-21-7-7-7-1005";
+    const LG_INTER: &str = "S-1-5-21-7-7-7-1006";
+    const LG_EVERY: &str = "S-1-5-21-7-7-7-1007";
+    const LG_ORG: &str = "S-1-5-21-7-7-7-1008";
+    const LG_OTHER: &str = "S-1-5-21-7-7-7-1009";
+
+    fn local_group(sid: &str, name: &str, members: &[&str]) -> LocalGroupDescriptor {
+        LocalGroupDescriptor {
+            sid: Sid(sid.into()),
+            name: name.into(),
+            members: members.iter().map(|m| Sid((*m).into())).collect(),
+        }
+    }
+
+    /// The MS-01 lab fixture in miniature: a local group per entry route.
+    fn ms01_groups() -> Vec<LocalGroupDescriptor> {
+        vec![
+            local_group(LG_DIRECT, "msg_direct", &[USER]),
+            local_group(LG_DOMGRP, "msg_domgrp", &[GROUP_B]),
+            local_group(LG_AUTH, "msg_auth", &["S-1-5-11"]),
+            local_group(LG_INTER, "msg_inter", &[SID_INTERACTIVE]),
+            local_group(LG_EVERY, "msg_every", &["S-1-1-0"]),
+            local_group(LG_ORG, "msg_org", &[THIS_ORGANIZATION]),
+            local_group(LG_OTHER, "msg_other", &[OTHER]),
+        ]
+    }
+
+    fn certain_names(e: &LocalGroupExpansion) -> Vec<String> {
+        e.certain.iter().map(|g| g.name.clone()).collect()
+    }
+
+    fn uncertain_names(e: &LocalGroupExpansion) -> Vec<String> {
+        e.logon_dependent.iter().map(|g| g.name.clone()).collect()
+    }
+
+    /// Lab finding MS-1: `NetUserGetLocalGroups` missed the groups entered
+    /// through a nested domain group, `Authenticated Users` and `Everyone`.
+    /// The expansion finds every one of them; GROUP_B stands for a group the
+    /// account reaches only through nesting (it is in the resolved set).
+    #[test]
+    fn local_groups_are_entered_through_every_token_sid() {
+        let memberships = vec![membership(USER, GROUP_A), membership(USER, GROUP_B)];
+        let e = expand_local_groups(
+            USER,
+            &[],
+            &memberships,
+            &ms01_groups(),
+            AccessContext::RemoteSmb,
+        );
+        assert_eq!(
+            certain_names(&e),
+            vec!["msg_auth", "msg_direct", "msg_domgrp", "msg_every"]
+        );
+        // Over SMB the logon is a network logon: INTERACTIVE is not in the
+        // token, so msg_inter is no membership at all — not even uncertain.
+        assert_eq!(uncertain_names(&e), vec!["msg_org"]);
+        let direct = &e.certain[1];
+        assert_eq!(direct.via, vec![Sid(USER.into())]);
+        let domgrp = &e.certain[2];
+        assert_eq!(domgrp.via, vec![Sid(GROUP_B.into())]);
+    }
+
+    #[test]
+    fn interactive_member_depends_on_the_access_context() {
+        let groups = ms01_groups();
+        let local = expand_local_groups(USER, &[], &[], &groups, AccessContext::LocalInteractive);
+        assert!(certain_names(&local).contains(&"msg_inter".to_string()));
+        let unspecified = expand_local_groups(USER, &[], &[], &groups, AccessContext::Unspecified);
+        assert!(!certain_names(&unspecified).contains(&"msg_inter".to_string()));
+        assert!(uncertain_names(&unspecified).contains(&"msg_inter".to_string()));
+        let smb = expand_local_groups(USER, &[], &[], &groups, AccessContext::RemoteSmb);
+        assert!(!certain_names(&smb).contains(&"msg_inter".to_string()));
+        assert!(!uncertain_names(&smb).contains(&"msg_inter".to_string()));
+    }
+
+    #[test]
+    fn sid_history_and_group_sid_history_enter_local_groups() {
+        let old_user = "S-1-5-21-5-5-5-1001";
+        let old_group = "S-1-5-21-5-5-5-1100";
+        let groups = vec![
+            local_group(LG_DIRECT, "via_old_user", &[old_user]),
+            local_group(LG_DOMGRP, "via_old_group", &[old_group]),
+        ];
+        let e = expand_local_groups(
+            USER,
+            &[Sid(old_user.into())],
+            &[membership_with_history(USER, GROUP_A, &[old_group])],
+            &groups,
+            AccessContext::RemoteSmb,
+        );
+        assert_eq!(certain_names(&e), vec!["via_old_group", "via_old_user"]);
+    }
+
+    #[test]
+    fn a_certain_route_wins_over_a_logon_dependent_one() {
+        let groups = vec![local_group(LG_DIRECT, "both", &[THIS_ORGANIZATION, USER])];
+        let e = expand_local_groups(USER, &[], &[], &groups, AccessContext::RemoteSmb);
+        assert_eq!(certain_names(&e), vec!["both"]);
+        assert!(e.logon_dependent.is_empty());
+        assert_eq!(e.certain[0].via, vec![Sid(USER.into())]);
+    }
+
+    #[test]
+    fn expansion_is_independent_of_server_order() {
+        let memberships = vec![membership(USER, GROUP_A), membership(USER, GROUP_B)];
+        let mut groups = ms01_groups();
+        groups.push(local_group(
+            "S-1-5-32-545",
+            "Users",
+            &["S-1-5-11", GROUP_A, USER, SID_INTERACTIVE],
+        ));
+        let a = expand_local_groups(USER, &[], &memberships, &groups, AccessContext::RemoteSmb);
+        groups.reverse();
+        for g in &mut groups {
+            g.members.reverse();
+        }
+        let b = expand_local_groups(USER, &[], &memberships, &groups, AccessContext::RemoteSmb);
+        assert_eq!(a, b);
+        let users = a.certain.iter().find(|g| g.name == "Users").unwrap();
+        // The account's own SID first, then by SID.
+        assert_eq!(
+            users.via,
+            vec![
+                Sid(USER.into()),
+                Sid("S-1-5-11".into()),
+                Sid(GROUP_A.into())
+            ]
+        );
+    }
+
+    #[test]
+    fn no_member_in_the_token_is_no_membership() {
+        let groups = vec![
+            local_group(LG_OTHER, "other", &[OTHER]),
+            local_group(LG_DIRECT, "empty", &[]),
+        ];
+        let e = expand_local_groups(USER, &[], &[], &groups, AccessContext::RemoteSmb);
+        assert!(e.certain.is_empty() && e.logon_dependent.is_empty());
+    }
+
+    /// An ACE for a local group the account is in only through a
+    /// logon-dependent SID bounds the result instead of being ignored.
+    #[test]
+    fn ace_for_a_logon_dependent_local_group_bounds_the_result() {
+        let p = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![],
+                file_system_object: fso(
+                    None,
+                    vec![
+                        allow_ace(LG_ORG, MASK_MODIFY, false),
+                        allow_ace(USER, MASK_READ, false),
+                    ],
+                ),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
+                logon_dependent_group_sids: vec![Sid(LG_ORG.into())],
+                access_context: AccessContext::RemoteSmb,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                resolution: ResolutionProvenance::default(),
+            })
+            .unwrap();
+        let (sids, min, max) = logon_marker(&p).expect("bounded");
+        assert_eq!(sids, vec![LG_ORG.to_string()]);
+        assert_eq!(min, expand_generic_rights(MASK_READ));
+        assert_eq!(max, expand_generic_rights(MASK_MODIFY | MASK_READ));
+        assert!(!p.effective_determinable());
     }
 }
