@@ -721,7 +721,8 @@ login:
    `Authenticated Users` (S-1-5-11).
 5. **Context-specific well-knowns** from `access_context`:
    - `RemoteSmb` → `NETWORK` (S-1-5-2).
-   - `LocalInteractive` → `INTERACTIVE` (S-1-5-4), `LOCAL` (S-1-2-0).
+   - `LocalInteractive` → `INTERACTIVE` (S-1-5-4). `LOCAL` (S-1-2-0) is
+     logon-dependent there and bounds the result (ADR 0069).
    - `Unspecified` → none.
 
 This distinction is critical: an ACE on `NETWORK` only matches in

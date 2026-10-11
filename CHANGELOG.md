@@ -54,6 +54,10 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   read as empty — direct memberships counted as nested; it is now completed
   through validated range retrieval (lab: 1601 direct memberships read
   completely, before 0).
+- **`LOCAL` is no longer assumed for local paths** (lab finding MS-2,
+  ADR 0069). A real console session's token carries `LOCAL` (S-1-2-0), an
+  interactive `LogonUser` token does not; an ACE for `LOCAL` now bounds the
+  result ("not determinable — between … and …") instead of being counted.
 - **Local groups of the target server are complete** (lab finding MS-1,
   ADR 0068). Stars took them from `NetUserGetLocalGroups`, which on a domain
   member omits groups entered through a nested domain group, a domain local

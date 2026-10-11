@@ -78,3 +78,4 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0066 | No silent drops in group resolution |
 | 0067 | Only security groups count; cross-check against tokenGroups |
 | 0068 | Local groups of the target server expanded by SID |
+| 0069 | `LOCAL` is logon-dependent for a local access |

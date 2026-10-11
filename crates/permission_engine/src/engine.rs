@@ -355,7 +355,8 @@ pub fn build_token_sids(user_sid: &str, memberships: &[GroupMembership]) -> Hash
 /// `Authenticated Users`), and the context-specific well-knowns:
 ///
 /// - `RemoteSmb` → `NETWORK` (S-1-5-2)
-/// - `LocalInteractive` → `INTERACTIVE` (S-1-5-4) + `LOCAL` (S-1-2-0)
+/// - `LocalInteractive` → `INTERACTIVE` (S-1-5-4) — `LOCAL` (S-1-2-0) is
+///   not certain for a local logon and is bounded instead (ADR 0069)
 /// - `Unspecified` → no additional well-knowns
 pub fn build_token_sids_with_context(
     user_sid: &str,
@@ -391,7 +392,6 @@ pub fn build_token_sids_with_context(
         }
         AccessContext::LocalInteractive => {
             sids.insert("S-1-5-4".to_string()); // INTERACTIVE
-            sids.insert("S-1-2-0".to_string()); // LOCAL
         }
         AccessContext::Unspecified => {}
     }
@@ -596,8 +596,9 @@ fn walk_dacl_stored_order(dacl: &[AceEntry], match_sids: &HashSet<String>) -> Da
 ///   (S-1-5-114);
 /// - for a local logon (and an unspecified context): `Remote Interactive
 ///   Logon` (S-1-5-14), `Console Logon` (S-1-2-1), `Terminal Server User`
-///   (S-1-5-13) — over SMB the logon is a network logon, which never
-///   carries them;
+///   (S-1-5-13) and `LOCAL` (S-1-2-0) — over SMB the logon is a network
+///   logon, which never carries them. `LOCAL` is in a console session's
+///   token but not in that of an interactive `LogonUser` (lab, ADR 0069);
 /// - for an unspecified context additionally `NETWORK`, `INTERACTIVE` and
 ///   `LOCAL`, which the modelled contexts decide.
 pub fn is_logon_dependent_sid(sid: &str, context: AccessContext) -> bool {
@@ -608,7 +609,7 @@ pub fn is_logon_dependent_sid(sid: &str, context: AccessContext) -> bool {
         "S-1-5-113",
         "S-1-5-114",
     ];
-    const LOCAL_LOGON: [&str; 3] = ["S-1-5-14", "S-1-2-1", "S-1-5-13"];
+    const LOCAL_LOGON: [&str; 4] = ["S-1-5-14", "S-1-2-1", "S-1-5-13", "S-1-2-0"];
     const CONTEXT: [&str; 3] = ["S-1-5-2", "S-1-5-4", "S-1-2-0"];
     if ALWAYS.contains(&sid) || sid.starts_with("S-1-18-") || sid.starts_with("S-1-5-64-") {
         return true;
@@ -3276,6 +3277,22 @@ mod tests {
             "S-1-2-1",
             AccessContext::LocalInteractive
         ));
+        // ADR 0069: LOCAL depends on how the local logon happened; a network
+        // logon never carries it.
+        assert!(is_logon_dependent_sid(
+            "S-1-2-0",
+            AccessContext::LocalInteractive
+        ));
+        assert!(is_logon_dependent_sid(
+            "S-1-2-0",
+            AccessContext::Unspecified
+        ));
+        assert!(!is_logon_dependent_sid("S-1-2-0", AccessContext::RemoteSmb));
+        // INTERACTIVE is in every interactive token (console, RDP, LogonUser).
+        assert!(!is_logon_dependent_sid(
+            "S-1-5-4",
+            AccessContext::LocalInteractive
+        ));
     }
 
     #[test]
@@ -3360,8 +3377,11 @@ mod tests {
         );
     }
 
+    /// ADR 0069 (lab finding MS-2): a real console session's token carries
+    /// LOCAL, an interactive `LogonUser` token does not — a LOCAL ACE
+    /// bounds the result instead of being assumed to apply.
     #[test]
-    fn local_ace_applies_in_local_interactive_context() {
+    fn local_ace_is_logon_dependent_in_local_interactive_context() {
         let p = eval_with_context(
             user(USER),
             vec![],
@@ -3369,10 +3389,12 @@ mod tests {
             None,
             AccessContext::LocalInteractive,
         );
-        assert!(
-            NormalizedRights::new(p.ntfs_mask.0).is_read(),
-            "LOCAL (S-1-2-0) ACE must apply in LocalInteractive context"
-        );
+        assert_eq!(p.ntfs_mask.0, 0, "the shown mask treats LOCAL as absent");
+        let (sids, min, max) = logon_marker(&p).expect("LOCAL bounds the result");
+        assert_eq!(sids, vec![SID_LOCAL.to_string()]);
+        assert_eq!(min, 0);
+        assert_eq!(max, expand_generic_rights(MASK_READ));
+        assert!(!p.effective_determinable());
     }
 
     #[test]
@@ -3434,7 +3456,7 @@ mod tests {
     }
 
     #[test]
-    fn build_token_sids_with_context_adds_interactive_and_local_for_local_interactive() {
+    fn build_token_sids_with_context_adds_interactive_but_not_local_for_local_interactive() {
         let token = super::build_token_sids_with_context(
             USER,
             &[],
@@ -3447,8 +3469,8 @@ mod tests {
             "INTERACTIVE must be added for LocalInteractive"
         );
         assert!(
-            token.contains(SID_LOCAL),
-            "LOCAL must be added for LocalInteractive"
+            !token.contains(SID_LOCAL),
+            "LOCAL is logon-dependent for LocalInteractive (ADR 0069), not in the token"
         );
         assert!(
             !token.contains(SID_NETWORK),

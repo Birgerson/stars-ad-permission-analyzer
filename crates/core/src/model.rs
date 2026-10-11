@@ -197,12 +197,13 @@ impl Identity {
 /// on logon type. For a faithful AccessCheck reproduction the engine
 /// needs to know whether to simulate a local or remote (SMB) access:
 /// ACEs targeting `NETWORK` (S-1-5-2) only apply over SMB; ACEs
-/// targeting `INTERACTIVE` (S-1-5-4) and `LOCAL` (S-1-2-0) only apply
-/// to local logons.
+/// targeting `INTERACTIVE` (S-1-5-4) only apply to local logons. `LOCAL`
+/// (S-1-2-0) is in some local logons' tokens and not in others, so it is
+/// bounded (ADR 0069).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AccessContext {
-    /// Local interactive evaluation — `INTERACTIVE` and `LOCAL` are added
-    /// to the token implicitly.
+    /// Local interactive evaluation — `INTERACTIVE` is added to the token
+    /// implicitly; `LOCAL` is logon-dependent (ADR 0069).
     LocalInteractive,
     /// Remote SMB access — `NETWORK` is added to the token implicitly.
     RemoteSmb,

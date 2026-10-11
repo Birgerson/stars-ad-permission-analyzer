@@ -55,7 +55,9 @@ Stars reconstructs the **access token** the way Windows would build it on a real
 * context-dependent well-known SIDs:
   * `Everyone` (S-1-1-0) — always
   * `Authenticated Users` (S-1-5-11) — always (for non-anonymous logons)
-  * `INTERACTIVE` (S-1-5-4) and `LOCAL` (S-1-2-0) — only on local access
+  * `INTERACTIVE` (S-1-5-4) — only on local access
+  * `LOCAL` (S-1-2-0) — on some local logons only (console yes, interactive
+    `LogonUser` no); an ACE for it bounds the result (ADR 0069)
   * `NETWORK` (S-1-5-2) — only on SMB access
 
 Which of the last group is present depends on the **AccessContext**. Stars derives it from the path type: local paths → `LocalInteractive`, UNC paths → `RemoteSmb`. This matters because ACEs on `NETWORK` apply on SMB but are ignored on local access — and vice versa.
