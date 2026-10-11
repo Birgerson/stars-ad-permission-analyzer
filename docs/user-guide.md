@@ -529,6 +529,13 @@ in forests with hundreds of thousands of identities.
   fallback there yields the direct domain groups plus local group
   chains. **Caveat:** nested domain groups are missing then; Stars
   flags those findings with `DomainGroupRecursionIncomplete`.
+- **Local accounts** of a file server (e.g. `FS01\svc_backup`). Without
+  LDAP Stars looks the account up **on the server of the analysed path**
+  (for a local path on this machine) — also from a machine outside the
+  domain — and reads its complete group set there; no LDAP is needed and the
+  results are exact. A bare name such as `Administrator` therefore means the
+  server's account, never the one of the machine Stars runs on. For local
+  administrators see `UacFilteredGroups` below (ADR 0070).
 
 ### LDAP configuration
 
@@ -804,6 +811,7 @@ exact wording, lives in
 | `IdentityNotResolvable { reason }` | high | **yes** | The SID could not be resolved and is **not** proven orphaned — e.g. an account of the trusted domain named in `reason`. Its memberships are unknown, so the computed rights can be too low or too high. |
 | `IdentityOrphaned` | info | no | The account no longer exists in the configured domain. Nobody can log on with the SID; an ACE naming it is a dead entry. |
 | `GroupResolutionIncomplete { reason }` | high | **yes** | The group resolution succeeded, but `reason` names groups that are missing from the evaluated token — a primary group outside the base, groups outside a base that is only an OU, a group without a readable SID, an unresolvable local group. |
+| `UacFilteredGroups { groups }` | medium | no (the bounds it causes are) | The account is a local account in groups User Account Control filters (Administrators, Backup Operators, …): over the network unless `LocalAccountTokenFilterPolicy` = 1 on the server (built-in Administrator: only with `FilterAdministratorToken` = 1), locally when not elevated. Stars cannot see these settings — Deny ACEs for the groups apply, Allow ACEs give a range. |
 | `NonSecurityGroupsExcluded { groups }` | info | no | Distribution groups, and groups reached only through one, are not in a Windows token; Stars left them out and lists them here. |
 | `LogonDependentTrustees { sids, min_mask, max_mask }` | medium | **yes** | ACEs for SIDs whose presence depends on how the user logs on (This Organization, NTLM authentication, console logon, …) decide bits of this result. The NTFS right lies between `min_mask` and `max_mask`. |
 

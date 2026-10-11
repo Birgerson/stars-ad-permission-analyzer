@@ -79,3 +79,4 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0067 | Only security groups count; cross-check against tokenGroups |
 | 0068 | Local groups of the target server expanded by SID |
 | 0069 | `LOCAL` is logon-dependent for a local access |
+| 0070 | Local accounts of the target server |

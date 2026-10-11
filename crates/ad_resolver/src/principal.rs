@@ -166,6 +166,12 @@ pub enum GroupResolutionStatus {
     LdapRecursive,
     /// SAM/NetAPI path: only direct domain groups + local group chains.
     SamFlat,
+    /// A local account of the target server, read on that server (ADR
+    /// 0070): its SAM groups cannot nest and its local groups come from the
+    /// server's local-group table, so the group set is complete. User
+    /// Account Control may filter some of its groups (handled by the
+    /// caller via `uac_filtered_group_sids`).
+    LocalAccount,
     /// Resolution failed.
     Failed { reason: String },
     /// Deliberately skipped.

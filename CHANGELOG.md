@@ -54,6 +54,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   read as empty — direct memberships counted as nested; it is now completed
   through validated range retrieval (lab: 1601 direct memberships read
   completely, before 0).
+- **Local accounts of a file server can be analysed — exactly** (lab
+  findings MS-3 / OBS-1, ADR 0070). Without LDAP every account was looked up
+  on the machine Stars runs on: a local account of a remote server could not
+  be analysed, and a name existing on both machines (`Administrator`)
+  silently became the analysing machine's account. The account is now looked
+  up on the server of the analysed path and its complete group set is read
+  there (primary group, SAM groups, `Local account`, local groups by SID) —
+  exact results instead of "not determinable". User Account Control is
+  modelled from lab evidence: for a local administrator the filtered groups
+  match Deny ACEs only and their Allow ACEs give a range, because the
+  server's UAC policies are not visible (`UacFilteredGroups`). Verified on
+  the lab member server against the Authz oracle, real tokens and real SMB
+  access: 0 violations.
 - **`LOCAL` is no longer assumed for local paths** (lab finding MS-2,
   ADR 0069). A real console session's token carries `LOCAL` (S-1-2-0), an
   interactive `LogonUser` token does not; an ACE for `LOCAL` now bounds the

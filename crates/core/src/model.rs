@@ -437,6 +437,10 @@ pub enum MembershipPathSource {
     /// `LDAP_MATCHING_RULE_IN_CHAIN`) but the concrete path could not
     /// be fully reconstructed. `complete` is `false` in this case.
     LdapMatchingRule,
+    /// A SID Windows puts into the token because of the account type — e.g.
+    /// `Local account` (S-1-5-113) for every local account of a machine
+    /// (lab-confirmed in every logon type, ADR 0070).
+    AccountType,
 }
 
 impl GroupMembership {
@@ -483,6 +487,9 @@ impl GroupMembership {
             match p.source {
                 MembershipPathSource::PrimaryGroup => return "primary group".to_owned(),
                 MembershipPathSource::LocalGroup => return "local group".to_owned(),
+                MembershipPathSource::AccountType => {
+                    return "added by Windows for every local account".to_owned()
+                }
                 _ => {}
             }
         }
@@ -1456,6 +1463,17 @@ pub enum PermissionDiagnostic {
     /// the evaluated token; listed so the omission is never silent.
     /// Informational (ADR 0067).
     NonSecurityGroupsExcluded { groups: Vec<String> },
+
+    /// The account is a local account of the target server and member of
+    /// groups that User Account Control filters out of its token: over the
+    /// network for every local account except the built-in Administrator
+    /// (unless `LocalAccountTokenFilterPolicy` = 1), for the built-in
+    /// Administrator only with `FilterAdministratorToken` = 1, and locally
+    /// in the non-elevated token. A filtered group only matches Deny ACEs.
+    /// Stars cannot see these policies, so Deny ACEs for the groups apply and
+    /// Allow ACEs bound the result (`LogonDependentTrustees`). Lab-confirmed
+    /// (ADR 0070). Notice.
+    UacFilteredGroups { groups: Vec<String> },
 }
 
 /// Account state as it may be stated to a reader — the single source for
@@ -1670,8 +1688,9 @@ impl PermissionDiagnostic {
                 max_mask,
             } => format!(
                 "ACE(s) for {} apply only for certain logons (authentication type, \
-                 organization, logon type), which Stars does not model — the NTFS right \
-                 lies between 0x{min_mask:08X} and 0x{max_mask:08X}.",
+                 organization, logon type, User Account Control filtering), which Stars \
+                 does not model — the NTFS right lies between 0x{min_mask:08X} and \
+                 0x{max_mask:08X}.",
                 sids.join(", ")
             ),
             PermissionDiagnostic::GroupResolutionIncomplete { reason } => {
@@ -1682,6 +1701,14 @@ impl PermissionDiagnostic {
                  distribution groups and nesting through them: {}.",
                 groups.len(),
                 groups.join("; ")
+            ),
+            PermissionDiagnostic::UacFilteredGroups { groups } => format!(
+                "Local account: User Account Control may filter {} out of the token (over \
+                 the network unless LocalAccountTokenFilterPolicy = 1 — for the built-in \
+                 Administrator only with FilterAdministratorToken = 1 — and locally when not \
+                 elevated). Stars cannot see these settings: Deny ACEs for them apply, \
+                 Allow ACEs bound the result.",
+                groups.join(", ")
             ),
         }
     }
@@ -1738,7 +1765,10 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::GroupSidHistoryEvaluated { .. }
             | PermissionDiagnostic::MembersViaPrimaryGroupIncluded { .. }
             | PermissionDiagnostic::IdentityOrphaned
-            | PermissionDiagnostic::NonSecurityGroupsExcluded { .. } => None,
+            | PermissionDiagnostic::NonSecurityGroupsExcluded { .. }
+            // The bounds it causes carry the uncertainty (LogonDependentTrustees);
+            // with no Allow ACE for a filtered group the result is exact.
+            | PermissionDiagnostic::UacFilteredGroups { .. } => None,
         }
     }
 
@@ -1767,7 +1797,8 @@ impl PermissionDiagnostic {
             // result.
             PermissionDiagnostic::UnsupportedShareAces { .. }
             | PermissionDiagnostic::UnsupportedNtfsAces { .. }
-            | PermissionDiagnostic::LogonDependentTrustees { .. } => DiagnosticSeverity::Notice,
+            | PermissionDiagnostic::LogonDependentTrustees { .. }
+            | PermissionDiagnostic::UacFilteredGroups { .. } => DiagnosticSeverity::Notice,
             // Likely a real gap — under-report or a hard resolution failure.
             PermissionDiagnostic::SidHistoryPresent { .. }
             | PermissionDiagnostic::GroupSidHistoryPresent { .. }
@@ -2515,6 +2546,9 @@ mod tests {
             PermissionDiagnostic::GroupResolutionIncomplete { reason: "r".into() },
             PermissionDiagnostic::NonSecurityGroupsExcluded {
                 groups: vec!["g".into()],
+            },
+            PermissionDiagnostic::UacFilteredGroups {
+                groups: vec!["S-1-5-32-544".into()],
             },
         ];
         for d in &all {

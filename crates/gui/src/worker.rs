@@ -1019,21 +1019,36 @@ async fn handle_analyze(
     // the RESOLVED SID, never the raw input: a name passed into the share
     // token would silently match nothing (review 2026-07-01 deep pass,
     // finding 1).
-    let res = resolve_identity_sids(identity, ldap).await?;
+    // ADR 0070: without LDAP the account is looked up on the target server.
+    let account_server = validation::path::effective_smb_target(path, smb_server);
+    let res = resolve_identity_sids(identity, ldap, account_server.as_deref()).await?;
 
     let access_context = AccessContext::for_path_with_smb(path, smb_server, share_name);
     let LocalGroupResolution {
         sids: local_group_sids,
         memberships: local_group_memberships,
         logon_dependent: logon_dependent_group_sids,
+        uac_filtered: uac_filtered_group_sids,
         status: local_group_status,
+        ..
     } = collect_local_group_sids_for_path(
         path,
         smb_server,
         &res.identity,
         &res.memberships,
         access_context,
+        matches!(
+            res.group_resolution_status,
+            ad_resolver::GroupResolutionStatus::LocalAccount
+        ),
     );
+    // Share ACEs for a UAC-filtered group are as uncertain as for a
+    // logon-dependent one.
+    let share_uncertain_group_sids: Vec<adpa_core::model::Sid> = logon_dependent_group_sids
+        .iter()
+        .chain(uac_filtered_group_sids.iter())
+        .cloned()
+        .collect();
 
     let (share_status, unsupported_share_ace_count) = resolve_share_status(
         path,
@@ -1042,7 +1057,7 @@ async fn handle_analyze(
         &res.identity,
         &res.memberships,
         &local_group_sids,
-        &logon_dependent_group_sids,
+        &share_uncertain_group_sids,
         access_context,
     );
 
@@ -1070,6 +1085,7 @@ async fn handle_analyze(
             local_group_sids,
             local_group_status,
             logon_dependent_group_sids,
+            uac_filtered_group_sids,
             access_context,
             unsupported_share_ace_count,
             sid_names,
@@ -1095,11 +1111,44 @@ async fn handle_resolve_groups(
     let ldap = normalized.ldap.as_ref();
     // `resolve_identity_sids` validates the identity and auto-dispatches it
     // (LDAP principal pipeline for a name, or the local LSA/SAM path).
-    let res = resolve_identity_sids(identity, ldap).await?;
+    let mut res = resolve_identity_sids(identity, ldap, None).await?;
+    if matches!(
+        res.group_resolution_status,
+        ad_resolver::GroupResolutionStatus::LocalAccount
+    ) {
+        add_local_groups_for_membership_view(&mut res);
+    }
     // `ad_connected` mirrors the CLI: true exactly when an LDAP bind backed
     // the lookup (otherwise the SAM/LSA flat fallback was used).
     let report = res.into_membership_report(ldap.is_some());
     Ok(membership_report_to_view(&report))
+}
+
+/// ADR 0070: the membership view of a local account of this machine lists
+/// its local groups too — read by SID and expanded like a logon (no specific
+/// logon). Groups reachable only through a logon-dependent SID and an
+/// incomplete local-group table are named as gaps, never dropped.
+fn add_local_groups_for_membership_view(res: &mut PrincipalResolution) {
+    let lg = collect_local_groups_on(
+        None,
+        &res.identity,
+        &res.memberships,
+        AccessContext::Unspecified,
+        false,
+    );
+    res.memberships.extend(lg.memberships);
+    if let adpa_core::model::LocalGroupEvalStatus::NotAvailable(msg) = lg.status {
+        res.group_resolution_gaps.push(format!(
+            "the local groups could not be read completely ({msg})"
+        ));
+    }
+    if !lg.logon_dependent_names.is_empty() {
+        res.group_resolution_gaps.push(format!(
+            "membership in {} depends on how the account logs on (the group is entered \
+             only through a logon-dependent SID such as INTERACTIVE)",
+            lg.logon_dependent_names.join(", ")
+        ));
+    }
 }
 
 /// Maps a [`MembershipReport`] into the GUI-ready [`GroupsViewData`].
@@ -1299,6 +1348,10 @@ struct LocalGroupResolution {
     sids: Vec<adpa_core::model::Sid>,
     memberships: Vec<GroupMembership>,
     logon_dependent: Vec<adpa_core::model::Sid>,
+    /// Display names of the logon-dependent groups, for reader-facing notes.
+    logon_dependent_names: Vec<String>,
+    /// UAC-filtered groups of a local account (ADR 0070).
+    uac_filtered: Vec<adpa_core::model::Sid>,
     status: adpa_core::model::LocalGroupEvalStatus,
 }
 
@@ -1315,13 +1368,31 @@ fn collect_local_group_sids_for_path(
     identity: &Identity,
     domain_memberships: &[GroupMembership],
     access_context: AccessContext,
+    local_account: bool,
 ) -> LocalGroupResolution {
-    use adpa_core::model::LocalGroupEvalStatus;
-
     use validation::path::effective_smb_target;
 
     let server_owned = effective_smb_target(path, explicit_smb_server);
-    let server = server_owned.as_deref();
+    collect_local_groups_on(
+        server_owned.as_deref(),
+        identity,
+        domain_memberships,
+        access_context,
+        local_account,
+    )
+}
+
+/// [`collect_local_group_sids_for_path`] for a known server (`None` = this
+/// machine) — also used by the membership view of a local account.
+fn collect_local_groups_on(
+    server: Option<&str>,
+    identity: &Identity,
+    domain_memberships: &[GroupMembership],
+    access_context: AccessContext,
+    local_account: bool,
+) -> LocalGroupResolution {
+    use adpa_core::model::LocalGroupEvalStatus;
+
     let table = match ad_resolver::read_local_group_table(server) {
         Ok(t) => t,
         Err(e) => {
@@ -1336,6 +1407,8 @@ fn collect_local_group_sids_for_path(
                 sids: Vec::new(),
                 memberships: Vec::new(),
                 logon_dependent: Vec::new(),
+                logon_dependent_names: Vec::new(),
+                uac_filtered: Vec::new(),
                 status: LocalGroupEvalStatus::NotAvailable(msg),
             };
         }
@@ -1359,11 +1432,24 @@ fn collect_local_group_sids_for_path(
         }
     }
     let memberships = ad_resolver::local_group_memberships(identity, &expansion.certain, &names);
-    let sids = memberships.iter().map(|m| m.group_sid.clone()).collect();
+    let all_sids: Vec<adpa_core::model::Sid> =
+        memberships.iter().map(|m| m.group_sid.clone()).collect();
+    // ADR 0070: User Account Control may filter some groups of a local
+    // account; they stay in the explanation but are deny-only for the engine.
+    let (sids, uac_filtered) = if local_account {
+        permission_engine::engine::split_uac_filtered_local_account_groups(&all_sids)
+    } else {
+        (all_sids, Vec::new())
+    };
     let logon_dependent = expansion
         .logon_dependent
         .iter()
         .map(|e| e.group.clone())
+        .collect();
+    let logon_dependent_names = expansion
+        .logon_dependent
+        .iter()
+        .map(|e| e.name.clone())
         .collect();
     tracing::debug!(
         ?server,
@@ -1384,6 +1470,8 @@ fn collect_local_group_sids_for_path(
         sids,
         memberships,
         logon_dependent,
+        logon_dependent_names,
+        uac_filtered,
         status,
     }
 }
@@ -1449,13 +1537,19 @@ async fn handle_scan(
     // `resolve_identity_sids`. Everything downstream uses the RESOLVED
     // identity, never the raw input (review 2026-07-01 deep pass,
     // finding 1).
-    let res = match resolve_identity_sids(identity, ldap).await {
+    // ADR 0070: without LDAP the account is looked up on the target server.
+    let account_server = validation::path::effective_smb_target(root, smb_server);
+    let res = match resolve_identity_sids(identity, ldap, account_server.as_deref()).await {
         Ok(r) => r,
         Err(e) => {
             return make_early_summary(format!("Identity resolution failed: {e}"));
         }
     };
     let engine_flags = res.engine_flags();
+    let local_account = matches!(
+        res.group_resolution_status,
+        ad_resolver::GroupResolutionStatus::LocalAccount
+    );
     let identity = res.identity;
     let memberships = res.memberships;
 
@@ -1469,14 +1563,22 @@ async fn handle_scan(
         sids: local_group_sids,
         memberships: local_group_memberships,
         logon_dependent: logon_dependent_group_sids,
+        uac_filtered: uac_filtered_group_sids,
         status: local_group_status,
+        ..
     } = collect_local_group_sids_for_path(
         root,
         smb_server,
         &identity,
         &memberships,
         root_access_context,
+        local_account,
     );
+    let share_uncertain_group_sids: Vec<adpa_core::model::Sid> = logon_dependent_group_sids
+        .iter()
+        .chain(uac_filtered_group_sids.iter())
+        .cloned()
+        .collect();
     // Round 6 finding 1: combine AD + local memberships per path.
     let combined_memberships: Vec<GroupMembership> = {
         let mut v = memberships.clone();
@@ -1504,7 +1606,7 @@ async fn handle_scan(
         &identity,
         &memberships,
         &local_group_sids,
-        &logon_dependent_group_sids,
+        &share_uncertain_group_sids,
         root_access_context,
     );
     if scan_unsupported_share_ace_count > 0 {
@@ -1594,6 +1696,7 @@ async fn handle_scan(
             local_group_sids: local_group_sids.clone(),
             local_group_status: local_group_status.clone(),
             logon_dependent_group_sids: logon_dependent_group_sids.clone(),
+            uac_filtered_group_sids: uac_filtered_group_sids.clone(),
             access_context: scan_access_context,
             unsupported_share_ace_count: scan_unsupported_share_ace_count,
             sid_names: scan_sid_names.clone(),
@@ -2556,6 +2659,7 @@ pub fn trust_to_row(t: &adpa_core::model::DomainTrust) -> TrustRow {
 async fn resolve_identity_sids(
     identity: &str,
     ldap: Option<&LdapParams>,
+    account_server: Option<&str>,
 ) -> Result<PrincipalResolution, String> {
     // Validate the identity at this GUI boundary (AGENTS.md: validate before
     // use) — a raw SID syntactically, a name/UPN via the identity-query
@@ -2594,13 +2698,28 @@ async fn resolve_identity_sids(
     // (LookupAccountName) on Windows, then the SAM/LSA group fallback. On a
     // domain controller this covers full domain membership; nested domain
     // groups are not recursively resolved, which the SamFlat status signals.
+    // ADR 0070: the account namespace that matters is the target server's —
+    // a local account exists only there, and a name that exists on both
+    // machines must not resolve to this machine's account. A local account
+    // of the server is resolved there completely; anything else continues
+    // with the server's SID. Local paths use this machine.
     #[cfg(windows)]
-    let sid = if is_sid {
-        Sid::try_new(trimmed).map_err(|e| format!("Invalid SID: {e}"))?
-    } else {
-        ad_resolver::lookup_sid_for_account(None, trimmed)
-            .map_err(|e| format!("LSA name lookup failed: {e}"))?
+    let sid = {
+        use ad_resolver::local_account::{
+            local_account_principal, resolve_account_on_server, ServerAccountLookup,
+        };
+        match resolve_account_on_server(account_server, trimmed).map_err(|e| {
+            format!(
+                "Account lookup on {} failed: {e}",
+                account_server.unwrap_or("this machine")
+            )
+        })? {
+            ServerAccountLookup::LocalAccount(r) => return Ok(local_account_principal(r)),
+            ServerAccountLookup::NotALocalAccount { sid } => sid,
+        }
     };
+    #[cfg(not(windows))]
+    let _ = account_server;
     #[cfg(not(windows))]
     let sid = {
         if !is_sid {
@@ -2843,11 +2962,11 @@ mod tests {
     #[cfg(not(windows))]
     fn resolve_identity_sids_without_ldap_dispatches_sid_vs_name() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ok = rt.block_on(resolve_identity_sids("S-1-5-21-1-2-3-1000", None));
+        let ok = rt.block_on(resolve_identity_sids("S-1-5-21-1-2-3-1000", None, None));
         assert!(ok.is_ok(), "a raw SID must resolve without LDAP: {ok:?}");
         assert_eq!(ok.unwrap().sid.0, "S-1-5-21-1-2-3-1000");
 
-        let err = rt.block_on(resolve_identity_sids("alice", None));
+        let err = rt.block_on(resolve_identity_sids("alice", None, None));
         assert!(err.is_err(), "a name without LDAP must error off-Windows");
         assert!(
             err.unwrap_err().contains("must be a SID"),

@@ -43,12 +43,18 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             groups = input.group_memberships.len(),
             "Evaluating effective permissions"
         );
-        let user_sids = collect_user_sids(
+        let mut user_sids = collect_user_sids(
             &input.identity,
             &input.group_memberships,
             &input.local_group_sids,
             input.access_context,
         );
+        // ADR 0070: a group User Account Control may filter is never an
+        // enabled token group here, whichever list it arrived in — it is
+        // deny-only below, and its Allow side is bounded.
+        for filtered in &input.uac_filtered_group_sids {
+            user_sids.remove(&filtered.0);
+        }
 
         // Owner handling (engine review 2026-06-09 finding 1).
         //
@@ -81,6 +87,24 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             user_sids.clone()
         };
 
+        // ADR 0070: groups User Account Control may filter out of a local
+        // account's token. A filtered group is deny-only — it matches Deny
+        // ACEs, never Allow ACEs — so the shown result is the filtered token
+        // and the Allow side is bounded below.
+        let deny_only_sids: HashSet<String> = input
+            .uac_filtered_group_sids
+            .iter()
+            .map(|s| s.0.clone())
+            .collect();
+        // The owner is a filtered group of the token: whether the implicit
+        // owner grant (and OWNER RIGHTS ACEs) apply depends on the filtering.
+        let uncertain_owner: Option<&str> = input
+            .file_system_object
+            .owner_sid
+            .as_ref()
+            .map(|o| o.0.as_str())
+            .filter(|o| deny_only_sids.contains(*o));
+
         // NULL DACL means "no access control" — Windows grants everyone full access.
         // An empty DACL (dacl == [] && null_dacl == false) by contrast denies everything.
         let walk = if input.file_system_object.null_dacl {
@@ -92,7 +116,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
                 decided_per_ace: Vec::new(),
             }
         } else {
-            walk_dacl_stored_order(&input.file_system_object.dacl, &match_sids)
+            walk_dacl_stored_order(&input.file_system_object.dacl, &match_sids, &deny_only_sids)
         };
         let mut ntfs_raw = walk.granted;
         let denied_raw = walk.denied;
@@ -131,7 +155,9 @@ impl PermissionEvaluator for DefaultPermissionEngine {
                 &match_sids,
                 input.access_context,
                 &logon_dependent_groups,
+                &deny_only_sids,
                 owner_implicit_bits,
+                uncertain_owner,
             )
         };
 
@@ -159,6 +185,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             memberships: &input.group_memberships,
             dacl: &input.file_system_object.dacl,
             match_sids: &match_sids,
+            deny_only_sids: &deny_only_sids,
             decided_per_ace: &decided_per_ace,
             unsupported_ntfs_count: input.file_system_object.unsupported_aces.len(),
             ntfs_raw,
@@ -173,7 +200,8 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             logon_dependent: logon_dependent.as_ref(),
         });
 
-        let matched_aces = collect_matched_aces(&input.file_system_object.dacl, &match_sids);
+        let matched_aces =
+            collect_matched_aces(&input.file_system_object.dacl, &match_sids, &deny_only_sids);
 
         // Structured diagnostic markers.
         //  - Follow-up finding 3 (NTFS): non-canonical DACL ordering. A
@@ -246,6 +274,19 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         // ADR 0066: groups that may be missing from a successful resolution.
         for reason in input.resolution.group_resolution_gaps {
             diagnostics.push(PermissionDiagnostic::GroupResolutionIncomplete { reason });
+        }
+        // ADR 0070: UAC-filtered groups of a local account — named, so the
+        // bounds they cause are explained.
+        if !input.uac_filtered_group_sids.is_empty() {
+            let groups = input
+                .uac_filtered_group_sids
+                .iter()
+                .map(|s| match input.sid_names.get(&s.0) {
+                    Some(name) => format!("{name} ({})", s.0),
+                    None => s.0.clone(),
+                })
+                .collect();
+            diagnostics.push(PermissionDiagnostic::UacFilteredGroups { groups });
         }
         // ADR 0067: groups left out of the token — visible, never silent.
         if !input.resolution.excluded_non_security_groups.is_empty() {
@@ -442,6 +483,13 @@ pub fn expand_local_groups(
             });
             via.dedup();
         };
+        // Lab (ADR 0070): Windows leaves Cryptographic Operators out of the
+        // token when the account is also in another UAC-filtered group, and
+        // makes it deny-only in a filtered token. Its presence is therefore
+        // never certain — bounded like a logon-dependent group.
+        if group.sid.0 == SID_CRYPTOGRAPHIC_OPERATORS && !certain.is_empty() {
+            uncertain.append(&mut certain);
+        }
         if !certain.is_empty() {
             sort_via(&mut certain);
             out.certain.push(LocalGroupEntry {
@@ -468,6 +516,45 @@ pub fn expand_local_groups(
     out.certain.sort_by(by_name);
     out.logon_dependent.sort_by(by_name);
     out
+}
+
+/// `BUILTIN\Cryptographic Operators`.
+pub const SID_CRYPTOGRAPHIC_OPERATORS: &str = "S-1-5-32-569";
+
+/// Builtin groups User Account Control turns deny-only in a filtered token —
+/// lab-confirmed on Windows Server 2025 for an account in every builtin
+/// group (ADR 0070): Administrators, Power Users, Print Operators, Backup
+/// Operators, Network Configuration Operators. (Cryptographic Operators is
+/// deny-only or absent and handled by [`expand_local_groups`].)
+pub const UAC_FILTERED_BUILTIN_GROUPS: [&str; 5] = [
+    "S-1-5-32-544",
+    "S-1-5-32-547",
+    "S-1-5-32-550",
+    "S-1-5-32-551",
+    "S-1-5-32-556",
+];
+
+/// `Local account and member of Administrators group` — in the token of a
+/// local account in Administrators, deny-only when filtered.
+pub const SID_LOCAL_ACCOUNT_AND_ADMIN: &str = "S-1-5-114";
+
+/// Splits the local groups of a **local account** into those that are
+/// certainly in its token and those User Account Control may filter
+/// (ADR 0070). `S-1-5-114` joins the filtered ones when the account is in
+/// Administrators. Domain accounts are not passed here: over the network
+/// they are never filtered (lab-confirmed).
+pub fn split_uac_filtered_local_account_groups(certain: &[Sid]) -> (Vec<Sid>, Vec<Sid>) {
+    let (filtered, kept): (Vec<Sid>, Vec<Sid>) = certain
+        .iter()
+        .cloned()
+        .partition(|s| UAC_FILTERED_BUILTIN_GROUPS.contains(&s.0.as_str()));
+    let mut filtered = filtered;
+    if filtered.iter().any(|s| s.0 == "S-1-5-32-544") {
+        filtered.push(Sid(SID_LOCAL_ACCOUNT_AND_ADMIN.to_owned()));
+    }
+    filtered.sort_by(|a, b| a.0.cmp(&b.0));
+    filtered.dedup();
+    (kept, filtered)
 }
 
 fn collect_user_sids(
@@ -539,7 +626,11 @@ struct DaclWalkOutcome {
 /// contribution — the order in which `AccessCheck` reached them. Until
 /// v1.9.0 they came out of a `HashMap` in a random order per process, so
 /// two runs over the same DACL listed them differently (lab finding DET-2).
-fn walk_dacl_stored_order(dacl: &[AceEntry], match_sids: &HashSet<String>) -> DaclWalkOutcome {
+fn walk_dacl_stored_order(
+    dacl: &[AceEntry],
+    match_sids: &HashSet<String>,
+    deny_only_sids: &HashSet<String>,
+) -> DaclWalkOutcome {
     let mut granted: u32 = 0;
     let mut denied: u32 = 0;
     let mut contributions: Vec<ContributingAce> = Vec::new();
@@ -548,7 +639,7 @@ fn walk_dacl_stored_order(dacl: &[AceEntry], match_sids: &HashSet<String>) -> Da
         if !ace_applies_to_current_object(ace) {
             continue;
         }
-        if !match_sids.contains(&ace.sid.0) {
+        if !ace_matches(ace, match_sids, deny_only_sids) {
             continue;
         }
         let mask = expand_generic_rights(ace.mask.0);
@@ -581,6 +672,17 @@ fn walk_dacl_stored_order(dacl: &[AceEntry], match_sids: &HashSet<String>) -> Da
         contributions,
         decided_per_ace,
     }
+}
+
+/// Whether `ace` applies to the token: its trustee is in the token, or it is
+/// a Deny ACE for a deny-only (UAC-filtered) group (ADR 0070).
+fn ace_matches(
+    ace: &AceEntry,
+    match_sids: &HashSet<String>,
+    deny_only_sids: &HashSet<String>,
+) -> bool {
+    match_sids.contains(&ace.sid.0)
+        || (ace.kind == AceKind::Deny && deny_only_sids.contains(&ace.sid.0))
 }
 
 /// Well-known SIDs whose presence in a real access token depends on **how**
@@ -643,12 +745,20 @@ pub struct LogonDependentBounds {
 ///
 /// `logon_dependent_groups` are local groups the account is in only through
 /// a logon-dependent SID (ADR 0068); their ACEs are uncertain the same way.
+/// `deny_only_groups` may be filtered out of the token by User Account
+/// Control (ADR 0070): their Deny ACEs apply in both bounds, their Allow
+/// ACEs only in the upper one. `uncertain_owner` — the object's owner when
+/// it is such a group — makes `OWNER RIGHTS` ACEs uncertain and adds the
+/// implicit owner grant to the upper bound.
+#[allow(clippy::too_many_arguments)]
 pub fn logon_dependent_bounds(
     dacl: &[AceEntry],
     match_sids: &HashSet<String>,
     context: AccessContext,
     logon_dependent_groups: &HashSet<String>,
+    deny_only_groups: &HashSet<String>,
     owner_implicit_bits: u32,
+    uncertain_owner: Option<&str>,
 ) -> Option<LogonDependentBounds> {
     let mut uncertain: Vec<String> = dacl
         .iter()
@@ -657,20 +767,38 @@ pub fn logon_dependent_bounds(
         .filter(|ace| {
             is_logon_dependent_sid(&ace.sid.0, context)
                 || logon_dependent_groups.contains(&ace.sid.0)
+                || (ace.kind == AceKind::Allow && deny_only_groups.contains(&ace.sid.0))
+                || (uncertain_owner.is_some() && ace.sid.0 == SID_OWNER_RIGHTS)
         })
         .map(|ace| ace.sid.0.clone())
         .collect();
-    if uncertain.is_empty() {
+    let owner_rights_ace = dacl
+        .iter()
+        .any(|ace| ace.sid.0 == SID_OWNER_RIGHTS && ace_applies_to_current_object(ace));
+    let upper_owner_bits = if uncertain_owner.is_some() && !owner_rights_ace {
+        owner_implicit_bits | FILE_READ_CONTROL | FILE_WRITE_DAC
+    } else {
+        owner_implicit_bits
+    };
+    if uncertain.is_empty() && upper_owner_bits == owner_implicit_bits {
         return None;
     }
     uncertain.sort();
     uncertain.dedup();
-    let certain = |sid: &str| match_sids.contains(sid);
-    let maybe = |sid: &str| certain(sid) || uncertain.iter().any(|u| u == sid);
-    let max = walk_granted_with(dacl, &maybe, &certain) | owner_implicit_bits;
-    let min = walk_granted_with(dacl, &certain, &maybe) | owner_implicit_bits;
+    let certain_allow = |sid: &str| match_sids.contains(sid);
+    let certain_deny = |sid: &str| match_sids.contains(sid) || deny_only_groups.contains(sid);
+    let maybe_allow = |sid: &str| certain_allow(sid) || uncertain.iter().any(|u| u == sid);
+    let maybe_deny = |sid: &str| certain_deny(sid) || uncertain.iter().any(|u| u == sid);
+    let max = walk_granted_with(dacl, &maybe_allow, &certain_deny) | upper_owner_bits;
+    let min = walk_granted_with(dacl, &certain_allow, &maybe_deny) | owner_implicit_bits;
     if min == max {
         return None;
+    }
+    if uncertain.is_empty() {
+        // Only the implicit owner grant is uncertain — name the owner group.
+        if let Some(owner) = uncertain_owner {
+            uncertain.push(owner.to_owned());
+        }
     }
     Some(LogonDependentBounds {
         sids: uncertain,
@@ -718,9 +846,15 @@ fn walk_granted_with(
 /// apply only to children; a risk rule like `DirectUserAceRule` would
 /// otherwise fire on an explicit user ACE that does not affect the current
 /// object at all (follow-up finding 2).
-fn collect_matched_aces(dacl: &[AceEntry], user_sids: &HashSet<String>) -> Vec<AceEntry> {
+fn collect_matched_aces(
+    dacl: &[AceEntry],
+    user_sids: &HashSet<String>,
+    deny_only_sids: &HashSet<String>,
+) -> Vec<AceEntry> {
     dacl.iter()
-        .filter(|ace| ace_applies_to_current_object(ace) && user_sids.contains(&ace.sid.0))
+        .filter(|ace| {
+            ace_applies_to_current_object(ace) && ace_matches(ace, user_sids, deny_only_sids)
+        })
         .cloned()
         .collect()
 }
@@ -771,6 +905,7 @@ fn source_label(source: &MembershipPathSource) -> &'static str {
         MembershipPathSource::DomainGroup => "DomainGroup",
         MembershipPathSource::LocalGroup => "LocalGroup",
         MembershipPathSource::LdapMatchingRule => "LdapMatchingRule",
+        MembershipPathSource::AccountType => "AccountType",
     }
 }
 
@@ -910,6 +1045,8 @@ struct ExplanationInput<'a> {
     /// SID set used for ACE matching — includes `S-1-3-4` when the user
     /// is the owner, so OWNER RIGHTS ACEs show up in the step list.
     match_sids: &'a HashSet<String>,
+    /// UAC-filtered groups — match Deny ACEs only (ADR 0070).
+    deny_only_sids: &'a HashSet<String>,
     /// Index-aligned with `dacl`: the exact bits each ACE decided during
     /// the stored-order walk (engine review 2026-06-12 finding 1). `0`
     /// means the ACE matched the token but contributed no effective bits.
@@ -946,6 +1083,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         memberships,
         dacl,
         match_sids,
+        deny_only_sids,
         decided_per_ace,
         unsupported_ntfs_count,
         ntfs_raw,
@@ -1015,7 +1153,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     // This keeps the audit text as exact as the calculation: a reader can
     // no longer mistake a merely-matched ACE for one that mattered.
     for (idx, ace) in dacl.iter().enumerate() {
-        if !match_sids.contains(&ace.sid.0) {
+        if !ace_matches(ace, match_sids, deny_only_sids) {
             continue;
         }
         let kind = match ace.kind {
@@ -1328,6 +1466,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -1352,6 +1491,7 @@ mod tests {
                 local_group_sids,
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -1376,6 +1516,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -1400,6 +1541,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2279,6 +2421,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2307,6 +2450,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2331,6 +2475,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2896,6 +3041,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 4,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2923,6 +3069,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2983,6 +3130,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -3019,6 +3167,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -3685,6 +3834,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -3834,6 +3984,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3868,6 +4019,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3901,6 +4053,7 @@ mod tests {
             local_group_sids: vec![],
             local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
             logon_dependent_group_sids: Vec::new(),
+            uac_filtered_group_sids: Vec::new(),
             access_context: AccessContext::Unspecified,
             unsupported_share_ace_count: 0,
             sid_names: std::collections::BTreeMap::new(),
@@ -4257,6 +4410,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4296,6 +4450,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4334,6 +4489,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4369,6 +4525,7 @@ mod tests {
                     local_group_sids: vec![],
                     local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                     logon_dependent_group_sids: Vec::new(),
+                    uac_filtered_group_sids: Vec::new(),
                     access_context: AccessContext::Unspecified,
                     unsupported_share_ace_count: 0,
                     sid_names: std::collections::BTreeMap::new(),
@@ -4422,6 +4579,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4454,6 +4612,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4524,6 +4683,7 @@ mod tests {
                 local_group_sids: vec![Sid(BUILTIN_ADMINS.to_owned())],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -4584,6 +4744,7 @@ mod tests {
                 local_group_sids: vec![Sid(BUILTIN_ADMINS.to_owned())],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4630,6 +4791,7 @@ mod tests {
                 local_group_sids: Vec::new(),
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4679,6 +4841,7 @@ mod tests {
                 local_group_sids: Vec::new(),
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4716,6 +4879,7 @@ mod tests {
                 local_group_sids: Vec::new(),
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 // Key setting: local-looking input, explicit RemoteSmb —
                 // mirrors what CLI/GUI now produce via for_path_with_smb
                 // when --smb-server / --share-name is provided.
@@ -4747,6 +4911,7 @@ mod tests {
                 local_group_sids: Vec::new(),
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::LocalInteractive,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4923,6 +5088,7 @@ mod tests {
                 local_group_sids: vec![],
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
                 logon_dependent_group_sids: vec![Sid(LG_ORG.into())],
+                uac_filtered_group_sids: Vec::new(),
                 access_context: AccessContext::RemoteSmb,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4934,5 +5100,133 @@ mod tests {
         assert_eq!(min, expand_generic_rights(MASK_READ));
         assert_eq!(max, expand_generic_rights(MASK_MODIFY | MASK_READ));
         assert!(!p.effective_determinable());
+    }
+
+    // --- ADR 0070: UAC-filtered groups of a local account ---
+
+    const ADMINS: &str = "S-1-5-32-544";
+
+    fn eval_uac(dacl: Vec<AceEntry>, owner: Option<&str>) -> EffectivePermission {
+        DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                // The membership arrives through the local-group list too;
+                // the engine must still treat it as deny-only.
+                group_memberships: vec![membership(USER, ADMINS)],
+                file_system_object: fso(owner, dacl),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![Sid(ADMINS.into())],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
+                logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: vec![Sid(ADMINS.into())],
+                access_context: AccessContext::RemoteSmb,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                resolution: ResolutionProvenance::default(),
+            })
+            .unwrap()
+    }
+
+    /// Lab (MS-01): a local admin's Administrators group is filtered over
+    /// SMB by default, not with LocalAccountTokenFilterPolicy = 1. The shown
+    /// value is the filtered token, the upper bound the unfiltered one.
+    #[test]
+    fn allow_for_a_uac_filtered_group_bounds_the_result() {
+        let p = eval_uac(
+            vec![
+                allow_ace(ADMINS, MASK_FULL_CONTROL, false),
+                allow_ace(USER, MASK_READ, false),
+            ],
+            None,
+        );
+        assert_eq!(p.ntfs_mask.0, expand_generic_rights(MASK_READ));
+        let (sids, min, max) = logon_marker(&p).expect("bounded");
+        assert_eq!(sids, vec![ADMINS.to_string()]);
+        assert_eq!(min, expand_generic_rights(MASK_READ));
+        assert_eq!(max, MASK_FULL_CONTROL);
+        assert!(!p.effective_determinable());
+        assert!(p
+            .diagnostics
+            .iter()
+            .any(|d| matches!(d, PermissionDiagnostic::UacFilteredGroups { groups } if groups.iter().any(|g| g.contains(ADMINS)))));
+    }
+
+    /// A filtered group is deny-only: its Deny ACE applies either way, so
+    /// the result stays exact.
+    #[test]
+    fn deny_for_a_uac_filtered_group_always_applies() {
+        let p = eval_uac(
+            vec![
+                deny_ace(ADMINS, MASK_WRITE, false),
+                allow_ace(USER, MASK_MODIFY, false),
+            ],
+            None,
+        );
+        let expected = expand_generic_rights(MASK_MODIFY) & !expand_generic_rights(MASK_WRITE);
+        assert_eq!(p.ntfs_mask.0, expected);
+        assert!(logon_marker(&p).is_none(), "nothing uncertain");
+        assert!(p.effective_determinable());
+    }
+
+    /// Owner = a filtered group: the implicit owner grant applies only to
+    /// the unfiltered token — upper bound only.
+    #[test]
+    fn filtered_owner_group_bounds_the_implicit_owner_grant() {
+        let p = eval_uac(vec![allow_ace(USER, MASK_READ, false)], Some(ADMINS));
+        let read = expand_generic_rights(MASK_READ);
+        assert_eq!(p.ntfs_mask.0, read, "filtered token: no owner grant");
+        let (sids, min, max) = logon_marker(&p).expect("bounded by the owner grant");
+        assert_eq!(sids, vec![ADMINS.to_string()]);
+        assert_eq!(min, read);
+        assert_eq!(max, read | FILE_READ_CONTROL | FILE_WRITE_DAC);
+    }
+
+    #[test]
+    fn uac_split_of_local_account_groups() {
+        let groups: Vec<Sid> = [
+            "S-1-5-32-545",
+            ADMINS,
+            "S-1-5-32-551",
+            "S-1-5-21-7-7-7-1003",
+        ]
+        .iter()
+        .map(|s| Sid((*s).into()))
+        .collect();
+        let (kept, filtered) = split_uac_filtered_local_account_groups(&groups);
+        assert_eq!(
+            kept,
+            vec![
+                Sid("S-1-5-32-545".into()),
+                Sid("S-1-5-21-7-7-7-1003".into())
+            ]
+        );
+        assert_eq!(
+            filtered,
+            // Sorted by SID string — deterministic.
+            vec![
+                Sid("S-1-5-114".into()),
+                Sid(ADMINS.into()),
+                Sid("S-1-5-32-551".into())
+            ]
+        );
+        // Not in Administrators: no S-1-5-114.
+        let (_, filtered) = split_uac_filtered_local_account_groups(&[Sid("S-1-5-32-551".into())]);
+        assert_eq!(filtered, vec![Sid("S-1-5-32-551".into())]);
+    }
+
+    /// Lab: Cryptographic Operators is absent from the token when the
+    /// account is also in another filtered group — never certain.
+    #[test]
+    fn cryptographic_operators_membership_is_never_certain() {
+        let groups = vec![local_group(SID_CRYPTOGRAPHIC_OPERATORS, "Crypto", &[USER])];
+        for ctx in [
+            AccessContext::RemoteSmb,
+            AccessContext::LocalInteractive,
+            AccessContext::Unspecified,
+        ] {
+            let e = expand_local_groups(USER, &[], &[], &groups, ctx);
+            assert!(e.certain.is_empty(), "{ctx:?}");
+            assert_eq!(uncertain_names(&e), vec!["Crypto"], "{ctx:?}");
+        }
     }
 }
