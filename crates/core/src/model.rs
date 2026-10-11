@@ -948,6 +948,41 @@ pub enum LocalGroupEvalStatus {
     NotAvailable(String),
 }
 
+/// One local group (alias) of a target server with its direct members, read
+/// by SID (ADR 0068). Local groups cannot contain local groups, so the direct
+/// members are everything Windows considers when it puts the group into a
+/// logon token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalGroupDescriptor {
+    pub sid: Sid,
+    /// Display name (`BUILTIN\Users`, `SERVER\Group`, or the bare name).
+    pub name: String,
+    pub members: Vec<Sid>,
+}
+
+/// One local group the account is in, with the token SIDs that put it
+/// there (ADR 0068). `via` is sorted: the account's own SID first, then by
+/// SID — deterministic regardless of the member order the server returned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalGroupEntry {
+    pub group: Sid,
+    pub name: String,
+    pub via: Vec<Sid>,
+}
+
+/// The local groups of a target server an account is in (ADR 0068).
+///
+/// `certain` groups contain a SID that is in the account's token in the
+/// evaluated access context. `logon_dependent` groups are reachable only
+/// through a well-known SID whose presence depends on how the account logs
+/// on (e.g. `INTERACTIVE` when the context is unspecified) — whether they are
+/// in the token is unknown, so they are bounded, never assumed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalGroupExpansion {
+    pub certain: Vec<LocalGroupEntry>,
+    pub logon_dependent: Vec<LocalGroupEntry>,
+}
+
 /// Allow ACE that contributed at least one bit to the NTFS result.
 ///
 /// `mask` contains only the bits of this ACE that appear in the final ntfs_raw
@@ -1392,8 +1427,9 @@ pub enum PermissionDiagnostic {
     /// The DACL has applicable ACEs for well-known SIDs whose presence in
     /// the real token depends on how the user logs on — This Organization,
     /// authentication assertion or package (NTLM / SChannel / Digest),
-    /// remote-interactive or console logon, local account — and those ACEs
-    /// decide bits of this result. Stars does not model them, so the NTFS
+    /// remote-interactive or console logon, local account — or for local
+    /// groups of the target server the user is in only through such a SID
+    /// (ADR 0068), and those ACEs decide bits of this result. Stars does not model them, so the NTFS
     /// right lies between `min_mask` and `max_mask` (inclusive bounds; the
     /// shown mask treats them as absent). Until ADR 0065 such ACEs were
     /// silently treated as not applying. Incompleteness trigger; Notice.

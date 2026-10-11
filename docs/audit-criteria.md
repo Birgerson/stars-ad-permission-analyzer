@@ -318,7 +318,7 @@ Every `RiskFinding` carries a boolean `incomplete` field. It marks findings whos
    Object, callback, or conditional ACEs are skipped by the parser; a hidden Deny could flip the result.
 
 3. **Local server groups could not be resolved** (`LocalGroupEvalStatus::NotAvailable(...)`).
-   ACEs targeting e.g. a local `Administrators` group are then invisible; effective rights may be **too low**. Since v1.5.3 this also covers the case where `NetUserGetLocalGroups` returns `NERR_USER_NOT_FOUND` for **all** tried account name forms (typical with trust / LSA identities backed by a NetBIOS domain) — see ADR 0040.
+   ACEs targeting e.g. a local `Administrators` group are then invisible; effective rights may be **too low**. Since ADR 0068 the local groups are read by SID and expanded against the token (account, nested and domain local groups, `Everyone`, `Authenticated Users`, the logon's well-knowns), so the marker means the server's local groups could not be read completely — not that an account name form was unknown.
 
 **Structural identity / group gaps** (variant-tagged `PermissionDiagnostic` markers in `EffectivePermission.diagnostics`; the full per-marker table with meanings and ADR references lives in `docs/features-and-limitations.md`, section "Structured diagnostic markers per finding"):
 

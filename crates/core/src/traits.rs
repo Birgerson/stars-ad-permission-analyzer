@@ -120,6 +120,12 @@ pub struct PermissionEvaluationInput {
     /// as incomplete (see [`LocalGroupEvalStatus`]). The caller sets this; the
     /// engine forwards it unchanged.
     pub local_group_status: LocalGroupEvalStatus,
+    /// SIDs of local groups the user is in **only** through a logon-dependent
+    /// well-known SID (e.g. a group containing `INTERACTIVE` when the access
+    /// context is unspecified, ADR 0068). Not in the token as a fact: ACEs
+    /// for them are bounded like ACEs for logon-dependent well-known SIDs
+    /// (ADR 0065). Empty by default.
+    pub logon_dependent_group_sids: Vec<Sid>,
     /// Access context (local interactive / remote SMB / unspecified).
     /// Controls which well-known SIDs are added to the token implicitly
     /// (e.g. `NETWORK` for SMB, `INTERACTIVE` for local). The default

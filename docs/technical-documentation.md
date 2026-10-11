@@ -920,103 +920,68 @@ share trustees from the share DACL, separated via the
 
 ---
 
-## 8. Local server groups and the candidate list
+## 8. Local server groups
 
-**Source:** [`crates/ad_resolver/src/local_groups.rs`](../crates/ad_resolver/src/local_groups.rs).
-**Architecture rationale:** [ADR 0040](adr/0040-local-group-candidate-name-list.md).
+**Source:** [`crates/ad_resolver/src/local_groups.rs`](../crates/ad_resolver/src/local_groups.rs),
+`expand_local_groups` in [`crates/permission_engine/src/engine.rs`](../crates/permission_engine/src/engine.rs).
+**Architecture rationale:** [ADR 0068](adr/0068-local-groups-expanded-by-sid.md)
+(supersedes ADR 0040).
 
-Local server groups (`BUILTIN\Administrators`, locally defined
-groups) are essential for correct token construction — and
-historically one of the most common silent gaps in permission tools.
+Local server groups (`BUILTIN\Administrators`, locally defined groups)
+belong to the token and are one of the most common silent gaps in
+permission tools.
 
-### 8.1 The problem
+### 8.1 The token rule
 
-`NetUserGetLocalGroups` expects an account name. Which form is
-correct?
+Windows adds a local group to a logon token when one of its **direct
+members** is a SID already in the token: the account, its SID history, its
+domain groups (nested and domain local ones included) with their SID
+history, `Everyone`, `Authenticated Users` and the well-knowns of the logon
+(`NETWORK` over SMB, `INTERACTIVE` locally). Local groups cannot contain
+local groups, so one level is exact.
 
-- For domain-joined users with a UPN: `user@dns.suffix` works.
-- For NetBIOS-domain trust identities: `user@TRUSTED` fails (not a
-  valid UPN suffix). `TRUSTED\user` works.
-- For local accounts: `user` alone.
-
-Up to v1.5.2 Stars blindly built `name@domain` — for NetBIOS-domain
-identities from the LSA / trust path that regularly produced
-`NERR_USER_NOT_FOUND`, which was **silently** interpreted as
-`Ok(Vec::new())`. Result: ACEs on local server groups invisible, no
-`incomplete` marker.
-
-### 8.2 The candidate list
-
-`format_account_candidates_for_local_groups(identity)` returns a
-list in preference order:
+### 8.2 Reading the table — by SID
 
 ```rust
-1. identity.user_principal_name              // real UPN (when AD has it)
-2. format!("{domain}\\{name}")                // works for all domain types
-3. format!("{name}@{domain}")                 // ONLY when looks_like_dns_domain(domain)
-4. name                                       // local accounts
+pub fn read_local_group_table(server: Option<&str>)
+    -> Result<LocalGroupTable /* groups + gaps */, CoreError>
 ```
 
-`looks_like_dns_domain(domain)` is the heuristic:
+`NetLocalGroupEnum` (all pages) → `LookupAccountNameW` on the server (the
+result must be an alias, `SidTypeAlias`) → `NetLocalGroupGetMembers`. Every
+SID is validated; all non-builtin groups must belong to one account domain.
+A group that cannot be read completely is a gap → the caller sets
+`LocalGroupEvalStatus::NotAvailable`.
+
+`NetUserGetLocalGroups` is **not** used on the analysis path any more: from
+a machine outside the domain it fails for every domain account (1355), and
+on a domain member it omits groups entered through nested domain groups,
+domain local groups and well-known SIDs (lab finding MS-1). It remains only
+in the SAM fallback, whose results are always not determinable.
+
+### 8.3 Expansion
 
 ```rust
-fn looks_like_dns_domain(domain: &str) -> bool {
-    domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
-}
+pub fn expand_local_groups(user_sid, sid_history, memberships,
+                           groups: &[LocalGroupDescriptor],
+                           access_context) -> LocalGroupExpansion
+// certain:          groups with a member in the token
+// logon_dependent:  groups reachable only through a logon-dependent SID
 ```
 
-A NetBIOS name like `TRUSTED` contains no dot → the UPN form is
-**not** added to the list → no misleading `alice@TRUSTED` attempt.
+The token SID set is the one the evaluation uses
+(`build_token_sids_with_context`), so expansion and evaluation cannot
+disagree. `logon_dependent` groups go into
+`PermissionEvaluationInput::logon_dependent_group_sids`; their NTFS and
+share ACEs are bounded like logon-dependent SIDs (ADR 0065).
 
-### 8.3 Strict variant + outcome type
+### 8.4 Explanation
 
-```rust
-enum LocalGroupLookupOutcome {
-    WithGroups(Vec<Sid>),     // account found, here are the groups
-    UserNotFoundOnServer,     // NERR_USER_NOT_FOUND
-}
-
-fn resolve_local_group_sids_strict(server, account)
-    -> Result<LocalGroupLookupOutcome, CoreError>
-```
-
-This separation is what the candidate loop needs: only with it can
-the caller distinguish "account found, 0 groups" (= a valid result)
-from "account not recognised" (= try the next candidate).
-
-### 8.4 The identity wrapper
-
-`resolve_local_group_sids_for_identity(server, identity)` is the
-**honest** function the CLI and GUI call:
-
-```rust
-for candidate in candidates {
-    match resolve_local_group_sids_strict(server, &candidate)? {
-        WithGroups(sids) => return Ok(sids),       // first hit
-        UserNotFoundOnServer => continue,          // next
-    }
-}
-// when ALL NotFound:
-Err(CoreError::Validation(format!(
-    "NetUserGetLocalGroups: account for identity {} not known on {server:?} \
-     (tried forms: {:?}). Local server group memberships are not available; \
-     the result is marked incomplete.",
-    identity.sid.0, tried
-)))
-```
-
-Callers set the `Err` as
-`LocalGroupEvalStatus::NotAvailable(reason)` → the risk engine
-flags `incomplete = true`. **No silent skips.**
-
-### 8.5 Backward compatibility
-
-The old API `resolve_local_group_sids()` is preserved — it still
-treats `NERR_USER_NOT_FOUND` as `Ok(Vec::new())`, but is only used by
-external consumers. Internally all callers go through the identity
-wrapper.
-
----
+`ad_resolver::local_group_memberships` turns the certain groups into
+`GroupMembership` entries with source `LocalGroup`: `account → group` when
+the account itself is a member, else `account → token SID → group`, the
+remaining entries as `also_via`. Deterministic order (account first, then
+SID; groups by name, then SID).
 
 ## 9. The diagnostic marker system
 

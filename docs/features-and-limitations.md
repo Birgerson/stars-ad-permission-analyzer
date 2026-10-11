@@ -409,9 +409,14 @@ permanently not part of the product:
 
 - **When:** The NTFS DACL references a local group on the file/SMB
   server (e.g. `BUILTIN\Administrators` or a custom local group).
-- **What happens:** Stars resolves local server groups on the same
-  server as the share DACL (`effective_smb_target`, ADR 0031). On
-  explicit specification, `--smb-server` wins.
+- **What happens:** Stars reads the local groups of the same server as
+  the share DACL (`effective_smb_target`, ADR 0031; `--smb-server` wins)
+  **by SID** and adds every group that has a member in the account's token —
+  the account, a nested or domain local domain group, `Everyone`,
+  `Authenticated Users`, `NETWORK`/`INTERACTIVE` of the access context
+  (ADR 0068). This works the same from a machine outside the domain. A group
+  reachable only through a logon-dependent SID bounds the result instead of
+  being assumed.
 - **When resolution fails:** `LocalGroupEvalStatus::NotAvailable`
   → entry in the diagnostics block; the result is marked incomplete.
 - **How to read:** Without successful local-group resolution, ACEs

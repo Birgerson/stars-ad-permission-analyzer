@@ -1021,8 +1021,19 @@ async fn handle_analyze(
     // finding 1).
     let res = resolve_identity_sids(identity, ldap).await?;
 
-    let (local_group_sids, local_group_memberships, local_group_status) =
-        collect_local_group_sids_for_path(path, smb_server, &res.identity, &res.memberships);
+    let access_context = AccessContext::for_path_with_smb(path, smb_server, share_name);
+    let LocalGroupResolution {
+        sids: local_group_sids,
+        memberships: local_group_memberships,
+        logon_dependent: logon_dependent_group_sids,
+        status: local_group_status,
+    } = collect_local_group_sids_for_path(
+        path,
+        smb_server,
+        &res.identity,
+        &res.memberships,
+        access_context,
+    );
 
     let (share_status, unsupported_share_ace_count) = resolve_share_status(
         path,
@@ -1031,7 +1042,8 @@ async fn handle_analyze(
         &res.identity,
         &res.memberships,
         &local_group_sids,
-        AccessContext::for_path_with_smb(path, smb_server, share_name),
+        &logon_dependent_group_sids,
+        access_context,
     );
 
     // SID→name table for the explanation path. DACL trustees are resolved
@@ -1057,7 +1069,8 @@ async fn handle_analyze(
             share_status,
             local_group_sids,
             local_group_status,
-            access_context: AccessContext::for_path_with_smb(path, smb_server, share_name),
+            logon_dependent_group_sids,
+            access_context,
             unsupported_share_ace_count,
             sid_names,
             resolution: engine_flags,
@@ -1279,67 +1292,99 @@ fn group_members_report_to_view(report: &adpa_core::model::GroupMembersReport) -
     }
 }
 
-/// Collects local group SIDs on the analysis target server — see CLI counterpart.
-/// Finding 2: prefers the explicit `smb_server` over the path-derived UNC server
-/// so the token SID set stays consistent.
+/// The local groups of the analysis target server the account is in
+/// (ADR 0068), split into token memberships and groups reachable only
+/// through a logon-dependent SID.
+struct LocalGroupResolution {
+    sids: Vec<adpa_core::model::Sid>,
+    memberships: Vec<GroupMembership>,
+    logon_dependent: Vec<adpa_core::model::Sid>,
+    status: adpa_core::model::LocalGroupEvalStatus,
+}
+
+/// Resolves the account's local groups on the analysis target server — the
+/// GUI counterpart of the CLI function of the same name (ADR 0068). For
+/// UNC paths the server is derived from the path; for local paths the local
+/// machine is used. The server's local groups are read by SID and expanded
+/// against the account's token like a logon does (ADR 0068) — no account
+/// name lookup, so a machine outside the domain gets the same answer. A
+/// failure does not abort the analysis; it marks the result incomplete.
 fn collect_local_group_sids_for_path(
     path: &str,
     explicit_smb_server: Option<&str>,
     identity: &Identity,
     domain_memberships: &[GroupMembership],
-) -> (
-    Vec<adpa_core::model::Sid>,
-    Vec<GroupMembership>,
-    adpa_core::model::LocalGroupEvalStatus,
-) {
+    access_context: AccessContext,
+) -> LocalGroupResolution {
     use adpa_core::model::LocalGroupEvalStatus;
+
     use validation::path::effective_smb_target;
 
     let server_owned = effective_smb_target(path, explicit_smb_server);
     let server = server_owned.as_deref();
-    // Round 6 finding 1: chains instead of bare SIDs, so the engine's
-    // explanation path renders every `Member of …` mediator step.
-    let mut known_member_sids_to_names: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    if let Some(ref n) = identity.name {
-        known_member_sids_to_names.insert(identity.sid.0.clone(), n.clone());
-    }
-    for gm in domain_memberships {
-        if let Some(ref n) = gm.group_name {
-            known_member_sids_to_names.insert(gm.group_sid.0.clone(), n.clone());
-        }
-    }
-    match ad_resolver::resolve_local_group_chains_for_identity(
-        server,
-        identity,
-        &known_member_sids_to_names,
-    ) {
-        Ok(ad_resolver::LocalGroupMemberships { memberships, gaps }) => {
-            let sids: Vec<adpa_core::model::Sid> =
-                memberships.iter().map(|m| m.group_sid.clone()).collect();
-            // ADR 0066: unresolvable local groups keep the evaluation
-            // incomplete; the resolved ones stay in the token.
-            let status = if gaps.is_empty() {
-                LocalGroupEvalStatus::Applied
-            } else {
-                LocalGroupEvalStatus::NotAvailable(gaps.join("; "))
-            };
-            (sids, memberships, status)
-        }
+    let table = match ad_resolver::read_local_group_table(server) {
+        Ok(t) => t,
         Err(e) => {
             let msg = e.to_string();
             warn!(
                 ?server,
                 sid = %identity.sid.0,
                 error = %msg,
-                "Local group resolution failed; result will be marked incomplete"
+                "Local group table unreadable; result will be marked incomplete"
             );
-            (
-                Vec::new(),
-                Vec::new(),
-                LocalGroupEvalStatus::NotAvailable(msg),
-            )
+            return LocalGroupResolution {
+                sids: Vec::new(),
+                memberships: Vec::new(),
+                logon_dependent: Vec::new(),
+                status: LocalGroupEvalStatus::NotAvailable(msg),
+            };
         }
+    };
+    let expansion = permission_engine::engine::expand_local_groups(
+        &identity.sid.0,
+        &identity.sid_history,
+        domain_memberships,
+        &table.groups,
+        access_context,
+    );
+    // Labels for the mediator step of each chain (account, domain groups);
+    // well-known SIDs are looked up by the builder.
+    let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    if let Some(ref n) = identity.name {
+        names.insert(identity.sid.0.clone(), n.clone());
+    }
+    for gm in domain_memberships {
+        if let Some(ref n) = gm.group_name {
+            names.insert(gm.group_sid.0.clone(), n.clone());
+        }
+    }
+    let memberships = ad_resolver::local_group_memberships(identity, &expansion.certain, &names);
+    let sids = memberships.iter().map(|m| m.group_sid.clone()).collect();
+    let logon_dependent = expansion
+        .logon_dependent
+        .iter()
+        .map(|e| e.group.clone())
+        .collect();
+    tracing::debug!(
+        ?server,
+        sid = %identity.sid.0,
+        groups = table.groups.len(),
+        member_of = memberships.len(),
+        logon_dependent = expansion.logon_dependent.len(),
+        "Local groups expanded for target server"
+    );
+    // ADR 0066: groups that could not be read keep the evaluation
+    // incomplete; the resolved ones stay in the token.
+    let status = if table.gaps.is_empty() {
+        LocalGroupEvalStatus::Applied
+    } else {
+        LocalGroupEvalStatus::NotAvailable(table.gaps.join("; "))
+    };
+    LocalGroupResolution {
+        sids,
+        memberships,
+        logon_dependent,
+        status,
     }
 }
 
@@ -1419,8 +1464,19 @@ async fn handle_scan(
     let mut summary_errors: Vec<ScanError> = Vec::new();
 
     // Resolve local server groups once per scan root — before the share mask, so
-    let (local_group_sids, local_group_memberships, local_group_status) =
-        collect_local_group_sids_for_path(root, smb_server, &identity, &memberships);
+    let root_access_context = AccessContext::for_path_with_smb(root, smb_server, share_name);
+    let LocalGroupResolution {
+        sids: local_group_sids,
+        memberships: local_group_memberships,
+        logon_dependent: logon_dependent_group_sids,
+        status: local_group_status,
+    } = collect_local_group_sids_for_path(
+        root,
+        smb_server,
+        &identity,
+        &memberships,
+        root_access_context,
+    );
     // Round 6 finding 1: combine AD + local memberships per path.
     let combined_memberships: Vec<GroupMembership> = {
         let mut v = memberships.clone();
@@ -1448,7 +1504,8 @@ async fn handle_scan(
         &identity,
         &memberships,
         &local_group_sids,
-        AccessContext::for_path_with_smb(root, smb_server, share_name),
+        &logon_dependent_group_sids,
+        root_access_context,
     );
     if scan_unsupported_share_ace_count > 0 {
         let msg = format!(
@@ -1536,6 +1593,7 @@ async fn handle_scan(
             share_status: share_status.clone(),
             local_group_sids: local_group_sids.clone(),
             local_group_status: local_group_status.clone(),
+            logon_dependent_group_sids: logon_dependent_group_sids.clone(),
             access_context: scan_access_context,
             unsupported_share_ace_count: scan_unsupported_share_ace_count,
             sid_names: scan_sid_names.clone(),
@@ -2652,6 +2710,7 @@ fn bare_sid_identity(sid: &str) -> (Identity, Vec<GroupMembership>) {
 ///
 /// Returns `NotApplicable` when no SMB context exists, `Applied(mask)` on
 /// success, or `ReadFailed(reason)` when the share DACL could not be read.
+#[allow(clippy::too_many_arguments)]
 fn resolve_share_status(
     path: &str,
     smb_server: Option<&str>,
@@ -2661,6 +2720,7 @@ fn resolve_share_status(
     identity: &Identity,
     memberships: &[GroupMembership],
     local_group_sids: &[adpa_core::model::Sid],
+    logon_dependent_group_sids: &[adpa_core::model::Sid],
     access_context: AccessContext,
 ) -> (adpa_core::model::ShareMaskStatus, usize) {
     // G1: the share-mask orchestration is shared with the CLI in
@@ -2676,6 +2736,7 @@ fn resolve_share_status(
         &identity.sid_history,
         memberships,
         local_group_sids,
+        logon_dependent_group_sids,
         access_context,
     )
 }
@@ -2954,6 +3015,7 @@ mod tests {
             None,
             None,
             &dummy_id,
+            &[],
             &[],
             &[],
             AccessContext::LocalInteractive,

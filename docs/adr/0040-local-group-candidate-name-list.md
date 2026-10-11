@@ -1,6 +1,8 @@
 # ADR 0040 — Candidate list for local group resolution
 
-**Status:** Accepted
+**Status:** Superseded by [ADR 0068](0068-local-groups-expanded-by-sid.md)
+(2026-10-11) — `NetUserGetLocalGroups` turned out not to return the
+complete local-group set at all; local groups are now read by SID.
 **Date:** 2026-06-04
 
 ## Context
