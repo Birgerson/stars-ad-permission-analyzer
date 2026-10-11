@@ -309,7 +309,7 @@ Stars classifies every finding into one of five levels (`adpa_core::model::RiskS
 
 Every `RiskFinding` carries a boolean `incomplete` field. It marks findings whose underlying **permission evaluation** had gaps and which should therefore be read **cautiously**.
 
-`incomplete = true` is set when the underlying evaluation has at least one of the gaps listed below. **Authoritative source:** `EffectivePermission::is_incomplete()` together with `PermissionDiagnostic::is_incompleteness_trigger()` in `crates/core/src/model.rs` — `rules.rs::is_incomplete()` is a thin delegate to it. The list here must stay in sync with the code (last verified 2026-07-26 for v1.8.0).
+`incomplete = true` is set when the underlying evaluation has at least one of the gaps listed below. **Authoritative source:** `EffectivePermission::is_incomplete()` together with `PermissionDiagnostic::is_incompleteness_trigger()` in `crates/core/src/model.rs` — `rules.rs::is_incomplete()` is a thin delegate to it. The list here must stay in sync with the code (last verified 2026-10-11 for v1.9.1).
 
 **Direct evaluation gaps:**
 
@@ -354,6 +354,15 @@ Every `RiskFinding` carries a boolean `incomplete` field. It marks findings whos
 13. **Persisted evidence could not be fully decoded** (`PermissionDiagnostic::PersistedEvidenceDecodeFailed`), **member enumeration incomplete** (`PermissionDiagnostic::GroupMemberEnumerationIncomplete`), **universal-group members of other domains not visible** (`PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible`).
     Gaps of the persistence / members views that make a reconstructed or listed result a lower bound.
 
+14. **A SID could not be resolved and is not provably orphaned** (`PermissionDiagnostic::IdentityNotResolvable { reason }`).
+    Covers a trusted-domain SID, a SID of another (unconfigured) domain, or a partial LDAP base — `reason` names which. Its memberships are unknown; see ADR 0064.
+
+15. **Groups may be missing from an otherwise successful resolution** (`PermissionDiagnostic::GroupResolutionIncomplete { reason }`).
+    A primary group that could not be read, a group without a readable SID, memberships outside the resolved set, an incomplete `memberOf` range, or an unreadable local-group table — `reason` names them. See ADR 0066 / 0068.
+
+16. **ACEs for a logon-dependent trustee decide bits of the result** (`PermissionDiagnostic::LogonDependentTrustees { sids, min_mask, max_mask }`).
+    Well-known SIDs whose presence depends on the logon type/organization, or a local group reached only through one — the NTFS right is bounded between `min_mask` and `max_mask` instead of being guessed. See ADR 0065 / 0068 / 0069.
+
 Markers that do **not** contribute to incomplete — informational:
 
 - `PermissionDiagnostic::IdentityDisabled` (account flagged disabled in AD via `userAccountControl`; ACL-theoretical rights are correct).
@@ -363,6 +372,9 @@ Markers that do **not** contribute to incomplete — informational:
 - `PermissionDiagnostic::TrustBoundaryEffectsNotModeled` (hint that SID filtering / trust effects are not simulated; the NTFS/share computation itself is complete — see L4 in the known limitations).
 - `PermissionDiagnostic::SidHistoryEvaluated` / `PermissionDiagnostic::GroupSidHistoryEvaluated` (historical SIDs **were** read and included in the token; the marker documents that the result already accounts for them).
 - `PermissionDiagnostic::MembersViaPrimaryGroupIncluded` (members view: members found via `primaryGroupID` were included; transparency, not a gap).
+- `PermissionDiagnostic::IdentityOrphaned` (the SID is provably orphaned — a deleted account of the configured domain; the rights shown are what a logon with this SID would get, a correct statement). See ADR 0064.
+- `PermissionDiagnostic::NonSecurityGroupsExcluded { groups }` (a distribution group, or a group reached only through one, is not in a Windows token and was left out; named so the omission is never silent). See ADR 0067.
+- `PermissionDiagnostic::UacFilteredGroups { groups }` (the token holds groups User Account Control may filter; by itself the result stays exact — an applicable Allow ACE for one of them is what turns it into a `LogonDependentTrustees` range). See ADR 0070 / 0071.
 
 A finding with `incomplete = true` does **not** mean it is wrong — it means the underlying result might not be 100 % complete. For an audit that is the honest statement; for an automated escalation you should not blindly trust it.
 

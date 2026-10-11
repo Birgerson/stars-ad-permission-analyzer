@@ -10,6 +10,53 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+## [1.9.1] — 2026-10-11
+
+**No misinformation, verified against Windows itself.**
+
+Triggered by the explicit requirement "no misinformation in any respect —
+rather a message that the evaluation is not correctly possible at this
+point": every result Stars computes was checked bit-for-bit against
+Windows' own authorization APIs and against real logon tokens, in a lab
+spanning two forests, ten thousand users, five thousand nested groups and —
+new this release — a domain member server. Every defect the comparison
+found is fixed here; what Stars still cannot determine now says so
+explicitly instead of guessing.
+
+**Nondeterminism eliminated** (ADR 0063/DET-2): the explanation path no
+longer changes between runs of the same scan, and contributing trustees are
+listed in a reproducible order.
+
+**"Not determinable" replaces silent guessing** (ADR 0065, JSON schema
+**v4**): logon-dependent well-known SIDs, non-security (distribution)
+groups wrongly counted as access (ADR 0067, cross-checked against the
+domain controller's own `tokenGroups`), missing builtin groups in every
+LDAP result (ADR 0066), and groups silently dropped during resolution are
+now either computed correctly or explicitly bounded and flagged — never
+stated as fact when they are not known.
+
+**A new member-server lab (MS-01) found four further defects, all fixed:**
+local groups read incompletely (ADR 0068), `LOCAL` (S-1-2-0) wrongly
+assumed present on every local logon (ADR 0069), local accounts of a remote
+server unanalysable or silently resolved against the wrong machine
+(ADR 0070), and administrators on a local path assumed elevated although
+User Account Control may filter their token (ADR 0071) — the last two model
+User Account Control from direct lab evidence: real filtered and elevated
+tokens, and all four `LocalAccountTokenFilterPolicy` /
+`FilterAdministratorToken` combinations.
+
+**Also new:** a CI and pre-commit secret gate (`scripts/check-secrets.py`)
+— no password, token or key may reach a commit.
+
+### Known issues
+
+- **L15 (remainder) / L16 — trusted-domain group memberships and User
+  Account Control policies are not read.** A trusted-domain account's own
+  memberships in that domain, and whether a server sets
+  `LocalAccountTokenFilterPolicy` / `FilterAdministratorToken`, are not
+  visible to Stars; both surface as `NOT DETERMINABLE` with the reason
+  rather than being guessed. See `docs/known-limitations.md`, L15 and L16.
+
 ### Changed
 
 - **A result Stars cannot determine is never stated as a fact any more**
