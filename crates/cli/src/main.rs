@@ -1611,7 +1611,8 @@ struct LocalGroupResolution {
     logon_dependent: Vec<adpa_core::model::Sid>,
     /// Display names of the logon-dependent groups, for reader-facing notes.
     logon_dependent_names: Vec<String>,
-    /// UAC-filtered groups of a local account (ADR 0070).
+    /// Token groups User Account Control may filter for this access
+    /// (ADR 0070/0071) — deny-only for the engine.
     uac_filtered: Vec<adpa_core::model::Sid>,
     status: adpa_core::model::LocalGroupEvalStatus,
 }
@@ -1640,6 +1641,25 @@ fn collect_local_group_sids_for_path(
     )
 }
 
+/// The token groups User Account Control may filter for this access
+/// (ADR 0070/0071): over all groups of the token — domain groups with their
+/// SID history, and the local groups.
+fn uac_filtered_token_groups(
+    domain_memberships: &[adpa_core::model::GroupMembership],
+    local_group_sids: &[adpa_core::model::Sid],
+    local_account: bool,
+    access_context: AccessContext,
+) -> Vec<adpa_core::model::Sid> {
+    let token_groups: Vec<adpa_core::model::Sid> = domain_memberships
+        .iter()
+        .flat_map(|m| {
+            std::iter::once(m.group_sid.clone()).chain(m.group_sid_history.iter().cloned())
+        })
+        .chain(local_group_sids.iter().cloned())
+        .collect();
+    permission_engine::engine::uac_filtered_groups(&token_groups, local_account, access_context)
+}
+
 /// [`collect_local_group_sids_for_path`] for a known server (`None` = this
 /// machine) — also used by the membership view of a local account.
 fn collect_local_groups_on(
@@ -1666,7 +1686,12 @@ fn collect_local_groups_on(
                 memberships: Vec::new(),
                 logon_dependent: Vec::new(),
                 logon_dependent_names: Vec::new(),
-                uac_filtered: Vec::new(),
+                uac_filtered: uac_filtered_token_groups(
+                    domain_memberships,
+                    &[],
+                    local_account,
+                    access_context,
+                ),
                 status: LocalGroupEvalStatus::NotAvailable(msg),
             };
         }
@@ -1692,13 +1717,12 @@ fn collect_local_groups_on(
     let memberships = ad_resolver::local_group_memberships(identity, &expansion.certain, &names);
     let all_sids: Vec<adpa_core::model::Sid> =
         memberships.iter().map(|m| m.group_sid.clone()).collect();
-    // ADR 0070: User Account Control may filter some groups of a local
-    // account; they stay in the explanation but are deny-only for the engine.
-    let (sids, uac_filtered) = if local_account {
-        permission_engine::engine::split_uac_filtered_local_account_groups(&all_sids)
-    } else {
-        (all_sids, Vec::new())
-    };
+    // ADR 0070/0071: groups User Account Control may filter for this access;
+    // they stay in the token lists and the explanation, the engine treats
+    // them as deny-only.
+    let uac_filtered =
+        uac_filtered_token_groups(domain_memberships, &all_sids, local_account, access_context);
+    let sids = all_sids;
     let logon_dependent = expansion
         .logon_dependent
         .iter()

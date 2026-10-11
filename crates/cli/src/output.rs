@@ -446,21 +446,23 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      with this SID would get; an ACE naming it is a dead entry.");
             }
             PermissionDiagnostic::UacFilteredGroups { groups } => {
-                println!("  [!] Local account: User Account Control may filter these groups out");
-                println!("      of the token (deny-only):");
+                println!("  [!] User Account Control may filter these groups out of the token");
+                println!("      (deny-only):");
                 for g in groups {
                     println!("        - {g}");
                 }
+                println!("      In a local session that is not elevated (any account in such a");
                 println!(
-                    "      Over the network this happens unless LocalAccountTokenFilterPolicy"
+                    "      group; the built-in Administrator is exempt by default), and for a"
                 );
                 println!(
-                    "      = 1 (built-in Administrator: only with FilterAdministratorToken = 1),"
+                    "      local account over the network unless LocalAccountTokenFilterPolicy"
                 );
-                println!("      locally when the session is not elevated. Stars cannot see these");
                 println!(
-                    "      settings: Deny ACEs for the groups apply, Allow ACEs bound the result."
+                    "      = 1 (built-in Administrator: only with FilterAdministratorToken = 1)."
                 );
+                println!("      Stars cannot see elevation or these settings: Deny ACEs for the");
+                println!("      groups apply, Allow ACEs bound the result.");
             }
             PermissionDiagnostic::NonSecurityGroupsExcluded { groups } => {
                 println!(

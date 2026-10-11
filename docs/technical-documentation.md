@@ -944,9 +944,14 @@ validated as `SidTypeGroup` of the server's domain), the primary group by
 RID if missing, and `S-1-5-113` with source `MembershipPathSource::AccountType`.
 `local_account_principal` yields `GroupResolutionStatus::LocalAccount`.
 
-UAC: `permission_engine::engine::split_uac_filtered_local_account_groups`
-moves the filtered groups (`UAC_FILTERED_BUILTIN_GROUPS`, plus `S-1-5-114`
-with Administrators) into `PermissionEvaluationInput::uac_filtered_group_sids`.
+UAC: `permission_engine::engine::uac_filtered_groups(token_groups,
+local_account, context)` returns the token groups User Account Control may
+filter — over the network only for a local account, on a local path for every
+account (`UAC_FILTERED_BUILTIN_GROUPS`, `UAC_FILTERED_DOMAIN_RIDS`, plus
+`S-1-5-114` for a local account in Administrators; ADR 0070/0071) — and the
+callers pass them as `PermissionEvaluationInput::uac_filtered_group_sids`.
+Cryptographic Operators (S-1-5-32-569) is removed from the enabled token by
+the engine itself and bounded, whatever source the membership came from.
 The engine removes them from the enabled token; `ace_matches` lets them match
 Deny ACEs only; `logon_dependent_bounds` counts their Allow ACEs (and, for an
 object they own, the implicit owner grant) in the upper bound only.

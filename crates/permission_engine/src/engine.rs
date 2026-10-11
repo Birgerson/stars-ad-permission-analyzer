@@ -55,6 +55,12 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         for filtered in &input.uac_filtered_group_sids {
             user_sids.remove(&filtered.0);
         }
+        // Lab (ADR 0071): Windows leaves Cryptographic Operators out of the
+        // token when the account is also in another UAC-filtered group — over
+        // the network too — and makes it deny-only in a filtered token. A
+        // membership, from LDAP or the local-group table, is therefore never
+        // certain: bounded like a logon-dependent group.
+        let crypto_operators_uncertain = user_sids.remove(SID_CRYPTOGRAPHIC_OPERATORS);
 
         // Owner handling (engine review 2026-06-09 finding 1).
         //
@@ -145,11 +151,14 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         let logon_dependent = if input.file_system_object.null_dacl {
             None
         } else {
-            let logon_dependent_groups: HashSet<String> = input
+            let mut logon_dependent_groups: HashSet<String> = input
                 .logon_dependent_group_sids
                 .iter()
                 .map(|s| s.0.clone())
                 .collect();
+            if crypto_operators_uncertain {
+                logon_dependent_groups.insert(SID_CRYPTOGRAPHIC_OPERATORS.to_owned());
+            }
             logon_dependent_bounds(
                 &input.file_system_object.dacl,
                 &match_sids,
@@ -483,13 +492,6 @@ pub fn expand_local_groups(
             });
             via.dedup();
         };
-        // Lab (ADR 0070): Windows leaves Cryptographic Operators out of the
-        // token when the account is also in another UAC-filtered group, and
-        // makes it deny-only in a filtered token. Its presence is therefore
-        // never certain — bounded like a logon-dependent group.
-        if group.sid.0 == SID_CRYPTOGRAPHIC_OPERATORS && !certain.is_empty() {
-            uncertain.append(&mut certain);
-        }
         if !certain.is_empty() {
             sort_via(&mut certain);
             out.certain.push(LocalGroupEntry {
@@ -518,43 +520,89 @@ pub fn expand_local_groups(
     out
 }
 
-/// `BUILTIN\Cryptographic Operators`.
+/// `BUILTIN\Cryptographic Operators` — never a certain token group
+/// (see [`DefaultPermissionEngine`], ADR 0071).
 pub const SID_CRYPTOGRAPHIC_OPERATORS: &str = "S-1-5-32-569";
 
-/// Builtin groups User Account Control turns deny-only in a filtered token —
-/// lab-confirmed on Windows Server 2025 for an account in every builtin
-/// group (ADR 0070): Administrators, Power Users, Print Operators, Backup
-/// Operators, Network Configuration Operators. (Cryptographic Operators is
-/// deny-only or absent and handled by [`expand_local_groups`].)
-pub const UAC_FILTERED_BUILTIN_GROUPS: [&str; 5] = [
+/// Builtin groups User Account Control turns deny-only in a filtered token,
+/// lab-confirmed on Windows Server 2025 (ADR 0070/0071): Administrators,
+/// Power Users, Account Operators, Server Operators, Print Operators, Backup
+/// Operators, Pre-Windows 2000 Compatible Access, Network Configuration
+/// Operators. (Cryptographic Operators is handled separately.)
+pub const UAC_FILTERED_BUILTIN_GROUPS: [&str; 8] = [
     "S-1-5-32-544",
     "S-1-5-32-547",
+    "S-1-5-32-548",
+    "S-1-5-32-549",
     "S-1-5-32-550",
     "S-1-5-32-551",
+    "S-1-5-32-554",
     "S-1-5-32-556",
 ];
+
+/// RIDs of domain groups User Account Control turns deny-only: lab-confirmed
+/// Domain Admins (512), Cert Publishers (517), Schema Admins (518),
+/// Enterprise Admins (519), Group Policy Creator Owners (520). The domain
+/// controller groups (498, 516, 521) are treated the same without a lab
+/// test — for them a bound is the safe statement either way. Key Admins
+/// (526/527) and DnsAdmins were lab-confirmed as **not** filtered.
+pub const UAC_FILTERED_DOMAIN_RIDS: [u32; 8] = [498, 512, 516, 517, 518, 519, 520, 521];
 
 /// `Local account and member of Administrators group` — in the token of a
 /// local account in Administrators, deny-only when filtered.
 pub const SID_LOCAL_ACCOUNT_AND_ADMIN: &str = "S-1-5-114";
 
-/// Splits the local groups of a **local account** into those that are
-/// certainly in its token and those User Account Control may filter
-/// (ADR 0070). `S-1-5-114` joins the filtered ones when the account is in
-/// Administrators. Domain accounts are not passed here: over the network
-/// they are never filtered (lab-confirmed).
-pub fn split_uac_filtered_local_account_groups(certain: &[Sid]) -> (Vec<Sid>, Vec<Sid>) {
-    let (filtered, kept): (Vec<Sid>, Vec<Sid>) = certain
+/// Whether User Account Control may turn `sid` deny-only.
+pub fn is_uac_filtered_group(sid: &str) -> bool {
+    if UAC_FILTERED_BUILTIN_GROUPS.contains(&sid) {
+        return true;
+    }
+    match sid
+        .strip_prefix("S-1-5-21-")
+        .and_then(|rest| rest.rsplit_once('-'))
+    {
+        Some((domain, rid)) => {
+            domain.split('-').count() == 3
+                && rid
+                    .parse::<u32>()
+                    .is_ok_and(|r| UAC_FILTERED_DOMAIN_RIDS.contains(&r))
+        }
+        None => false,
+    }
+}
+
+/// The token groups User Account Control may filter (deny-only) for this
+/// access (ADR 0070/0071), lab-confirmed:
+///
+/// - **over the network** only a **local account** is filtered (remote UAC);
+///   a domain account keeps its groups;
+/// - **in a local session** every account in such a group gets a filtered
+///   token unless the session is elevated (the built-in Administrator is
+///   exempt by default) — Stars cannot see elevation or the policies, so
+///   the groups are deny-only with a bounded Allow side;
+/// - an unspecified context may be either.
+///
+/// `token_groups` are all group SIDs of the token (domain, SID history,
+/// local). `S-1-5-114` is added for a local account in Administrators.
+pub fn uac_filtered_groups(
+    token_groups: &[Sid],
+    local_account: bool,
+    context: AccessContext,
+) -> Vec<Sid> {
+    if context == AccessContext::RemoteSmb && !local_account {
+        return Vec::new();
+    }
+    let mut filtered: Vec<Sid> = token_groups
         .iter()
+        .filter(|s| is_uac_filtered_group(&s.0))
         .cloned()
-        .partition(|s| UAC_FILTERED_BUILTIN_GROUPS.contains(&s.0.as_str()));
-    let mut filtered = filtered;
-    if filtered.iter().any(|s| s.0 == "S-1-5-32-544") {
+        .collect();
+    if local_account && filtered.iter().any(|s| s.0 == "S-1-5-32-544") {
         filtered.push(Sid(SID_LOCAL_ACCOUNT_AND_ADMIN.to_owned()));
     }
     filtered.sort_by(|a, b| a.0.cmp(&b.0));
     filtered.dedup();
-    (kept, filtered)
+    filtered
 }
 
 fn collect_user_sids(
@@ -5181,52 +5229,117 @@ mod tests {
         assert_eq!(max, read | FILE_READ_CONTROL | FILE_WRITE_DAC);
     }
 
+    fn sids(list: &[&str]) -> Vec<Sid> {
+        list.iter().map(|s| Sid((*s).into())).collect()
+    }
+
+    /// Lab (ADR 0070): a local account's filtered groups, plus S-1-5-114
+    /// with Administrators — in every context, over SMB too.
     #[test]
-    fn uac_split_of_local_account_groups() {
-        let groups: Vec<Sid> = [
+    fn uac_filtered_groups_of_a_local_account() {
+        let groups = sids(&[
             "S-1-5-32-545",
             ADMINS,
             "S-1-5-32-551",
             "S-1-5-21-7-7-7-1003",
-        ]
-        .iter()
-        .map(|s| Sid((*s).into()))
-        .collect();
-        let (kept, filtered) = split_uac_filtered_local_account_groups(&groups);
-        assert_eq!(
-            kept,
-            vec![
-                Sid("S-1-5-32-545".into()),
-                Sid("S-1-5-21-7-7-7-1003".into())
-            ]
-        );
-        assert_eq!(
-            filtered,
-            // Sorted by SID string — deterministic.
-            vec![
-                Sid("S-1-5-114".into()),
-                Sid(ADMINS.into()),
-                Sid("S-1-5-32-551".into())
-            ]
-        );
-        // Not in Administrators: no S-1-5-114.
-        let (_, filtered) = split_uac_filtered_local_account_groups(&[Sid("S-1-5-32-551".into())]);
-        assert_eq!(filtered, vec![Sid("S-1-5-32-551".into())]);
-    }
-
-    /// Lab: Cryptographic Operators is absent from the token when the
-    /// account is also in another filtered group — never certain.
-    #[test]
-    fn cryptographic_operators_membership_is_never_certain() {
-        let groups = vec![local_group(SID_CRYPTOGRAPHIC_OPERATORS, "Crypto", &[USER])];
+        ]);
         for ctx in [
             AccessContext::RemoteSmb,
             AccessContext::LocalInteractive,
             AccessContext::Unspecified,
         ] {
-            let e = expand_local_groups(USER, &[], &[], &groups, ctx);
-            assert!(e.certain.is_empty(), "{ctx:?}");
-            assert_eq!(uncertain_names(&e), vec!["Crypto"], "{ctx:?}");
+            assert_eq!(
+                uac_filtered_groups(&groups, true, ctx),
+                // Sorted by SID string — deterministic.
+                sids(&["S-1-5-114", ADMINS, "S-1-5-32-551"]),
+                "{ctx:?}"
+            );
         }
+        // Not in Administrators: no S-1-5-114.
+        assert_eq!(
+            uac_filtered_groups(&sids(&["S-1-5-32-551"]), true, AccessContext::RemoteSmb),
+            sids(&["S-1-5-32-551"])
+        );
+    }
+
+    /// Lab (ADR 0071): a domain account keeps its groups over the network,
+    /// but its filtered domain and builtin groups are deny-only in a local
+    /// session that is not elevated; Key Admins and DnsAdmins are not.
+    #[test]
+    fn uac_filtered_groups_of_a_domain_account_depend_on_the_context() {
+        let d = "S-1-5-21-1025961329-1437379190-2506159458";
+        let groups = sids(&[
+            &format!("{d}-512"),
+            &format!("{d}-513"),
+            &format!("{d}-519"),
+            &format!("{d}-526"),
+            &format!("{d}-1101"),
+            ADMINS,
+            "S-1-5-32-545",
+            "S-1-5-32-554",
+        ]);
+        assert!(uac_filtered_groups(&groups, false, AccessContext::RemoteSmb).is_empty());
+        let expected = sids(&[
+            &format!("{d}-512"),
+            &format!("{d}-519"),
+            ADMINS,
+            "S-1-5-32-554",
+        ]);
+        assert_eq!(
+            uac_filtered_groups(&groups, false, AccessContext::LocalInteractive),
+            expected
+        );
+        assert_eq!(
+            uac_filtered_groups(&groups, false, AccessContext::Unspecified),
+            expected
+        );
+    }
+
+    #[test]
+    fn domain_group_rids_are_matched_only_on_domain_sids() {
+        assert!(is_uac_filtered_group("S-1-5-21-1-2-3-512"));
+        assert!(is_uac_filtered_group("S-1-5-21-1-2-3-518"));
+        assert!(!is_uac_filtered_group("S-1-5-21-1-2-3-526"));
+        assert!(!is_uac_filtered_group("S-1-5-21-1-2-3-513"));
+        // A RID 512 under a different authority shape is not a domain group.
+        assert!(!is_uac_filtered_group("S-1-5-21-1-2-512"));
+        assert!(!is_uac_filtered_group("S-1-5-21-1-2-3-4-512"));
+        assert!(!is_uac_filtered_group("S-1-5-32-545"));
+        assert!(is_uac_filtered_group("S-1-5-32-554"));
+    }
+
+    /// Lab (ADR 0071): Cryptographic Operators is absent from the token —
+    /// over the network too — when the account is also in another filtered
+    /// group. A membership from any source is real, but the token entry is
+    /// never certain: its ACEs bound the result.
+    #[test]
+    fn cryptographic_operators_in_the_token_is_never_certain() {
+        let p = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![membership(USER, SID_CRYPTOGRAPHIC_OPERATORS)],
+                file_system_object: fso(
+                    None,
+                    vec![allow_ace(SID_CRYPTOGRAPHIC_OPERATORS, MASK_MODIFY, false)],
+                ),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
+                logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: Vec::new(),
+                access_context: AccessContext::RemoteSmb,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                resolution: ResolutionProvenance::default(),
+            })
+            .unwrap();
+        assert_eq!(p.ntfs_mask.0, 0);
+        let (sids, min, max) = logon_marker(&p).expect("bounded");
+        assert_eq!(sids, vec![SID_CRYPTOGRAPHIC_OPERATORS.to_string()]);
+        assert_eq!((min, max), (0, expand_generic_rights(MASK_MODIFY)));
+        // The membership itself stays visible in the local-group expansion.
+        let groups = vec![local_group(SID_CRYPTOGRAPHIC_OPERATORS, "Crypto", &[USER])];
+        let e = expand_local_groups(USER, &[], &[], &groups, AccessContext::RemoteSmb);
+        assert_eq!(certain_names(&e), vec!["Crypto"]);
     }
 }
