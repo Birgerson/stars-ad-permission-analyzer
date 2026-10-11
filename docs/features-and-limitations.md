@@ -221,6 +221,7 @@ out; the report font is Arial.
 | `IdentityNotResolvable { reason }` | Concern | **yes** | The SID could not be resolved and is **not** proven orphaned — it belongs to a trusted domain (named), another domain, lies outside a base that is only an OU, or its domain could not be determined. Its memberships are unknown; the rights computed for the bare SID can be too low or too high (ADR 0064). |
 | `IdentityOrphaned` | Neutral | no | The SID belongs to the configured domain, the base covers that whole domain, and no object exists: the account no longer exists. Nobody can log on with it; an ACE naming it is a dead entry (ADR 0064). |
 | `GroupResolutionIncomplete { reason }` | Concern | **yes** | A successful group resolution may still lack groups — a primary group that could not be read, a group without a readable SID, memberships in groups outside the resolved set (e.g. outside a base that is only an OU), an unresolvable local group. `reason` names them (ADR 0066). |
+| `UacFilteredGroups { groups }` | Notice | no (its bounds are) | A local account's groups that User Account Control may filter (deny-only): over the network unless the server's `LocalAccountTokenFilterPolicy` = 1 (built-in Administrator: only with `FilterAdministratorToken` = 1), locally when not elevated — lab-confirmed in all four policy cases (ADR 0070). |
 | `NonSecurityGroupsExcluded { groups }` | Neutral | no | Distribution groups and groups reached only through one are not in the Windows token (lab-confirmed via the DC's `tokenGroups` and Authz); they were left out of the evaluated token and are named here (ADR 0067). |
 | `LogonDependentTrustees { sids, min_mask, max_mask }` | Notice | **yes** | Applicable ACEs for well-known SIDs whose presence depends on how the user logs on (This Organization, authentication assertion / package, console or remote-interactive logon, local account) decide bits of this result; the NTFS right lies between the two bounds. If the bounds were equal the ACEs could not matter and no marker is attached (ADR 0065). |
 | `MembersViaPrimaryGroupIncluded { count }` | Neutral | no | *(members view)* `count` members were found via their `primaryGroupID` and included — they do not appear in the `member` attribute, so this makes the completeness of the count transparent. |
@@ -423,6 +424,24 @@ permanently not part of the product:
   targeting local groups may stay invisible to the user — the
   "local groups unavailable" marker points exactly at that.
 
+### 9a. Local accounts of the target server
+
+- **What happens:** Without LDAP, the account is looked up on the server
+  of the analysed path (this machine for a local path) and its group set is
+  read there completely — primary group, SAM groups, `Local account`
+  (S-1-5-113), local groups by SID (ADR 0070). Results are exact.
+- **User Account Control:** a local account in Administrators, Power Users,
+  Print, Backup or Network Configuration Operators gets these groups as
+  deny-only over the network (unless `LocalAccountTokenFilterPolicy` = 1;
+  the built-in Administrator only with `FilterAdministratorToken` = 1) and
+  locally when not elevated. Stars cannot read these policies: Deny ACEs for
+  the groups apply, Allow ACEs give a range (`UacFilteredGroups`).
+- **Cryptographic Operators** is deny-only in a filtered token and absent
+  when the account is also in Administrators, Backup Operators or Power
+  Users (lab) — its membership is always bounded, never assumed.
+- **Domain controllers** have no local accounts; their accounts are domain
+  accounts.
+
 ### 10. Permissions via token privileges
 
 - **What we do not model:** Privilege-based access
@@ -434,6 +453,11 @@ permanently not part of the product:
 - **How to read:** If the auditor wants to know "can this user
   actually reach the data?", token privileges must be added
   manually — Stars answers the question "what does the ACL say?".
+- **Lab note:** over SMB, Windows also reported `Traverse` (with "Bypass
+  traverse checking", granted to Everyone by default) and the attribute
+  bits as granted on folders where the same real token was denied them
+  locally, and the built-in Administrator got `Take ownership` through
+  `SeTakeOwnershipPrivilege`. None of these are DACL results.
 
 ### 11. Dynamic Access Control (DAC) / Conditional ACEs
 

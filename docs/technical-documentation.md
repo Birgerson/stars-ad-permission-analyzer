@@ -921,6 +921,36 @@ share trustees from the share DACL, separated via the
 
 ---
 
+## 7a. Local accounts of the target server
+
+**Source:** [`crates/ad_resolver/src/local_account.rs`](../crates/ad_resolver/src/local_account.rs).
+**Rationale:** [ADR 0070](adr/0070-local-accounts-of-the-target-server.md).
+
+Without LDAP, CLI and GUI call `resolve_account_on_server(server, input)`
+with the server of the analysed path (`effective_smb_target`, `None` for a
+local path):
+
+```rust
+read_server_account_domain(server)   // NetUserModalsGet(2) + NetServerGetInfo(101)
+  -> ServerAccountDomain { name, sid /* S-1-5-21-a-b-c */, is_domain_controller }
+resolve_account_on_server(server, input)
+  -> LocalAccount(LocalAccountResolution)   // user SID in the server's domain, not a DC
+   | NotALocalAccount { sid }               // continue with the server's SID
+```
+
+A local account is read on the server: `NetUserGetInfo` level 4 (state,
+primary group RID, own SID cross-checked), `NetUserGetGroups` (each group
+validated as `SidTypeGroup` of the server's domain), the primary group by
+RID if missing, and `S-1-5-113` with source `MembershipPathSource::AccountType`.
+`local_account_principal` yields `GroupResolutionStatus::LocalAccount`.
+
+UAC: `permission_engine::engine::split_uac_filtered_local_account_groups`
+moves the filtered groups (`UAC_FILTERED_BUILTIN_GROUPS`, plus `S-1-5-114`
+with Administrators) into `PermissionEvaluationInput::uac_filtered_group_sids`.
+The engine removes them from the enabled token; `ace_matches` lets them match
+Deny ACEs only; `logon_dependent_bounds` counts their Allow ACEs (and, for an
+object they own, the implicit owner grant) in the upper bound only.
+
 ## 8. Local server groups
 
 **Source:** [`crates/ad_resolver/src/local_groups.rs`](../crates/ad_resolver/src/local_groups.rs),

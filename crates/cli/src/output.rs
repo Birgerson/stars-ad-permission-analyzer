@@ -63,6 +63,16 @@ pub(crate) fn inheritance_label(null_dacl: bool, inheritance_disabled: bool) -> 
     }
 }
 
+/// A local account carries the `Local account` SID Windows adds to every
+/// local account's token (ADR 0070).
+fn is_local_account(memberships: &[GroupMembership]) -> bool {
+    memberships.iter().any(|m| {
+        m.path
+            .as_ref()
+            .is_some_and(|p| p.source == adpa_core::model::MembershipPathSource::AccountType)
+    })
+}
+
 pub fn print_report(
     fso: &FileSystemObject,
     user_input: &str,
@@ -89,10 +99,20 @@ pub fn print_report(
     let kind = format!("{:?}", result.identity.kind);
     println!("  Status    : {status}  ·  Kind: {kind}");
 
-    if !ad_connected {
+    // The warning only where it is true: the SAM fallback of a domain
+    // account. A local account needs no LDAP (ADR 0070).
+    if !ad_connected
+        && result
+            .diagnostics
+            .contains(&PermissionDiagnostic::DomainGroupRecursionIncomplete)
+    {
         println!();
         println!("  [!] No LDAP connection — only the direct domain groups and the local");
         println!("      groups were resolved (SAM/LSA); nested domain groups are unknown.");
+    } else if is_local_account(memberships) {
+        println!();
+        println!("  [i] Local account — resolved on the machine it belongs to; its groups");
+        println!("      cannot nest, the group set is complete.");
     }
 
     if !memberships.is_empty() {
@@ -425,6 +445,23 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      nobody can log on with it. The rights shown are what a logon");
                 println!("      with this SID would get; an ACE naming it is a dead entry.");
             }
+            PermissionDiagnostic::UacFilteredGroups { groups } => {
+                println!("  [!] Local account: User Account Control may filter these groups out");
+                println!("      of the token (deny-only):");
+                for g in groups {
+                    println!("        - {g}");
+                }
+                println!(
+                    "      Over the network this happens unless LocalAccountTokenFilterPolicy"
+                );
+                println!(
+                    "      = 1 (built-in Administrator: only with FilterAdministratorToken = 1),"
+                );
+                println!("      locally when the session is not elevated. Stars cannot see these");
+                println!(
+                    "      settings: Deny ACEs for the groups apply, Allow ACEs bound the result."
+                );
+            }
             PermissionDiagnostic::NonSecurityGroupsExcluded { groups } => {
                 println!(
                     "  [i] {} group(s) are not in the token and were left out — Windows",
@@ -492,9 +529,16 @@ pub fn print_membership_report(report: &MembershipReport, user_input: &str) {
             report.identity.sid_history_count
         );
     }
-    if !report.ad_connected {
+    if !report.ad_connected
+        && report
+            .diagnostics
+            .contains(&PermissionDiagnostic::DomainGroupRecursionIncomplete)
+    {
         println!();
         println!("  [!] No AD/LDAP connection — only direct (SAM/LSA) groups resolved.");
+    } else if is_local_account(&report.memberships) {
+        println!();
+        println!("  [i] Local account — resolved on this machine; its groups cannot nest.");
     }
 
     let privileged = report.privileged();

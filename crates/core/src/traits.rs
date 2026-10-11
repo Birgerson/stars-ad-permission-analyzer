@@ -126,6 +126,11 @@ pub struct PermissionEvaluationInput {
     /// for them are bounded like ACEs for logon-dependent well-known SIDs
     /// (ADR 0065). Empty by default.
     pub logon_dependent_group_sids: Vec<Sid>,
+    /// Groups User Account Control may filter out of the token (deny-only):
+    /// the UAC-filtered groups of a local account of the target server
+    /// (ADR 0070). Deny ACEs for them apply; Allow ACEs bound the result.
+    /// Empty by default.
+    pub uac_filtered_group_sids: Vec<Sid>,
     /// Access context (local interactive / remote SMB / unspecified).
     /// Controls which well-known SIDs are added to the token implicitly
     /// (e.g. `NETWORK` for SMB, `INTERACTIVE` for local). The default

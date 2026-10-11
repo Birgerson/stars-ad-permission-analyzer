@@ -15,6 +15,8 @@ pub mod config;
 pub mod enumerate;
 pub mod ldap_client;
 #[cfg(windows)]
+pub mod local_account;
+#[cfg(windows)]
 pub mod local_groups;
 pub mod principal;
 pub mod resolver;
