@@ -54,6 +54,14 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   read as empty — direct memberships counted as nested; it is now completed
   through validated range retrieval (lab: 1601 direct memberships read
   completely, before 0).
+- **Secret gate** (CI and pre-commit). `scripts/check-secrets.py` fails a
+  push when a tracked file contains a known token/key format, a password
+  literal handed to a tool or a credential assignment with a literal value
+  (hits printed masked; deliberate fakes marked `secret-gate: allow`). The
+  pre-commit hook (`git config core.hooksPath scripts/hooks`) also checks the
+  staged content against a local, gitignored `.secrets-denylist` of the real
+  secrets — the only way to catch a password passed as a bare string, as an
+  early commit (May 2026) did with a lab test password.
 - **Administrators on a local path are no longer assumed elevated** (lab
   finding MS-4, ADR 0071). For a local path Stars counted every group of a
   domain account as enabled. Real interactive tokens show User Account

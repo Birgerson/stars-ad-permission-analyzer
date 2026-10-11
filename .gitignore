@@ -45,3 +45,6 @@ TestStructure.md
 LabTopology.md
 testfile.md
 __pycache__/
+
+# Local list of real secrets for the pre-commit secret gate — never commit.
+.secrets-denylist
