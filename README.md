@@ -198,6 +198,20 @@ confident display — is closed end to end: whatever Stars could not read
 or evaluate is now *named*, in the scan output, the reports, the CLI and
 the GUI alike.
 
+Since v1.9.0 every result has been compared bit-for-bit with what Windows
+itself computes, in a lab with two forests, ten thousand users, five
+thousand nested groups and a member server: the Windows authorization API
+evaluated for each identity and object, access checks on real logon tokens
+(interactive, network, filtered and elevated), and real SMB access. The rule
+is: a result that is stated as a fact equals Windows; anything Stars cannot
+determine reads **NOT DETERMINABLE** with the reason and, where possible,
+the range the real right lies in. Every comparison script is itself tested
+with deliberately falsified rows.
+
+Two more CI gates guard the repository: a language check (US English only)
+and a **secret check** — no password, token or key may reach a commit
+(see [SECURITY.md](SECURITY.md)).
+
 ### What does Stars analyze?
 
 #### NTFS permissions
@@ -530,6 +544,25 @@ cargo build --release -p gui   # adpa-gui.exe
 ```
 
 Prerequisite: [Rust Toolchain](https://rustup.rs/) for Windows (MSVC target).
+Build from the repository root — `.cargo/config.toml` links the C runtime
+statically, so `adpa.exe` runs on a fresh Windows Server without the Visual
+C++ Redistributable.
+
+Before a commit (the same checks CI runs):
+
+```powershell
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+python scripts/check-language.py
+python scripts/check-secrets.py
+```
+
+Install the pre-commit secret hook once per clone:
+`git config core.hooksPath scripts/hooks`. Put the real passwords of your
+test environment into a local `.secrets-denylist` (gitignored, one per
+line) — the hook then also rejects them when they appear as a bare string,
+which no generic rule can recognise.
 
 ### Database, scan history, and uninstallation
 

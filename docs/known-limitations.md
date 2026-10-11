@@ -747,6 +747,37 @@ of the trusted domain).
 
 ---
 
+## L16 — User Account Control policies and session elevation are not visible
+
+**Priority:** Medium — found in the member-server lab run 2026-10-11
+(ADR 0070, ADR 0071)
+
+### Problem
+
+User Account Control turns Administrators, the operator groups and the
+privileged domain groups deny-only in a filtered token: on a local access
+for every account until the session is elevated, and over the network for
+local accounts unless the server sets `LocalAccountTokenFilterPolicy` = 1
+(the built-in Administrator only with `FilterAdministratorToken` = 1).
+Stars sees neither the session's elevation nor these registry policies.
+
+### Effect
+
+Wherever an Allow ACE for such a group decides the result, it reads
+**NOT DETERMINABLE — between … and …** (marker `UacFilteredGroups` +
+`LogonDependentTrustees`): the lower bound is the filtered token, the upper
+bound the unfiltered one. Deny ACEs for the groups always apply. The result
+is never wrong, but for administrators it is often a range.
+
+### Solution sketch
+
+Read the two policy values read-only from the target server (remote
+registry, where permitted and validated) to decide the network case
+exactly; the elevation of a local session stays a property of the logon and
+remains a range.
+
+---
+
 ## Status overview
 
 | Limit | Priority | Marker present? | Resolvable? |
@@ -766,6 +797,7 @@ of the trusted domain).
 | L13 — IPv6 literals rejected as server addresses | Low | n/a (explicit validation error) | yes — bracket handling (LDAP) + `ipv6-literal.net` (UNC/NetAPI), must be built and lab-verified together |
 | L14 — Junction cycles over UNC | Medium | **yes** (ReparseCycle / ReparseDuplicateTarget, as locally) | **closed 2026-10-10** (ADR 0062: volume serial + file ID on UNC scans) |
 | L15 — Trusted-domain SID reported as orphaned | Medium | **yes** (IdentityNotResolvable, names the trust partner) | **classification closed 2026-10-10** (ADR 0064); resolving the memberships via GC / trusted DC still open |
+| L16 — UAC policies / session elevation not visible | Medium | **yes** (UacFilteredGroups, bounded result) | partly — the network case via a read-only policy read of the target server |
 
 ## Contribution policy
 

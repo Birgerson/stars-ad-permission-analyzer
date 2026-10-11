@@ -1,0 +1,15 @@
+#!/bin/sh
+# Stars pre-commit hook: no secrets in a commit (scripts/check-secrets.py).
+#
+# Install once per clone:   git config core.hooksPath scripts/hooks
+#
+# With a local, gitignored `.secrets-denylist` (one real secret per line)
+# the staged content is also checked for those exact values — the only way
+# to catch a password passed as a bare string. Without it, only the generic
+# rules run (the same ones CI runs).
+denylist=.secrets-denylist
+if [ -f "$denylist" ]; then
+    exec python scripts/check-secrets.py --staged --denylist "$denylist"
+fi
+echo "[secret-gate] no $denylist found - generic rules only." >&2
+exec python scripts/check-secrets.py --staged

@@ -59,6 +59,28 @@ I treat the following classes as security vulnerabilities in particular:
 
 ---
 
+## Secrets in the repository
+
+No password, token, key or other credential belongs in this repository —
+not in code, tests, scripts, documentation or commit messages. Lab and test
+credentials live in local, gitignored files only.
+
+- **CI** runs `scripts/check-secrets.py` on every push: known token and key
+  formats, password literals handed to tools (a literal secure string in
+  PowerShell, a `plink` password, a password after the user in `net use`, a
+  `--password` value, credentials in URLs) and credential assignments with a
+  literal value. Hits are printed
+  masked. A deliberate fake value in a test carries the marker
+  `secret-gate: allow`.
+- **Locally** the pre-commit hook (`git config core.hooksPath scripts/hooks`)
+  checks the staged content with the same rules and against a gitignored
+  `.secrets-denylist` of the real secrets — the only way to catch a password
+  passed as a bare string.
+- An early commit (May 2026) carried a lab test password into the public
+  history. Any credential that ever reached a commit must be treated as
+  exposed and changed; removing it from the history does not undo the
+  exposure.
+
 ## Responsible disclosure
 
 Once a reported issue has been confirmed and fixed, I publish a patch and a release note describing the problem — with credit to the reporter, if they consent.

@@ -101,6 +101,19 @@ jobs:
             ${{ runner.os }}-cargo-conformance-
       - run: cargo test -p permission_engine --test windows_conformance -- --ignored
 
+  secrets:
+    name: secret check (no passwords, tokens, keys)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      # Detector regression checks first, then every tracked file. Hits are
+      # printed masked; the local denylist (real secrets) is never in CI.
+      - run: python scripts/check-secrets.py --selftest
+      - run: python scripts/check-secrets.py --list
+
   language:
     name: language check (US English only)
     runs-on: ubuntu-latest

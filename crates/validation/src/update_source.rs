@@ -13,7 +13,7 @@
 //!   transit and would teach users that unencrypted update endpoints are
 //!   acceptable. `file://`, UNC and everything else are rejected too;
 //!   an offline/file-based check is a separate, deliberate feature.
-//! - **No embedded credentials** (`https://user:pass@host/…`) — update
+//! - **No embedded credentials** (`https://user:<password>@host/…`) — update
 //!   credentials must never live in a URL (they end up in logs, shell
 //!   history and screenshots).
 //! - **No fragment** (`#…`) — meaningless for an API endpoint.
@@ -125,7 +125,8 @@ mod tests {
 
     #[test]
     fn rejects_embedded_credentials() {
-        let err = validate_update_source("https://user:secret@host/api").unwrap_err();
+        // A deliberately embedded fake credential — the validator must reject it.
+        let err = validate_update_source("https://user:secret@host/api").unwrap_err(); // secret-gate: allow
         assert!(
             format!("{err}").contains("credentials"),
             "must name the credential problem"
