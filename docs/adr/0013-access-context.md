@@ -3,6 +3,11 @@
 **Status:** Accepted
 **Date:** 2026-05-24
 
+> **Refined by [ADR 0069](0069-local-sid-is-logon-dependent.md)
+> (2026-10-11):** for a local path only `INTERACTIVE` is added; `LOCAL` is
+> in a console session's token but not in an interactive `LogonUser`
+> token, so it is bounded as a logon-dependent SID.
+
 ## Context
 
 The permission engine built the token SID set independently of the logon type. The only implicit additions were `Everyone` (S-1-1-0) and `Authenticated Users` (S-1-5-11). The real Windows `AccessCheck` adds further well-known SIDs depending on the logon:
