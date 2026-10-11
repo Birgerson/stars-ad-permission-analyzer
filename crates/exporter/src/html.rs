@@ -507,11 +507,12 @@ fn write_permissions_table(
                 PermissionDiagnostic::UacFilteredGroups { groups } => {
                     diag_parts.push(format!(
                         "<span class=\"badge badge-medium\" \
-                         title=\"Local account: User Account Control may filter {} out of \
-                         the token (over the network unless LocalAccountTokenFilterPolicy = 1, \
-                         for the built-in Administrator only with FilterAdministratorToken = 1; \
-                         locally when not elevated). Deny ACEs for them apply, Allow ACEs bound \
-                         the result.\">⚠ UAC may filter {} group(s)</span>",
+                         title=\"User Account Control may filter {} out of the token \
+                         (deny-only): in a local session that is not elevated, and for a local \
+                         account over the network unless LocalAccountTokenFilterPolicy = 1 \
+                         (built-in Administrator: only with FilterAdministratorToken = 1). Deny \
+                         ACEs for them apply, Allow ACEs bound the result.\">⚠ UAC may filter \
+                         {} group(s)</span>",
                         escape_html(&groups.join(", ")),
                         groups.len()
                     ));

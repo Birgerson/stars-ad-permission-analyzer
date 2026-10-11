@@ -1464,15 +1464,15 @@ pub enum PermissionDiagnostic {
     /// Informational (ADR 0067).
     NonSecurityGroupsExcluded { groups: Vec<String> },
 
-    /// The account is a local account of the target server and member of
-    /// groups that User Account Control filters out of its token: over the
-    /// network for every local account except the built-in Administrator
-    /// (unless `LocalAccountTokenFilterPolicy` = 1), for the built-in
-    /// Administrator only with `FilterAdministratorToken` = 1, and locally
-    /// in the non-elevated token. A filtered group only matches Deny ACEs.
-    /// Stars cannot see these policies, so Deny ACEs for the groups apply and
-    /// Allow ACEs bound the result (`LogonDependentTrustees`). Lab-confirmed
-    /// (ADR 0070). Notice.
+    /// The token contains groups User Account Control may filter
+    /// (deny-only): in a local session that is not elevated — every account
+    /// in such a group, the built-in Administrator exempt by default — and,
+    /// for a **local account**, over the network unless
+    /// `LocalAccountTokenFilterPolicy` = 1 (built-in Administrator: only with
+    /// `FilterAdministratorToken` = 1). A filtered group only matches Deny
+    /// ACEs. Stars cannot see elevation or these policies, so Deny ACEs for
+    /// the groups apply and Allow ACEs bound the result
+    /// (`LogonDependentTrustees`). Lab-confirmed (ADR 0070/0071). Notice.
     UacFilteredGroups { groups: Vec<String> },
 }
 
@@ -1703,11 +1703,11 @@ impl PermissionDiagnostic {
                 groups.join("; ")
             ),
             PermissionDiagnostic::UacFilteredGroups { groups } => format!(
-                "Local account: User Account Control may filter {} out of the token (over \
-                 the network unless LocalAccountTokenFilterPolicy = 1 — for the built-in \
-                 Administrator only with FilterAdministratorToken = 1 — and locally when not \
-                 elevated). Stars cannot see these settings: Deny ACEs for them apply, \
-                 Allow ACEs bound the result.",
+                "User Account Control may filter {} out of the token (deny-only): in a local \
+                 session that is not elevated, and for a local account over the network \
+                 unless LocalAccountTokenFilterPolicy = 1 (built-in Administrator: only with \
+                 FilterAdministratorToken = 1). Stars cannot see elevation or these settings: \
+                 Deny ACEs for them apply, Allow ACEs bound the result.",
                 groups.join(", ")
             ),
         }

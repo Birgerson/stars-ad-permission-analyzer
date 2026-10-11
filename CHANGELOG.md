@@ -54,6 +54,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   read as empty — direct memberships counted as nested; it is now completed
   through validated range retrieval (lab: 1601 direct memberships read
   completely, before 0).
+- **Administrators on a local path are no longer assumed elevated** (lab
+  finding MS-4, ADR 0071). For a local path Stars counted every group of a
+  domain account as enabled. Real interactive tokens show User Account
+  Control filtering Administrators, Domain/Schema/Enterprise Admins, Cert
+  Publishers, Group Policy Creator Owners and the operator groups for every
+  account until the session is elevated — "Full Control" was shown where a
+  non-elevated session gets "Read & Execute". These groups are now deny-only
+  with a bounded Allow side (from the non-elevated to the elevated session);
+  over SMB nothing changes for domain accounts. Cryptographic Operators,
+  which Windows drops from the token when the account is in another filtered
+  group, is never assumed, also when it comes from LDAP. Verified against
+  access checks on real filtered and elevated tokens: 0 violations.
 - **Local accounts of a file server can be analysed — exactly** (lab
   findings MS-3 / OBS-1, ADR 0070). Without LDAP every account was looked up
   on the machine Stars runs on: a local account of a remote server could not

@@ -1,7 +1,8 @@
 # ADR 0070 — Local accounts of the target server
 
 ## Status
-Accepted (2026-10-11). Closes lab findings MS-3 and OBS-1. Builds on
+Accepted (2026-10-11). Closes lab findings MS-3 and OBS-1. Extended to
+domain accounts on a local access by [ADR 0071](0071-uac-split-token-for-local-access.md). Builds on
 ADR 0068 (local groups by SID) and ADR 0065 (bounds instead of guesses).
 
 ## Context
