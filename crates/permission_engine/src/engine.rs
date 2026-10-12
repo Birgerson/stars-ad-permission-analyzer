@@ -389,6 +389,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             effective_raw,
             sid_names: &input.sid_names,
             logon_dependent: logon_dependent.as_ref(),
+            access_context: input.access_context,
             ntfs_determinable: result.ntfs_determinable(),
             share_determinable: result.share_determinable(),
             effective_determinable: result.effective_determinable(),
@@ -1150,6 +1151,54 @@ fn format_membership_step_base(
     format!("Member of {target_display} [via {chain_joined}, source: {source}]")
 }
 
+/// Short name of the evaluated logon (review CR-6) — for report headers.
+pub fn access_context_summary(context: AccessContext) -> &'static str {
+    match context {
+        AccessContext::RemoteSmb => "network logon over SMB",
+        AccessContext::LocalInteractive => {
+            "interactive logon at the target computer, session not elevated"
+        }
+        AccessContext::Unspecified => "no specific logon type",
+    }
+}
+
+/// The explanation step stating how the access is evaluated and which
+/// implicit SIDs the token receives (review CR-6). Derived from the same
+/// rules as `build_token_sids_with_context`, `identity_uncertain_well_knowns`
+/// and `uac_filtered_groups`, so the text and the computation agree.
+pub fn access_context_step(context: AccessContext, user_sid: &str) -> String {
+    let uncertain = identity_uncertain_well_knowns(user_sid);
+    let universal = match (
+        uncertain.contains(&SID_EVERYONE),
+        uncertain.contains(&SID_AUTHENTICATED_USERS),
+    ) {
+        (false, false) => "Everyone (S-1-1-0), Authenticated Users (S-1-5-11)".to_owned(),
+        (false, true) => {
+            "Everyone (S-1-1-0); Authenticated Users is not assumed (Guest account)".to_owned()
+        }
+        _ => "neither Everyone nor Authenticated Users is assumed (anonymous logon)".to_owned(),
+    };
+    let summary = access_context_summary(context);
+    match context {
+        AccessContext::RemoteSmb => format!(
+            "Evaluated as: {summary} — the token receives NETWORK (S-1-5-2), {universal}. \
+             User Account Control filters the groups of local accounts only. Logon rights \
+             (\"Access this computer from the network\") are not checked"
+        ),
+        AccessContext::LocalInteractive => format!(
+            "Evaluated as: {summary} — the token receives INTERACTIVE (S-1-5-4), {universal}; \
+             LOCAL (S-1-2-0) and the groups User Account Control filters are bounded (an \
+             elevated session may have more). Logon rights (\"Allow log on locally\") are not \
+             checked"
+        ),
+        AccessContext::Unspecified => format!(
+            "Evaluated as: {summary} — the token receives {universal}; logon-type SIDs \
+             (NETWORK, INTERACTIVE) are not assumed, the groups User Account Control filters \
+             are bounded"
+        ),
+    }
+}
+
 /// Bundles the inputs for [`build_explanation`] — replaces the previous
 /// 9-argument signature with named fields (engine review 2026-06-09).
 struct ExplanationInput<'a> {
@@ -1188,6 +1237,8 @@ struct ExplanationInput<'a> {
     /// Bounds over logon-dependent trustees that decide bits of the NTFS
     /// result (ADR 0065); `None` when there are none.
     logon_dependent: Option<&'a LogonDependentBounds>,
+    /// How the access is evaluated (review CR-6): stated as a step.
+    access_context: AccessContext,
     /// Determinability of the three values, from the finished result
     /// (`EffectivePermission::ntfs_determinable` etc., review CR-5).
     ntfs_determinable: bool,
@@ -1217,6 +1268,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         effective_raw,
         sid_names,
         logon_dependent,
+        access_context,
         ntfs_determinable,
         share_determinable,
         effective_determinable,
@@ -1238,6 +1290,11 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
             old.0
         ));
     }
+
+    // 1c. Review CR-6: how the access is evaluated and which SIDs that adds
+    // to the token — memberships "via … → INTERACTIVE → …" are explained by
+    // this step, and so are the bounds of LOCAL and UAC-filtered groups.
+    steps.push(access_context_step(access_context, &identity.sid.0));
 
     // 2. Group memberships.
     //
@@ -2278,7 +2335,7 @@ mod tests {
             .path_explanation
             .steps
             .iter()
-            .find(|s| s.contains("S-1-1-0"))
+            .find(|s| s.starts_with("Allow ACE") && s.contains("S-1-1-0"))
             .expect("Everyone ACE step must exist");
         assert!(
             everyone_step.contains("matched, no effective bits contributed"),
@@ -5764,6 +5821,169 @@ mod tests {
                     assert!(!p.effective_determinable(), "{name} / {share:?}");
                 }
                 assert_path_agrees_with_result(&p);
+            }
+        }
+    }
+
+    // --- Explanation path v2 (review P3, ADR 0074): the invariant first ---
+
+    /// The bits a step states as "[granted …]" / "[denied …]" (0 if none).
+    fn decided_bits(step: &str, verb: &str) -> u32 {
+        let Some(at) = step.find(&format!(" [{verb} ")) else {
+            return 0;
+        };
+        let rest = &step[at..];
+        let Some(hex_at) = rest.find("(0x") else {
+            return 0;
+        };
+        u32::from_str_radix(&rest[hex_at + 3..hex_at + 11], 16).unwrap()
+    }
+
+    fn mask_of_step(step: &str) -> u32 {
+        let hex_at = step.find("(0x").unwrap();
+        u32::from_str_radix(&step[hex_at + 3..hex_at + 11], 16).unwrap()
+    }
+
+    /// Deterministic generator (no external crate): a 64-bit LCG.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self, n: u64) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (self.0 >> 33) % n
+        }
+    }
+
+    /// The explanation path accounts for every bit of the NTFS result:
+    /// the "[granted …]" bits of the ACE steps are pairwise disjoint (the
+    /// first decision per bit wins), together with the owner rule they are
+    /// exactly the NTFS mask, and the Deny aggregation step states exactly
+    /// the "[denied …]" bits the owner rule does not restore. Checked over
+    /// 3000 generated DACLs (allow / deny, explicit / inherited,
+    /// inherit-only, generic rights, group and non-member trustees, owner
+    /// or not).
+    #[test]
+    fn explanation_accounts_for_every_bit_of_the_ntfs_result() {
+        const GROUP: &str = "S-1-5-21-1000-1000-1000-2001";
+        const OTHER: &str = "S-1-5-21-1000-1000-1000-2002";
+        let sids = [USER, GROUP, OTHER, SID_EVERYONE, SID_OWNER_RIGHTS];
+        let masks = [
+            MASK_READ,
+            MASK_MODIFY,
+            MASK_FULL_CONTROL,
+            FILE_WRITE_DAC,
+            FILE_READ_CONTROL,
+            0x1000_0000, // GENERIC_ALL
+            0x8000_0000, // GENERIC_READ
+            0x0010_0000, // SYNCHRONIZE
+        ];
+        let mut rng = Lcg(0x5EED_2026_1012);
+        for case in 0..3000 {
+            let n = rng.next(7) as usize;
+            let dacl: Vec<AceEntry> = (0..n)
+                .map(|_| {
+                    let sid = sids[rng.next(sids.len() as u64) as usize];
+                    let mask = masks[rng.next(masks.len() as u64) as usize];
+                    let inherited = rng.next(2) == 0;
+                    match rng.next(5) {
+                        0 => deny_ace(sid, mask, inherited),
+                        1 => allow_ace_inherit_only(sid, mask, inherited),
+                        2 => deny_ace_inherit_only(sid, mask, inherited),
+                        _ => allow_ace(sid, mask, inherited),
+                    }
+                })
+                .collect();
+            let owner = if rng.next(2) == 0 { USER } else { OTHER };
+            let p = eval(
+                user(USER),
+                vec![membership(USER, GROUP)],
+                fso(Some(owner), dacl.clone()),
+                None,
+            );
+            let steps = &p.path_explanation.steps;
+            let mut granted = 0u32;
+            let mut denied = 0u32;
+            for s in steps {
+                let g = decided_bits(s, "granted");
+                assert_eq!(granted & g, 0, "case {case}: bits granted twice: {steps:?}");
+                granted |= g;
+                denied |= decided_bits(s, "denied");
+            }
+            let owner_bits = if steps.iter().any(|s| s.starts_with("Owner special rule")) {
+                FILE_READ_CONTROL | FILE_WRITE_DAC
+            } else {
+                0
+            };
+            assert_eq!(
+                granted | owner_bits,
+                p.ntfs_mask.0,
+                "case {case}: path does not account for the NTFS mask; dacl {dacl:?}, steps {steps:?}"
+            );
+            let aggregation = steps
+                .iter()
+                .find(|s| s.starts_with("Deny aggregation"))
+                .map_or(0, |s| mask_of_step(s));
+            assert_eq!(
+                aggregation,
+                denied & !owner_bits,
+                "case {case}: deny aggregation; steps {steps:?}"
+            );
+        }
+    }
+
+    // --- Review CR-6: the evaluated logon is stated ---
+
+    #[test]
+    fn explanation_states_the_evaluated_logon_after_the_user() {
+        let p = eval_with_context(
+            user(USER),
+            vec![],
+            fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            None,
+            AccessContext::RemoteSmb,
+        );
+        let steps = &p.path_explanation.steps;
+        assert!(steps[0].starts_with("User: "));
+        assert!(
+            steps[1].starts_with("Evaluated as: network logon over SMB"),
+            "{steps:?}"
+        );
+        assert!(steps[1].contains("NETWORK (S-1-5-2)"));
+        assert!(steps[1].contains("Authenticated Users (S-1-5-11)"));
+
+        let local = access_context_step(AccessContext::LocalInteractive, USER);
+        assert!(local.contains("INTERACTIVE (S-1-5-4)") && local.contains("not elevated"));
+        assert!(local.contains("LOCAL (S-1-2-0)") && local.contains("bounded"));
+        let none = access_context_step(AccessContext::Unspecified, USER);
+        assert!(none.contains("not assumed") && !none.contains("S-1-5-2)"));
+    }
+
+    /// The step agrees with the token: what it says is added is in the token,
+    /// what it says is not assumed is not.
+    #[test]
+    fn access_context_step_agrees_with_the_token() {
+        for ctx in [
+            AccessContext::RemoteSmb,
+            AccessContext::LocalInteractive,
+            AccessContext::Unspecified,
+        ] {
+            for sid in [USER, "S-1-5-21-1000-1000-1000-501", SID_ANONYMOUS_LOGON] {
+                let token = build_token_sids_with_context(sid, &[], &[], &[], ctx);
+                let step = access_context_step(ctx, sid);
+                for (well_known, text) in [
+                    (SID_EVERYONE, "Everyone (S-1-1-0)"),
+                    (SID_AUTHENTICATED_USERS, "Authenticated Users (S-1-5-11)"),
+                    ("S-1-5-2", "NETWORK (S-1-5-2)"),
+                    ("S-1-5-4", "INTERACTIVE (S-1-5-4)"),
+                ] {
+                    assert_eq!(
+                        token.contains(well_known),
+                        step.contains(text),
+                        "{ctx:?} / {sid}: {well_known} vs step {step}"
+                    );
+                }
             }
         }
     }

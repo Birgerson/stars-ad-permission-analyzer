@@ -134,6 +134,7 @@ pub fn print_report(
     result: &EffectivePermission,
     memberships: &[GroupMembership],
     sid_names: &BTreeMap<String, String>,
+    access_context: adpa_core::model::AccessContext,
     ad_connected: bool,
 ) {
     println!();
@@ -154,6 +155,11 @@ pub fn print_report(
     let status = AccountStatus::of(&result.identity, &result.diagnostics).label();
     let kind = format!("{:?}", result.identity.kind);
     println!("  Status    : {status}  ·  Kind: {kind}");
+    // Review CR-6: the evaluated logon, explained in the path below.
+    println!(
+        "  Evaluated : {}",
+        permission_engine::engine::access_context_summary(access_context)
+    );
 
     // The warning only where it is true: the SAM fallback of a domain
     // account. A local account needs no LDAP (ADR 0070).
