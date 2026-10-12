@@ -802,7 +802,14 @@ every surface says:
   remote-interactive logon, …): Stars computes the lowest and the highest
   possible result. If they are equal the ACE cannot matter and the result
   stays exact; otherwise the explanation says "the NTFS right lies between
-  … and …" (marker `LogonDependentTrustees`).
+  … and …" (marker `LogonDependentTrustees`). Each ACE that causes the
+  range is listed in the explanation as `[UNCERTAIN — <reason>; …]` — for
+  example "User Account Control makes this group deny-only until the
+  session is elevated" for an administrator on a local path — and a
+  filtered membership is marked `[deny-only in a filtered token: …]`.
+- The explanation also names a **NULL DACL** (everyone has full access),
+  an **empty DACL** (nobody has access) and a DACL in which **no ACE
+  applies** to the account.
 
 How to get an exact answer: configure LDAP (`--server` …) for nested
 groups; analyze accounts of a trusted domain against that domain; make
