@@ -1474,6 +1474,15 @@ pub enum PermissionDiagnostic {
     /// the groups apply and Allow ACEs bound the result
     /// (`LogonDependentTrustees`). Lab-confirmed (ADR 0070/0071). Notice.
     UacFilteredGroups { groups: Vec<String> },
+
+    /// The analysed account is the built-in **Guest** account (RID 501 of a
+    /// machine or domain) or ANONYMOUS LOGON. Microsoft documents that such
+    /// a token carries no `Authenticated Users`, and an anonymous token no
+    /// `Everyone` unless `EveryoneIncludesAnonymous` is set. Not yet
+    /// lab-verified, so ACEs for these SIDs bound the result
+    /// (`LogonDependentTrustees`) instead of counting as a fact — review
+    /// finding CR-8, ADR 0072. Notice.
+    GuestOrAnonymousToken { sids: Vec<String> },
 }
 
 /// Account state as it may be stated to a reader — the single source for
@@ -1702,6 +1711,13 @@ impl PermissionDiagnostic {
                 groups.len(),
                 groups.join("; ")
             ),
+            PermissionDiagnostic::GuestOrAnonymousToken { sids } => format!(
+                "Guest / anonymous logon: Windows does not put {} into this token the way it \
+                 does for other accounts (Authenticated Users excludes Guest and anonymous; \
+                 Everyone excludes anonymous unless EveryoneIncludesAnonymous = 1). ACEs for \
+                 them bound the result.",
+                sids.join(", ")
+            ),
             PermissionDiagnostic::UacFilteredGroups { groups } => format!(
                 "User Account Control may filter {} out of the token (deny-only): in a local \
                  session that is not elevated, and for a local account over the network \
@@ -1768,7 +1784,8 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::NonSecurityGroupsExcluded { .. }
             // The bounds it causes carry the uncertainty (LogonDependentTrustees);
             // with no Allow ACE for a filtered group the result is exact.
-            | PermissionDiagnostic::UacFilteredGroups { .. } => None,
+            | PermissionDiagnostic::UacFilteredGroups { .. }
+            | PermissionDiagnostic::GuestOrAnonymousToken { .. } => None,
         }
     }
 
@@ -1798,7 +1815,8 @@ impl PermissionDiagnostic {
             PermissionDiagnostic::UnsupportedShareAces { .. }
             | PermissionDiagnostic::UnsupportedNtfsAces { .. }
             | PermissionDiagnostic::LogonDependentTrustees { .. }
-            | PermissionDiagnostic::UacFilteredGroups { .. } => DiagnosticSeverity::Notice,
+            | PermissionDiagnostic::UacFilteredGroups { .. }
+            | PermissionDiagnostic::GuestOrAnonymousToken { .. } => DiagnosticSeverity::Notice,
             // Likely a real gap — under-report or a hard resolution failure.
             PermissionDiagnostic::SidHistoryPresent { .. }
             | PermissionDiagnostic::GroupSidHistoryPresent { .. }
@@ -2549,6 +2567,9 @@ mod tests {
             },
             PermissionDiagnostic::UacFilteredGroups {
                 groups: vec!["S-1-5-32-544".into()],
+            },
+            PermissionDiagnostic::GuestOrAnonymousToken {
+                sids: vec!["S-1-5-11".into()],
             },
         ];
         for d in &all {

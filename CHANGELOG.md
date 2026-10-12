@@ -12,6 +12,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **Guest and anonymous rights are no longer stated through Authenticated
+  Users** (review finding CR-8, ADR 0072). Every token received Everyone and
+  Authenticated Users; Microsoft documents that the Guest account is not in
+  Authenticated Users and an anonymous logon in neither (Everyone only with
+  `EveryoneIncludesAnonymous`). For these identities the SIDs are now left
+  out of the token and their ACEs bound the result (marker
+  `GuestOrAnonymousToken`) — on the NTFS side, for local groups and on the
+  share side. The exact rule follows a lab measurement.
+
 - **A local administrator over SMB no longer gets a share right through a
   group User Account Control filters** (review finding CR-1, regression in
   v1.9.1). The share token was built from every local group and still

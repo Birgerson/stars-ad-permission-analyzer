@@ -159,6 +159,13 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             if crypto_operators_uncertain {
                 logon_dependent_groups.insert(SID_CRYPTOGRAPHIC_OPERATORS.to_owned());
             }
+            // Review CR-8: Guest / anonymous — Authenticated Users (and, for
+            // anonymous, Everyone) bound the result.
+            logon_dependent_groups.extend(
+                identity_uncertain_well_knowns(&input.identity.sid.0)
+                    .iter()
+                    .map(|s| (*s).to_owned()),
+            );
             logon_dependent_bounds(
                 &input.file_system_object.dacl,
                 &match_sids,
@@ -297,6 +304,13 @@ impl PermissionEvaluator for DefaultPermissionEngine {
                 .collect();
             diagnostics.push(PermissionDiagnostic::UacFilteredGroups { groups });
         }
+        // Review CR-8: name the well-knowns a Guest / anonymous token lacks.
+        let guest_uncertain = identity_uncertain_well_knowns(&input.identity.sid.0);
+        if !guest_uncertain.is_empty() {
+            diagnostics.push(PermissionDiagnostic::GuestOrAnonymousToken {
+                sids: guest_uncertain.iter().map(|s| (*s).to_owned()).collect(),
+            });
+        }
         // ADR 0067: groups left out of the token — visible, never silent.
         if !input.resolution.excluded_non_security_groups.is_empty() {
             diagnostics.push(PermissionDiagnostic::NonSecurityGroupsExcluded {
@@ -431,9 +445,15 @@ pub fn build_token_sids_with_context(
     for local in local_group_sids {
         sids.insert(local.0.clone());
     }
-    // Implicit well-known principals present in every Windows access token
-    sids.insert("S-1-1-0".to_string()); // Everyone
-    sids.insert("S-1-5-11".to_string()); // Authenticated Users
+    // Implicit well-known principals present in every Windows access token —
+    // except where Windows documents otherwise for the Guest account and
+    // anonymous logons (review CR-8): those stay uncertain, never assumed.
+    let uncertain_well_knowns = identity_uncertain_well_knowns(user_sid);
+    for well_known in [SID_EVERYONE, SID_AUTHENTICATED_USERS] {
+        if !uncertain_well_knowns.contains(&well_known) {
+            sids.insert(well_known.to_string());
+        }
+    }
 
     // Context-specific well-knowns.
     match access_context {
@@ -471,6 +491,9 @@ pub fn expand_local_groups(
     let token =
         build_token_sids_with_context(user_sid, sid_history, memberships, &[], access_context);
     let mut out = LocalGroupExpansion::default();
+    // Review CR-8: a local group reached only through a well-known a Guest /
+    // anonymous token may lack is uncertain, not a membership.
+    let uncertain_well_knowns = identity_uncertain_well_knowns(user_sid);
     for group in groups {
         let mut certain: Vec<Sid> = group
             .members
@@ -481,7 +504,11 @@ pub fn expand_local_groups(
         let mut uncertain: Vec<Sid> = group
             .members
             .iter()
-            .filter(|m| !token.contains(&m.0) && is_logon_dependent_sid(&m.0, access_context))
+            .filter(|m| {
+                !token.contains(&m.0)
+                    && (is_logon_dependent_sid(&m.0, access_context)
+                        || uncertain_well_knowns.contains(&m.0.as_str()))
+            })
             .cloned()
             .collect();
         let sort_via = |via: &mut Vec<Sid>| {
@@ -518,6 +545,37 @@ pub fn expand_local_groups(
     out.certain.sort_by(by_name);
     out.logon_dependent.sort_by(by_name);
     out
+}
+
+/// `Everyone`.
+pub const SID_EVERYONE: &str = "S-1-1-0";
+/// `Authenticated Users`.
+pub const SID_AUTHENTICATED_USERS: &str = "S-1-5-11";
+/// `ANONYMOUS LOGON`.
+pub const SID_ANONYMOUS_LOGON: &str = "S-1-5-7";
+
+/// Whether `sid` is the built-in Guest account — RID 501 of a machine or
+/// domain account domain (`S-1-5-21-a-b-c-501`).
+pub fn is_guest_account(sid: &str) -> bool {
+    sid.strip_prefix("S-1-5-21-")
+        .and_then(|rest| rest.rsplit_once('-'))
+        .is_some_and(|(domain, rid)| rid == "501" && domain.split('-').count() == 3)
+}
+
+/// The universal well-knowns whose presence in this identity's token is
+/// uncertain (review CR-8, ADR 0072): Microsoft documents that the Guest
+/// account is not in `Authenticated Users`, and that an anonymous logon is in
+/// neither `Authenticated Users` nor — unless `EveryoneIncludesAnonymous` is
+/// set — `Everyone`. Until a real Guest / anonymous token is measured in the
+/// lab they are bounded, not assumed in either direction.
+pub fn identity_uncertain_well_knowns(user_sid: &str) -> &'static [&'static str] {
+    if user_sid == SID_ANONYMOUS_LOGON {
+        &[SID_AUTHENTICATED_USERS, SID_EVERYONE]
+    } else if is_guest_account(user_sid) {
+        &[SID_AUTHENTICATED_USERS]
+    } else {
+        &[]
+    }
 }
 
 /// `BUILTIN\Cryptographic Operators` — never a certain token group
@@ -5341,5 +5399,115 @@ mod tests {
         let groups = vec![local_group(SID_CRYPTOGRAPHIC_OPERATORS, "Crypto", &[USER])];
         let e = expand_local_groups(USER, &[], &[], &groups, AccessContext::RemoteSmb);
         assert_eq!(certain_names(&e), vec!["Crypto"]);
+    }
+
+    // --- Review CR-8 / ADR 0072: Guest and anonymous tokens ---
+
+    const GUEST: &str = "S-1-5-21-1000-1000-1000-501";
+
+    #[test]
+    fn guest_account_is_recognised_only_as_rid_501_of_an_account_domain() {
+        assert!(is_guest_account(GUEST));
+        assert!(is_guest_account(
+            "S-1-5-21-1948694518-2669005538-3518942002-501"
+        ));
+        assert!(!is_guest_account("S-1-5-21-1000-1000-1000-500"));
+        assert!(!is_guest_account("S-1-5-21-1000-1000-501"));
+        assert!(!is_guest_account("S-1-5-21-1000-1000-1000-1501"));
+        assert!(!is_guest_account("S-1-5-32-546"));
+    }
+
+    #[test]
+    fn guest_and_anonymous_tokens_leave_out_the_documented_well_knowns() {
+        let guest = build_token_sids(GUEST, &[]);
+        assert!(guest.contains(SID_EVERYONE));
+        assert!(!guest.contains(SID_AUTHENTICATED_USERS));
+        let anonymous = build_token_sids(SID_ANONYMOUS_LOGON, &[]);
+        assert!(!anonymous.contains(SID_EVERYONE));
+        assert!(!anonymous.contains(SID_AUTHENTICATED_USERS));
+        let normal = build_token_sids(USER, &[]);
+        assert!(normal.contains(SID_EVERYONE) && normal.contains(SID_AUTHENTICATED_USERS));
+    }
+
+    /// Guest: an Authenticated Users ACE bounds the result (shown without
+    /// it, as Microsoft documents) instead of counting as a fact.
+    #[test]
+    fn authenticated_users_ace_bounds_a_guest_result() {
+        let p = eval_with_context(
+            user(GUEST),
+            vec![],
+            fso(
+                None,
+                vec![
+                    allow_ace(SID_AUTHENTICATED_USERS, MASK_MODIFY, false),
+                    allow_ace(SID_EVERYONE, MASK_READ, false),
+                ],
+            ),
+            None,
+            AccessContext::RemoteSmb,
+        );
+        assert_eq!(p.ntfs_mask.0, expand_generic_rights(MASK_READ));
+        let (sids, min, max) = logon_marker(&p).expect("bounded");
+        assert_eq!(sids, vec![SID_AUTHENTICATED_USERS.to_string()]);
+        assert_eq!(min, expand_generic_rights(MASK_READ));
+        assert_eq!(max, expand_generic_rights(MASK_MODIFY | MASK_READ));
+        assert!(!p.effective_determinable());
+        assert!(p.diagnostics.iter().any(|d| matches!(
+            d,
+            PermissionDiagnostic::GuestOrAnonymousToken { sids } if sids == &vec![SID_AUTHENTICATED_USERS.to_string()]
+        )));
+    }
+
+    /// Every other account keeps Authenticated Users as a certain group.
+    #[test]
+    fn authenticated_users_ace_is_exact_for_a_normal_account() {
+        let p = eval_with_context(
+            user(USER),
+            vec![],
+            fso(
+                None,
+                vec![allow_ace(SID_AUTHENTICATED_USERS, MASK_MODIFY, false)],
+            ),
+            None,
+            AccessContext::RemoteSmb,
+        );
+        assert_eq!(p.ntfs_mask.0, expand_generic_rights(MASK_MODIFY));
+        assert!(logon_marker(&p).is_none());
+        assert!(!p
+            .diagnostics
+            .iter()
+            .any(|d| matches!(d, PermissionDiagnostic::GuestOrAnonymousToken { .. })));
+    }
+
+    /// Anonymous: an Everyone ACE is uncertain as well.
+    #[test]
+    fn everyone_ace_bounds_an_anonymous_result() {
+        let p = eval_with_context(
+            user(SID_ANONYMOUS_LOGON),
+            vec![],
+            fso(None, vec![allow_ace(SID_EVERYONE, MASK_READ, false)]),
+            None,
+            AccessContext::RemoteSmb,
+        );
+        assert_eq!(p.ntfs_mask.0, 0);
+        let (sids, min, max) = logon_marker(&p).expect("bounded");
+        assert_eq!(sids, vec![SID_EVERYONE.to_string()]);
+        assert_eq!((min, max), (0, expand_generic_rights(MASK_READ)));
+    }
+
+    /// A local group a Guest reaches only through Authenticated Users is
+    /// uncertain, not a membership.
+    #[test]
+    fn local_group_through_authenticated_users_is_uncertain_for_a_guest() {
+        let groups = vec![local_group(
+            "S-1-5-32-545",
+            "Users",
+            &[SID_AUTHENTICATED_USERS],
+        )];
+        let e = expand_local_groups(GUEST, &[], &[], &groups, AccessContext::RemoteSmb);
+        assert!(e.certain.is_empty());
+        assert_eq!(uncertain_names(&e), vec!["Users"]);
+        let normal = expand_local_groups(USER, &[], &[], &groups, AccessContext::RemoteSmb);
+        assert_eq!(certain_names(&normal), vec!["Users"]);
     }
 }

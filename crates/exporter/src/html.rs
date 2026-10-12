@@ -504,6 +504,17 @@ fn write_permissions_table(
                             .to_string(),
                     );
                 }
+                PermissionDiagnostic::GuestOrAnonymousToken { sids } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-medium\" \
+                         title=\"Guest / anonymous logon: Windows does not put {} into this \
+                         token the way it does for other accounts (Authenticated Users excludes \
+                         Guest and anonymous; Everyone excludes anonymous unless \
+                         EveryoneIncludesAnonymous = 1). ACEs for them bound the result.\">⚠ \
+                         Guest / anonymous token</span>",
+                        escape_html(&sids.join(", "))
+                    ));
+                }
                 PermissionDiagnostic::UacFilteredGroups { groups } => {
                     diag_parts.push(format!(
                         "<span class=\"badge badge-medium\" \
