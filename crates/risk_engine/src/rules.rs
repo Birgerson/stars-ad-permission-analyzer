@@ -31,9 +31,57 @@ fn is_incomplete(p: &EffectivePermission) -> bool {
     p.is_incomplete()
 }
 use permission_engine::mask::{
-    FILE_APPEND_DATA, FILE_DELETE, FILE_DELETE_CHILD, FILE_WRITE_DAC, FILE_WRITE_DATA,
-    FILE_WRITE_OWNER, MASK_FULL_CONTROL, MASK_MODIFY, MASK_WRITE,
+    NormalizedRights, FILE_APPEND_DATA, FILE_DELETE, FILE_DELETE_CHILD, FILE_WRITE_DAC,
+    FILE_WRITE_DATA, FILE_WRITE_OWNER, MASK_FULL_CONTROL, MASK_MODIFY, MASK_WRITE,
+    NOT_DETERMINABLE,
 };
+
+/// The right a rule judges, and how it may word it (review CR-2, ADR 0065).
+///
+/// Rules judge the **upper bound** of the effective right
+/// (`EffectivePermission::effective_upper_bound`) — for an audit the safe
+/// direction: an elevated administrator whose shown value is the
+/// UAC-filtered lower bound still gets the Full Control finding. A right is
+/// worded as a fact ("has", "can") only when the result is exact; otherwise
+/// "may have" / "may be able to", with the range where one is known.
+struct AuditedRight {
+    mask: u32,
+    has: &'static str,
+    can: &'static str,
+    /// Empty for an exact result; otherwise a parenthesised reason.
+    note: String,
+}
+
+impl AuditedRight {
+    fn of(p: &EffectivePermission) -> Self {
+        let mask = p.effective_upper_bound();
+        if p.effective_determinable() {
+            return Self {
+                mask,
+                has: "has",
+                can: "can",
+                note: String::new(),
+            };
+        }
+        let shown = p.effective_mask.0;
+        let note = if mask != shown {
+            format!(
+                " ({NOT_DETERMINABLE}: the known data gives {} (0x{shown:08X}); up to {} \
+                 (0x{mask:08X}) is possible)",
+                NormalizedRights::new(shown).display_name(),
+                NormalizedRights::new(mask).display_name(),
+            )
+        } else {
+            format!(" ({NOT_DETERMINABLE}: stated from the known data only)")
+        };
+        Self {
+            mask,
+            has: "may have",
+            can: "may be able to",
+            note,
+        }
+    }
+}
 
 /// Bits that grant the ability to create or alter file *content*:
 /// `FILE_WRITE_DATA` (overwrite) and `FILE_APPEND_DATA` (append, or create
@@ -149,19 +197,24 @@ impl RiskRule for FullControlRule {
         context
             .findings
             .iter()
-            .filter(|p| p.effective_mask.0 & MASK_FULL_CONTROL == MASK_FULL_CONTROL)
-            .map(|p| {
+            .filter_map(|p| {
+                let a = AuditedRight::of(p);
+                if a.mask & MASK_FULL_CONTROL != MASK_FULL_CONTROL {
+                    return None;
+                }
                 let name = p.identity.name.as_deref().unwrap_or(&p.identity.sid.0);
-                RiskFinding {
+                Some(RiskFinding {
                     rule_id: "FULL_CONTROL".to_string(),
                     severity: RiskSeverity::Critical,
                     description: format!(
-                        "'{name}' has Full Control — can read, write, delete and change permissions"
+                        "'{name}' {} Full Control — {} read, write, delete and change \
+                         permissions{}",
+                        a.has, a.can, a.note
                     ),
                     affected_path: Some(p.path.clone()),
                     affected_identity: Some(p.identity.sid.clone()),
                     incomplete: is_incomplete(p),
-                }
+                })
             })
             .collect()
     }
@@ -190,7 +243,8 @@ impl RiskRule for WriteAccessRule {
             .findings
             .iter()
             .filter_map(|p| {
-                let m = p.effective_mask.0;
+                let a = AuditedRight::of(p);
+                let m = a.mask;
                 // Full Control is reported as CRITICAL by FullControlRule.
                 if m & MASK_FULL_CONTROL == MASK_FULL_CONTROL {
                     return None;
@@ -206,7 +260,8 @@ impl RiskRule for WriteAccessRule {
                         rule_id: "WRITE_ACCESS".to_string(),
                         severity: RiskSeverity::High,
                         description: format!(
-                            "'{name}' has {level} access — can create or modify files"
+                            "'{name}' {} {level} access — {} create or modify files{}",
+                            a.has, a.can, a.note
                         ),
                         affected_path: Some(p.path.clone()),
                         affected_identity: Some(p.identity.sid.clone()),
@@ -219,8 +274,9 @@ impl RiskRule for WriteAccessRule {
                         rule_id: "PARTIAL_WRITE".to_string(),
                         severity: RiskSeverity::Medium,
                         description: format!(
-                            "'{name}' can write file content via special permissions ({bits}) \
-                             without the full Write composite"
+                            "'{name}' {} write file content via special permissions ({bits}) \
+                             without the full Write composite{}",
+                            a.can, a.note
                         ),
                         affected_path: Some(p.path.clone()),
                         affected_identity: Some(p.identity.sid.clone()),
@@ -262,20 +318,23 @@ impl RiskRule for AdminRightsRule {
     fn evaluate(&self, context: &RiskContext) -> Vec<RiskFinding> {
         let mut out = Vec::new();
         for p in &context.findings {
-            let m = p.effective_mask.0;
+            let a = AuditedRight::of(p);
+            let m = a.mask;
             // Full Control is already reported as CRITICAL by FullControlRule — do
             // not break it down again here to avoid duplicate findings.
             if m & MASK_FULL_CONTROL == MASK_FULL_CONTROL {
                 continue;
             }
             let name = p.identity.name.as_deref().unwrap_or(&p.identity.sid.0);
+            let (can, note) = (a.can, a.note.as_str());
 
             if m & FILE_WRITE_DAC != 0 {
                 out.push(RiskFinding {
                     rule_id: "PERMISSION_CHANGE".to_string(),
                     severity: RiskSeverity::High,
                     description: format!(
-                        "'{name}' can change permissions (WRITE_DAC) — enables privilege escalation"
+                        "'{name}' {can} change permissions (WRITE_DAC) — enables privilege \
+                         escalation{note}"
                     ),
                     affected_path: Some(p.path.clone()),
                     affected_identity: Some(p.identity.sid.clone()),
@@ -287,7 +346,8 @@ impl RiskRule for AdminRightsRule {
                     rule_id: "OWNER_CHANGE".to_string(),
                     severity: RiskSeverity::High,
                     description: format!(
-                        "'{name}' can take ownership (WRITE_OWNER) — enables privilege escalation"
+                        "'{name}' {can} take ownership (WRITE_OWNER) — enables privilege \
+                         escalation{note}"
                     ),
                     affected_path: Some(p.path.clone()),
                     affected_identity: Some(p.identity.sid.clone()),
@@ -298,7 +358,7 @@ impl RiskRule for AdminRightsRule {
                 out.push(RiskFinding {
                     rule_id: "DELETE_RIGHT".to_string(),
                     severity: RiskSeverity::Medium,
-                    description: format!("'{name}' can delete this object (DELETE)"),
+                    description: format!("'{name}' {can} delete this object (DELETE){note}"),
                     affected_path: Some(p.path.clone()),
                     affected_identity: Some(p.identity.sid.clone()),
                     incomplete: is_incomplete(p),
@@ -308,7 +368,9 @@ impl RiskRule for AdminRightsRule {
                 out.push(RiskFinding {
                     rule_id: "DELETE_CHILD_RIGHT".to_string(),
                     severity: RiskSeverity::Medium,
-                    description: format!("'{name}' can delete child objects (DELETE_CHILD)"),
+                    description: format!(
+                        "'{name}' {can} delete child objects (DELETE_CHILD){note}"
+                    ),
                     affected_path: Some(p.path.clone()),
                     affected_identity: Some(p.identity.sid.clone()),
                     incomplete: is_incomplete(p),
@@ -352,7 +414,8 @@ impl RiskRule for BroadGroupWriteRule {
             .findings
             .iter()
             .filter_map(|p| {
-                let eff_w = p.effective_mask.0 & CONTENT_WRITE_BITS;
+                let a = AuditedRight::of(p);
+                let eff_w = a.mask & CONTENT_WRITE_BITS;
                 if eff_w == 0 {
                     return None;
                 }
@@ -380,7 +443,8 @@ impl RiskRule for BroadGroupWriteRule {
                     rule_id: "BROAD_GROUP_WRITE".to_string(),
                     severity: RiskSeverity::Critical,
                     description: format!(
-                        "'{identity_name}' has write access via '{sid_name}' — affects {scope}"
+                        "'{identity_name}' {} write access via '{sid_name}' — affects {scope}{}",
+                        a.has, a.note
                     ),
                     affected_path: Some(p.path.clone()),
                     affected_identity: Some(p.identity.sid.clone()),
@@ -462,18 +526,24 @@ impl RiskRule for SensitivePathRule {
         context
             .findings
             .iter()
-            .filter(|p| {
+            .filter_map(|p| {
                 // Follow-up finding 3 (review 2026-05-25): the rule
                 // claims "has access" — so only emit a finding when the
                 // identity actually has access. Otherwise a deny-all
-                // result would be misreported as a positive risk.
-                if p.effective_mask.0 == 0 {
-                    return false;
+                // result would be misreported as a positive risk. Review
+                // CR-2: judged on the upper bound, so an access that is
+                // possible but not shown is reported ("may have").
+                let a = AuditedRight::of(p);
+                if a.mask == 0 {
+                    return None;
                 }
                 let lower = p.path.0.to_lowercase();
-                SENSITIVE_KEYWORDS.iter().any(|kw| lower.contains(kw))
+                SENSITIVE_KEYWORDS
+                    .iter()
+                    .any(|kw| lower.contains(kw))
+                    .then_some((p, a))
             })
-            .map(|p| {
+            .map(|(p, a)| {
                 let name = p.identity.name.as_deref().unwrap_or(&p.identity.sid.0);
                 let keyword = SENSITIVE_KEYWORDS
                     .iter()
@@ -484,7 +554,9 @@ impl RiskRule for SensitivePathRule {
                     rule_id: "SENSITIVE_PATH".to_string(),
                     severity: RiskSeverity::Medium,
                     description: format!(
-                        "Path contains keyword '{keyword}' — may contain credentials or secrets; '{name}' has access"
+                        "Path contains keyword '{keyword}' — may contain credentials or secrets; \
+                         '{name}' {} access{}",
+                        a.has, a.note
                     ),
                     affected_path: Some(p.path.clone()),
                     affected_identity: Some(p.identity.sid.clone()),
@@ -1522,5 +1594,138 @@ mod tests {
         let results = RuleRegistry::with_defaults().evaluate_all(&ctx(findings));
         assert!(results.iter().any(|f| f.rule_id == "FULL_CONTROL"));
         assert!(results.iter().any(|f| f.rule_id == "SENSITIVE_PATH"));
+    }
+
+    // --- Review CR-2: rules judge the upper bound, and say "may" when the
+    // result is not determinable ---
+
+    const RX: u32 = 0x0012_00A9;
+
+    /// A local administrator's result: shown (UAC-filtered) Read & Execute,
+    /// up to Full Control in an elevated session (ADR 0071).
+    fn bounded_admin(path: &str) -> EffectivePermission {
+        let mut p = perm(USER_SID, RX, path, vec![]);
+        p.diagnostics = vec![PermissionDiagnostic::LogonDependentTrustees {
+            sids: vec!["S-1-5-32-544".into()],
+            min_mask: RX,
+            max_mask: MASK_FULL_CONTROL,
+        }];
+        p
+    }
+
+    #[test]
+    fn full_control_of_an_elevated_session_is_reported_as_possible() {
+        let r = FullControlRule.evaluate(&ctx(vec![bounded_admin(r"C:\data")]));
+        assert_eq!(r.len(), 1, "the upper bound is Full Control");
+        let d = &r[0].description;
+        assert!(
+            d.contains("may have Full Control") && d.contains("may be able to read"),
+            "{d}"
+        );
+        assert!(
+            d.contains(NOT_DETERMINABLE) && d.contains("up to Full Control"),
+            "{d}"
+        );
+        assert!(
+            d.contains("Read & Execute"),
+            "the shown value is named: {d}"
+        );
+        assert!(r[0].incomplete);
+        // No duplicate break-down of the same Full Control upper bound.
+        assert!(WriteAccessRule
+            .evaluate(&ctx(vec![bounded_admin(r"C:\data")]))
+            .is_empty());
+        assert!(AdminRightsRule
+            .evaluate(&ctx(vec![bounded_admin(r"C:\data")]))
+            .is_empty());
+    }
+
+    #[test]
+    fn exact_results_keep_the_factual_wording() {
+        let r = FullControlRule.evaluate(&ctx(vec![perm(
+            USER_SID,
+            MASK_FULL_CONTROL,
+            r"C:\data",
+            vec![],
+        )]));
+        assert_eq!(
+            r[0].description,
+            format!(
+                "'{USER_SID}' has Full Control — can read, write, delete and change permissions"
+            )
+        );
+        assert!(!r[0].incomplete);
+    }
+
+    /// A token gap gives no upper bound: the known data is judged, worded
+    /// as "may", never as a fact.
+    #[test]
+    fn undeterminable_result_without_range_says_may() {
+        let mut p = perm(USER_SID, MASK_MODIFY, r"C:\data", vec![]);
+        p.diagnostics = vec![PermissionDiagnostic::GroupResolutionIncomplete {
+            reason: "gap".into(),
+        }];
+        let r = WriteAccessRule.evaluate(&ctx(vec![p.clone()]));
+        assert_eq!(r.len(), 1);
+        assert!(r[0].description.contains("may have Modify access"));
+        assert!(r[0].description.contains("stated from the known data only"));
+        let r = AdminRightsRule.evaluate(&ctx(vec![p]));
+        assert!(r.iter().all(|f| f.description.contains("may be able to")));
+    }
+
+    /// An undeterminable share may grant more than the shown share mask:
+    /// the NTFS right is judged.
+    #[test]
+    fn uncertain_share_does_not_hide_ntfs_write_access() {
+        let mut p = perm(USER_SID, MASK_READ, r"C:\data", vec![]);
+        p.ntfs_mask = AccessMask(MASK_MODIFY);
+        p.share_mask = Some(AccessMask(MASK_READ));
+        p.share_status = adpa_core::model::ShareEvalStatus::Applied;
+        p.diagnostics = vec![PermissionDiagnostic::UnsupportedShareAces { count: 1 }];
+        let r = WriteAccessRule.evaluate(&ctx(vec![p.clone()]));
+        assert_eq!(r.len(), 1);
+        assert!(r[0].description.contains("may have Modify access"));
+        // The same share, exact: it restricts, no write finding.
+        p.diagnostics = vec![];
+        assert!(WriteAccessRule.evaluate(&ctx(vec![p])).is_empty());
+    }
+
+    /// A shown value of 0 with a possible access still flags the path.
+    #[test]
+    fn sensitive_path_with_possible_access_is_reported() {
+        let mut p = bounded_admin(r"C:\data\passwords");
+        p.effective_mask = AccessMask(0);
+        p.ntfs_mask = AccessMask(0);
+        if let PermissionDiagnostic::LogonDependentTrustees { min_mask, .. } = &mut p.diagnostics[0]
+        {
+            *min_mask = 0;
+        }
+        let r = SensitivePathRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(r[0].description.contains("may have access"));
+    }
+
+    /// Broad-group write through an undeterminable share.
+    #[test]
+    fn broad_group_write_through_an_uncertain_share_is_possible() {
+        let mut p = perm_cs(
+            USER_SID,
+            MASK_READ,
+            r"C:\data",
+            vec![],
+            vec![ContributingAce {
+                sid: Sid(SID_EVERYONE.into()),
+                mask: AccessMask(MASK_MODIFY),
+            }],
+        );
+        p.ntfs_mask = AccessMask(MASK_MODIFY);
+        p.share_mask = Some(AccessMask(MASK_READ));
+        p.share_status = adpa_core::model::ShareEvalStatus::Applied;
+        p.diagnostics = vec![PermissionDiagnostic::UnsupportedShareAces { count: 1 }];
+        let r = BroadGroupWriteRule.evaluate(&ctx(vec![p]));
+        assert_eq!(r.len(), 1);
+        assert!(r[0]
+            .description
+            .contains("may have write access via 'Everyone'"));
     }
 }

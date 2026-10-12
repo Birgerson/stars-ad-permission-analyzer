@@ -12,6 +12,17 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **Risk findings are no longer missing for a bounded result** (review
+  finding CR-2, ADR 0073). The rules judged the shown value of a
+  logon-dependent range — its lower bound: a local administrator whose
+  elevated session has Full Control got no `FULL_CONTROL`, `WRITE_ACCESS`
+  or `PERMISSION_CHANGE` finding, and `SENSITIVE_PATH` was skipped for a
+  shown value of 0. The rules now judge
+  `EffectivePermission::effective_upper_bound()` (NTFS upper bound,
+  restricted by the share only when the share is determinable), and a
+  finding of a not-determinable result reads "may have" / "may be able to"
+  with the range instead of stating a fact. Exact results are unchanged.
+
 - **The GUI Delta tab no longer states undeterminable rights as facts**
   (review finding CR-9). Old and new rights were plain labels; a row
   "Added: Full Control" could be a not-determinable value, and a change
