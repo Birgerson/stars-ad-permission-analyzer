@@ -768,6 +768,13 @@ every surface says:
   `account_status`.
 - **HTML / GUI**: a `NOT DETERMINABLE` badge or label with the computed
   value as "known data".
+- **Explanation path** (CLI, CSV `explanation`, HTML details, GUI steps):
+  the "NTFS effective", "Share permission" and "Effective (NTFS ∩ Share)"
+  steps use the same wording. Why the value is uncertain is part of the
+  path: a step right after the group memberships names what may be missing
+  from the token, a step after the share line what is uncertain on the
+  share side. A share whose permissions could not be read is stated as not
+  determinable — it can only restrict the NTFS right, never extend it.
 - **ACEs for logon-dependent SIDs** (`This Organization`, `NTLM
   Authentication`, `Authentication authority asserted identity`, console or
   remote-interactive logon, …): Stars computes the lowest and the highest
