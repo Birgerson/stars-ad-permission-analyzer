@@ -561,6 +561,13 @@ pub fn share_token(
         .map(|s| s.0.clone())
         .filter(|s| !deny_only.contains(s))
         .collect();
+    // Review CR-8: Guest / anonymous — the same uncertain well-knowns as on
+    // the NTFS side (`build_token_sids_with_context` already left them out).
+    uncertain.extend(
+        permission_engine::engine::identity_uncertain_well_knowns(user_sid)
+            .iter()
+            .map(|s| (*s).to_owned()),
+    );
     for sid in deny_only.iter().chain(uncertain.iter()) {
         enabled.remove(sid);
     }
@@ -1282,6 +1289,33 @@ mod tests {
         let dacl = ShareDacl::Acl(vec![make_perm(
             "S",
             "S-1-5-32-569",
+            0x001F_01FF,
+            AceKind::Allow,
+        )]);
+        let (mask, uncertain) = evaluate_share_dacl(&dacl, &token, AccessContext::RemoteSmb);
+        assert_eq!(mask.map(|m| m.0), Some(0));
+        assert_eq!(uncertain, 1);
+    }
+
+    /// Review CR-8: the share token of a Guest has Authenticated Users as
+    /// uncertain, never enabled.
+    #[test]
+    fn share_token_of_a_guest_bounds_authenticated_users() {
+        let token = share_token(
+            "S-1-5-21-7-7-7-501",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            AccessContext::RemoteSmb,
+        );
+        assert!(token.enabled.contains("S-1-1-0"));
+        assert!(!token.enabled.contains("S-1-5-11"));
+        assert!(token.uncertain.contains("S-1-5-11"));
+        let dacl = ShareDacl::Acl(vec![make_perm(
+            "S",
+            "S-1-5-11",
             0x001F_01FF,
             AceKind::Allow,
         )]);

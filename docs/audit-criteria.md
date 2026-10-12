@@ -374,6 +374,7 @@ Markers that do **not** contribute to incomplete — informational:
 - `PermissionDiagnostic::MembersViaPrimaryGroupIncluded` (members view: members found via `primaryGroupID` were included; transparency, not a gap).
 - `PermissionDiagnostic::IdentityOrphaned` (the SID is provably orphaned — a deleted account of the configured domain; the rights shown are what a logon with this SID would get, a correct statement). See ADR 0064.
 - `PermissionDiagnostic::NonSecurityGroupsExcluded { groups }` (a distribution group, or a group reached only through one, is not in a Windows token and was left out; named so the omission is never silent). See ADR 0067.
+- `PermissionDiagnostic::GuestOrAnonymousToken { sids }` (the account is Guest or anonymous; Authenticated Users — for anonymous also Everyone — is bounded, not assumed; an applicable ACE for it is what turns the result into a `LogonDependentTrustees` range). See ADR 0072.
 - `PermissionDiagnostic::UacFilteredGroups { groups }` (the token holds groups User Account Control may filter; by itself the result stays exact — an applicable Allow ACE for one of them is what turns it into a `LogonDependentTrustees` range). See ADR 0070 / 0071.
 
 A finding with `incomplete = true` does **not** mean it is wrong — it means the underlying result might not be 100 % complete. For an audit that is the honest statement; for an automated escalation you should not blindly trust it.

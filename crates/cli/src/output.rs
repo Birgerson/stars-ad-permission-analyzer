@@ -445,6 +445,16 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      nobody can log on with it. The rights shown are what a logon");
                 println!("      with this SID would get; an ACE naming it is a dead entry.");
             }
+            PermissionDiagnostic::GuestOrAnonymousToken { sids } => {
+                println!("  [!] Guest / anonymous logon: Windows does not put these SIDs into");
+                println!("      this token the way it does for other accounts:");
+                for s in sids {
+                    println!("        - {s}");
+                }
+                println!("      (Authenticated Users excludes Guest and anonymous; Everyone");
+                println!("      excludes anonymous unless EveryoneIncludesAnonymous = 1.)");
+                println!("      ACEs for them bound the result.");
+            }
             PermissionDiagnostic::UacFilteredGroups { groups } => {
                 println!("  [!] User Account Control may filter these groups out of the token");
                 println!("      (deny-only):");
