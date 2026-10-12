@@ -1044,7 +1044,7 @@ async fn handle_analyze(
         ),
     );
 
-    let (share_status, unsupported_share_ace_count) = resolve_share_status(
+    let (share_status, unsupported_share_ace_count, share_decisions) = resolve_share_status(
         path,
         smb_server,
         share_name,
@@ -1068,7 +1068,10 @@ async fn handle_analyze(
         ad_resolver::build_sid_name_map_for_target(
             &res.identity,
             &named,
-            fso.dacl.iter().map(|a| a.sid.0.clone()),
+            fso.dacl
+                .iter()
+                .map(|a| a.sid.0.clone())
+                .chain(share_decisions.iter().map(|d| d.sid.0.clone())),
             account_server.as_deref(),
         )
     };
@@ -1081,6 +1084,7 @@ async fn handle_analyze(
     // Round 6 finding 1: merge local group memberships into the
     // engine input so the explanation path renders all token steps.
     memberships.extend(local_group_memberships.iter().cloned());
+    let share_names = sid_names.clone();
     DefaultPermissionEngine
         .evaluate(PermissionEvaluationInput {
             identity,
@@ -1095,6 +1099,14 @@ async fn handle_analyze(
             unsupported_share_ace_count,
             sid_names,
             resolution: engine_flags,
+        })
+        .map(|mut result| {
+            // Review CR-7: the share side explained ACE by ACE.
+            permission_engine::engine::attach_share_provenance(
+                &mut result.path_explanation,
+                share_scanner::share_decision_steps(&share_decisions, &share_names),
+            );
+            result
         })
         .map_err(|e| format!("Permission engine error: {e}"))
 }
@@ -1623,17 +1635,18 @@ async fn handle_scan(
         });
     }
 
-    let (share_status, scan_unsupported_share_ace_count) = resolve_share_status(
-        root,
-        smb_server,
-        share_name,
-        &identity,
-        &memberships,
-        &local_group_sids,
-        &logon_dependent_group_sids,
-        &uac_filtered_group_sids,
-        root_access_context,
-    );
+    let (share_status, scan_unsupported_share_ace_count, scan_share_decisions) =
+        resolve_share_status(
+            root,
+            smb_server,
+            share_name,
+            &identity,
+            &memberships,
+            &local_group_sids,
+            &logon_dependent_group_sids,
+            &uac_filtered_group_sids,
+            root_access_context,
+        );
     if scan_unsupported_share_ace_count > 0 {
         let msg = format!(
             "{scan_unsupported_share_ace_count} share ACE(s) could not be evaluated (unsupported type, unreadable trustee or logon-dependent trustee) — share mask may be incomplete (diagnostic propagated to each result)."
@@ -1694,6 +1707,7 @@ async fn handle_scan(
         }
         // Review CR-4: identity and local groups named, unknown SIDs looked
         // up on the target server.
+        trustees.extend(scan_share_decisions.iter().map(|d| d.sid.0.clone()));
         ad_resolver::build_sid_name_map_for_target(
             &identity,
             &combined_memberships,
@@ -1734,7 +1748,12 @@ async fn handle_scan(
             sid_names: scan_sid_names.clone(),
             resolution: engine_flags.clone(),
         }) {
-            Ok(perm) => {
+            Ok(mut perm) => {
+                // Review CR-7: the share side explained ACE by ACE.
+                permission_engine::engine::attach_share_provenance(
+                    &mut perm.path_explanation,
+                    share_scanner::share_decision_steps(&scan_share_decisions, &scan_sid_names),
+                );
                 // ADR 0065: an undeterminable row says so instead of
                 // showing the computed value as a fact.
                 let label = permission_engine::rights_label_compact(
@@ -2905,13 +2924,18 @@ fn resolve_share_status(
     logon_dependent_group_sids: &[adpa_core::model::Sid],
     uac_filtered_group_sids: &[adpa_core::model::Sid],
     access_context: AccessContext,
-) -> (adpa_core::model::ShareMaskStatus, usize) {
+) -> (
+    adpa_core::model::ShareMaskStatus,
+    usize,
+    Vec<share_scanner::ShareAceDecision>,
+) {
     // G1: the share-mask orchestration is shared with the CLI in
     // `share_scanner::resolve_share_mask_status` so the two frontends can
     // never diverge (this function and the CLI's used to be edited in
     // lockstep, e.g. the ADR 0056 sIDHistory change). This wrapper only
     // adapts the GUI's `&Identity` + memberships to the shared primitives.
-    share_scanner::resolve_share_mask_status(
+    // Review CR-7: the per-ACE decisions come from the same DACL read.
+    let r = share_scanner::resolve_share_mask_status_explained(
         path,
         smb_server,
         share_name,
@@ -2922,7 +2946,8 @@ fn resolve_share_status(
         logon_dependent_group_sids,
         uac_filtered_group_sids,
         access_context,
-    )
+    );
+    (r.status, r.unevaluated, r.decisions)
 }
 
 // UNC parsing now lives centrally in validation::path::parse_unc_components.
@@ -3194,7 +3219,7 @@ mod tests {
             sid_history_count: 0,
             sid_history: Vec::new(),
         };
-        let (status, _unsupported) = resolve_share_status(
+        let (status, _unsupported, _decisions) = resolve_share_status(
             r"C:\Windows\SYSVOL",
             None,
             None,

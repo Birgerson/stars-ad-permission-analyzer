@@ -1250,6 +1250,21 @@ fn uncertain_ace_reason(
     None
 }
 
+/// Inserts the share ACE steps (review CR-7; built by
+/// `share_scanner::share_decision_steps` from the same DACL read as the
+/// share mask) right before the "Share permission:" step, so the share side
+/// is explained like the NTFS side. Without an applied share there is no
+/// such step and nothing is inserted.
+pub fn attach_share_provenance(path: &mut PermissionPath, share_steps: Vec<String>) {
+    if let Some(at) = path
+        .steps
+        .iter()
+        .position(|s| s.starts_with("Share permission: "))
+    {
+        path.steps.splice(at..at, share_steps);
+    }
+}
+
 /// Short name of the evaluated logon (review CR-6) — for report headers.
 pub fn access_context_summary(context: AccessContext) -> &'static str {
     match context {
@@ -1764,6 +1779,38 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
                     "Effective (NTFS \u{2229} Share): {}",
                     rights_statement(effective_raw, effective_determinable)
                 ));
+                // Review CR-7: which side limits the result.
+                let label = |bits: u32| {
+                    format!(
+                        "{} (0x{bits:08X})",
+                        NormalizedRights::new(bits).display_name()
+                    )
+                };
+                let prefix = if effective_determinable {
+                    ""
+                } else {
+                    "From the known data: "
+                };
+                let removed_by_share = ntfs_raw & !share.0;
+                let removed_by_ntfs = share.0 & !ntfs_raw;
+                steps.push(if removed_by_share != 0 {
+                    format!(
+                        "{prefix}Limited by the share: NTFS grants {}, the share allows {} — the \
+                         share removes {}",
+                        label(ntfs_raw),
+                        label(share.0),
+                        label(removed_by_share)
+                    )
+                } else if removed_by_ntfs != 0 {
+                    format!(
+                        "{prefix}Limited by NTFS: the share allows {}, NTFS grants {} — the result \
+                         follows NTFS",
+                        label(share.0),
+                        label(ntfs_raw)
+                    )
+                } else {
+                    format!("{prefix}NTFS and share allow the same — neither side limits the other")
+                });
             }
         }
         ShareEvalStatus::Unrestricted => {
@@ -6574,5 +6621,71 @@ mod tests {
                 .iter()
                 .any(|s| s.contains("FILE_DELETE_CHILD")));
         }
+    }
+
+    // --- Review CR-7: share provenance and the limiting side ---
+
+    #[test]
+    fn explanation_names_the_side_that_limits_the_result() {
+        let step_of = |share: u32, ntfs: u32| {
+            let p = eval(
+                user(USER),
+                vec![],
+                fso(None, vec![allow_ace(USER, ntfs, false)]),
+                Some(AccessMask(share)),
+            );
+            p.path_explanation
+                .steps
+                .iter()
+                .find(|s| s.starts_with("Limited by") || s.starts_with("NTFS and share"))
+                .cloned()
+                .expect("limiting-side step")
+        };
+        let share_limits = step_of(
+            expand_generic_rights(MASK_READ),
+            expand_generic_rights(MASK_MODIFY),
+        );
+        assert!(
+            share_limits.starts_with("Limited by the share: NTFS grants Modify"),
+            "{share_limits}"
+        );
+        let ntfs_limits = step_of(MASK_FULL_CONTROL, expand_generic_rights(MASK_READ));
+        assert!(ntfs_limits.starts_with("Limited by NTFS"), "{ntfs_limits}");
+        let same = step_of(MASK_FULL_CONTROL, MASK_FULL_CONTROL);
+        assert!(same.starts_with("NTFS and share allow the same"), "{same}");
+    }
+
+    #[test]
+    fn share_provenance_is_inserted_before_the_share_value() {
+        let mut p = eval(
+            user(USER),
+            vec![],
+            fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+            Some(AccessMask(MASK_READ)),
+        );
+        attach_share_provenance(
+            &mut p.path_explanation,
+            vec!["Share ACE Allow for X".into()],
+        );
+        let steps = &p.path_explanation.steps;
+        let at = steps
+            .iter()
+            .position(|s| s == "Share ACE Allow for X")
+            .unwrap();
+        assert!(steps[at + 1].starts_with("Share permission: "));
+
+        // No applied share: nothing inserted.
+        let mut p = eval(
+            user(USER),
+            vec![],
+            fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            None,
+        );
+        let before = p.path_explanation.steps.clone();
+        attach_share_provenance(
+            &mut p.path_explanation,
+            vec!["Share ACE Allow for X".into()],
+        );
+        assert_eq!(p.path_explanation.steps, before);
     }
 }

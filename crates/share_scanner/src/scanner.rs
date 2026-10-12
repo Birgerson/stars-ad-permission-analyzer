@@ -460,9 +460,80 @@ pub fn resolve_share_mask_status(
     uac_filtered_group_sids: &[Sid],
     access_context: AccessContext,
 ) -> (ShareMaskStatus, usize) {
+    let r = resolve_share_mask_status_explained(
+        path,
+        smb_server,
+        share_name,
+        user_sid,
+        sid_history,
+        memberships,
+        local_group_sids,
+        logon_dependent_group_sids,
+        uac_filtered_group_sids,
+        access_context,
+    );
+    (r.status, r.unevaluated)
+}
+
+/// The share status together with what each share ACE decided for this
+/// token (review CR-7) — from the **same** DACL read, so the provenance
+/// can never describe a different DACL than the one evaluated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareResolution {
+    pub status: ShareMaskStatus,
+    /// Share ACEs that could not be evaluated (unsupported, unreadable or
+    /// uncertain trustee) — the count behind `UnsupportedShareAces`.
+    pub unevaluated: usize,
+    /// Per share ACE in stored order; empty without an SMB context, on a
+    /// failed read and for a NULL share DACL.
+    pub decisions: Vec<ShareAceDecision>,
+}
+
+/// What one share ACE decided for the token (review CR-7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareAceDecision {
+    pub kind: AceKind,
+    pub sid: Sid,
+    pub mask: AccessMask,
+    pub outcome: ShareAceOutcome,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShareAceOutcome {
+    /// Applies; these bits were decided by it (first decision wins).
+    Decided(u32),
+    /// Applies, but every bit was already decided by an earlier ACE.
+    NoEffect,
+    /// Whether the trustee is in the token is uncertain (logon-dependent,
+    /// UAC-filtered Allow, Cryptographic Operators, Guest / anonymous).
+    Uncertain,
+    /// The trustee is not in the token.
+    NotApplicable,
+}
+
+/// [`resolve_share_mask_status`] plus the per-ACE decisions.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_share_mask_status_explained(
+    path: &str,
+    smb_server: Option<&str>,
+    share_name: Option<&str>,
+    user_sid: &str,
+    sid_history: &[Sid],
+    memberships: &[GroupMembership],
+    local_group_sids: &[Sid],
+    logon_dependent_group_sids: &[Sid],
+    uac_filtered_group_sids: &[Sid],
+    access_context: AccessContext,
+) -> ShareResolution {
     let smb_ctx = match validation::path::SmbAuditContext::resolve(path, smb_server, share_name) {
         Some(c) => c,
-        None => return (ShareMaskStatus::NotApplicable, 0),
+        None => {
+            return ShareResolution {
+                status: ShareMaskStatus::NotApplicable,
+                unevaluated: 0,
+                decisions: Vec::new(),
+            }
+        }
     };
     let server = smb_ctx.server;
     let share = smb_ctx.share;
@@ -480,7 +551,11 @@ pub fn resolve_share_mask_status(
     match get_share_dacl(&server, &share) {
         Err(e) => {
             warn!(server = %server, share = %share, error = %e, "Cannot read share DACL");
-            (ShareMaskStatus::ReadFailed(e.to_string()), 0)
+            ShareResolution {
+                status: ShareMaskStatus::ReadFailed(e.to_string()),
+                unevaluated: 0,
+                decisions: Vec::new(),
+            }
         }
         Ok(scan) => {
             let (mask, logon_dependent) = evaluate_share_dacl(&scan.dacl, &token, access_context);
@@ -508,7 +583,11 @@ pub fn resolve_share_mask_status(
                     "Share DACL has logon-dependent trustees that decide bits — share mask not determinable"
                 );
             }
-            (status, scan.unsupported_count + logon_dependent)
+            ShareResolution {
+                status,
+                unevaluated: scan.unsupported_count + logon_dependent,
+                decisions: share_ace_decisions(&scan.dacl, &token, access_context),
+            }
         }
     }
 }
@@ -628,6 +707,110 @@ pub fn evaluate_share_dacl(
     });
     let count = if max == min { 0 } else { uncertain.len() };
     (Some(AccessMask(shown)), count)
+}
+
+/// What each share ACE decided for `token` in the shown share walk (review
+/// CR-7) — the same predicates and the same "first decision per bit" rule
+/// as [`evaluate_share_dacl`], so the decided bits of all ACEs are exactly
+/// the shown share mask.
+pub fn share_ace_decisions(
+    dacl: &ShareDacl,
+    token: &ShareToken,
+    context: AccessContext,
+) -> Vec<ShareAceDecision> {
+    let ShareDacl::Acl(perms) = dacl else {
+        return Vec::new();
+    };
+    let enabled = |sid: &str| token.enabled.contains(sid);
+    let deny_only = |sid: &str| token.deny_only.contains(sid);
+    let mut granted = 0u32;
+    let mut denied = 0u32;
+    perms
+        .iter()
+        .map(|p| {
+            let applies = match p.kind {
+                AceKind::Allow => enabled(&p.sid.0),
+                AceKind::Deny => enabled(&p.sid.0) || deny_only(&p.sid.0),
+            };
+            let uncertain = !enabled(&p.sid.0)
+                && (token.uncertain.contains(&p.sid.0)
+                    || permission_engine::engine::is_logon_dependent_sid(&p.sid.0, context)
+                    || (p.kind == AceKind::Allow && deny_only(&p.sid.0)));
+            let outcome = if applies {
+                let bits = expand_generic_rights(p.mask.0) & !(granted | denied);
+                match p.kind {
+                    AceKind::Allow => granted |= bits,
+                    AceKind::Deny => denied |= bits,
+                }
+                if bits == 0 {
+                    ShareAceOutcome::NoEffect
+                } else {
+                    ShareAceOutcome::Decided(bits)
+                }
+            } else if uncertain {
+                ShareAceOutcome::Uncertain
+            } else {
+                ShareAceOutcome::NotApplicable
+            };
+            ShareAceDecision {
+                kind: p.kind,
+                sid: p.sid.clone(),
+                mask: p.mask,
+                outcome,
+            }
+        })
+        .collect()
+}
+
+/// The share ACE steps of the explanation path (review CR-7): every share
+/// ACE that applies to the token or may apply, with what it decided. ACEs
+/// whose trustee is not in the token are left out, like on the NTFS side.
+pub fn share_decision_steps(
+    decisions: &[ShareAceDecision],
+    sid_names: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    use permission_engine::NormalizedRights;
+    let mut steps = Vec::new();
+    for d in decisions {
+        let kind = match d.kind {
+            AceKind::Allow => "Allow",
+            AceKind::Deny => "Deny",
+        };
+        let trustee = match sid_names.get(&d.sid.0) {
+            Some(name) => format!("{name} ({})", d.sid.0),
+            None => d.sid.0.clone(),
+        };
+        let rights = NormalizedRights::new(expand_generic_rights(d.mask.0)).display_name();
+        let note = match d.outcome {
+            ShareAceOutcome::Decided(bits) => {
+                let verb = match d.kind {
+                    AceKind::Allow => "share grants",
+                    AceKind::Deny => "share denies",
+                };
+                format!(
+                    "[{verb} {} (0x{bits:08X})]",
+                    NormalizedRights::new(bits).display_name()
+                )
+            }
+            ShareAceOutcome::NoEffect => "[matched, no effective bits contributed]".to_owned(),
+            ShareAceOutcome::Uncertain => "[UNCERTAIN — the trustee is in the token only for \
+                 certain logons or session states; not in the shown share value]"
+                .to_owned(),
+            ShareAceOutcome::NotApplicable => continue,
+        };
+        steps.push(format!(
+            "Share ACE {kind} for {trustee} → {rights} (0x{:08X}) {note}",
+            d.mask.0
+        ));
+    }
+    if steps.is_empty() {
+        steps.push(if decisions.is_empty() {
+            "Share DACL has no entries — the share grants nobody access".to_owned()
+        } else {
+            "No share ACE applies to this token — the share grants nothing".to_owned()
+        });
+    }
+    steps
 }
 
 /// Stored-order share walk with separate Allow / Deny predicates — the same
@@ -1813,5 +1996,86 @@ mod tests {
             scan.unsupported_count, 7,
             "per-share unsupported_count must survive into share_dacls"
         );
+    }
+
+    // --- Review CR-7: share provenance ---
+
+    #[test]
+    fn share_decisions_add_up_to_the_shown_share_mask() {
+        let token = share_token(
+            "S-1-5-21-7-7-7-1001",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[Sid("S-1-5-32-544".into())],
+            AccessContext::RemoteSmb,
+        );
+        let dacl = ShareDacl::Acl(vec![
+            make_perm("S", "S-1-5-32-544", 0x001F_01FF, AceKind::Allow),
+            make_perm("S", "S-1-1-0", 0x0012_00A9, AceKind::Allow),
+            make_perm("S", "S-1-5-11", 0x0012_00A9, AceKind::Allow),
+            make_perm("S", "S-1-5-21-9-9-9-5", 0x001F_01FF, AceKind::Allow),
+        ]);
+        let decisions = share_ace_decisions(&dacl, &token, AccessContext::RemoteSmb);
+        let (mask, _) = evaluate_share_dacl(&dacl, &token, AccessContext::RemoteSmb);
+        let decided = decisions.iter().fold(0u32, |acc, d| match d.outcome {
+            ShareAceOutcome::Decided(bits) if d.kind == AceKind::Allow => acc | bits,
+            _ => acc,
+        });
+        assert_eq!(Some(decided), mask.map(|m| m.0));
+        assert_eq!(
+            decisions[0].outcome,
+            ShareAceOutcome::Uncertain,
+            "UAC-filtered Allow"
+        );
+        assert!(matches!(decisions[1].outcome, ShareAceOutcome::Decided(_)));
+        assert_eq!(decisions[2].outcome, ShareAceOutcome::NoEffect);
+        assert_eq!(decisions[3].outcome, ShareAceOutcome::NotApplicable);
+
+        let names =
+            std::collections::BTreeMap::from([("S-1-1-0".to_owned(), "Everyone".to_owned())]);
+        let steps = share_decision_steps(&decisions, &names);
+        assert_eq!(
+            steps.len(),
+            3,
+            "the non-applicable ACE is left out: {steps:?}"
+        );
+        assert!(steps[0].contains("[UNCERTAIN"));
+        assert!(steps[1].starts_with("Share ACE Allow for Everyone (S-1-1-0)"));
+        assert!(steps[1].contains("[share grants"));
+        assert!(steps[2].contains("no effective bits"));
+    }
+
+    #[test]
+    fn share_without_applicable_ace_says_so() {
+        let token = share_token(
+            "S-1-5-21-7-7-7-1001",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            AccessContext::RemoteSmb,
+        );
+        let dacl = ShareDacl::Acl(vec![make_perm(
+            "S",
+            "S-1-5-21-9-9-9-5",
+            0x001F_01FF,
+            AceKind::Allow,
+        )]);
+        let steps = share_decision_steps(
+            &share_ace_decisions(&dacl, &token, AccessContext::RemoteSmb),
+            &Default::default(),
+        );
+        assert_eq!(
+            steps,
+            vec!["No share ACE applies to this token — the share grants nothing"]
+        );
+        let steps = share_decision_steps(
+            &share_ace_decisions(&ShareDacl::Acl(vec![]), &token, AccessContext::RemoteSmb),
+            &Default::default(),
+        );
+        assert!(steps[0].starts_with("Share DACL has no entries"));
     }
 }

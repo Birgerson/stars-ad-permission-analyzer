@@ -80,6 +80,24 @@ a typed, structured explanation is a later feature.
    evaluated on the folder (`DELETE_CHILD_RIGHT`), as in the Windows
    Effective Access tab, not in this result.
 
+8. **CR-7 — share provenance (review priority 4).** The share side is
+   explained like the NTFS side: `share_scanner::share_ace_decisions`
+   records, from the **same** DACL read as the share mask
+   (`resolve_share_mask_status_explained`), what each share ACE decided —
+   the same predicates and "first decision per bit" rule, so the decided
+   bits add up to the shown share mask. `share_decision_steps` renders
+   `Share ACE Allow for <trustee> → <rights> [share grants …]` (or
+   `[share denies …]`, `[matched, no effective bits contributed]`,
+   `[UNCERTAIN — …]`; trustees not in the token are left out, an empty
+   share DACL and "no share ACE applies" have their own step), and
+   `attach_share_provenance` inserts them before the "Share permission:"
+   step. A new step after "Effective (NTFS ∩ Share)" names the limiting
+   side: "Limited by the share: NTFS grants …, the share allows … — the
+   share removes …", "Limited by NTFS …", or "neither side limits the
+   other" (prefixed "From the known data:" when not determinable). The
+   share verbs differ from the NTFS `[granted …]` so the NTFS invariant
+   stays a statement about NTFS alone.
+
 ## Consequences
 
 - An exact result keeps its wording; new steps only add what was missing.
@@ -101,3 +119,4 @@ a typed, structured explanation is a later feature.
 | Deny wording | CR-13 | shipped |
 | Decisive memberships | CR-12 | shipped (list collapsing open) |
 | Deletion through the folder | CR-14 | shipped |
+| Share provenance, limiting side | CR-7 | shipped |
