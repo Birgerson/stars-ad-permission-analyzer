@@ -74,6 +74,12 @@ const ACCESS_DENIED_ACE_TYPE: u8 = 1;
 pub enum ShareDacl {
     /// NULL DACL — no access restrictions; equivalent to full control for everyone.
     NullDacl,
+    /// The server reports **no security descriptor** at all (review CR-15).
+    /// Not a NULL DACL: the server service then applies its own built-in
+    /// default — an administrative share (`C$`, `ADMIN$`) admits only
+    /// administrators and backup operators. Stars cannot see that default,
+    /// so the share permission is not determinable — never "unrestricted".
+    NoSecurityDescriptor,
     /// DACL present with the listed ACEs.
     Acl(Vec<SharePermission>),
 }
@@ -168,7 +174,7 @@ pub fn scan_shares(server: &str) -> ShareScanResult {
             Ok(scan) => {
                 if let ShareDacl::Acl(perms) = &scan.dacl {
                     result.permissions.extend(perms.iter().cloned());
-                } else {
+                } else if matches!(scan.dacl, ShareDacl::NullDacl) {
                     null_dacl_count += 1;
                 }
                 unsupported_share_aces_total += scan.unsupported_count;
@@ -327,8 +333,9 @@ pub fn get_share_dacl(server: &str, share_name: &str) -> Result<ShareDaclScan, C
     }
 
     if buf.is_null() {
+        // Review CR-15: no information is not "no restriction".
         return Ok(ShareDaclScan {
-            dacl: ShareDacl::NullDacl,
+            dacl: ShareDacl::NoSecurityDescriptor,
             unsupported_count: 0,
         });
     }
@@ -338,13 +345,15 @@ pub fn get_share_dacl(server: &str, share_name: &str) -> Result<ShareDaclScan, C
     let info = unsafe { &*buf.as_ptr() };
 
     let (dacl, unsupported_count) = if info.shi502_security_descriptor.is_null() {
-        // No security descriptor → treat as NULL DACL (full access)
+        // Review CR-15 (lab evidence: C$, ADMIN$, IPC$ on Windows 11): no
+        // security descriptor is not a NULL DACL — the server applies its
+        // built-in default, which Stars cannot see.
         warn!(
             server,
             share = share_name,
-            "Share has no security descriptor — treating as NULL DACL"
+            "Share has no security descriptor — the server applies a built-in default; share permission not determinable"
         );
-        (ShareDacl::NullDacl, 0usize)
+        (ShareDacl::NoSecurityDescriptor, 0usize)
     } else {
         // SAFETY: shi502_security_descriptor is valid for the lifetime of `buf`.
         // If parse_share_dacl returns Err, the `?` propagates out and `buf`
@@ -388,6 +397,8 @@ pub fn effective_share_mask(
 ) -> Option<AccessMask> {
     let perms = match dacl {
         ShareDacl::NullDacl => return None,
+        // Review CR-15: unknown default — nothing is known to be granted.
+        ShareDacl::NoSecurityDescriptor => return Some(AccessMask(0)),
         ShareDacl::Acl(p) => p,
     };
 
@@ -489,6 +500,11 @@ pub struct ShareResolution {
     pub decisions: Vec<ShareAceDecision>,
 }
 
+/// The reason stated when a share has no security descriptor (review
+/// CR-15) — carried as `ShareMaskStatus::ReadFailed`, whose meaning is "the
+/// share permission is not determinable".
+pub const NO_SECURITY_DESCRIPTOR_REASON: &str = "the server reports no security descriptor for this share — it applies a built-in default instead (an administrative share such as C$ or ADMIN$ admits only administrators and backup operators); the share permission is not determinable";
+
 /// What one share ACE decided for the token (review CR-7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShareAceDecision {
@@ -553,6 +569,14 @@ pub fn resolve_share_mask_status_explained(
             warn!(server = %server, share = %share, error = %e, "Cannot read share DACL");
             ShareResolution {
                 status: ShareMaskStatus::ReadFailed(e.to_string()),
+                unevaluated: 0,
+                decisions: Vec::new(),
+            }
+        }
+        Ok(scan) if matches!(scan.dacl, ShareDacl::NoSecurityDescriptor) => {
+            warn!(server = %server, share = %share, "Share has no security descriptor — share permission not determinable");
+            ShareResolution {
+                status: ShareMaskStatus::ReadFailed(NO_SECURITY_DESCRIPTOR_REASON.to_owned()),
                 unevaluated: 0,
                 decisions: Vec::new(),
             }
@@ -674,8 +698,12 @@ pub fn evaluate_share_dacl(
     token: &ShareToken,
     context: AccessContext,
 ) -> (Option<AccessMask>, usize) {
-    let ShareDacl::Acl(perms) = dacl else {
-        return (None, 0);
+    let perms = match dacl {
+        ShareDacl::Acl(perms) => perms,
+        ShareDacl::NullDacl => return (None, 0),
+        // Review CR-15: the server's built-in default is unknown — nothing
+        // is known to be granted, and the share is not evaluable.
+        ShareDacl::NoSecurityDescriptor => return (Some(AccessMask(0)), 1),
     };
     if let Some(at) = first_non_canonical_position(perms) {
         warn!(
@@ -2077,5 +2105,38 @@ mod tests {
             &Default::default(),
         );
         assert!(steps[0].starts_with("Share DACL has no entries"));
+    }
+
+    // --- Review CR-15: no security descriptor is not "unrestricted" ---
+
+    #[test]
+    fn a_share_without_security_descriptor_is_never_unrestricted() {
+        let token = share_token(
+            "S-1-5-21-7-7-7-1001",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            AccessContext::RemoteSmb,
+        );
+        let (mask, unevaluated) = evaluate_share_dacl(
+            &ShareDacl::NoSecurityDescriptor,
+            &token,
+            AccessContext::RemoteSmb,
+        );
+        assert_eq!(mask, Some(AccessMask(0)), "never None (= unrestricted)");
+        assert_eq!(unevaluated, 1, "marked not evaluable");
+        assert_eq!(
+            effective_share_mask(&ShareDacl::NoSecurityDescriptor, &sids(&["S-1-1-0"])),
+            Some(AccessMask(0))
+        );
+        assert!(share_ace_decisions(
+            &ShareDacl::NoSecurityDescriptor,
+            &token,
+            AccessContext::RemoteSmb
+        )
+        .is_empty());
+        assert!(NO_SECURITY_DESCRIPTOR_REASON.contains("not determinable"));
     }
 }

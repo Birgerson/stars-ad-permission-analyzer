@@ -1043,11 +1043,16 @@ adpa shares --server "fileserver.corp.local" --include-admin
 ```
 
 Each share is listed with its **UNC path**, its **local target path** and the
-**share-level permissions**. Three states are shown distinctly, because they
-mean opposite things:
+**share-level permissions**. Four states are shown distinctly, because they
+mean different things:
 
 - **NULL DACL** — no share-level restriction; everyone passes the share layer
-  and NTFS alone decides. (Typical for the administrative shares.)
+  and NTFS alone decides.
+- **no security descriptor** — reported as **NOT DETERMINABLE**: the server
+  applies a built-in default Stars cannot see. Typical for the
+  administrative shares (`C$`, `ADMIN$`), which admit only administrators
+  and backup operators (ADR 0075). An analysis over such a share is marked
+  not determinable on the share side.
 - **empty DACL** — no access at all through this share.
 - a list of Allow/Deny entries with their rights.
 
