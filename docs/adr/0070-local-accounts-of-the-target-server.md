@@ -65,8 +65,14 @@ it:
    in Administrators) go into `uac_filtered_group_sids`. The engine removes
    them from the enabled token: they match Deny ACEs only; their Allow ACEs
    bound the result (`LogonDependentTrustees`), and an object owned by such
-   a group bounds the implicit owner grant. Share ACEs for them count as
-   uncertain. `UacFilteredGroups` names them and the two policies. The
+   a group bounds the implicit owner grant. The share side applies the same
+   semantics (`share_scanner::share_token` / `evaluate_share_dacl`): a
+   filtered group is never an enabled share-token group, its Deny share ACEs
+   apply, its Allow share ACEs make the share mask not determinable. (Until
+   review finding CR-1, 2026-10-12, the share token still counted the
+   filtered groups as enabled after the MS-4 rewiring — a share right
+   through `Administrators` was stated as a fact.) `UacFilteredGroups` names
+   them and the two policies. The
    shown value is the filtered token — the default for every local account
    but the built-in Administrator; the bounds cover both cases.
 4. **Cryptographic Operators** is never a certain membership — bounded.

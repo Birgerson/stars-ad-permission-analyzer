@@ -1022,13 +1022,6 @@ async fn run_analyze(
             GroupResolutionStatus::LocalAccount
         ),
     );
-    // Share ACEs for a UAC-filtered group are as uncertain as for a
-    // logon-dependent one.
-    let share_uncertain_group_sids: Vec<adpa_core::model::Sid> = logon_dependent_group_sids
-        .iter()
-        .chain(uac_filtered_group_sids.iter())
-        .cloned()
-        .collect();
 
     if let adpa_core::model::LocalGroupEvalStatus::NotAvailable(ref msg) = local_group_status {
         println!(
@@ -1042,7 +1035,8 @@ async fn run_analyze(
         share_name.as_deref(),
         &resolved,
         &local_group_sids,
-        &share_uncertain_group_sids,
+        &logon_dependent_group_sids,
+        &uac_filtered_group_sids,
         access_context,
     );
 
@@ -1276,12 +1270,6 @@ async fn run_scan(
             GroupResolutionStatus::LocalAccount
         ),
     );
-    let scan_share_uncertain_group_sids: Vec<adpa_core::model::Sid> =
-        scan_logon_dependent_group_sids
-            .iter()
-            .chain(scan_uac_filtered_group_sids.iter())
-            .cloned()
-            .collect();
 
     // Combine AD + local memberships for the engine (see Analyze).
     let mut scan_all_memberships = resolved.resolution.memberships.clone();
@@ -1299,7 +1287,8 @@ async fn run_scan(
         share_name.as_deref(),
         &resolved,
         &scan_local_group_sids,
-        &scan_share_uncertain_group_sids,
+        &scan_logon_dependent_group_sids,
+        &scan_uac_filtered_group_sids,
         scan_access_context,
     );
 
@@ -1571,6 +1560,7 @@ use validation::path::effective_smb_target;
 ///
 /// Returns `NotApplicable` when no SMB context is detectable; `Applied(mask)`
 /// after a successful DACL read; `ReadFailed(reason)` on NetAPI errors.
+#[allow(clippy::too_many_arguments)]
 fn resolve_scan_share_status(
     path: &str,
     smb_server: Option<&str>,
@@ -1578,6 +1568,7 @@ fn resolve_scan_share_status(
     resolved: &ResolvedIdentity,
     local_group_sids: &[adpa_core::model::Sid],
     logon_dependent_group_sids: &[adpa_core::model::Sid],
+    uac_filtered_group_sids: &[adpa_core::model::Sid],
     access_context: AccessContext,
 ) -> (adpa_core::model::ShareMaskStatus, usize) {
     // G1: the share-mask orchestration is shared with the GUI in
@@ -1594,6 +1585,7 @@ fn resolve_scan_share_status(
         &resolved.resolution.memberships,
         local_group_sids,
         logon_dependent_group_sids,
+        uac_filtered_group_sids,
         access_context,
     )
 }

@@ -956,6 +956,15 @@ The engine removes them from the enabled token; `ace_matches` lets them match
 Deny ACEs only; `logon_dependent_bounds` counts their Allow ACEs (and, for an
 object they own, the implicit owner grant) in the upper bound only.
 
+The share side mirrors this (`share_scanner::resolve_share_mask_status`, which
+takes `logon_dependent_group_sids` and `uac_filtered_group_sids` separately):
+`share_token` builds the share token from the same inputs and removes the
+UAC-filtered groups (→ `deny_only`), the logon-dependent groups and
+Cryptographic Operators (→ `uncertain`); `evaluate_share_dacl` walks the share
+DACL with the same predicates as the engine — deny-only groups match Deny
+ACEs, uncertain trustees only in the bounds — and returns the shown mask plus
+the number of share ACEs that make it not determinable (review CR-1).
+
 ## 8. Local server groups
 
 **Source:** [`crates/ad_resolver/src/local_groups.rs`](../crates/ad_resolver/src/local_groups.rs),
