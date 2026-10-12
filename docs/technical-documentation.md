@@ -861,9 +861,17 @@ local-group lookup on a domain controller) is one step;
 `merged_memberships_per_group` keeps the most informative entry and adds the
 other source's mediator to its further routes.
 
-`sid_names` is built up front from the membership names and the
-DACL trustee SIDs — one LSA call per unique SID, deduplicated across
-the whole scan.
+`sid_names` is built up front (`build_sid_name_map_for_target` /
+`SidNameResolver::new_for_target`, review CR-4): the analysed identity,
+every membership — domain groups and the local groups, whose names were
+read on the target server — and the DACL / share trustee SIDs. One LSA
+call per unique SID, deduplicated across the whole scan; a SID the
+analysing machine cannot resolve (an account or group of a member server's
+own account domain) is looked up on the target server (`LookupAccountSidW`
+with the server name — the explicit SMB server or the server of the UNC
+path). Every name from the OS is validated before display (non-empty, at
+most 512 characters, no control characters); an unresolvable SID stays
+visible as the SID.
 
 ---
 

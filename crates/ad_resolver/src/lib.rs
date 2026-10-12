@@ -45,7 +45,7 @@ pub use principal::{
 pub use resolver::LdapResolver;
 #[cfg(windows)]
 pub use sam::{
-    build_sid_name_map, lookup_sid_for_account, resolve_identity_via_sam, SamResolution,
-    SidNameResolver,
+    build_sid_name_map, build_sid_name_map_for_target, identity_display, lookup_sid_for_account,
+    resolve_identity_via_sam, SamResolution, SidNameResolver,
 };
 pub use trusts::resolve_domain_trusts;

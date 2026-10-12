@@ -514,7 +514,10 @@ fn lookup_name_on(server: Option<&str>, name: &str) -> Result<(Sid, String, i32)
 }
 
 /// `LookupAccountSidW` on `server`: name, domain, SID use.
-fn lookup_sid_on(server: Option<&str>, sid: &Sid) -> Result<(String, String, i32), CoreError> {
+pub(crate) fn lookup_sid_on(
+    server: Option<&str>,
+    sid: &Sid,
+) -> Result<(String, String, i32), CoreError> {
     let server_w = server.map(to_wide_null);
     let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let sid_w = to_wide_null(&sid.0);

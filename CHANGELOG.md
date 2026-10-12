@@ -10,6 +10,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Fixed
+
+- **Names instead of raw SIDs where Stars knows them** (review finding
+  CR-4). The SID → name table was built from the domain groups and a
+  lookup on the analysing machine only: local groups (named on the target
+  server), the analysed account itself and every account or group of a
+  member server's own account domain appeared as bare SIDs in the
+  explanation path, the trustee view and the Shares tab — the
+  administrator had to match them by hand. The table now includes the
+  identity and the local groups, and a SID unknown on the analysing
+  machine is looked up on the target server. Names returned by the OS are
+  validated before display.
+
 ## [1.9.2] — 2026-10-12
 
 **Code review: how rights come about — honest in every surface.**

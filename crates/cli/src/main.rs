@@ -1054,11 +1054,19 @@ async fn run_analyze(
     // (with names possibly already set by the resolver) and all trustee
     // SIDs referenced in the DACL get a single LSA round-trip into
     // `DOMAIN\Name`. The engine threads it through the permission path.
+    // Review CR-4: the identity and the local groups (named on the target
+    // server) seed the table; SIDs unknown here are looked up there.
     #[cfg(windows)]
-    let sid_names = ad_resolver::build_sid_name_map(
-        &resolved.resolution.memberships,
-        fso.dacl.iter().map(|a| a.sid.0.clone()),
-    );
+    let sid_names = {
+        let mut named = resolved.resolution.memberships.clone();
+        named.extend(local_group_memberships.iter().cloned());
+        ad_resolver::build_sid_name_map_for_target(
+            &resolved.resolution.identity,
+            &named,
+            fso.dacl.iter().map(|a| a.sid.0.clone()),
+            account_server.as_deref(),
+        )
+    };
     #[cfg(not(windows))]
     let sid_names = std::collections::BTreeMap::new();
 
@@ -1385,8 +1393,19 @@ async fn run_scan(
     // explanation only reference that path's own SIDs, which are resolved
     // right before the path is rendered — so the streamed result is
     // identical to the previous buffered one.
+    // Review CR-4: the identity and the local groups (named on the target
+    // server) seed the cache; SIDs unknown here are looked up there.
     #[cfg(windows)]
-    let mut sid_resolver = ad_resolver::SidNameResolver::new(&resolved.resolution.memberships);
+    let mut sid_resolver = {
+        let mut r = ad_resolver::SidNameResolver::new_for_target(
+            &scan_all_memberships,
+            account_server.as_deref(),
+        );
+        if let Some(display) = ad_resolver::identity_display(&resolved.resolution.identity) {
+            r.seed(&resolved.resolution.identity.sid.0, &display);
+        }
+        r
+    };
 
     let scan_engine_flags = resolved.resolution.engine_flags();
 
