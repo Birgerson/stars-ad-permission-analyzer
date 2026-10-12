@@ -12,6 +12,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Added
 
+- **Bounded results are traceable in the explanation path** (review
+  finding CR-3, ADR 0074). The ACEs that only bound a result (UAC-filtered
+  groups, logon-dependent SIDs, Cryptographic Operators, Guest /
+  anonymous) were not listed, and the range had one generic reason that
+  was wrong for User Account Control — a local administrator read "member
+  of Administrators, no ACE, no access". Each such ACE is now listed with
+  its own reason and whether it counts in the upper or lower bound; a
+  filtered membership is marked deny-only; the range step points to the
+  per-ACE reasons.
+- **NULL DACL, empty DACL and "no ACE applies" are explained** (review
+  finding CR-10, ADR 0074) — a NULL-DACL row no longer reads "Full
+  Control" without a reason.
+
 - **The explanation path states how the access is evaluated** (review
   finding CR-6, ADR 0074). A new step 2 names the evaluated logon (network
   logon over SMB / interactive logon at the target, not elevated / no

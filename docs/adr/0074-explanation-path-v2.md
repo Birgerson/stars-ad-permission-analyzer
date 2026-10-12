@@ -42,9 +42,34 @@ a typed, structured explanation is a later feature.
    context and identity class. The CLI header shows the short form
    (`Evaluated : …`).
 
+3. **CR-10 — DACL states.** A NULL DACL ("the object has no access control
+   list: Windows grants every access to everyone"), an empty DACL ("nobody is
+   granted anything through it; only the owner rule can apply") and a DACL
+   in which no ACE applies to the token each get their own step — the
+   result is never left without a reason.
+4. **CR-3 — bounded results are traceable.** Every applicable ACE that only
+   bounds the result (`uncertain_ace_reason`, the same predicate as
+   `logon_dependent_bounds`) is listed like the others, as
+   `… [UNCERTAIN — <reason>; counted in the upper / lower bound only, not
+   in the shown value]` or `…; cannot change this result]`. The reason is
+   per trustee: User Account Control (elevation on a local access; remote
+   filtering of local accounts over SMB, `LocalAccountTokenFilterPolicy`),
+   Cryptographic Operators, Guest / anonymous (ADR 0072), a local group
+   reached only through a logon-dependent SID, the specific logon-dependent
+   well-known (LOCAL, organisation, authentication package, logon type),
+   OWNER RIGHTS of a filtered owner group. A filtered membership is marked
+   `[deny-only in a filtered token: …]`, an uncertain implicit owner grant
+   has its own step, "no ACE applies" becomes "no ACE certainly applies —
+   only the UNCERTAIN ACEs" where that is the case, and the range step
+   points to the per-ACE reasons instead of one generic (for UAC wrong)
+   text. The invariant test now also requires every SID of a range to have
+   its own UNCERTAIN step.
+
 ## Steps
 
 | Step | Finding | Status |
 | --- | --- | --- |
 | Invariant test | — | shipped |
 | Evaluated logon | CR-6 | shipped |
+| DACL states | CR-10 | shipped |
+| Bounded results traceable | CR-3 | shipped |

@@ -148,24 +148,24 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         // the upper bound counts every such Allow as matching and no such
         // Deny, the lower bound the opposite. Equal bounds mean those ACEs
         // cannot change this result — it stays exact.
+        let mut logon_dependent_groups: HashSet<String> = input
+            .logon_dependent_group_sids
+            .iter()
+            .map(|s| s.0.clone())
+            .collect();
+        if crypto_operators_uncertain {
+            logon_dependent_groups.insert(SID_CRYPTOGRAPHIC_OPERATORS.to_owned());
+        }
+        // Review CR-8: Guest / anonymous — Authenticated Users (and, for
+        // anonymous, Everyone) bound the result.
+        logon_dependent_groups.extend(
+            identity_uncertain_well_knowns(&input.identity.sid.0)
+                .iter()
+                .map(|s| (*s).to_owned()),
+        );
         let logon_dependent = if input.file_system_object.null_dacl {
             None
         } else {
-            let mut logon_dependent_groups: HashSet<String> = input
-                .logon_dependent_group_sids
-                .iter()
-                .map(|s| s.0.clone())
-                .collect();
-            if crypto_operators_uncertain {
-                logon_dependent_groups.insert(SID_CRYPTOGRAPHIC_OPERATORS.to_owned());
-            }
-            // Review CR-8: Guest / anonymous — Authenticated Users (and, for
-            // anonymous, Everyone) bound the result.
-            logon_dependent_groups.extend(
-                identity_uncertain_well_knowns(&input.identity.sid.0)
-                    .iter()
-                    .map(|s| (*s).to_owned()),
-            );
             logon_dependent_bounds(
                 &input.file_system_object.dacl,
                 &match_sids,
@@ -390,6 +390,9 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             sid_names: &input.sid_names,
             logon_dependent: logon_dependent.as_ref(),
             access_context: input.access_context,
+            null_dacl: input.file_system_object.null_dacl,
+            uncertain_sids: &logon_dependent_groups,
+            uncertain_owner,
             ntfs_determinable: result.ntfs_determinable(),
             share_determinable: result.share_determinable(),
             effective_determinable: result.effective_determinable(),
@@ -1151,6 +1154,101 @@ fn format_membership_step_base(
     format!("Member of {target_display} [via {chain_joined}, source: {source}]")
 }
 
+/// What User Account Control does to a filtered group, for the context
+/// (review CR-3, ADR 0070/0071).
+fn uac_filter_reason(context: AccessContext) -> &'static str {
+    match context {
+        AccessContext::RemoteSmb => {
+            "User Account Control makes this group deny-only in the remote token of a local \
+             account (unless the server sets LocalAccountTokenFilterPolicy) — its Allow ACEs \
+             count only without that filtering"
+        }
+        _ => {
+            "User Account Control makes this group deny-only until the session is elevated — \
+             its Allow ACEs count only in an elevated session"
+        }
+    }
+}
+
+/// Why a well-known SID is present only for certain logons (review CR-3).
+fn logon_dependent_reason(sid: &str) -> &'static str {
+    match sid {
+        "S-1-2-0" => "LOCAL is present only for some local logons (ADR 0069)",
+        "S-1-5-113" | "S-1-5-114" => {
+            "present only in the token of a local account of the target computer"
+        }
+        "S-1-5-15" | "S-1-5-1000" | "S-1-5-65-1" => {
+            "depends on the account's organisation relative to the target (trusts, selective \
+             authentication)"
+        }
+        "S-1-5-14" | "S-1-2-1" | "S-1-5-13" => {
+            "present only for a specific logon type (remote interactive, console, terminal \
+             server)"
+        }
+        "S-1-5-2" | "S-1-5-4" => {
+            "present only for a network or an interactive logon — the logon type is not \
+             specified"
+        }
+        s if s.starts_with("S-1-5-64-") => {
+            "present only for a specific authentication package (NTLM, SChannel, Digest)"
+        }
+        s if s.starts_with("S-1-18-") => "depends on how the logon was authenticated",
+        _ => "present only for certain logons",
+    }
+}
+
+/// Why an applicable ACE neither certainly applies nor certainly does not
+/// (review CR-3) — `None` otherwise. The same predicate as
+/// [`logon_dependent_bounds`], so every ACE that moves a bound is named.
+fn uncertain_ace_reason(
+    ace: &AceEntry,
+    match_sids: &HashSet<String>,
+    deny_only_sids: &HashSet<String>,
+    uncertain_sids: &HashSet<String>,
+    uncertain_owner: Option<&str>,
+    context: AccessContext,
+    user_sid: &str,
+) -> Option<String> {
+    let sid = ace.sid.0.as_str();
+    if !ace_applies_to_current_object(ace) || match_sids.contains(sid) {
+        return None;
+    }
+    if ace.kind == AceKind::Allow && deny_only_sids.contains(sid) {
+        return Some(uac_filter_reason(context).to_owned());
+    }
+    if sid == SID_CRYPTOGRAPHIC_OPERATORS && uncertain_sids.contains(sid) {
+        return Some(
+            "Windows may leave Cryptographic Operators out of the token or make it deny-only \
+             — not modelled"
+                .to_owned(),
+        );
+    }
+    if identity_uncertain_well_knowns(user_sid).contains(&sid) {
+        return Some(
+            "Windows documents this SID as absent from a Guest / anonymous token (ADR 0072, \
+             not lab-measured)"
+                .to_owned(),
+        );
+    }
+    if uncertain_sids.contains(sid) {
+        return Some(
+            "a local group reached only through a SID that is present only for certain logons"
+                .to_owned(),
+        );
+    }
+    if is_logon_dependent_sid(sid, context) {
+        return Some(logon_dependent_reason(sid).to_owned());
+    }
+    if uncertain_owner.is_some() && sid == SID_OWNER_RIGHTS {
+        return Some(
+            "OWNER RIGHTS applies only if the owner group is enabled in the token (User Account \
+             Control)"
+                .to_owned(),
+        );
+    }
+    None
+}
+
 /// Short name of the evaluated logon (review CR-6) — for report headers.
 pub fn access_context_summary(context: AccessContext) -> &'static str {
     match context {
@@ -1239,6 +1337,14 @@ struct ExplanationInput<'a> {
     logon_dependent: Option<&'a LogonDependentBounds>,
     /// How the access is evaluated (review CR-6): stated as a step.
     access_context: AccessContext,
+    /// The object has no DACL at all (review CR-10): stated as a step.
+    null_dacl: bool,
+    /// SIDs whose presence in the token is uncertain — logon-dependent
+    /// local groups, Cryptographic Operators, Guest / anonymous well-knowns
+    /// (review CR-3): their ACEs are listed with the reason.
+    uncertain_sids: &'a HashSet<String>,
+    /// The owner when it is a UAC-filtered group (implicit grant uncertain).
+    uncertain_owner: Option<&'a str>,
     /// Determinability of the three values, from the finished result
     /// (`EffectivePermission::ntfs_determinable` etc., review CR-5).
     ntfs_determinable: bool,
@@ -1269,6 +1375,9 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         sid_names,
         logon_dependent,
         access_context,
+        null_dacl,
+        uncertain_sids,
+        uncertain_owner,
         ntfs_determinable,
         share_determinable,
         effective_determinable,
@@ -1316,7 +1425,18 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     let merged = adpa_core::model::merged_memberships_per_group(memberships);
     let mut seen_membership_steps: HashSet<String> = HashSet::new();
     for gm in &merged {
-        let step = format_membership_step(gm, sid_names);
+        let mut step = format_membership_step(gm, sid_names);
+        // Review CR-3: a membership whose group is filtered or uncertain says
+        // so where the administrator reads it.
+        let group = gm.group_sid.0.as_str();
+        if deny_only_sids.contains(group) {
+            step.push_str(&format!(
+                " [deny-only in a filtered token: {}]",
+                uac_filter_reason(access_context)
+            ));
+        } else if uncertain_sids.contains(group) {
+            step.push_str(" [uncertain — present in the token only for certain logons]");
+        }
         if seen_membership_steps.insert(step.clone()) {
             steps.push(step);
         }
@@ -1347,10 +1467,51 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     //     earlier ACE) → "matched, no effective bits contributed".
     // This keeps the audit text as exact as the calculation: a reader can
     // no longer mistake a merely-matched ACE for one that mattered.
+    let mut matched_ace_steps = 0usize;
+    let mut uncertain_ace_steps = 0usize;
     for (idx, ace) in dacl.iter().enumerate() {
         if !ace_matches(ace, match_sids, deny_only_sids) {
+            // Review CR-3: an ACE that only bounds the result is listed like
+            // the others, with its own reason.
+            if let Some(reason) = uncertain_ace_reason(
+                ace,
+                match_sids,
+                deny_only_sids,
+                uncertain_sids,
+                uncertain_owner,
+                access_context,
+                &identity.sid.0,
+            ) {
+                uncertain_ace_steps += 1;
+                let kind = match ace.kind {
+                    AceKind::Allow => "Allow",
+                    AceKind::Deny => "Deny",
+                };
+                let scope = if ace.inherited {
+                    "[inherited]"
+                } else {
+                    "[explicit]"
+                };
+                let rights = NormalizedRights::new(expand_generic_rights(ace.mask.0));
+                let effect = match (logon_dependent.is_some(), ace.kind) {
+                    (false, _) => "cannot change this result".to_owned(),
+                    (true, AceKind::Allow) => {
+                        "counted in the upper bound only, not in the shown value".to_owned()
+                    }
+                    (true, AceKind::Deny) => {
+                        "counted in the lower bound only, not in the shown value".to_owned()
+                    }
+                };
+                steps.push(format!(
+                    "{kind} ACE {scope} for {} → {} (0x{:08X}) [UNCERTAIN — {reason}; {effect}]",
+                    display_for_sid(&ace.sid, None, sid_names),
+                    rights.display_name(),
+                    ace.mask.0,
+                ));
+            }
             continue;
         }
+        matched_ace_steps += 1;
         let kind = match ace.kind {
             AceKind::Allow => "Allow",
             AceKind::Deny => "Deny",
@@ -1405,6 +1566,33 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         }
     }
 
+    // 3a. Review CR-10: the DACL states that explain a result without any
+    // ACE step — the most critical state (NULL DACL) above all.
+    if null_dacl {
+        steps.push(
+            "NULL DACL — the object has no access control list: Windows grants every access \
+             to everyone (Full Control)"
+                .to_string(),
+        );
+    } else if dacl.is_empty() {
+        steps.push(
+            "Empty DACL — the object's access control list has no entries: nobody is granted \
+             anything through it (only the owner rule below can apply)"
+                .to_string(),
+        );
+    } else if matched_ace_steps == 0 && uncertain_ace_steps == 0 {
+        steps.push(
+            "No ACE in the DACL applies to this token — nothing is granted or denied through it"
+                .to_string(),
+        );
+    } else if matched_ace_steps == 0 {
+        steps.push(
+            "No ACE in the DACL certainly applies to this token — only the UNCERTAIN ACE(s) \
+             listed above, which bound the result"
+                .to_string(),
+        );
+    }
+
     // 3b. Deny aggregation step: makes it visible that the NTFS mask
     // below was reduced by Deny ACEs. Without it the reader has to diff
     // the hex values to realize Allow bits got blocked (especially
@@ -1434,6 +1622,13 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
             .unwrap_or_else(|| "(unknown)".to_string());
         steps.push(format!(
             "Owner special rule: READ_CONTROL + WRITE_DAC granted implicitly (owner: {owner_display})"
+        ));
+    } else if let Some(owner) = uncertain_owner.filter(|_| !owner_rights_ace_present) {
+        steps.push(format!(
+            "Owner special rule: UNCERTAIN — the owner {} is a group User Account Control \
+             filters; READ_CONTROL + WRITE_DAC are granted implicitly only while it is enabled \
+             (elevated session)",
+            display_for_sid(&Sid(owner.to_owned()), None, sid_names)
         ));
     } else if owner_rights_ace_present {
         steps.push(
@@ -1469,7 +1664,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
             })
             .collect();
         steps.push(format!(
-            "NOT DETERMINABLE: ACE(s) for {} apply only for certain logons (authentication type, organization, logon type), which Stars does not model — the NTFS right lies between {} (0x{:08X}) and {} (0x{:08X})",
+            "NOT DETERMINABLE: ACE(s) for {} count only for certain logons or session states (the reason is given at each UNCERTAIN step above) — the NTFS right lies between {} (0x{:08X}) and {} (0x{:08X})",
             names.join(", "),
             NormalizedRights::new(bounds.min).display_name(),
             bounds.min,
@@ -5868,7 +6063,16 @@ mod tests {
     fn explanation_accounts_for_every_bit_of_the_ntfs_result() {
         const GROUP: &str = "S-1-5-21-1000-1000-1000-2001";
         const OTHER: &str = "S-1-5-21-1000-1000-1000-2002";
-        let sids = [USER, GROUP, OTHER, SID_EVERYONE, SID_OWNER_RIGHTS];
+        // S-1-5-15 (This Organization) is always logon-dependent: its ACEs
+        // bound the result and must each be named (review CR-3).
+        let sids = [
+            USER,
+            GROUP,
+            OTHER,
+            SID_EVERYONE,
+            SID_OWNER_RIGHTS,
+            "S-1-5-15",
+        ];
         let masks = [
             MASK_READ,
             MASK_MODIFY,
@@ -5930,6 +6134,17 @@ mod tests {
                 denied & !owner_bits,
                 "case {case}: deny aggregation; steps {steps:?}"
             );
+            // Every SID that moves a bound has its own UNCERTAIN step.
+            if let Some((bounding, _, _)) = logon_marker(&p) {
+                for sid in bounding {
+                    assert!(
+                        steps
+                            .iter()
+                            .any(|s| s.contains("[UNCERTAIN — ") && s.contains(sid.as_str())),
+                        "case {case}: bounding SID {sid} not explained; steps {steps:?}"
+                    );
+                }
+            }
         }
     }
 
@@ -5986,5 +6201,176 @@ mod tests {
                 }
             }
         }
+    }
+
+    // --- Review CR-10: DACL states are explained ---
+
+    #[test]
+    fn null_dacl_is_explained_as_full_access_for_everyone() {
+        let p = eval(user(USER), vec![], fso_null_dacl(), None);
+        assert!(p
+            .path_explanation
+            .steps
+            .iter()
+            .any(|s| s.starts_with("NULL DACL") && s.contains("every access to everyone")));
+    }
+
+    #[test]
+    fn empty_dacl_and_no_matching_ace_are_explained() {
+        let p = eval(user(USER), vec![], fso(None, vec![]), None);
+        assert!(p
+            .path_explanation
+            .steps
+            .iter()
+            .any(|s| s.starts_with("Empty DACL")));
+        assert_eq!(p.ntfs_mask.0, 0);
+
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(
+                None,
+                vec![allow_ace("S-1-5-21-9-9-9-999", MASK_FULL_CONTROL, false)],
+            ),
+            None,
+        );
+        assert!(p
+            .path_explanation
+            .steps
+            .iter()
+            .any(|s| s.starts_with("No ACE in the DACL applies to this token")));
+
+        // A matching ACE: no such step.
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            None,
+        );
+        assert!(!p
+            .path_explanation
+            .steps
+            .iter()
+            .any(|s| s.starts_with("No ACE")
+                || s.starts_with("Empty DACL")
+                || s.starts_with("NULL DACL")));
+    }
+
+    // --- Review CR-3: bounded results are traceable ---
+
+    /// Lab case rt_uac01 (domain account in MS-01's local Administrators,
+    /// local path, DACL "Administrators: Full Control"): the path names the
+    /// filtered membership, lists the ACE with the real reason and says that
+    /// no ACE certainly applies — no more "member of Administrators, no ACE,
+    /// no access" with a generic reason.
+    #[test]
+    fn uac_bounded_result_names_the_membership_the_ace_and_the_reason() {
+        let p = DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![membership(USER, ADMINS)],
+                file_system_object: fso(None, vec![allow_ace(ADMINS, MASK_FULL_CONTROL, false)]),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![Sid(ADMINS.into())],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
+                logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: vec![Sid(ADMINS.into())],
+                access_context: AccessContext::LocalInteractive,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                resolution: ResolutionProvenance::default(),
+            })
+            .unwrap();
+        let steps = &p.path_explanation.steps;
+        let member = steps
+            .iter()
+            .find(|s| s.starts_with("Member of") && s.contains(ADMINS))
+            .expect("membership step");
+        assert!(member.contains("deny-only in a filtered token") && member.contains("elevated"));
+        let ace = steps
+            .iter()
+            .find(|s| s.starts_with("Allow ACE") && s.contains(ADMINS))
+            .expect("the bounding ACE is listed");
+        assert!(ace.contains("[UNCERTAIN — User Account Control"), "{ace}");
+        assert!(ace.contains("counted in the upper bound only"), "{ace}");
+        assert!(steps
+            .iter()
+            .any(|s| s.starts_with("No ACE in the DACL certainly applies")));
+        let range = steps
+            .iter()
+            .find(|s| s.starts_with("NOT DETERMINABLE: ACE(s) for"))
+            .expect("range step");
+        assert!(
+            !range.contains("authentication type, organization"),
+            "{range}"
+        );
+        assert!(
+            range.contains("reason is given at each UNCERTAIN step"),
+            "{range}"
+        );
+    }
+
+    /// Over SMB the reason is remote UAC, not elevation.
+    #[test]
+    fn uac_reason_over_smb_is_remote_filtering() {
+        let p = eval_uac(vec![allow_ace(ADMINS, MASK_FULL_CONTROL, false)], None);
+        let ace = p
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.starts_with("Allow ACE") && s.contains(ADMINS))
+            .expect("listed");
+        assert!(ace.contains("LocalAccountTokenFilterPolicy"), "{ace}");
+    }
+
+    #[test]
+    fn logon_dependent_aces_get_their_own_reason_and_effect() {
+        // Allow This Organization: bounds the result.
+        let p = eval_with_context(
+            user(USER),
+            vec![],
+            fso(None, vec![allow_ace("S-1-5-15", MASK_MODIFY, false)]),
+            None,
+            AccessContext::RemoteSmb,
+        );
+        let ace = p
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("S-1-5-15") && s.starts_with("Allow ACE"))
+            .expect("listed");
+        assert!(
+            ace.contains("organisation") && ace.contains("upper bound"),
+            "{ace}"
+        );
+
+        // An uncertain Allow whose bits a certain Allow already grants:
+        // listed, and it says it cannot change the result.
+        let p = eval_with_context(
+            user(USER),
+            vec![],
+            fso(
+                None,
+                vec![
+                    allow_ace(USER, MASK_MODIFY, false),
+                    allow_ace("S-1-5-15", MASK_READ, false),
+                ],
+            ),
+            None,
+            AccessContext::RemoteSmb,
+        );
+        assert!(logon_marker(&p).is_none());
+        let ace = p
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.contains("S-1-5-15") && s.starts_with("Allow ACE"))
+            .expect("listed");
+        assert!(ace.contains("cannot change this result"), "{ace}");
+        assert!(!p
+            .path_explanation
+            .steps
+            .iter()
+            .any(|s| s.contains(NOT_DETERMINABLE)));
     }
 }
