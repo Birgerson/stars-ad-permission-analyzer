@@ -41,6 +41,16 @@ pub fn read_share_overlay(server: &str, share_name: &str) -> ShareTrusteeOverlay
                     "Share NULL DACL — no SMB restriction (effective: Everyone full access)",
                 ));
             }
+            // Review CR-15: no security descriptor is not "unrestricted".
+            share_scanner::ShareDacl::NoSecurityDescriptor => {
+                trustees.push(PathTrusteeEntry::diagnostic(
+                    TrusteeCategory::Share,
+                    format!(
+                        "Share permissions not determinable: {}",
+                        share_scanner::NO_SECURITY_DESCRIPTOR_REASON
+                    ),
+                ));
+            }
             share_scanner::ShareDacl::Acl(perms) => {
                 for p in perms {
                     trustees.push(PathTrusteeEntry::Ace(PathTrustee {

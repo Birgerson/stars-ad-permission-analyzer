@@ -787,6 +787,15 @@ pub fn print_shares(result: &ShareScanResult, include_admin: bool) {
                         println!("                   (every principal passes the share layer;");
                         println!("                    NTFS alone decides the effective right)");
                     }
+                    // Review CR-15: no security descriptor is not "unrestricted".
+                    ShareDacl::NoSecurityDescriptor => {
+                        println!("    Permissions  : NOT DETERMINABLE — no security descriptor reported;");
+                        println!("                   the server applies a built-in default (an");
+                        println!(
+                            "                   administrative share admits only administrators"
+                        );
+                        println!("                   and backup operators)");
+                    }
                     ShareDacl::Acl(perms) if perms.is_empty() => {
                         println!("    Permissions  : empty DACL — no access via this share");
                     }

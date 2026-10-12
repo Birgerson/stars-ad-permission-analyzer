@@ -10,6 +10,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Fixed
+
+- **A share without security descriptor is no longer "unrestricted"**
+  (finding CR-15, ADR 0075). For the administrative shares (`C$`,
+  `ADMIN$`, `IPC$`) Windows reports no security descriptor; Stars treated
+  that as a NULL DACL — "every principal passes the share layer" — and an
+  analysis over `\server\C$\…` combined NTFS with an unrestricted share,
+  although such a share admits only administrators and backup operators.
+  Now the share permission reads NOT DETERMINABLE with the reason in
+  `adpa shares`, the Shares tab, the trustee view and every analysis; a
+  real NULL DACL is unchanged.
+
 ### Added
 
 - **Share permission with provenance** (review finding CR-7, ADR 0074).
