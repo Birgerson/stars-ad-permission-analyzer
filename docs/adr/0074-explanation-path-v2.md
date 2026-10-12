@@ -65,6 +65,31 @@ a typed, structured explanation is a later feature.
    text. The invariant test now also requires every SID of a range to have
    its own UNCERTAIN step.
 
+5. **CR-13 — what a Deny takes away.** The Deny aggregation step keeps the
+   total of the bits Deny ACEs decided and separates them: bits an
+   applicable Allow ACE of this token would otherwise have granted ("the
+   Deny takes them away") and bits no Allow ACE grants ("denied in advance
+   only") — the old text called every denied bit "removed".
+6. **CR-12 — which membership mattered.** A membership whose group has an
+   ACE that decided bits of this result is marked `[decisive — …]`; a group
+   whose ACE matched but decided nothing is not. (Collapsing the full list
+   is a frontend matter and stays open.)
+7. **CR-14 — deleting a file through its folder.** For a file whose result
+   lacks DELETE, a note says that "Delete subfolders and files"
+   (`FILE_DELETE_CHILD`) on the parent folder still allows deleting it —
+   evaluated on the folder (`DELETE_CHILD_RIGHT`), as in the Windows
+   Effective Access tab, not in this result.
+
+## Consequences
+
+- An exact result keeps its wording; new steps only add what was missing.
+- The explanation remains text steps; consumers that parse step prefixes
+  ("NTFS effective:", "Share permission:", "Effective (NTFS ∩ Share):",
+  "Deny aggregation:") keep working. The value steps keep the
+  `(0x…)` mask as the first hex value of their line.
+- Live review against real lab output (UAC / INTERACTIVE texts on MS-01)
+  follows in the next lab run (review P5).
+
 ## Steps
 
 | Step | Finding | Status |
@@ -73,3 +98,6 @@ a typed, structured explanation is a later feature.
 | Evaluated logon | CR-6 | shipped |
 | DACL states | CR-10 | shipped |
 | Bounded results traceable | CR-3 | shipped |
+| Deny wording | CR-13 | shipped |
+| Decisive memberships | CR-12 | shipped (list collapsing open) |
+| Deletion through the folder | CR-14 | shipped |

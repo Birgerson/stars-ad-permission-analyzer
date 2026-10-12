@@ -810,6 +810,11 @@ every surface says:
 - The explanation also names a **NULL DACL** (everyone has full access),
   an **empty DACL** (nobody has access) and a DACL in which **no ACE
   applies** to the account.
+- Further aids in the explanation: memberships whose group's ACE decided
+  the result are marked `[decisive]`; the Deny step says which bits a Deny
+  really takes away and which it only denies in advance; for a file
+  without DELETE a note says that "Delete subfolders and files" on the
+  parent folder still allows deleting it.
 
 How to get an exact answer: configure LDAP (`--server` …) for nested
 groups; analyze accounts of a trusted domain against that domain; make

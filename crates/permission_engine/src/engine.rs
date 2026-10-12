@@ -28,8 +28,8 @@ use adpa_core::{
 };
 
 use crate::mask::{
-    expand_generic_rights, rights_statement, NormalizedRights, FILE_READ_CONTROL, FILE_WRITE_DAC,
-    INHERIT_ONLY_ACE, MASK_FULL_CONTROL, NOT_DETERMINABLE,
+    expand_generic_rights, rights_statement, NormalizedRights, FILE_DELETE, FILE_READ_CONTROL,
+    FILE_WRITE_DAC, INHERIT_ONLY_ACE, MASK_FULL_CONTROL, NOT_DETERMINABLE,
 };
 use tracing::{debug, warn};
 
@@ -391,6 +391,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             logon_dependent: logon_dependent.as_ref(),
             access_context: input.access_context,
             null_dacl: input.file_system_object.null_dacl,
+            is_directory: input.file_system_object.is_directory,
             uncertain_sids: &logon_dependent_groups,
             uncertain_owner,
             ntfs_determinable: result.ntfs_determinable(),
@@ -1339,6 +1340,8 @@ struct ExplanationInput<'a> {
     access_context: AccessContext,
     /// The object has no DACL at all (review CR-10): stated as a step.
     null_dacl: bool,
+    /// A file (not a folder) gets the parent-folder deletion note (CR-14).
+    is_directory: bool,
     /// SIDs whose presence in the token is uncertain — logon-dependent
     /// local groups, Cryptographic Operators, Guest / anonymous well-knowns
     /// (review CR-3): their ACEs are listed with the reason.
@@ -1376,6 +1379,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         logon_dependent,
         access_context,
         null_dacl,
+        is_directory,
         uncertain_sids,
         uncertain_owner,
         ntfs_determinable,
@@ -1423,9 +1427,25 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     // into the kept step's "also a member through" list (ADR 0063), so no
     // route is lost.
     let merged = adpa_core::model::merged_memberships_per_group(memberships);
+    // Review CR-12: the groups whose ACEs decided bits of this result — in
+    // a list of dozens (or thousands) of memberships, these are the ones
+    // that matter.
+    let decisive: HashSet<&str> = dacl
+        .iter()
+        .enumerate()
+        .filter(|(idx, ace)| {
+            ace_applies_to_current_object(ace)
+                && ace_matches(ace, match_sids, deny_only_sids)
+                && decided_per_ace.get(*idx).copied().unwrap_or(0) != 0
+        })
+        .map(|(_, ace)| ace.sid.0.as_str())
+        .collect();
     let mut seen_membership_steps: HashSet<String> = HashSet::new();
     for gm in &merged {
         let mut step = format_membership_step(gm, sid_names);
+        if decisive.contains(gm.group_sid.0.as_str()) {
+            step.push_str(" [decisive — an ACE for this group decides bits of this result]");
+        }
         // Review CR-3: a membership whose group is filtered or uncertain says
         // so where the administrator reads it.
         let group = gm.group_sid.0.as_str();
@@ -1605,11 +1625,42 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     // contains them again via the owner rule.
     let denied_for_display = denied_raw & !owner_implicit_bits;
     if denied_for_display != 0 {
-        let deny_rights = NormalizedRights::new(denied_for_display);
+        // Review CR-13: separate what a Deny really took away — bits an
+        // applicable Allow ACE of this token would otherwise have granted —
+        // from what it merely denies in advance (no Allow grants them).
+        let allow_union = dacl
+            .iter()
+            .filter(|ace| {
+                ace.kind == AceKind::Allow
+                    && ace_applies_to_current_object(ace)
+                    && ace_matches(ace, match_sids, deny_only_sids)
+            })
+            .fold(0u32, |acc, ace| acc | expand_generic_rights(ace.mask.0));
+        let taken_away = denied_for_display & allow_union;
+        let pre_empted = denied_for_display & !allow_union;
+        let label = |bits: u32| {
+            format!(
+                "{} (0x{bits:08X})",
+                NormalizedRights::new(bits).display_name()
+            )
+        };
+        let detail = match (taken_away != 0, pre_empted != 0) {
+            (true, false) => "an Allow ACE of this token would otherwise have granted all of them \
+                 — the Deny takes them away"
+                .to_owned(),
+            (false, true) => "no Allow ACE of this token grants them — the Deny takes nothing \
+                 away that would otherwise be granted"
+                .to_owned(),
+            _ => format!(
+                "taken away (an Allow ACE of this token would otherwise grant them): {}; \
+                 denied in advance only (no Allow ACE grants them): {}",
+                label(taken_away),
+                label(pre_empted)
+            ),
+        };
         steps.push(format!(
-            "Deny aggregation: {} (0x{:08X}) decided by Deny ACEs before any Allow could grant them — removed from the effective NTFS mask",
-            deny_rights.display_name(),
-            denied_for_display,
+            "Deny aggregation: {} decided by Deny ACEs before any Allow could grant them — {detail}",
+            label(denied_for_display),
         ));
     }
 
@@ -1651,6 +1702,19 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         steps.push(format!(
             "WARNING: {unsupported_ntfs_count} NTFS ACE(s) on this path could not be evaluated (object / callback / conditional / vendor-specific) — the NTFS effective mask above is a lower-confidence approximation and may be too permissive or too restrictive"
         ));
+    }
+
+    // 4b'. Review CR-14: a file can also be deleted through its folder.
+    // Stars, like the Windows "Effective Access" tab, evaluates the file's
+    // own DACL; one line answers "can X delete this file?" honestly.
+    if !is_directory && ntfs_raw & FILE_DELETE == 0 {
+        steps.push(
+            "Note: this result has no DELETE on the file itself — Windows still lets anyone \
+             delete the file who has \"Delete subfolders and files\" (FILE_DELETE_CHILD) on \
+             its parent folder; that right is evaluated on the folder (finding \
+             DELETE_CHILD_RIGHT), not in this result"
+                .to_string(),
+        );
     }
 
     // 4c. Logon-dependent trustees (ADR 0065): the NTFS result is a range.
@@ -3609,7 +3673,11 @@ mod tests {
             .expect("explanation must contain a Member-of step");
         assert_eq!(
             member_step,
-            &format!("Member of {GROUP_A} [direct]"),
+            // The group's ACE decides bits — marked decisive (review CR-12).
+            &format!(
+                "Member of {GROUP_A} [direct] [decisive — an ACE for this group decides bits of \
+                 this result]"
+            ),
             "without names the member step must be SID-only"
         );
         let ace_step = p
@@ -6372,5 +6440,139 @@ mod tests {
             .steps
             .iter()
             .any(|s| s.contains(NOT_DETERMINABLE)));
+    }
+
+    // --- Review CR-13: what a Deny really takes away ---
+
+    fn deny_step(p: &EffectivePermission) -> String {
+        p.path_explanation
+            .steps
+            .iter()
+            .find(|s| s.starts_with("Deny aggregation"))
+            .cloned()
+            .expect("deny aggregation step")
+    }
+
+    #[test]
+    fn deny_wording_separates_taken_away_from_denied_in_advance() {
+        // Deny Write, later Allow Modify: the Deny takes the write bits away.
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(
+                None,
+                vec![
+                    deny_ace(USER, FILE_WRITE_DATA, false),
+                    allow_ace(USER, MASK_MODIFY, false),
+                ],
+            ),
+            None,
+        );
+        assert!(
+            deny_step(&p).contains("the Deny takes them away"),
+            "{}",
+            deny_step(&p)
+        );
+
+        // Deny Full Control, only Allow Read: the read bits are taken away,
+        // the rest is denied in advance only.
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(
+                None,
+                vec![
+                    deny_ace(USER, MASK_FULL_CONTROL, false),
+                    allow_ace(USER, MASK_READ, true),
+                ],
+            ),
+            None,
+        );
+        let d = deny_step(&p);
+        assert!(
+            d.contains("taken away (") && d.contains("denied in advance only"),
+            "{d}"
+        );
+
+        // Deny without any Allow: nothing taken away.
+        let p = eval(
+            user(USER),
+            vec![],
+            fso(None, vec![deny_ace(USER, FILE_WRITE_DATA, false)]),
+            None,
+        );
+        assert!(
+            deny_step(&p).contains("takes nothing away"),
+            "{}",
+            deny_step(&p)
+        );
+    }
+
+    // --- Review CR-12: which membership mattered ---
+
+    #[test]
+    fn decisive_memberships_are_marked() {
+        const DECIDES: &str = "S-1-5-21-1000-1000-1000-3001";
+        const IDLE: &str = "S-1-5-21-1000-1000-1000-3002";
+        const LATE: &str = "S-1-5-21-1000-1000-1000-3003";
+        let p = eval(
+            user(USER),
+            vec![
+                membership(USER, DECIDES),
+                membership(USER, IDLE),
+                membership(USER, LATE),
+            ],
+            fso(
+                None,
+                vec![
+                    allow_ace(DECIDES, MASK_MODIFY, false),
+                    // Matches, but every bit is already decided.
+                    allow_ace(LATE, MASK_READ, false),
+                ],
+            ),
+            None,
+        );
+        let step = |sid: &str| {
+            p.path_explanation
+                .steps
+                .iter()
+                .find(|s| s.starts_with("Member of") && s.contains(sid))
+                .cloned()
+                .unwrap()
+        };
+        assert!(step(DECIDES).contains("[decisive"), "{}", step(DECIDES));
+        assert!(!step(IDLE).contains("[decisive"));
+        assert!(
+            !step(LATE).contains("[decisive"),
+            "a matched ACE that decided nothing"
+        );
+    }
+
+    // --- Review CR-14: deletion through the parent folder ---
+
+    #[test]
+    fn a_file_without_delete_names_deletion_through_the_folder() {
+        let mut file = fso(None, vec![allow_ace(USER, MASK_READ, false)]);
+        file.is_directory = false;
+        let p = eval(user(USER), vec![], file, None);
+        assert!(p
+            .path_explanation
+            .steps
+            .iter()
+            .any(|s| s.contains("FILE_DELETE_CHILD") && s.contains("parent folder")));
+
+        // A folder, or a file the account may delete anyway: no note.
+        let mut folder = fso(None, vec![allow_ace(USER, MASK_READ, false)]);
+        folder.is_directory = true;
+        let mut deletable = fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]);
+        deletable.is_directory = false;
+        for f in [folder, deletable] {
+            let p = eval(user(USER), vec![], f, None);
+            assert!(!p
+                .path_explanation
+                .steps
+                .iter()
+                .any(|s| s.contains("FILE_DELETE_CHILD")));
+        }
     }
 }

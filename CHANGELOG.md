@@ -12,6 +12,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Added
 
+- **Decisive memberships marked, deletion through the folder named**
+  (review findings CR-12, CR-14, ADR 0074). A membership whose group's ACE
+  decided bits of the result is marked `[decisive — …]`; a file whose
+  result lacks DELETE notes that "Delete subfolders and files" on the
+  parent folder still allows deleting it.
+
+### Changed
+
+- **Deny wording** (review finding CR-13, ADR 0074): the Deny aggregation
+  step separates bits a Deny really takes away (an Allow ACE of the token
+  would otherwise grant them) from bits it only denies in advance.
+
 - **Bounded results are traceable in the explanation path** (review
   finding CR-3, ADR 0074). The ACEs that only bound a result (UAC-filtered
   groups, logon-dependent SIDs, Cryptographic Operators, Guest /
