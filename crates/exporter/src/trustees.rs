@@ -85,6 +85,24 @@ pub fn build_path_trustees(
         (Some(server), Some(name)) => Some(read_share_overlay(server, name)),
         _ => None,
     };
+    // Review CR-4: trustees of the target server's own account domain are
+    // unknown to the analysing machine — resolve them on that server (the
+    // explicit SMB server, or the server of a UNC path).
+    #[cfg(windows)]
+    {
+        let target = smb_server.map(str::to_owned).or_else(|| {
+            fso.path
+                .0
+                .strip_prefix(r"\\")
+                .and_then(|rest| rest.split('\\').next())
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+        });
+        let mut resolver = ad_resolver::SidNameResolver::new_for_target(&[], target.as_deref());
+        resolver.resolve(collect_ace_sids_for_resolution(fso, share_overlay.as_ref()));
+        build_path_trustees_with_share_and_names(fso, share_overlay.as_ref(), resolver.map())
+    }
+    #[cfg(not(windows))]
     build_path_trustees_with_share(fso, share_overlay.as_ref())
 }
 

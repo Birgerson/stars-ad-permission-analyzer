@@ -1059,9 +1059,19 @@ async fn handle_analyze(
     // SID→name table for the explanation path. DACL trustees are resolved
     // once so that `Member of …` and `Allow ACE for …` carry the readable
     // name in addition to the SID.
+    // Review CR-4: also the identity and the local groups (named where
+    // they live); SIDs unknown here are looked up on the target server.
     #[cfg(windows)]
-    let sid_names =
-        ad_resolver::build_sid_name_map(&res.memberships, fso.dacl.iter().map(|a| a.sid.0.clone()));
+    let sid_names = {
+        let mut named = res.memberships.clone();
+        named.extend(local_group_memberships.iter().cloned());
+        ad_resolver::build_sid_name_map_for_target(
+            &res.identity,
+            &named,
+            fso.dacl.iter().map(|a| a.sid.0.clone()),
+            account_server.as_deref(),
+        )
+    };
     #[cfg(not(windows))]
     let sid_names = std::collections::BTreeMap::new();
 
@@ -1682,7 +1692,14 @@ async fn handle_scan(
                 }
             }
         }
-        ad_resolver::build_sid_name_map(&memberships, trustees)
+        // Review CR-4: identity and local groups named, unknown SIDs looked
+        // up on the target server.
+        ad_resolver::build_sid_name_map_for_target(
+            &identity,
+            &combined_memberships,
+            trustees,
+            account_server.as_deref(),
+        )
     };
     #[cfg(not(windows))]
     let scan_sid_names = std::collections::BTreeMap::new();
@@ -2484,7 +2501,10 @@ fn handle_list_shares(server: &str) -> Result<SharesViewData, String> {
                 }
             }
         }
-        ad_resolver::build_sid_name_map(&[], sids)
+        // Review CR-4: SIDs of the server's own accounts are resolved there.
+        let mut resolver = ad_resolver::SidNameResolver::new_for_target(&[], Some(&server));
+        resolver.resolve(sids);
+        resolver.into_map()
     };
     #[cfg(not(windows))]
     let names = std::collections::BTreeMap::new();

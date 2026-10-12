@@ -573,6 +573,37 @@ where
     resolver.into_map()
 }
 
+/// The SID → name table for one analysis (review CR-4): the analysed
+/// identity, every membership passed (domain **and** local groups — their
+/// names were read where they live), the given trustee SIDs; a SID the
+/// analysing machine cannot resolve is looked up on `target_server`.
+pub fn build_sid_name_map_for_target<I>(
+    identity: &Identity,
+    memberships: &[GroupMembership],
+    extra_sids: I,
+    target_server: Option<&str>,
+) -> std::collections::BTreeMap<String, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut resolver = SidNameResolver::new_for_target(memberships, target_server);
+    if let Some(display) = identity_display(identity) {
+        resolver.seed(&identity.sid.0, &display);
+    }
+    resolver.resolve(extra_sids);
+    resolver.into_map()
+}
+
+/// `DOMAIN\name` of an identity, or the bare name when no domain is known
+/// or the name already carries one; `None` without a name.
+pub fn identity_display(identity: &Identity) -> Option<String> {
+    let name = identity.name.as_deref().filter(|n| !n.trim().is_empty())?;
+    match identity.domain.as_deref().filter(|d| !d.trim().is_empty()) {
+        Some(domain) if !name.contains('\\') => Some(format!("{domain}\\{name}")),
+        _ => Some(name.to_owned()),
+    }
+}
+
 /// Incremental SID → name resolver: the streaming counterpart to
 /// [`build_sid_name_map`] (engine review 2026-06-13 finding 1).
 ///
@@ -589,6 +620,17 @@ where
 pub struct SidNameResolver {
     map: std::collections::BTreeMap<String, String>,
     tried: std::collections::HashSet<String>,
+    /// Review CR-4: the server whose own account domain the analysed path
+    /// belongs to. SIDs the analysing machine cannot resolve (accounts and
+    /// groups local to that server) are looked up there. Validated.
+    target_server: Option<String>,
+}
+
+/// A name returned by LSA (local or remote) is shown in reports only when
+/// it is plausible: non-empty, bounded, free of control characters. Values
+/// from the OS are validated like user input (review CR-4).
+fn plausible_account_display(name: &str) -> bool {
+    !name.trim().is_empty() && name.chars().count() <= 512 && !name.chars().any(char::is_control)
 }
 
 impl SidNameResolver {
@@ -598,20 +640,53 @@ impl SidNameResolver {
     ///
     /// [`resolve`]: SidNameResolver::resolve
     pub fn new(memberships: &[GroupMembership]) -> Self {
+        Self::new_for_target(memberships, None)
+    }
+
+    /// Like [`new`](SidNameResolver::new), and SIDs the analysing machine
+    /// cannot resolve are looked up on `target_server` (review CR-4) — e.g.
+    /// the accounts and groups of a member server's own account domain,
+    /// which a workstation's LSA does not know. An invalid server name is
+    /// ignored (no remote lookup), never passed to the API.
+    pub fn new_for_target(memberships: &[GroupMembership], target_server: Option<&str>) -> Self {
+        let target_server = target_server
+            .and_then(|s| validation::net::validate_smb_server(s).ok())
+            .map(|v| v.0);
         let mut map = std::collections::BTreeMap::new();
         let mut tried = std::collections::HashSet::new();
         let mut pending: Vec<String> = Vec::new();
         for m in memberships {
-            if let Some(name) = m.group_name.as_deref().filter(|s| !s.is_empty()) {
+            if let Some(name) = m
+                .group_name
+                .as_deref()
+                .filter(|s| plausible_account_display(s))
+            {
                 map.insert(m.group_sid.0.clone(), name.to_owned());
                 tried.insert(m.group_sid.0.clone());
             } else {
                 pending.push(m.group_sid.0.clone());
             }
         }
-        let mut resolver = Self { map, tried };
+        let mut resolver = Self {
+            map,
+            tried,
+            target_server,
+        };
         resolver.resolve(pending);
         resolver
+    }
+
+    /// Records a name Stars already knows for a SID — the analysed identity
+    /// itself, or a group read on the target server (review CR-4). An
+    /// invalid SID or implausible name is ignored; an existing entry wins.
+    pub fn seed(&mut self, sid: &str, display: &str) {
+        if validation::sid::validate_sid(sid).is_err() || !plausible_account_display(display) {
+            return;
+        }
+        self.tried.insert(sid.to_owned());
+        self.map
+            .entry(sid.to_owned())
+            .or_insert_with(|| display.to_owned());
     }
 
     /// Resolves any of `sids` not yet seen via `lookup_account_for_sid`,
@@ -625,13 +700,24 @@ impl SidNameResolver {
             if !self.tried.insert(sid.clone()) {
                 continue;
             }
-            if let Ok(info) = lookup_account_for_sid(&sid) {
-                let display = if info.domain.is_empty() {
-                    info.name
+            let local = lookup_account_for_sid(&sid)
+                .ok()
+                .map(|info| (info.name, info.domain));
+            // Review CR-4: a SID of the target server's own account domain
+            // is unknown to the analysing machine — ask the target server.
+            let found = local.or_else(|| {
+                let server = self.target_server.as_deref()?;
+                crate::local_account::lookup_sid_on(Some(server), &Sid(sid.clone()))
+                    .ok()
+                    .map(|(name, domain, _)| (name, domain))
+            });
+            if let Some((name, domain)) = found {
+                let display = if domain.is_empty() {
+                    name
                 } else {
-                    format!("{}\\{}", info.domain, info.name)
+                    format!("{domain}\\{name}")
                 };
-                if !display.is_empty() {
+                if plausible_account_display(&display) {
                     self.map.insert(sid, display);
                 }
             }
@@ -840,5 +926,96 @@ mod tests {
         let mut resolver = SidNameResolver::new(&memberships);
         resolver.resolve(extra.iter().cloned());
         assert_eq!(batch, resolver.into_map());
+    }
+
+    // --- Review CR-4: names Stars knows are never shown as raw SIDs ---
+
+    #[test]
+    fn os_names_are_validated_before_display() {
+        assert!(plausible_account_display(r"MS-01\msuser1"));
+        assert!(!plausible_account_display(""));
+        assert!(!plausible_account_display("   "));
+        assert!(!plausible_account_display("evil\nname"));
+        assert!(!plausible_account_display(&"x".repeat(513)));
+    }
+
+    #[test]
+    fn seed_names_the_identity_and_never_overrides_or_accepts_invalid_values() {
+        let mut r = SidNameResolver::new(&[membership("S-1-5-21-1-2-3-1005", Some("msg_auth"))]);
+        r.seed("S-1-5-21-1-2-3-1000", r"MS-01\msuser1");
+        r.seed("S-1-5-21-1-2-3-1005", "other name");
+        r.seed("not-a-sid", "x");
+        r.seed("S-1-5-21-1-2-3-1006", "bad\u{7}name");
+        let map = r.into_map();
+        assert_eq!(map["S-1-5-21-1-2-3-1000"], r"MS-01\msuser1");
+        assert_eq!(
+            map["S-1-5-21-1-2-3-1005"], "msg_auth",
+            "existing entry wins"
+        );
+        assert!(!map.contains_key("not-a-sid"));
+        assert!(!map.contains_key("S-1-5-21-1-2-3-1006"));
+    }
+
+    #[test]
+    fn implausible_membership_names_are_not_taken_verbatim() {
+        let r = SidNameResolver::new(&[membership("S-1-5-21-1-2-3-1007", Some("a\rb"))]);
+        assert_ne!(
+            r.map().get("S-1-5-21-1-2-3-1007").map(String::as_str),
+            Some("a\rb")
+        );
+    }
+
+    #[test]
+    fn invalid_target_server_is_never_used() {
+        let r = SidNameResolver::new_for_target(&[], Some(r"bad\server name"));
+        assert!(r.target_server.is_none());
+        let r = SidNameResolver::new_for_target(&[], Some("MS-01"));
+        assert_eq!(r.target_server.as_deref(), Some("MS-01"));
+    }
+
+    #[test]
+    fn identity_display_prefixes_the_domain_once() {
+        let mut id = Identity {
+            sid: Sid("S-1-5-21-1-2-3-1000".into()),
+            name: Some("msuser1".into()),
+            domain: Some("MS-01".into()),
+            kind: IdentityKind::User,
+            disabled: false,
+            user_principal_name: None,
+            sid_history_count: 0,
+            sid_history: Vec::new(),
+        };
+        assert_eq!(identity_display(&id).as_deref(), Some(r"MS-01\msuser1"));
+        id.name = Some(r"CORP\u1".into());
+        assert_eq!(identity_display(&id).as_deref(), Some(r"CORP\u1"));
+        id.domain = None;
+        id.name = Some("u1".into());
+        assert_eq!(identity_display(&id).as_deref(), Some("u1"));
+        id.name = None;
+        assert_eq!(identity_display(&id), None);
+    }
+
+    /// The identity seeded by `build_sid_name_map_for_target` names an ACE
+    /// for the account itself (lab case F08: `Allow ACE … for S-1-5-21-…-1000`).
+    #[test]
+    fn build_for_target_names_the_identity() {
+        let id = Identity {
+            sid: Sid("S-1-5-21-1-2-3-1000".into()),
+            name: Some("msuser1".into()),
+            domain: Some("MS-01".into()),
+            kind: IdentityKind::User,
+            disabled: false,
+            user_principal_name: None,
+            sid_history_count: 0,
+            sid_history: Vec::new(),
+        };
+        let map = build_sid_name_map_for_target(
+            &id,
+            &[membership("S-1-5-21-1-2-3-1005", Some(r"MS-01\msg_auth"))],
+            vec!["S-1-5-21-1-2-3-1000".to_string()],
+            None,
+        );
+        assert_eq!(map["S-1-5-21-1-2-3-1000"], r"MS-01\msuser1");
+        assert_eq!(map["S-1-5-21-1-2-3-1005"], r"MS-01\msg_auth");
     }
 }
