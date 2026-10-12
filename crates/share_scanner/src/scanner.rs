@@ -23,7 +23,9 @@ use adpa_core::{
         ShareMaskStatus, SharePermission, Sid,
     },
 };
-use permission_engine::{build_token_sids_with_context, mask::expand_generic_rights};
+use permission_engine::{
+    build_token_sids_with_context, engine::SID_CRYPTOGRAPHIC_OPERATORS, mask::expand_generic_rights,
+};
 use tracing::{debug, info, warn};
 use win_safe::netapi::NetApiBuffer;
 use windows_sys::Win32::Foundation::{GetLastError, FALSE};
@@ -455,6 +457,7 @@ pub fn resolve_share_mask_status(
     memberships: &[GroupMembership],
     local_group_sids: &[Sid],
     logon_dependent_group_sids: &[Sid],
+    uac_filtered_group_sids: &[Sid],
     access_context: AccessContext,
 ) -> (ShareMaskStatus, usize) {
     let smb_ctx = match validation::path::SmbAuditContext::resolve(path, smb_server, share_name) {
@@ -464,11 +467,13 @@ pub fn resolve_share_mask_status(
     let server = smb_ctx.server;
     let share = smb_ctx.share;
 
-    let user_sids = build_token_sids_with_context(
+    let token = share_token(
         user_sid,
         sid_history,
         memberships,
         local_group_sids,
+        logon_dependent_group_sids,
+        uac_filtered_group_sids,
         access_context,
     );
 
@@ -478,7 +483,8 @@ pub fn resolve_share_mask_status(
             (ShareMaskStatus::ReadFailed(e.to_string()), 0)
         }
         Ok(scan) => {
-            let status = match effective_share_mask(&scan.dacl, &user_sids) {
+            let (mask, logon_dependent) = evaluate_share_dacl(&scan.dacl, &token, access_context);
+            let status = match mask {
                 Some(mask) => {
                     info!(server = %server, share = %share, mask = format!("0x{:08X}", mask.0), "Share mask resolved");
                     ShareMaskStatus::Applied(mask)
@@ -489,21 +495,11 @@ pub fn resolve_share_mask_status(
                 }
             };
             // ADR 0065: a share ACE whose trustee's presence depends on the
-            // logon (This Organization, NTLM authentication, …) and that can
-            // change the share mask cannot be evaluated — count it so the
-            // result is marked not determinable instead of trusting the
-            // "not in the token" assumption.
-            let logon_dependent_groups: std::collections::HashSet<String> =
-                logon_dependent_group_sids
-                    .iter()
-                    .map(|s| s.0.clone())
-                    .collect();
-            let logon_dependent = logon_dependent_share_aces(
-                &scan.dacl,
-                &user_sids,
-                &logon_dependent_groups,
-                access_context,
-            );
+            // logon (This Organization, NTLM authentication, …), on User
+            // Account Control (an Allow for a filtered group) or that is
+            // Cryptographic Operators, and that can change the share mask,
+            // cannot be evaluated — counted so the result is marked not
+            // determinable instead of trusting an assumption.
             if logon_dependent > 0 {
                 warn!(
                     server = %server,
@@ -517,56 +513,140 @@ pub fn resolve_share_mask_status(
     }
 }
 
-/// Number of applicable share ACEs whose trustee is a logon-dependent
-/// well-known SID (see `permission_engine::engine::is_logon_dependent_sid`)
-/// **and** that can change the share mask — `0` when there are none or when
-/// the upper and lower bound of the share walk agree (ADR 0065).
-fn logon_dependent_share_aces(
-    dacl: &ShareDacl,
-    user_sids: &std::collections::HashSet<String>,
-    logon_dependent_groups: &std::collections::HashSet<String>,
-    context: AccessContext,
-) -> usize {
-    let ShareDacl::Acl(perms) = dacl else {
-        return 0;
-    };
-    let uncertain: Vec<&SharePermission> = perms
+/// The token a share ACE is matched against, split the way the NTFS engine
+/// splits it (ADR 0065, 0070, 0071).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShareToken {
+    /// SIDs certainly enabled in the token.
+    pub enabled: std::collections::HashSet<String>,
+    /// Groups User Account Control may filter: their Deny ACEs apply, their
+    /// Allow ACEs are uncertain (deny-only in a filtered token).
+    pub deny_only: std::collections::HashSet<String>,
+    /// Groups whose presence is uncertain in both directions: reachable only
+    /// through a logon-dependent SID, or Cryptographic Operators.
+    pub uncertain: std::collections::HashSet<String>,
+}
+
+/// Builds the share token from the same inputs as the NTFS token, and —
+/// like the engine — never counts a UAC-filtered group, a logon-dependent
+/// local group or Cryptographic Operators as an enabled token group.
+///
+/// Lab finding CR-1 (review 2026-10-12): since MS-4 the callers pass every
+/// local group in `local_group_sids` and the UAC-filtered ones separately;
+/// the engine removed them from the NTFS token, but this share token kept
+/// them enabled, so a local administrator over SMB was granted a share
+/// right through `Administrators` that remote UAC denies — as a fact.
+pub fn share_token(
+    user_sid: &str,
+    sid_history: &[Sid],
+    memberships: &[GroupMembership],
+    local_group_sids: &[Sid],
+    logon_dependent_group_sids: &[Sid],
+    uac_filtered_group_sids: &[Sid],
+    access_context: AccessContext,
+) -> ShareToken {
+    let mut enabled = build_token_sids_with_context(
+        user_sid,
+        sid_history,
+        memberships,
+        local_group_sids,
+        access_context,
+    );
+    let deny_only: std::collections::HashSet<String> = uac_filtered_group_sids
         .iter()
-        .filter(|p| !user_sids.contains(&p.sid.0))
-        .filter(|p| {
-            permission_engine::engine::is_logon_dependent_sid(&p.sid.0, context)
-                || logon_dependent_groups.contains(&p.sid.0)
-        })
+        .map(|s| s.0.clone())
         .collect();
-    if uncertain.is_empty() {
-        return 0;
+    let mut uncertain: std::collections::HashSet<String> = logon_dependent_group_sids
+        .iter()
+        .map(|s| s.0.clone())
+        .filter(|s| !deny_only.contains(s))
+        .collect();
+    for sid in deny_only.iter().chain(uncertain.iter()) {
+        enabled.remove(sid);
     }
-    let walk = |allow_extra: bool, deny_extra: bool| -> u32 {
-        let mut granted = 0u32;
-        let mut denied = 0u32;
-        for p in perms {
-            let certain = user_sids.contains(&p.sid.0);
-            let maybe = uncertain.iter().any(|u| u.sid == p.sid);
-            let applies = match p.kind {
-                AceKind::Allow => certain || (allow_extra && maybe),
-                AceKind::Deny => certain || (deny_extra && maybe),
-            };
-            if !applies {
-                continue;
-            }
-            let bits = expand_generic_rights(p.mask.0) & !(granted | denied);
-            match p.kind {
-                AceKind::Allow => granted |= bits,
-                AceKind::Deny => denied |= bits,
-            }
-        }
-        granted
+    if enabled.remove(SID_CRYPTOGRAPHIC_OPERATORS) {
+        uncertain.insert(SID_CRYPTOGRAPHIC_OPERATORS.to_owned());
+    }
+    ShareToken {
+        enabled,
+        deny_only,
+        uncertain,
+    }
+}
+
+/// Evaluates a share DACL for a [`ShareToken`]: the mask the known token
+/// gives (`None` for a NULL DACL — no restriction), and the number of
+/// applicable share ACEs that make it not determinable (`0` when the upper
+/// and lower bound agree, ADR 0065).
+///
+/// Same semantics as the NTFS engine: a deny-only (UAC-filtered) group
+/// matches Deny ACEs in every bound and Allow ACEs only in the upper bound;
+/// an uncertain group or a logon-dependent well-known SID matches nowhere in
+/// the shown mask and in the bounds as the direction requires.
+pub fn evaluate_share_dacl(
+    dacl: &ShareDacl,
+    token: &ShareToken,
+    context: AccessContext,
+) -> (Option<AccessMask>, usize) {
+    let ShareDacl::Acl(perms) = dacl else {
+        return (None, 0);
     };
-    if walk(true, false) == walk(false, true) {
-        0
-    } else {
-        uncertain.len()
+    if let Some(at) = first_non_canonical_position(perms) {
+        warn!(
+            at,
+            "Non-canonical share DACL ordering detected — evaluation follows \
+             stored ACE order (matches Windows AccessCheck), but tools like \
+             SMB-share-MMC normally enforce canonical order"
+        );
     }
+    let enabled = |sid: &str| token.enabled.contains(sid);
+    let deny_only = |sid: &str| token.deny_only.contains(sid);
+    let uncertain_sid = |p: &SharePermission| {
+        !enabled(&p.sid.0)
+            && (token.uncertain.contains(&p.sid.0)
+                || permission_engine::engine::is_logon_dependent_sid(&p.sid.0, context)
+                || (p.kind == AceKind::Allow && deny_only(&p.sid.0)))
+    };
+    let uncertain: Vec<&SharePermission> = perms.iter().filter(|p| uncertain_sid(p)).collect();
+    let maybe = |sid: &str| uncertain.iter().any(|u| u.sid.0 == sid);
+    let shown = share_walk(perms, &|s| enabled(s), &|s| enabled(s) || deny_only(s));
+    if uncertain.is_empty() {
+        return (Some(AccessMask(shown)), 0);
+    }
+    let max = share_walk(perms, &|s| enabled(s) || maybe(s), &|s| {
+        enabled(s) || deny_only(s)
+    });
+    let min = share_walk(perms, &|s| enabled(s), &|s| {
+        enabled(s) || deny_only(s) || maybe(s)
+    });
+    let count = if max == min { 0 } else { uncertain.len() };
+    (Some(AccessMask(shown)), count)
+}
+
+/// Stored-order share walk with separate Allow / Deny predicates — the same
+/// per-bit "first decision wins" rule as [`effective_share_mask`].
+fn share_walk(
+    perms: &[SharePermission],
+    allow_matches: &dyn Fn(&str) -> bool,
+    deny_matches: &dyn Fn(&str) -> bool,
+) -> u32 {
+    let mut granted = 0u32;
+    let mut denied = 0u32;
+    for p in perms {
+        let applies = match p.kind {
+            AceKind::Allow => allow_matches(&p.sid.0),
+            AceKind::Deny => deny_matches(&p.sid.0),
+        };
+        if !applies {
+            continue;
+        }
+        let bits = expand_generic_rights(p.mask.0) & !(granted | denied);
+        match p.kind {
+            AceKind::Allow => granted |= bits,
+            AceKind::Deny => denied |= bits,
+        }
+    }
+    granted
 }
 
 /// Canonical share DACL order mirroring the NTFS convention: 0 =
@@ -835,6 +915,7 @@ mod tests {
             None,
             None,
             "S-1-5-21-1-2-3-1000",
+            &[],
             &[],
             &[],
             &[],
@@ -1109,6 +1190,148 @@ mod tests {
 
     // --- ADR 0065: logon-dependent share trustees ---
 
+    /// The not-determinable count of a share DACL for a token with only
+    /// enabled SIDs and uncertain groups (no UAC-filtered groups).
+    fn uncertain_count(
+        dacl: &ShareDacl,
+        enabled: &std::collections::HashSet<String>,
+        uncertain: &std::collections::HashSet<String>,
+        context: AccessContext,
+    ) -> usize {
+        let token = ShareToken {
+            enabled: enabled.clone(),
+            deny_only: Default::default(),
+            uncertain: uncertain.clone(),
+        };
+        evaluate_share_dacl(dacl, &token, context).1
+    }
+
+    // --- Review CR-1: the share side follows the engine's UAC semantics ---
+
+    const ADMINS: &str = "S-1-5-32-544";
+    const ACCOUNT: &str = "S-1-5-21-7-7-7-1013";
+
+    /// The regression: a local administrator over SMB. Callers pass every
+    /// local group (Administrators included) in `local_group_sids` and the
+    /// UAC-filtered ones separately; the share token must not count
+    /// Administrators as enabled.
+    #[test]
+    fn share_token_never_enables_a_uac_filtered_group() {
+        let local = [Sid(ADMINS.into()), Sid("S-1-5-32-545".into())];
+        let token = share_token(
+            ACCOUNT,
+            &[],
+            &[],
+            &local,
+            &[],
+            &[Sid(ADMINS.into())],
+            AccessContext::RemoteSmb,
+        );
+        assert!(!token.enabled.contains(ADMINS), "{token:?}");
+        assert!(token.enabled.contains("S-1-5-32-545"));
+        assert!(token.deny_only.contains(ADMINS));
+        // Remote-UAC case from the review: share "Administrators: Full,
+        // Everyone: Read" — the known token gets Read, Full is only the
+        // upper bound, and the result is not determinable.
+        let dacl = ShareDacl::Acl(vec![
+            make_perm("S", ADMINS, 0x001F_01FF, AceKind::Allow),
+            make_perm("S", "S-1-1-0", 0x0012_00A9, AceKind::Allow),
+        ]);
+        let (mask, uncertain) = evaluate_share_dacl(&dacl, &token, AccessContext::RemoteSmb);
+        assert_eq!(mask.map(|m| m.0), Some(0x0012_00A9));
+        assert_eq!(uncertain, 1);
+    }
+
+    /// A filtered group is deny-only: its Deny share ACE applies for sure,
+    /// so the shown mask honours it and the result stays exact.
+    #[test]
+    fn share_deny_for_a_uac_filtered_group_always_applies() {
+        let token = share_token(
+            ACCOUNT,
+            &[],
+            &[],
+            &[Sid(ADMINS.into())],
+            &[],
+            &[Sid(ADMINS.into())],
+            AccessContext::RemoteSmb,
+        );
+        let dacl = ShareDacl::Acl(vec![
+            make_perm("S", ADMINS, 0x0012_0116, AceKind::Deny),
+            make_perm("S", "S-1-1-0", 0x001F_01FF, AceKind::Allow),
+        ]);
+        let (mask, uncertain) = evaluate_share_dacl(&dacl, &token, AccessContext::RemoteSmb);
+        assert_eq!(mask.map(|m| m.0), Some(0x001F_01FF & !0x0012_0116));
+        assert_eq!(uncertain, 0);
+    }
+
+    /// Cryptographic Operators is never an enabled share-token group either
+    /// (ADR 0071): an Allow for it makes the share mask a range.
+    #[test]
+    fn share_token_bounds_cryptographic_operators() {
+        let token = share_token(
+            ACCOUNT,
+            &[],
+            &[],
+            &[Sid("S-1-5-32-569".into())],
+            &[],
+            &[],
+            AccessContext::RemoteSmb,
+        );
+        assert!(!token.enabled.contains("S-1-5-32-569"));
+        assert!(token.uncertain.contains("S-1-5-32-569"));
+        let dacl = ShareDacl::Acl(vec![make_perm(
+            "S",
+            "S-1-5-32-569",
+            0x001F_01FF,
+            AceKind::Allow,
+        )]);
+        let (mask, uncertain) = evaluate_share_dacl(&dacl, &token, AccessContext::RemoteSmb);
+        assert_eq!(mask.map(|m| m.0), Some(0));
+        assert_eq!(uncertain, 1);
+    }
+
+    /// A logon-dependent local group passed by the caller is never enabled,
+    /// even when the caller also listed it among the local groups.
+    #[test]
+    fn share_token_never_enables_a_logon_dependent_group() {
+        let group = "S-1-5-21-7-7-7-1006";
+        let token = share_token(
+            ACCOUNT,
+            &[],
+            &[],
+            &[Sid(group.into())],
+            &[Sid(group.into())],
+            &[],
+            AccessContext::Unspecified,
+        );
+        assert!(!token.enabled.contains(group));
+        assert!(token.uncertain.contains(group));
+    }
+
+    /// Unchanged behaviour without uncertain groups: the shown mask equals
+    /// the plain stored-order walk.
+    #[test]
+    fn evaluate_share_dacl_matches_effective_share_mask_for_a_certain_token() {
+        let dacl = ShareDacl::Acl(vec![
+            make_perm("S", "S-1-1-0", 0x0012_00A9, AceKind::Allow),
+            make_perm("S", ACCOUNT, 0x0013_01BF, AceKind::Allow),
+            make_perm("S", ACCOUNT, 0x0001_0000, AceKind::Deny),
+        ]);
+        let enabled = sids(&[ACCOUNT, "S-1-1-0"]);
+        let token = ShareToken {
+            enabled: enabled.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            evaluate_share_dacl(&dacl, &token, AccessContext::RemoteSmb),
+            (effective_share_mask(&dacl, &enabled), 0)
+        );
+        assert_eq!(
+            evaluate_share_dacl(&ShareDacl::NullDacl, &token, AccessContext::RemoteSmb),
+            (None, 0)
+        );
+    }
+
     #[test]
     fn logon_dependent_share_ace_that_changes_the_mask_is_counted() {
         // Everyone Read, This Organization Change: whether the share grants
@@ -1119,12 +1342,7 @@ mod tests {
         ]);
         let token = sids(&["S-1-5-21-1-2-3-1000", "S-1-1-0", "S-1-5-11", "S-1-5-2"]);
         assert_eq!(
-            logon_dependent_share_aces(
-                &dacl,
-                &token,
-                &Default::default(),
-                AccessContext::RemoteSmb
-            ),
+            uncertain_count(&dacl, &token, &Default::default(), AccessContext::RemoteSmb),
             1
         );
     }
@@ -1138,16 +1356,11 @@ mod tests {
         ]);
         let token = sids(&["S-1-5-21-1-2-3-1000", "S-1-1-0"]);
         assert_eq!(
-            logon_dependent_share_aces(
-                &dacl,
-                &token,
-                &Default::default(),
-                AccessContext::RemoteSmb
-            ),
+            uncertain_count(&dacl, &token, &Default::default(), AccessContext::RemoteSmb),
             0
         );
         assert_eq!(
-            logon_dependent_share_aces(
+            uncertain_count(
                 &ShareDacl::NullDacl,
                 &token,
                 &Default::default(),
@@ -1169,16 +1382,11 @@ mod tests {
         let token = sids(&["S-1-5-21-1-2-3-1000", "S-1-1-0", "S-1-5-11", "S-1-5-2"]);
         let groups: std::collections::HashSet<String> = [local_group.to_string()].into();
         assert_eq!(
-            logon_dependent_share_aces(&dacl, &token, &groups, AccessContext::RemoteSmb),
+            uncertain_count(&dacl, &token, &groups, AccessContext::RemoteSmb),
             1
         );
         assert_eq!(
-            logon_dependent_share_aces(
-                &dacl,
-                &token,
-                &Default::default(),
-                AccessContext::RemoteSmb
-            ),
+            uncertain_count(&dacl, &token, &Default::default(), AccessContext::RemoteSmb),
             0
         );
     }

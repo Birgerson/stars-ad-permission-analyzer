@@ -1042,13 +1042,6 @@ async fn handle_analyze(
             ad_resolver::GroupResolutionStatus::LocalAccount
         ),
     );
-    // Share ACEs for a UAC-filtered group are as uncertain as for a
-    // logon-dependent one.
-    let share_uncertain_group_sids: Vec<adpa_core::model::Sid> = logon_dependent_group_sids
-        .iter()
-        .chain(uac_filtered_group_sids.iter())
-        .cloned()
-        .collect();
 
     let (share_status, unsupported_share_ace_count) = resolve_share_status(
         path,
@@ -1057,7 +1050,8 @@ async fn handle_analyze(
         &res.identity,
         &res.memberships,
         &local_group_sids,
-        &share_uncertain_group_sids,
+        &logon_dependent_group_sids,
+        &uac_filtered_group_sids,
         access_context,
     );
 
@@ -1598,11 +1592,6 @@ async fn handle_scan(
         root_access_context,
         local_account,
     );
-    let share_uncertain_group_sids: Vec<adpa_core::model::Sid> = logon_dependent_group_sids
-        .iter()
-        .chain(uac_filtered_group_sids.iter())
-        .cloned()
-        .collect();
     // Round 6 finding 1: combine AD + local memberships per path.
     let combined_memberships: Vec<GroupMembership> = {
         let mut v = memberships.clone();
@@ -1630,7 +1619,8 @@ async fn handle_scan(
         &identity,
         &memberships,
         &local_group_sids,
-        &share_uncertain_group_sids,
+        &logon_dependent_group_sids,
+        &uac_filtered_group_sids,
         root_access_context,
     );
     if scan_unsupported_share_ace_count > 0 {
@@ -2864,6 +2854,7 @@ fn resolve_share_status(
     memberships: &[GroupMembership],
     local_group_sids: &[adpa_core::model::Sid],
     logon_dependent_group_sids: &[adpa_core::model::Sid],
+    uac_filtered_group_sids: &[adpa_core::model::Sid],
     access_context: AccessContext,
 ) -> (adpa_core::model::ShareMaskStatus, usize) {
     // G1: the share-mask orchestration is shared with the CLI in
@@ -2880,6 +2871,7 @@ fn resolve_share_status(
         memberships,
         local_group_sids,
         logon_dependent_group_sids,
+        uac_filtered_group_sids,
         access_context,
     )
 }
@@ -3158,6 +3150,7 @@ mod tests {
             None,
             None,
             &dummy_id,
+            &[],
             &[],
             &[],
             &[],

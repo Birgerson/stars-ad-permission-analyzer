@@ -10,6 +10,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Fixed
+
+- **A local administrator over SMB no longer gets a share right through a
+  group User Account Control filters** (review finding CR-1, regression in
+  v1.9.1). The share token was built from every local group and still
+  counted `Administrators` (and the other UAC-filtered groups, as well as
+  Cryptographic Operators) as enabled, although the NTFS side already treated
+  them as deny-only. Example: share `Administrators: Full, Everyone: Read`,
+  NTFS `Users: Modify` — Stars stated "Modify" as a fact where Windows grants
+  Read. The share side now uses the engine's semantics: a filtered group's
+  Deny share ACEs apply, its Allow share ACEs make the share mask not
+  determinable.
+
 ## [1.9.1] — 2026-10-11
 
 **No misinformation, verified against Windows itself.**
