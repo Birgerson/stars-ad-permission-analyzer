@@ -10,6 +10,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Added
+
+- **The explanation path states how the access is evaluated** (review
+  finding CR-6, ADR 0074). A new step 2 names the evaluated logon (network
+  logon over SMB / interactive logon at the target, not elevated / no
+  specific logon type) and the implicit SIDs it adds to the token —
+  memberships "via … → INTERACTIVE → …" and the bounds of LOCAL and
+  UAC-filtered groups are now explained in the path itself; logon rights
+  are named as not checked. The CLI report header shows it as
+  `Evaluated : …`.
+- **Invariant test for the explanation path** (ADR 0074): over 3000
+  generated DACLs the path accounts for every bit of the NTFS result.
+
 ### Fixed
 
 - **CLI `analyze` report readable without matching SIDs by hand**

@@ -827,12 +827,19 @@ chapter 10).
 
 ```text
 - User: alice (S-1-5-21-...-1001)
+- Evaluated as: network logon over SMB — the token receives NETWORK (S-1-5-2), Everyone (S-1-1-0), Authenticated Users (S-1-5-11). …
 - Member of Domain Users (S-1-5-21-...-513) [direct, source: PrimaryGroup]
 - Member of GG_Finance (S-1-5-21-...-1100) [via alice → GG_Team → GG_Finance, source: DomainGroup] [also a member through GG_Audit (S-1-5-21-...-1102) — the shown chain is not the only route]
 - Member of BUILTIN\Users (S-1-5-32-545) [via alice → Domain Users → BUILTIN\Users, source: LocalGroup]
 - Allow ACE [inherited] for BUILTIN\Users (S-1-5-32-545) → Read & Execute (0x001200A9) [granted Read & Execute (0x001200A9)]
 - NTFS effective: Read & Execute (0x001200A9)
 ```
+
+Step 2 states the evaluated logon and the implicit SIDs it adds
+(`access_context_step`, review CR-6, ADR 0074). The test
+`explanation_accounts_for_every_bit_of_the_ntfs_result` checks over 3000
+generated DACLs that the `[granted …]` bits of the ACE steps are disjoint
+and, with the owner rule, exactly the NTFS mask (ADR 0074).
 
 The path is built **after** the result is complete (review CR-5, ADR
 0065): `build_explanation` receives `uncertainty()` and the three

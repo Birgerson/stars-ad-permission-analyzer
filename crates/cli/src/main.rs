@@ -1107,6 +1107,7 @@ async fn run_analyze(
         &result,
         &report_memberships,
         &report_sid_names,
+        access_context,
         resolved.ad_connected,
     );
 
