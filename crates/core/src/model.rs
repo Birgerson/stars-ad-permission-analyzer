@@ -1126,6 +1126,39 @@ impl EffectivePermission {
     pub fn effective_determinable(&self) -> bool {
         self.uncertainty().is_empty()
     }
+
+    /// The highest effective right the known data leaves open — the safe
+    /// direction for an audit (review CR-2). Equals `effective_mask` for an
+    /// exact result. Otherwise:
+    /// - a logon-dependent range (`LogonDependentTrustees`) contributes its
+    ///   NTFS upper bound (UAC-filtered groups, Guest / anonymous, logon
+    ///   type, … — ADR 0065, 0071, 0072);
+    /// - the share mask restricts it only when the share side has no
+    ///   uncertainty of its own: an undeterminable share may grant more, and
+    ///   a share can only restrict, never extend, the NTFS right.
+    ///
+    /// With a token gap or un-evaluated NTFS ACEs no upper bound is known at
+    /// all; the known data is used and `is_incomplete()` says so.
+    pub fn effective_upper_bound(&self) -> u32 {
+        let uncertainty = self.uncertainty();
+        if uncertainty.is_empty() {
+            return self.effective_mask.0;
+        }
+        let ntfs_upper = self
+            .diagnostics
+            .iter()
+            .fold(self.ntfs_mask.0, |acc, d| match d {
+                PermissionDiagnostic::LogonDependentTrustees { max_mask, .. } => acc | max_mask,
+                _ => acc,
+            });
+        let share_uncertain = uncertainty.iter().any(|u| u.layer == UncertainLayer::Share);
+        let upper = match (&self.share_status, self.share_mask) {
+            (ShareEvalStatus::Applied, Some(share)) if !share_uncertain => ntfs_upper & share.0,
+            _ => ntfs_upper,
+        };
+        // Never below the shown value, whatever a damaged record holds.
+        upper | self.effective_mask.0
+    }
 }
 
 /// Which part of a result an uncertainty affects (ADR 0065).
@@ -2482,6 +2515,53 @@ mod tests {
             matched_aces: vec![],
             diagnostics: vec![],
         }
+    }
+
+    /// Review CR-2: the upper bound a risk rule judges.
+    #[test]
+    fn effective_upper_bound_is_the_safe_direction_and_exact_when_exact() {
+        const READ: u32 = 0x0012_0089;
+        const MODIFY: u32 = 0x0013_01BF;
+        const FULL: u32 = 0x001F_01FF;
+        // Exact: the shown value, whatever the masks would allow.
+        let mut exact = permission();
+        exact.ntfs_mask = AccessMask(MODIFY);
+        assert_eq!(exact.effective_upper_bound(), READ);
+
+        // Logon-dependent range: the NTFS upper bound, restricted by an
+        // exact share.
+        let mut bounded = permission();
+        bounded.ntfs_mask = AccessMask(READ);
+        bounded.share_mask = Some(AccessMask(MODIFY));
+        bounded.diagnostics = vec![PermissionDiagnostic::LogonDependentTrustees {
+            sids: vec!["S-1-5-32-544".into()],
+            min_mask: READ,
+            max_mask: FULL,
+        }];
+        assert_eq!(bounded.effective_upper_bound(), MODIFY);
+        bounded.share_status = ShareEvalStatus::NotApplicable;
+        bounded.share_mask = None;
+        assert_eq!(bounded.effective_upper_bound(), FULL);
+
+        // An undeterminable share does not restrict: it may grant more.
+        let mut share = permission();
+        share.ntfs_mask = AccessMask(MODIFY);
+        share.diagnostics = vec![PermissionDiagnostic::UnsupportedShareAces { count: 1 }];
+        assert_eq!(share.effective_upper_bound(), MODIFY);
+        share.share_status = ShareEvalStatus::ReadFailed("access denied".into());
+        share.share_mask = None;
+        share.diagnostics = vec![];
+        assert_eq!(share.effective_upper_bound(), MODIFY);
+
+        // A token gap has no known upper bound: the known data, never less.
+        let mut token = permission();
+        token.local_group_status = LocalGroupEvalStatus::NotAvailable("RPC".to_owned());
+        token.ntfs_mask = AccessMask(MODIFY);
+        assert_eq!(token.effective_upper_bound(), READ);
+        assert_eq!(
+            token.effective_upper_bound() & token.effective_mask.0,
+            token.effective_mask.0
+        );
     }
 
     /// ADR 0065: each uncertainty is attributed to the part it affects.

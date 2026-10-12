@@ -316,6 +316,13 @@ finding:
   keywords (`password`, `credentials`, …) and the user actually has
   access.
 
+When a result is **not determinable**, the rules judge the highest right
+it may be (ADR 0073) — for example the elevated session of a local
+administrator, whose shown value is UAC-filtered — and the finding says
+**"may have"** / **"may be able to"** with the range ("the known data gives
+Read & Execute; up to Full Control is possible"). Such findings are marked
+incomplete. Only an exact result is described as a fact ("has", "can").
+
 Findings carry `incomplete = true` when the underlying finding is
 incomplete — see the diagnostic markers.
 

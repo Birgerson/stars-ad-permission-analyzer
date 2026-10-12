@@ -1251,6 +1251,13 @@ struct RiskFinding {
 One rule struct can emit several rule-IDs; severities are fixed per
 rule-ID (there is no dynamic severity derivation).
 
+"Effective mask" below means `EffectivePermission::effective_upper_bound()`
+(ADR 0073, review CR-2): `effective_mask` for an exact result, otherwise the
+NTFS upper bound of a logon-dependent range, intersected with the share
+mask only when the share side is determinable. The helper `AuditedRight`
+in `rules.rs` carries that mask and the wording: "has" / "can" for an exact
+result, "may have" / "may be able to" plus the range otherwise.
+
 | Rule | Rule-IDs (severity) | Trigger |
 | --- | --- | --- |
 | `FullControlRule` | `FULL_CONTROL` (Critical) | Effective mask contains **all** `MASK_FULL_CONTROL` bits |
@@ -1258,7 +1265,7 @@ rule-ID (there is no dynamic severity derivation).
 | `AdminRightsRule` | `PERMISSION_CHANGE` (High), `OWNER_CHANGE` (High), `DELETE_RIGHT` (Medium), `DELETE_CHILD_RIGHT` (Medium) | `FILE_WRITE_DAC`, `FILE_WRITE_OWNER`, `FILE_DELETE`, `FILE_DELETE_CHILD` individually present; skips Full Control holders |
 | `BroadGroupWriteRule` | `BROAD_GROUP_WRITE` (Critical) | A broad SID (`Everyone`, `Authenticated Users`, `Anonymous Logon`, `NETWORK`) contributed content-write bits that survived into the effective mask |
 | `DirectUserAceRule` | `DIRECT_USER_ACE` (Low) | Non-inherited ACE directly on the analyzed user/computer SID (Allow **or** Deny, including full-deny); silent for group and other identity kinds |
-| `SensitivePathRule` | `SENSITIVE_PATH` (Medium) | Path contains sensitive keywords (`password`, `credentials`, …) **and** the identity has access (`effective_mask > 0`) |
+| `SensitivePathRule` | `SENSITIVE_PATH` (Medium) | Path contains sensitive keywords (`password`, `credentials`, …) **and** the identity has or may have access (upper bound `> 0`) |
 
 ### 10.3 `incomplete = true`
 

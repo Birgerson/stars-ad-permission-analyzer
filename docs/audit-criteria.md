@@ -143,13 +143,15 @@ The end result is the **Effective Access Mask**, plus the full explanation path 
 
 All rules live in `crates/risk_engine/src/rules.rs` and are registered via `RuleRegistry::with_defaults()`. Each rule is an independent implementation of the `RiskRule` trait and can be tested in isolation.
 
+**Which right the rules judge (ADR 0073, review CR-2):** every rule that judges rights evaluates `EffectivePermission::effective_upper_bound()` — for an exact result exactly `effective_mask`; for a result with a logon-dependent range (UAC-filtered groups of a local administrator, Guest / anonymous, logon type) the highest right the range allows; a share mask restricts it only when the share side is determinable (a share can only restrict, never extend). This is the safe direction for an audit: an administrator whose shown, UAC-filtered value is Read & Execute but whose elevated session has Full Control gets the `FULL_CONTROL` finding. A description states a right as a fact (`has`, `can`) only for an exact result; otherwise it reads `may have` / `may be able to` and names the range (`NOT DETERMINABLE: the known data gives …; up to … is possible`) or says it is stated from the known data only. Such findings always carry `incomplete = true`. In the sections below, "effective mask" means this upper bound.
+
 ##### 4.1 Rule: `FULL_CONTROL` — severity **Critical**
 
 **Source:** `FullControlRule` in `crates/risk_engine/src/rules.rs`
 
 **Trigger:** The effective mask contains **all** bits of `MASK_FULL_CONTROL` (`0x001F01FF` plus `WRITE_DAC`, `WRITE_OWNER`).
 
-**Logic:** `effective_mask & MASK_FULL_CONTROL == MASK_FULL_CONTROL`
+**Logic:** `effective_upper_bound() & MASK_FULL_CONTROL == MASK_FULL_CONTROL` (see the note at the start of section 4)
 
 **Severity justification:**
 Full Control gives the principal the right to change the ACL itself (`WRITE_DAC`) and to take ownership (`WRITE_OWNER`). Anyone with Full Control on an object can grant themselves practically any permission — and audit-relevant changes become indistinguishable from a normal write. This is the most severe finding the engine knows.
@@ -265,7 +267,7 @@ This is **Low** because it is rarely a concrete security risk — rather a **man
 
 **Source:** `SensitivePathRule` in `crates/risk_engine/src/rules.rs`
 
-**Trigger:** The path name contains one of the following keywords (case-insensitive), **and** the principal actually has access (`effective_mask > 0`):
+**Trigger:** The path name contains one of the following keywords (case-insensitive), **and** the principal has or may have access (`effective_upper_bound() > 0`; "may have access" when not determinable):
 
 ```
 password, passwort, pwd, login, credential, credentials, secret, secrets,
@@ -280,7 +282,7 @@ password, password-manager databases (KeePass) and private-key containers
 (PKCS#12, PuTTY) — names that mark credentials as clearly as the first
 group but were missed.
 
-**Important (anti-false-positive):** The rule reports **only** when `effective_mask > 0`. A path named `passwords.txt` on which the identity is explicitly denied is **not** a finding — otherwise Stars would falsely report a non-access as a risk.
+**Important (anti-false-positive):** The rule reports **only** when `effective_upper_bound() > 0`. A path named `passwords.txt` on which the identity is explicitly denied is **not** a finding — otherwise Stars would falsely report a non-access as a risk.
 
 **What the rule does *not* do:** It does not open the file, does not read content, does not search for actual secrets in cleartext. That would itself be a privacy problem. It looks **only at the path name** as a heuristic.
 

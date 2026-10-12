@@ -82,3 +82,4 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0070 | Local accounts of the target server |
 | 0071 | User Account Control for every account on a local access |
 | 0072 | Guest and anonymous tokens |
+| 0073 | Risk rules judge the upper bound |
