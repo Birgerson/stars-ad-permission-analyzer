@@ -57,7 +57,17 @@ Organization`.
      data"; the summary card reads "Not determinable";
    - GUI: Analyze rights label and scan-row label in the same wording,
      status-derived reasons listed with the markers, undeterminable rows
-     never shown as unremarkable.
+     never shown as unremarkable;
+   - explanation path (CLI, CSV `explanation`, HTML details, GUI steps) —
+     added 2026-10-12, review finding CR-5: the path is built from the
+     finished result, its "NTFS effective", "Share permission" and
+     "Effective (NTFS ∩ Share)" steps use `rights_statement` with the same
+     three determinability flags; every token-layer reason is a step right
+     after the memberships ("NOT DETERMINABLE — the token above may be
+     incomplete: …"), every share-layer reason one after the share step;
+     the NTFS-layer reasons keep their own steps (un-evaluated ACEs warning,
+     logon-dependent range). A failed share read states that the share can
+     only restrict the NTFS right, never extend it.
 3. **Logon-dependent trustees are bounded, not ignored.** The engine
    computes, for applicable ACEs whose trustee is such a SID, a lower and
    an upper bound of the stored-order walk (upper: every such Allow
@@ -85,6 +95,7 @@ Organization`.
 - Lab acceptance (2026-10-10): `u00030` over 41 project paths — 41 exact,
   plain; `EXT\ext_partner04` — 41 of 41 "NOT DETERMINABLE" with the trust
   and local-group reasons in the header and the CSV.
-- Tests: layer attribution and agreement with the trigger flag for every
-  marker, CSV/JSON/HTML rendering, the bounds (range, no-effect case,
+- Tests: the explanation path agrees with the result lines for every
+  kind of uncertainty and every share status (review CR-5); layer
+  attribution and agreement with the trigger flag for every marker, CSV/JSON/HTML rendering, the bounds (range, no-effect case,
   Deny side, inherit-only, context dependence) and the share-side count.

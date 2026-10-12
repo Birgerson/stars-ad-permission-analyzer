@@ -834,6 +834,26 @@ chapter 10).
 - NTFS effective: Read & Execute (0x001200A9)
 ```
 
+The path is built **after** the result is complete (review CR-5, ADR
+0065): `build_explanation` receives `uncertainty()` and the three
+determinability flags of the finished `EffectivePermission`, so a value
+step can never contradict the result lines.
+
+- "NTFS effective", "Share permission" and "Effective (NTFS ∩ Share)" use
+  `rights_statement`; an exact value keeps the wording shown above, an
+  undeterminable one reads `NOT DETERMINABLE — the known data alone gives
+  … ; the real right may differ`.
+- Each token-layer reason follows the membership steps
+  (`NOT DETERMINABLE — the token above may be incomplete: <reason>`), each
+  share-layer reason the share step (`NOT DETERMINABLE — share: <reason>`).
+  NTFS-layer reasons have their own steps: the warning for un-evaluated
+  ACEs and the logon-dependent range ("lies between … and …").
+- A failed share read: the share value is not determinable, and the share
+  can only restrict the NTFS right, never extend it.
+
+The test `explanation_and_result_lines_agree_on_determinability_in_every_case`
+checks this invariant for every kind of uncertainty and every share status.
+
 The chain of each membership step is reproducible (ADR 0063): one shortest
 route chosen by a fixed rule, with every further entry into the group named
 in the same step. A group that arrives from two sources (LDAP and the

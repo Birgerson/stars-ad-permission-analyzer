@@ -12,6 +12,17 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **The explanation path no longer states undeterminable values as facts**
+  (review finding CR-5, ADR 0065 amended). With a token gap (group
+  resolution incomplete, GC bind, local groups unavailable, …) or an
+  uncertain share mask, the path ended with e.g. "Effective (NTFS ∩ Share):
+  Modify" while the result line said NOT DETERMINABLE — and the path is
+  exported verbatim (CSV, HTML, GUI). The path is now built from the
+  finished result: its value steps carry the same verdict, and each reason
+  is stated in the path (token reasons after the memberships, share reasons
+  after the share step). An invariant test covers every kind of
+  uncertainty and every share status.
+
 - **Guest and anonymous rights are no longer stated through Authenticated
   Users** (review finding CR-8, ADR 0072). Every token received Everyone and
   Authenticated Users; Microsoft documents that the Guest account is not in

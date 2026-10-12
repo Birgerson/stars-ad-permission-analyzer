@@ -22,14 +22,14 @@ use adpa_core::{
         format_also_via, AccessContext, AccessMask, AceEntry, AceKind, ContributingAce,
         EffectivePermission, GroupMembership, Identity, LocalGroupDescriptor, LocalGroupEntry,
         LocalGroupExpansion, MembershipHop, MembershipPathSource, PermissionDiagnostic,
-        PermissionPath, ShareEvalStatus, ShareMaskStatus, Sid,
+        PermissionPath, ShareEvalStatus, ShareMaskStatus, Sid, UncertainLayer, Uncertainty,
     },
     traits::{PermissionEvaluationInput, PermissionEvaluator},
 };
 
 use crate::mask::{
-    expand_generic_rights, NormalizedRights, FILE_READ_CONTROL, FILE_WRITE_DAC, INHERIT_ONLY_ACE,
-    MASK_FULL_CONTROL,
+    expand_generic_rights, rights_statement, NormalizedRights, FILE_READ_CONTROL, FILE_WRITE_DAC,
+    INHERIT_ONLY_ACE, MASK_FULL_CONTROL, NOT_DETERMINABLE,
 };
 use tracing::{debug, warn};
 
@@ -196,26 +196,6 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             }
         };
 
-        let path_explanation = build_explanation(ExplanationInput {
-            identity: &input.identity,
-            memberships: &input.group_memberships,
-            dacl: &input.file_system_object.dacl,
-            match_sids: &match_sids,
-            deny_only_sids: &deny_only_sids,
-            decided_per_ace: &decided_per_ace,
-            unsupported_ntfs_count: input.file_system_object.unsupported_aces.len(),
-            ntfs_raw,
-            denied_raw,
-            owner_implicit_bits,
-            owner_rights_ace_present,
-            owner_sid: input.file_system_object.owner_sid.as_ref(),
-            share_mask: share_mask_for_output,
-            share_status: &output_share_status,
-            effective_raw,
-            sid_names: &input.sid_names,
-            logon_dependent: logon_dependent.as_ref(),
-        });
-
         let matched_aces =
             collect_matched_aces(&input.file_system_object.dacl, &match_sids, &deny_only_sids);
 
@@ -371,13 +351,14 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             diagnostics.push(PermissionDiagnostic::TrustBoundaryEffectsNotModeled);
         }
 
-        let result = EffectivePermission {
+        let mut result = EffectivePermission {
             identity: input.identity,
             path: input.file_system_object.path.clone(),
             ntfs_mask: AccessMask(ntfs_raw),
             share_mask: share_mask_for_output,
             effective_mask: AccessMask(effective_raw),
-            path_explanation,
+            // Built below from the finished result (review CR-5).
+            path_explanation: PermissionPath { steps: Vec::new() },
             share_status: output_share_status,
             local_group_status: input.local_group_status,
             contributing_sids,
@@ -386,6 +367,33 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             matched_aces,
             diagnostics,
         };
+        // Review CR-5: the explanation path states each value with the same
+        // determinability as the result lines, derived from the finished
+        // result (statuses and every marker) — the two cannot disagree.
+        let uncertainty = result.uncertainty();
+        result.path_explanation = build_explanation(ExplanationInput {
+            identity: &result.identity,
+            memberships: &input.group_memberships,
+            dacl: &input.file_system_object.dacl,
+            match_sids: &match_sids,
+            deny_only_sids: &deny_only_sids,
+            decided_per_ace: &decided_per_ace,
+            unsupported_ntfs_count: input.file_system_object.unsupported_aces.len(),
+            ntfs_raw,
+            denied_raw,
+            owner_implicit_bits,
+            owner_rights_ace_present,
+            owner_sid: input.file_system_object.owner_sid.as_ref(),
+            share_mask: result.share_mask,
+            share_status: &result.share_status,
+            effective_raw,
+            sid_names: &input.sid_names,
+            logon_dependent: logon_dependent.as_ref(),
+            ntfs_determinable: result.ntfs_determinable(),
+            share_determinable: result.share_determinable(),
+            effective_determinable: result.effective_determinable(),
+            uncertainty: &uncertainty,
+        });
         debug!(
             user = %result.identity.sid.0,
             path = %result.path.0,
@@ -1180,6 +1188,13 @@ struct ExplanationInput<'a> {
     /// Bounds over logon-dependent trustees that decide bits of the NTFS
     /// result (ADR 0065); `None` when there are none.
     logon_dependent: Option<&'a LogonDependentBounds>,
+    /// Determinability of the three values, from the finished result
+    /// (`EffectivePermission::ntfs_determinable` etc., review CR-5).
+    ntfs_determinable: bool,
+    share_determinable: bool,
+    effective_determinable: bool,
+    /// Every reason a value is not determinable (`uncertainty()`).
+    uncertainty: &'a [Uncertainty],
 }
 
 /// Creates an explainable permission path.
@@ -1202,6 +1217,10 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         effective_raw,
         sid_names,
         logon_dependent,
+        ntfs_determinable,
+        share_determinable,
+        effective_determinable,
+        uncertainty,
     } = input;
     let mut steps: Vec<String> = Vec::new();
 
@@ -1244,6 +1263,19 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         if seen_membership_steps.insert(step.clone()) {
             steps.push(step);
         }
+    }
+
+    // 2b. Review CR-5: why the token above may lack SIDs. A token gap makes
+    // every value below not determinable, so the reason is stated where the
+    // token is described — not only in a separate report section.
+    for u in uncertainty
+        .iter()
+        .filter(|u| u.layer == UncertainLayer::Token)
+    {
+        steps.push(format!(
+            "{NOT_DETERMINABLE} — the token above may be incomplete: {}",
+            u.reason
+        ));
     }
 
     // 3. Matching ACEs.
@@ -1352,12 +1384,11 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         );
     }
 
-    // 4. NTFS effective
-    let ntfs_rights = NormalizedRights::new(ntfs_raw);
+    // 4. NTFS effective — a fact only when determinable (review CR-5). The
+    // NTFS-layer reasons follow as their own steps (4b, 4c).
     steps.push(format!(
-        "NTFS effective: {} (0x{:08X})",
-        ntfs_rights.display_name(),
-        ntfs_raw
+        "NTFS effective: {}",
+        rights_statement(ntfs_raw, ntfs_determinable)
     ));
 
     // 4b. Lower-confidence warning when ACEs could not be evaluated
@@ -1394,20 +1425,28 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     // text explains *why* the effective mask is what it is — the data
     // model already carries the state; the explanation must not omit it
     // (engine review 2026-06-12 finding 5).
+    //
+    // Review CR-5: the share and the effective value are facts only when
+    // determinable; share-layer reasons are stated as steps (a failed read
+    // has its own step, which already names the reason).
+    let share_reasons = || {
+        uncertainty
+            .iter()
+            .filter(|u| u.layer == UncertainLayer::Share)
+            .map(|u| format!("{NOT_DETERMINABLE} — share: {}", u.reason))
+            .collect::<Vec<String>>()
+    };
     match share_status {
         ShareEvalStatus::Applied => {
             if let Some(share) = share_mask {
-                let share_rights = NormalizedRights::new(share.0);
                 steps.push(format!(
-                    "Share permission: {} (0x{:08X})",
-                    share_rights.display_name(),
-                    share.0
+                    "Share permission: {}",
+                    rights_statement(share.0, share_determinable)
                 ));
-                let eff_rights = NormalizedRights::new(effective_raw);
+                steps.extend(share_reasons());
                 steps.push(format!(
-                    "Effective (NTFS \u{2229} Share): {} (0x{:08X})",
-                    eff_rights.display_name(),
-                    effective_raw
+                    "Effective (NTFS \u{2229} Share): {}",
+                    rights_statement(effective_raw, effective_determinable)
                 ));
             }
         }
@@ -1416,10 +1455,13 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
                 "Share DACL unrestricted (NULL share DACL): SMB does not reduce the NTFS rights — effective = NTFS"
                     .to_string(),
             );
+            steps.extend(share_reasons());
         }
         ShareEvalStatus::ReadFailed(reason) => {
             steps.push(format!(
-                "Share DACL read failed ({reason}): the displayed effective mask is NTFS-only and incomplete"
+                "Share DACL read failed ({reason}): the share permission is {NOT_DETERMINABLE} — \
+                 the displayed effective mask is NTFS-only and incomplete; the share can only \
+                 restrict the NTFS right above, never extend it"
             ));
         }
         ShareEvalStatus::NotApplicable => {
@@ -1427,6 +1469,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
                 "No SMB context: effective permission is NTFS-only (no share combination applied)"
                     .to_string(),
             );
+            steps.extend(share_reasons());
         }
     }
 
@@ -5509,5 +5552,219 @@ mod tests {
         assert_eq!(uncertain_names(&e), vec!["Users"]);
         let normal = expand_local_groups(USER, &[], &[], &groups, AccessContext::RemoteSmb);
         assert_eq!(certain_names(&normal), vec!["Users"]);
+    }
+
+    // --- Review CR-5: the explanation path never states an undeterminable
+    // value as a fact ---
+
+    fn step<'a>(p: &'a EffectivePermission, prefix: &str) -> Option<&'a str> {
+        p.path_explanation
+            .steps
+            .iter()
+            .find(|s| s.starts_with(prefix))
+            .map(String::as_str)
+    }
+
+    /// The invariant behind CR-5: every value step of the path says
+    /// NOT DETERMINABLE exactly when the result line does.
+    fn assert_path_agrees_with_result(p: &EffectivePermission) {
+        let ntfs = step(p, "NTFS effective: ").expect("NTFS step");
+        assert_eq!(
+            ntfs.contains(NOT_DETERMINABLE),
+            !p.ntfs_determinable(),
+            "NTFS step vs result: {:?}",
+            p.path_explanation.steps
+        );
+        if let Some(share) = step(p, "Share permission: ") {
+            assert_eq!(
+                share.contains(NOT_DETERMINABLE),
+                !p.share_determinable(),
+                "share step vs result: {:?}",
+                p.path_explanation.steps
+            );
+        }
+        match step(p, "Effective (NTFS \u{2229} Share): ") {
+            Some(effective) => assert_eq!(
+                effective.contains(NOT_DETERMINABLE),
+                !p.effective_determinable(),
+                "effective step vs result: {:?}",
+                p.path_explanation.steps
+            ),
+            // Without an applied share the NTFS step is the final value; a
+            // share-side reason must then still be visible in the path.
+            None => {
+                if !p.effective_determinable() && p.ntfs_determinable() {
+                    assert!(
+                        p.path_explanation
+                            .steps
+                            .iter()
+                            .any(|s| s.contains(NOT_DETERMINABLE)),
+                        "share-side reason missing: {:?}",
+                        p.path_explanation.steps
+                    );
+                }
+            }
+        }
+        // An exact result never carries the marker anywhere in its path.
+        if p.effective_determinable() {
+            assert!(
+                !p.path_explanation
+                    .steps
+                    .iter()
+                    .any(|s| s.contains(NOT_DETERMINABLE)),
+                "exact result with marker: {:?}",
+                p.path_explanation.steps
+            );
+        }
+    }
+
+    fn cr5_dacl() -> FileSystemObject {
+        fso(None, vec![allow_ace(USER, MASK_MODIFY, false)])
+    }
+
+    /// Exact values keep their established wording, as facts.
+    #[test]
+    fn explanation_states_exact_values_as_facts() {
+        let p = eval(user(USER), vec![], cr5_dacl(), Some(AccessMask(MASK_READ)));
+        let modify = expand_generic_rights(MASK_MODIFY);
+        assert_eq!(
+            step(&p, "NTFS effective: "),
+            Some(format!("NTFS effective: Modify (0x{modify:08X})").as_str())
+        );
+        assert!(
+            step(&p, "Share permission: ").is_some_and(|s| s.starts_with("Share permission: Read"))
+        );
+        assert!(step(&p, "Effective (NTFS \u{2229} Share): ")
+            .is_some_and(|s| !s.contains(NOT_DETERMINABLE)));
+        assert_path_agrees_with_result(&p);
+    }
+
+    /// A token gap: the reason is stated at the token, and NTFS, share and
+    /// effective are all NOT DETERMINABLE — the CSV / HTML / GUI path no
+    /// longer contradicts the result line.
+    #[test]
+    fn explanation_states_a_token_gap_and_no_value_as_fact() {
+        let mut input = base_input(user(USER), cr5_dacl());
+        input.share_status = ShareMaskStatus::Applied(AccessMask(MASK_READ));
+        input.resolution.group_resolution_gaps = vec!["gap one".into()];
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        let token = step(&p, NOT_DETERMINABLE).expect("token reason step");
+        assert!(token.contains("token above may be incomplete") && token.contains("gap one"));
+        assert!(step(&p, "NTFS effective: ").is_some_and(|s| s.contains(NOT_DETERMINABLE)));
+        assert!(step(&p, "Share permission: ").is_some_and(|s| s.contains(NOT_DETERMINABLE)));
+        assert!(step(&p, "Effective (NTFS \u{2229} Share): ")
+            .is_some_and(|s| s.contains(NOT_DETERMINABLE)));
+        // The token reason precedes the ACE and value steps.
+        let pos = |prefix: &str| {
+            p.path_explanation
+                .steps
+                .iter()
+                .position(|s| s.starts_with(prefix))
+                .unwrap()
+        };
+        assert!(pos(NOT_DETERMINABLE) < pos("NTFS effective: "));
+        assert_path_agrees_with_result(&p);
+    }
+
+    /// Only the share side uncertain: NTFS stays a fact, share and effective
+    /// do not, and the share reason is named.
+    #[test]
+    fn explanation_marks_only_the_share_side_when_only_share_aces_are_uncertain() {
+        let mut input = base_input(user(USER), cr5_dacl());
+        input.share_status = ShareMaskStatus::Applied(AccessMask(MASK_READ));
+        input.unsupported_share_ace_count = 1;
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert!(step(&p, "NTFS effective: ").is_some_and(|s| !s.contains(NOT_DETERMINABLE)));
+        assert!(step(&p, "Share permission: ").is_some_and(|s| s.contains(NOT_DETERMINABLE)));
+        assert!(step(&p, &format!("{NOT_DETERMINABLE} — share: ")).is_some());
+        assert!(step(&p, "Effective (NTFS \u{2229} Share): ")
+            .is_some_and(|s| s.contains(NOT_DETERMINABLE)));
+        assert_path_agrees_with_result(&p);
+    }
+
+    /// A failed share read says the share value is not determinable and
+    /// that the share can only restrict, never extend, the NTFS right.
+    #[test]
+    fn explanation_of_a_failed_share_read_states_the_only_safe_bound() {
+        let p = eval_with_share(
+            user(USER),
+            cr5_dacl(),
+            ShareMaskStatus::ReadFailed("access denied".to_owned()),
+        );
+        let s = step(&p, "Share DACL read failed").expect("read-failed step");
+        assert!(s.contains(NOT_DETERMINABLE) && s.contains("never extend"));
+        assert_path_agrees_with_result(&p);
+    }
+
+    /// The invariant over every kind of uncertainty the engine produces.
+    #[test]
+    fn explanation_and_result_lines_agree_on_determinability_in_every_case() {
+        use adpa_core::model::{LocalGroupEvalStatus, UnsupportedAce};
+        let shares = [
+            ShareMaskStatus::NotApplicable,
+            ShareMaskStatus::Applied(AccessMask(MASK_READ)),
+            ShareMaskStatus::Unrestricted,
+            ShareMaskStatus::ReadFailed("access denied".to_owned()),
+        ];
+        type Mutate = fn(&mut PermissionEvaluationInput);
+        let cases: [(&str, Mutate); 9] = [
+            ("exact", |_| {}),
+            ("group gap", |i| {
+                i.resolution.group_resolution_gaps = vec!["gap".into()]
+            }),
+            ("local groups unavailable", |i| {
+                i.local_group_status = LocalGroupEvalStatus::NotAvailable("RPC failed".into())
+            }),
+            ("unsupported NTFS ACE", |i| {
+                i.file_system_object.unsupported_aces = vec![UnsupportedAce {
+                    ace_type: 9,
+                    flags: 0,
+                    mask: 0x001F_01FF,
+                }]
+            }),
+            ("logon-dependent ACE", |i| {
+                i.file_system_object
+                    .dacl
+                    .push(allow_ace("S-1-5-1000", MASK_FULL_CONTROL, false));
+                i.access_context = AccessContext::RemoteSmb;
+            }),
+            ("unsupported share ACE", |i| {
+                i.unsupported_share_ace_count = 1
+            }),
+            ("global catalog", |i| {
+                i.resolution.group_resolution_via_global_catalog = true
+            }),
+            ("guest", |i| {
+                i.identity = user("S-1-5-21-1000-1000-1000-501");
+                i.file_system_object.dacl.push(allow_ace(
+                    SID_AUTHENTICATED_USERS,
+                    MASK_FULL_CONTROL,
+                    false,
+                ));
+            }),
+            ("disabled (informational only)", |i| {
+                i.identity.disabled = true
+            }),
+        ];
+        for share in &shares {
+            for (name, mutate) in &cases {
+                let mut input = base_input(user(USER), cr5_dacl());
+                input.share_status = share.clone();
+                mutate(&mut input);
+                let p = DefaultPermissionEngine.evaluate(input).unwrap();
+                if *name == "exact" || name.starts_with("disabled") {
+                    assert_eq!(
+                        p.effective_determinable(),
+                        !matches!(share, ShareMaskStatus::ReadFailed(_)),
+                        "{name} / {share:?}"
+                    );
+                } else {
+                    // Each case must really make the result uncertain, or the
+                    // invariant below would be tested on exact results only.
+                    assert!(!p.effective_determinable(), "{name} / {share:?}");
+                }
+                assert_path_agrees_with_result(&p);
+            }
+        }
     }
 }
