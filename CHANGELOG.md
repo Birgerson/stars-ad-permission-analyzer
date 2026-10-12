@@ -12,6 +12,13 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **The GUI Delta tab no longer states undeterminable rights as facts**
+  (review finding CR-9). Old and new rights were plain labels; a row
+  "Added: Full Control" could be a not-determinable value, and a change
+  from "not determinable" to "exact" showed identical rights. Both sides
+  now use the shared wording (`NOT DETERMINABLE (known data: …)`), and the
+  new delta reason "determinability" names such a flip.
+
 - **The explanation path no longer states undeterminable values as facts**
   (review finding CR-5, ADR 0065 amended). With a token gap (group
   resolution incomplete, GC bind, local groups unavailable, …) or an

@@ -1385,9 +1385,13 @@ migration steps.
 
 ### 12.2 Delta comparison
 
-`ScanStore::compute_delta(run_a, run_b)` joins two runs per path and
-returns the before/after effective masks per path. The GUI filters
-out paths without change client-side.
+`persistence::delta::compare_scans(old_run, new_run)` refuses runs of
+different targets, keys the rows by (identity SID, path) and returns only
+changes: `Added`, `Removed`, or `Changed` with every reason
+(`DeltaReason`: effective / NTFS / share mask, determinability, share or
+local-group status, unsupported-ACE count, diagnostics). Each entry
+carries both stored results, so the GUI states every right with its
+determinability (`rights_label_compact`, review CR-9, ADR 0065).
 
 ### 12.3 Export formats
 

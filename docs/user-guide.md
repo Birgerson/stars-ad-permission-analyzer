@@ -335,6 +335,10 @@ diagnostic markers.
 - **Compare** — table with `Before → After` per path, including a
   "Changed (...)" column with concrete change reasons (e.g. "NTFS
   mask + share status").
+- A right Stars could not determine reads `NOT DETERMINABLE (known data:
+  …)` on either side, like everywhere else. When a result turned from not
+  determinable into exact (or back) — for example after LDAP was
+  configured — the reasons include **determinability**.
 
 Unchanged paths are hidden so only the relevant entries remain.
 
