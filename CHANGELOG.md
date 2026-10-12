@@ -12,6 +12,12 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Added
 
+- **Share permission with provenance** (review finding CR-7, ADR 0074).
+  The share side was a bare value; now each share ACE that applies to the
+  account is listed in the explanation path with what it granted or
+  denied (from the same DACL read as the share mask), and a step names the
+  limiting side — share or NTFS.
+
 - **Decisive memberships marked, deletion through the folder named**
   (review findings CR-12, CR-14, ADR 0074). A membership whose group's ACE
   decided bits of the result is marked `[decisive — …]`; a file whose

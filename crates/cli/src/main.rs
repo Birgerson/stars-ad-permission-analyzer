@@ -1029,7 +1029,7 @@ async fn run_analyze(
         );
     }
 
-    let (share_status, unsupported_share_ace_count) = resolve_scan_share_status(
+    let (share_status, unsupported_share_ace_count, share_decisions) = resolve_scan_share_status(
         &path,
         smb_server.as_deref(),
         share_name.as_deref(),
@@ -1063,7 +1063,10 @@ async fn run_analyze(
         ad_resolver::build_sid_name_map_for_target(
             &resolved.resolution.identity,
             &named,
-            fso.dacl.iter().map(|a| a.sid.0.clone()),
+            fso.dacl
+                .iter()
+                .map(|a| a.sid.0.clone())
+                .chain(share_decisions.iter().map(|d| d.sid.0.clone())),
             account_server.as_deref(),
         )
     };
@@ -1097,9 +1100,14 @@ async fn run_analyze(
         sid_names,
         resolution: engine_flags,
     };
-    let result = DefaultPermissionEngine
+    let mut result = DefaultPermissionEngine
         .evaluate(input)
         .map_err(|e| anyhow::anyhow!("Permission evaluation failed: {e}"))?;
+    // Review CR-7: the share side explained ACE by ACE.
+    permission_engine::engine::attach_share_provenance(
+        &mut result.path_explanation,
+        share_scanner::share_decision_steps(&share_decisions, &report_sid_names),
+    );
 
     output::print_report(
         &fso,
@@ -1295,16 +1303,17 @@ async fn run_scan(
         );
     }
 
-    let (scan_share_status, scan_unsupported_share_ace_count) = resolve_scan_share_status(
-        &path,
-        smb_server.as_deref(),
-        share_name.as_deref(),
-        &resolved,
-        &scan_local_group_sids,
-        &scan_logon_dependent_group_sids,
-        &scan_uac_filtered_group_sids,
-        scan_access_context,
-    );
+    let (scan_share_status, scan_unsupported_share_ace_count, scan_share_decisions) =
+        resolve_scan_share_status(
+            &path,
+            smb_server.as_deref(),
+            share_name.as_deref(),
+            &resolved,
+            &scan_local_group_sids,
+            &scan_logon_dependent_group_sids,
+            &scan_uac_filtered_group_sids,
+            scan_access_context,
+        );
 
     if let adpa_core::model::ShareMaskStatus::ReadFailed(ref msg) = scan_share_status {
         println!(
@@ -1410,6 +1419,8 @@ async fn run_scan(
         if let Some(display) = ad_resolver::identity_display(&resolved.resolution.identity) {
             r.seed(&resolved.resolution.identity.sid.0, &display);
         }
+        // Review CR-7: the share trustees of the explained share ACEs.
+        r.resolve(scan_share_decisions.iter().map(|d| d.sid.0.clone()));
         r
     };
 
@@ -1484,9 +1495,15 @@ async fn run_scan(
                     sid_names,
                     resolution: scan_engine_flags.clone(),
                 };
-                let result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
+                let mut result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
                     anyhow::anyhow!("Permission evaluation failed for '{path_display}': {e}")
                 })?;
+                // Review CR-7: the share side explained ACE by ACE.
+                #[cfg(windows)]
+                permission_engine::engine::attach_share_provenance(
+                    &mut result.path_explanation,
+                    share_scanner::share_decision_steps(&scan_share_decisions, sid_resolver.map()),
+                );
 
                 // ADR 0065: a row whose result cannot be determined says so
                 // instead of printing the computed value as a fact.
@@ -1595,13 +1612,18 @@ fn resolve_scan_share_status(
     logon_dependent_group_sids: &[adpa_core::model::Sid],
     uac_filtered_group_sids: &[adpa_core::model::Sid],
     access_context: AccessContext,
-) -> (adpa_core::model::ShareMaskStatus, usize) {
+) -> (
+    adpa_core::model::ShareMaskStatus,
+    usize,
+    Vec<share_scanner::ShareAceDecision>,
+) {
     // G1: the share-mask orchestration is shared with the GUI in
     // `share_scanner::resolve_share_mask_status` so the two frontends can
     // never diverge. This wrapper only adapts the CLI's `ResolvedIdentity`
     // shape to the shared function's primitive inputs.
     let identity = &resolved.resolution.identity;
-    share_scanner::resolve_share_mask_status(
+    // Review CR-7: the per-ACE decisions come from the same DACL read.
+    let r = share_scanner::resolve_share_mask_status_explained(
         path,
         smb_server,
         share_name,
@@ -1612,7 +1634,8 @@ fn resolve_scan_share_status(
         logon_dependent_group_sids,
         uac_filtered_group_sids,
         access_context,
-    )
+    );
+    (r.status, r.unevaluated, r.decisions)
 }
 
 // ---------------------------------------------------------------------------

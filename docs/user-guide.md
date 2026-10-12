@@ -810,6 +810,10 @@ every surface says:
 - The explanation also names a **NULL DACL** (everyone has full access),
   an **empty DACL** (nobody has access) and a DACL in which **no ACE
   applies** to the account.
+- On a share, every share ACE that applies to the account is listed in
+  the explanation with what it grants or denies, and a step says which
+  side limits the result ("Limited by the share: NTFS grants Modify, the
+  share allows Read & Execute — the share removes …").
 - Further aids in the explanation: memberships whose group's ACE decided
   the result are marked `[decisive]`; the Deny step says which bits a Deny
   really takes away and which it only denies in advance; for a file
