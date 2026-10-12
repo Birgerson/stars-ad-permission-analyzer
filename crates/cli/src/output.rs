@@ -4,12 +4,14 @@
 //! Formatted console output for the analyze command.
 
 use adpa_core::model::{
-    privileged_group_role, AccountStatus, AceKind, DomainTrust, EffectivePermission,
+    privileged_group_role, AccountStatus, AceEntry, AceKind, DomainTrust, EffectivePermission,
     FileSystemObject, GroupMembersReport, GroupMembership, MembershipReport, PermissionDiagnostic,
     RiskFinding, RiskSeverity, ScanError, ScanRun, Share, ShareEvalStatus, Uncertainty,
 };
+use permission_engine::mask::{expand_generic_rights, INHERIT_ONLY_ACE};
 use permission_engine::{rights_statement, NormalizedRights, NOT_DETERMINABLE};
 use share_scanner::{ShareDacl, ShareScanResult};
+use std::collections::BTreeMap;
 
 const W: usize = 65;
 const HEAVY: char = '═';
@@ -73,11 +75,65 @@ fn is_local_account(memberships: &[GroupMembership]) -> bool {
     })
 }
 
+/// A trustee as an administrator reads it: name and SID, or the SID alone
+/// when no name is known (review CR-11).
+fn trustee_label(sid: &str, sid_names: &BTreeMap<String, String>) -> String {
+    match sid_names.get(sid) {
+        Some(name) => format!("{name} ({sid})"),
+        None => sid.to_owned(),
+    }
+}
+
+/// The rights of one ACE as the engine evaluates them: generic bits
+/// expanded (`GENERIC_ALL` reads Full Control, as in the explanation path),
+/// with the raw mask kept visible (review CR-11).
+fn ace_rights_label(mask: u32) -> String {
+    let expanded = expand_generic_rights(mask);
+    let label = NormalizedRights::new(expanded).display_name();
+    if expanded == mask {
+        format!("{label} (0x{mask:08X})")
+    } else {
+        format!("{label} (raw 0x{mask:08X}, generic rights expanded)")
+    }
+}
+
+/// An inherit-only ACE only propagates to children; it does not apply to
+/// the object itself and must not look effective (review CR-11).
+fn inherit_only_note(ace: &AceEntry) -> &'static str {
+    if ace.propagation_flags & INHERIT_ONLY_ACE != 0 {
+        "  [inherit-only — not applied to this object]"
+    } else {
+        ""
+    }
+}
+
+/// One ACE line for the DACL listing and the matching-ACE list.
+fn ace_line(ace: &AceEntry, sid_names: &BTreeMap<String, String>) -> String {
+    let kind = match ace.kind {
+        AceKind::Allow => "Allow",
+        AceKind::Deny => "DENY ",
+    };
+    let scope = if ace.inherited {
+        "[inherited]"
+    } else {
+        "[explicit] "
+    };
+    format!(
+        "  {kind} {scope}  {}  \u{2192}  {}{}",
+        trustee_label(&ace.sid.0, sid_names),
+        ace_rights_label(ace.mask.0),
+        inherit_only_note(ace)
+    )
+}
+
+/// `memberships`: every group of the evaluated token (domain and local);
+/// `sid_names`: the same SID → name table the engine used.
 pub fn print_report(
     fso: &FileSystemObject,
     user_input: &str,
     result: &EffectivePermission,
     memberships: &[GroupMembership],
+    sid_names: &BTreeMap<String, String>,
     ad_connected: bool,
 ) {
     println!();
@@ -116,14 +172,26 @@ pub fn print_report(
     }
 
     if !memberships.is_empty() {
-        section(&format!("Resolved Groups ({})", memberships.len()));
-        for gm in memberships {
+        // Review CR-11: one line per group (a group reached from two
+        // sources is one group), with its name and where it came from.
+        let merged = adpa_core::model::merged_memberships_per_group(memberships);
+        section(&format!("Resolved Groups ({})", merged.len()));
+        for gm in &merged {
             let via = if gm.direct {
                 "direct    "
             } else {
                 "transitive"
             };
-            println!("  [{}]  {}", via, gm.group_sid.0);
+            let label = match gm.group_name.as_deref().filter(|n| !n.is_empty()) {
+                Some(name) => format!("{name} ({})", gm.group_sid.0),
+                None => trustee_label(&gm.group_sid.0, sid_names),
+            };
+            let source = gm
+                .path
+                .as_ref()
+                .map(|p| format!("  · source: {:?}", p.source))
+                .unwrap_or_default();
+            println!("  [{via}]  {label}{source}");
         }
     }
 
@@ -132,8 +200,8 @@ pub fn print_report(
     let owner = fso
         .owner_sid
         .as_ref()
-        .map(|s| s.0.as_str())
-        .unwrap_or("(unknown)");
+        .map(|s| trustee_label(&s.0, sid_names))
+        .unwrap_or_else(|| "(unknown)".to_owned());
     let inherit = inheritance_label(fso.null_dacl, fso.inheritance_disabled);
     println!("  Owner       : {owner}");
     println!("  Inheritance : {inherit}");
@@ -146,26 +214,9 @@ pub fn print_report(
         println!("  {label}");
     } else {
         println!();
-        println!("  {:5}  {:8}  {:10}  SID", "Kind", "Scope", "Rights");
-        println!("  {}", light_line().chars().take(W - 2).collect::<String>());
+        println!("  Stored order (Windows evaluates the ACEs in this order):");
         for ace in &fso.dacl {
-            let kind = match ace.kind {
-                AceKind::Allow => "Allow",
-                AceKind::Deny => "DENY ",
-            };
-            let scope = if ace.inherited {
-                "inherited"
-            } else {
-                "explicit "
-            };
-            let rights = NormalizedRights::new(ace.mask.0);
-            println!(
-                "  {}  {}  {:13}  {}",
-                kind,
-                scope,
-                rights.display_name(),
-                ace.sid.0
-            );
+            println!("{}", ace_line(ace, sid_names));
         }
     }
 
@@ -207,24 +258,7 @@ pub fn print_report(
         println!("  (none)");
     } else {
         for ace in &result.matched_aces {
-            let kind = match ace.kind {
-                AceKind::Allow => "Allow",
-                AceKind::Deny => "DENY ",
-            };
-            let scope = if ace.inherited {
-                "[inherited]"
-            } else {
-                "[explicit] "
-            };
-            let rights = NormalizedRights::new(ace.mask.0);
-            println!(
-                "  {} {}  {}  \u{2192}  {} (0x{:08X})",
-                kind,
-                scope,
-                ace.sid.0,
-                rights.display_name(),
-                ace.mask.0
-            );
+            println!("{}", ace_line(ace, sid_names));
         }
     }
 
@@ -949,7 +983,10 @@ pub fn print_run_errors(run: &ScanRun, errors: &[ScanError]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dacl_state_label, inheritance_label};
+    use super::{
+        ace_line, ace_rights_label, dacl_state_label, inheritance_label, AceEntry, AceKind,
+        BTreeMap, INHERIT_ONLY_ACE,
+    };
 
     #[test]
     fn null_dacl_is_full_control() {
@@ -997,5 +1034,56 @@ mod tests {
     fn populated_dacl_returns_none() {
         // ACE list present → caller renders the ACEs itself.
         assert_eq!(dacl_state_label(false, false), None);
+    }
+
+    // --- Review CR-11: readable ACE lines ---
+
+    fn ace(sid: &str, mask: u32, propagation_flags: u32) -> AceEntry {
+        AceEntry {
+            kind: AceKind::Allow,
+            sid: adpa_core::model::Sid(sid.to_owned()),
+            mask: adpa_core::model::AccessMask(mask),
+            inherited: true,
+            inheritance_flags: 0,
+            propagation_flags,
+        }
+    }
+
+    #[test]
+    fn ace_line_names_the_trustee_and_keeps_the_sid() {
+        let names = BTreeMap::from([(
+            "S-1-5-32-544".to_owned(),
+            r"BUILTIN\Administrators".to_owned(),
+        )]);
+        let line = ace_line(&ace("S-1-5-32-544", 0x001F_01FF, 0), &names);
+        assert!(
+            line.contains(r"BUILTIN\Administrators (S-1-5-32-544)"),
+            "{line}"
+        );
+        assert!(line.contains("Full Control (0x001F01FF)"), "{line}");
+        // Unknown SIDs stay visible as SIDs, never dropped.
+        let line = ace_line(&ace("S-1-5-21-9-9-9-1234", 0x0012_00A9, 0), &names);
+        assert!(line.contains("S-1-5-21-9-9-9-1234  \u{2192}"), "{line}");
+    }
+
+    #[test]
+    fn generic_rights_are_shown_expanded_with_the_raw_mask() {
+        // GENERIC_ALL: the explanation path says Full Control — so does the list.
+        let label = ace_rights_label(0x1000_0000);
+        assert!(label.starts_with("Full Control"), "{label}");
+        assert!(label.contains("raw 0x10000000"), "{label}");
+        assert_eq!(ace_rights_label(0x0012_00A9), "Read & Execute (0x001200A9)");
+    }
+
+    #[test]
+    fn inherit_only_aces_are_marked() {
+        let names = BTreeMap::new();
+        let line = ace_line(&ace("S-1-5-11", 0x0012_00A9, INHERIT_ONLY_ACE), &names);
+        assert!(
+            line.contains("[inherit-only — not applied to this object]"),
+            "{line}"
+        );
+        let line = ace_line(&ace("S-1-5-11", 0x0012_00A9, 0), &names);
+        assert!(!line.contains("inherit-only"), "{line}");
     }
 }

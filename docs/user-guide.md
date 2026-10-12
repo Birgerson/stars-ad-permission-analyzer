@@ -685,6 +685,17 @@ tabs once a mode other than Off is selected (range 1–600, default 10).
 - **Share DACL ∩ NTFS DACL** is evaluated — the effective SMB right
   is the *more restrictive* of the two.
 - Local server groups are read from the share's server.
+- Accounts and groups that exist only on that server (its own local
+  accounts and groups) are **named** by asking the server itself; a SID
+  nobody can resolve stays visible as the SID.
+
+**Reading the CLI `analyze` report:** "Resolved Groups" lists every group
+of the evaluated token — domain and local — once, with name, SID and
+source. The DACL is listed in **stored order** (the order Windows
+evaluates it), each ACE with trustee name and SID, its rights with generic
+bits expanded (`GENERIC_ALL` reads Full Control, the raw mask stays
+visible) and an `[inherit-only — not applied to this object]` mark where
+the ACE only propagates to children.
 
 **Manual SMB context** (CLI flags `--smb-server` / `--share-name` or
 GUI "SMB context" checkbox):

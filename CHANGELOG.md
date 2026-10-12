@@ -12,6 +12,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **CLI `analyze` report readable without matching SIDs by hand**
+  (review finding CR-11). "Resolved Groups" listed only the domain groups,
+  as bare SIDs; the DACL listing and "Matching ACEs" showed SIDs only, no
+  inherit-only mark (an inherit-only ACE looked effective) and raw generic
+  labels ("Special: Generic all" where the explanation said "Full
+  Control"). Now: every token group once with name, SID and source; ACEs
+  with trustee names, expanded rights next to the raw mask, inherit-only
+  marked, the DACL in stored order.
+
 - **Names instead of raw SIDs where Stars knows them** (review finding
   CR-4). The SID → name table was built from the domain groups and a
   lookup on the analysing machine only: local groups (named on the target

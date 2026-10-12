@@ -1079,6 +1079,10 @@ async fn run_analyze(
     all_memberships.extend(local_group_memberships.iter().cloned());
 
     let engine_flags = resolved.resolution.engine_flags();
+    // Review CR-11: the report shows the same groups and names the engine
+    // evaluated.
+    let report_memberships = all_memberships.clone();
+    let report_sid_names = sid_names.clone();
     let input = PermissionEvaluationInput {
         identity: resolved.resolution.identity.clone(),
         group_memberships: all_memberships,
@@ -1101,7 +1105,8 @@ async fn run_analyze(
         &fso,
         &user,
         &result,
-        &resolved.resolution.memberships,
+        &report_memberships,
+        &report_sid_names,
         resolved.ad_connected,
     );
 
