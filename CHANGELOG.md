@@ -10,6 +10,43 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+## [1.9.2] — 2026-10-12
+
+**Code review: how rights come about — honest in every surface.**
+
+A complete code review (2026-10-12) asked one question of every output:
+can an administrator honestly trace how each right comes about? It found a
+regression from v1.9.1 and four places where a value was still stated as a
+fact although it is not known. All five are fixed here; each fix is unit-
+and mutation-tested.
+
+- **Regression from v1.9.1 fixed** (CR-1): a local administrator analysed
+  over SMB could be granted a share right through `Administrators` — as a
+  fact — although remote User Account Control makes that group deny-only.
+- **Guest and anonymous** (CR-8, ADR 0072): `Authenticated Users` (and, for
+  anonymous, `Everyone`) are no longer assumed in their token; ACEs for them
+  give a range. The exact rule follows a lab measurement (L17).
+- **Explanation path** (CR-5) and **Delta tab** (CR-9) state a value as a
+  fact only when it is determinable, and say why it is not.
+- **Risk findings** (CR-2, ADR 0073) judge the highest right a bounded
+  result allows — an elevated administrator's Full Control is no longer
+  missing from the findings — and read "may have" when not determinable.
+
+Why patch: no new public API, CLI command, GUI surface or on-disk format;
+the only additions are a delta reason ("determinability") and a marker
+(`GuestOrAnonymousToken`), both additive.
+
+**Verification:** 875 automated tests, each fix additionally checked by
+deliberately reverting it (every reversal caught). The live proof of CR-1
+and CR-8 against real tokens follows in the next lab run; until then CR-8
+is deliberately conservative (bounded, never stated as fact).
+
+### Known issues
+
+- **L17 — Guest and anonymous tokens are bounded, not lab-measured.** See
+  `docs/known-limitations.md`, L17.
+- L15 (remainder) and L16 carried forward unchanged.
+
 ### Fixed
 
 - **Risk findings are no longer missing for a bounded result** (review
