@@ -30,6 +30,10 @@ pub struct PermissionSignature {
     pub local_group_status: LocalGroupStatusTag,
     pub unsupported_ace_count: usize,
     pub diagnostics: Vec<PermissionDiagnostic>,
+    /// Review CR-9: whether the effective right is determinable (ADR 0065).
+    /// Derived from the statuses and markers above, compared on its own so
+    /// a flip between "exact" and "not determinable" is named as such.
+    pub effective_determinable: bool,
 }
 
 /// Comparable status tag for `ShareEvalStatus` — the string in
@@ -84,6 +88,7 @@ impl PermissionSignature {
             local_group_status: (&p.local_group_status).into(),
             unsupported_ace_count: p.unsupported_ace_count,
             diagnostics: p.diagnostics.clone(),
+            effective_determinable: p.effective_determinable(),
         }
     }
 }
@@ -94,6 +99,8 @@ impl PermissionSignature {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeltaReason {
     EffectiveMaskChanged,
+    /// The effective right turned exact or not determinable (review CR-9).
+    DeterminabilityChanged,
     NtfsMaskChanged,
     ShareMaskChanged,
     ShareStatusChanged,
@@ -106,6 +113,7 @@ impl DeltaReason {
     pub fn label(&self) -> &'static str {
         match self {
             DeltaReason::EffectiveMaskChanged => "effective mask",
+            DeltaReason::DeterminabilityChanged => "determinability",
             DeltaReason::NtfsMaskChanged => "NTFS mask",
             DeltaReason::ShareMaskChanged => "share mask",
             DeltaReason::ShareStatusChanged => "share status",
@@ -122,6 +130,9 @@ fn signature_diff(old: &PermissionSignature, new: &PermissionSignature) -> Vec<D
     let mut reasons = Vec::new();
     if old.effective_mask != new.effective_mask {
         reasons.push(DeltaReason::EffectiveMaskChanged);
+    }
+    if old.effective_determinable != new.effective_determinable {
+        reasons.push(DeltaReason::DeterminabilityChanged);
     }
     if old.ntfs_mask != new.ntfs_mask {
         reasons.push(DeltaReason::NtfsMaskChanged);
@@ -599,5 +610,37 @@ mod tests {
             format!("{err}").contains("unknown scan run id"),
             "error must say the run id is unknown; got: {err}"
         );
+    }
+
+    /// Review CR-9: a flip between "not determinable" and "exact" is named
+    /// as its own reason; an informational marker is not such a flip.
+    #[test]
+    fn determinability_flip_is_a_named_reason() {
+        let mut old = mk_perm(r"C:\shareolder", MASK_READ);
+        old.diagnostics = vec![PermissionDiagnostic::GroupResolutionIncomplete {
+            reason: "gap".into(),
+        }];
+        let new = mk_perm(r"C:\shareolder", MASK_READ);
+        assert!(!old.effective_determinable() && new.effective_determinable());
+        let delta = diff_permission_lists(vec![old], vec![new]);
+        let DeltaKind::Changed { reasons, .. } = &delta[0].kind else {
+            panic!("expected Changed, got {:?}", delta[0].kind);
+        };
+        assert_eq!(
+            reasons,
+            &vec![
+                DeltaReason::DeterminabilityChanged,
+                DeltaReason::DiagnosticsChanged
+            ]
+        );
+
+        let old = mk_perm(r"C:\shareolder", MASK_READ);
+        let mut new = mk_perm(r"C:\shareolder", MASK_READ);
+        new.diagnostics = vec![PermissionDiagnostic::NonCanonicalDaclOrder { at_index: 2 }];
+        let delta = diff_permission_lists(vec![old], vec![new]);
+        let DeltaKind::Changed { reasons, .. } = &delta[0].kind else {
+            panic!("expected Changed, got {:?}", delta[0].kind);
+        };
+        assert_eq!(reasons, &vec![DeltaReason::DiagnosticsChanged]);
     }
 }

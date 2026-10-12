@@ -606,9 +606,10 @@ pub struct DeltaRow {
     pub path: String,
     /// Plain-text label: "Added", "Removed", "Changed".
     pub kind_label: String,
-    /// Old rights (plain text + hex) or empty when `Added`.
+    /// Old effective right (label + hex; `NOT DETERMINABLE (known data: …)`
+    /// when not determinable, review CR-9) or empty when `Added`.
     pub old_rights: String,
-    /// New rights (plain text + hex) or empty when `Removed`.
+    /// New effective right, same wording, or empty when `Removed`.
     pub new_rights: String,
 }
 
@@ -2312,65 +2313,93 @@ fn compute_delta(
         .compare_scans(&old_id, &new_id)
         .map_err(|e| format!("comparison failed: {e}"))?;
 
-    Ok(entries
-        .into_iter()
-        .map(|entry| {
-            use persistence::DeltaKind;
-            match entry.kind {
-                DeltaKind::Added => DeltaRow {
-                    path: entry.path.0,
-                    kind_label: "Added".into(),
-                    old_rights: String::new(),
-                    new_rights: entry.new_perm.map(format_rights).unwrap_or_default(),
-                },
-                DeltaKind::Removed => DeltaRow {
-                    path: entry.path.0,
-                    kind_label: "Removed".into(),
-                    old_rights: entry.old_perm.map(format_rights).unwrap_or_default(),
-                    new_rights: String::new(),
-                },
-                DeltaKind::Changed {
-                    old_mask,
-                    new_mask,
-                    reasons,
-                } => {
-                    // Code review 2026-06-07 finding 3: in addition to the
-                    // effective mask, show the concrete change reasons
-                    // ("NTFS mask + share status") so audit-relevant
-                    // changes with an unchanged final mask become
-                    // visible — without this the row would appear but
-                    // old/new would look identical in the UI.
-                    let reasons_label = reasons
-                        .iter()
-                        .map(|r| r.label())
-                        .collect::<Vec<_>>()
-                        .join(" + ");
-                    let kind_label = if reasons_label.is_empty() {
-                        "Changed".into()
-                    } else {
-                        format!("Changed ({reasons_label})")
-                    };
-                    DeltaRow {
-                        path: entry.path.0,
-                        kind_label,
-                        old_rights: format_mask(old_mask.0),
-                        new_rights: format_mask(new_mask.0),
-                    }
-                }
+    Ok(entries.into_iter().map(delta_row).collect())
+}
+
+/// One delta entry as a display row. Pure, so the wording is testable
+/// without a database.
+fn delta_row(entry: persistence::DeltaEntry) -> DeltaRow {
+    use persistence::DeltaKind;
+    match entry.kind {
+        DeltaKind::Added => DeltaRow {
+            path: entry.path.0,
+            kind_label: "Added".into(),
+            old_rights: String::new(),
+            new_rights: entry
+                .new_perm
+                .as_ref()
+                .map(format_rights)
+                .unwrap_or_default(),
+        },
+        DeltaKind::Removed => DeltaRow {
+            path: entry.path.0,
+            kind_label: "Removed".into(),
+            old_rights: entry
+                .old_perm
+                .as_ref()
+                .map(format_rights)
+                .unwrap_or_default(),
+            new_rights: String::new(),
+        },
+        DeltaKind::Changed {
+            old_mask,
+            new_mask,
+            reasons,
+        } => {
+            // Code review 2026-06-07 finding 3: in addition to the
+            // effective mask, show the concrete change reasons
+            // ("NTFS mask + share status") so audit-relevant
+            // changes with an unchanged final mask become
+            // visible — without this the row would appear but
+            // old/new would look identical in the UI.
+            let reasons_label = reasons
+                .iter()
+                .map(|r| r.label())
+                .collect::<Vec<_>>()
+                .join(" + ");
+            let kind_label = if reasons_label.is_empty() {
+                "Changed".into()
+            } else {
+                format!("Changed ({reasons_label})")
+            };
+            DeltaRow {
+                path: entry.path.0,
+                kind_label,
+                old_rights: entry
+                    .old_perm
+                    .as_ref()
+                    .map(format_rights)
+                    .unwrap_or_else(|| format_mask_without_evidence(old_mask.0)),
+                new_rights: entry
+                    .new_perm
+                    .as_ref()
+                    .map(format_rights)
+                    .unwrap_or_else(|| format_mask_without_evidence(new_mask.0)),
             }
-        })
-        .collect())
+        }
+    }
 }
 
-/// Formats the effective permission of an `EffectivePermission` as a
-/// "label (0x...)" string for the delta display.
-fn format_rights(perm: EffectivePermission) -> String {
-    format_mask(perm.effective_mask.0)
+/// The effective right of a stored result for the delta display — a fact
+/// only when determinable, in the wording of every other surface (review
+/// CR-9, ADR 0065). The compact form keeps "NOT DETERMINABLE" at the start,
+/// visible even in the narrow, eliding table column.
+fn format_rights(perm: &EffectivePermission) -> String {
+    let mask = perm.effective_mask.0;
+    format!(
+        "{} (0x{mask:08X})",
+        permission_engine::rights_label_compact(mask, perm.effective_determinable())
+    )
 }
 
-fn format_mask(mask: u32) -> String {
-    let rights = NormalizedRights::new(mask);
-    format!("{} (0x{:08X})", rights.display_name(), mask)
+/// A mask without its stored result cannot show that it is determinable,
+/// so it is never stated as a fact. Unreachable today (`Changed` always
+/// carries both results) — kept honest rather than optimistic.
+fn format_mask_without_evidence(mask: u32) -> String {
+    format!(
+        "{} (0x{mask:08X})",
+        permission_engine::rights_label_compact(mask, false)
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -3892,5 +3921,78 @@ mod tests {
             .err()
             .expect("must be an error");
         assert!(err.contains("needs an LDAP connection"), "{err}");
+    }
+
+    /// Review CR-9: the delta view never states an undeterminable right as a
+    /// fact, and names a flip between "not determinable" and "exact".
+    #[test]
+    fn delta_rows_state_determinability_like_every_other_surface() {
+        use adpa_core::model::{
+            AccessMask, EffectivePermission, Identity, IdentityKind, LocalGroupEvalStatus,
+            NormalizedPath, PermissionDiagnostic, PermissionPath, ShareEvalStatus, Sid,
+        };
+        use permission_engine::NOT_DETERMINABLE;
+        const READ: u32 = 0x0012_0089;
+        let perm = |path: &str, diagnostics: Vec<PermissionDiagnostic>| EffectivePermission {
+            identity: Identity {
+                sid: Sid("S-1-5-21-9-9-9-1234".to_owned()),
+                name: None,
+                domain: None,
+                kind: IdentityKind::User,
+                disabled: false,
+                user_principal_name: None,
+                sid_history_count: 0,
+                sid_history: Vec::new(),
+            },
+            path: NormalizedPath(path.to_owned()),
+            ntfs_mask: AccessMask(READ),
+            share_mask: None,
+            effective_mask: AccessMask(READ),
+            path_explanation: PermissionPath { steps: vec![] },
+            share_status: ShareEvalStatus::NotApplicable,
+            local_group_status: LocalGroupEvalStatus::NotQueried,
+            contributing_sids: vec![],
+            unsupported_ace_count: 0,
+            matched_aces: vec![],
+            diagnostics,
+        };
+        let gap = || {
+            vec![PermissionDiagnostic::GroupResolutionIncomplete {
+                reason: "gap".into(),
+            }]
+        };
+        let db = Database::open_in_memory().expect("in-memory DB");
+        let old = persist_scan(
+            &db,
+            r"C:\Root",
+            &[perm(r"C:\Root\Same", gap()), perm(r"C:\Root\Gone", gap())],
+            &[],
+            false,
+            Utc::now(),
+        )
+        .expect("old run");
+        let new = persist_scan(
+            &db,
+            r"C:\Root",
+            &[perm(r"C:\Root\Same", vec![]), perm(r"C:\Root\New", gap())],
+            &[],
+            false,
+            Utc::now(),
+        )
+        .expect("new run");
+        let rows = compute_delta(&db, &old, &new).expect("delta");
+        let row = |path: &str| rows.iter().find(|r| r.path == path).expect(path);
+
+        let undeterminable = |s: &str| {
+            s.starts_with(&format!("{NOT_DETERMINABLE} (known data: "))
+                && s.ends_with("(0x00120089)")
+        };
+        assert!(undeterminable(&row(r"C:\Root\Gone").old_rights));
+        assert!(undeterminable(&row(r"C:\Root\New").new_rights));
+        let same = row(r"C:\Root\Same");
+        assert_eq!(same.kind_label, "Changed (determinability + diagnostics)");
+        assert!(undeterminable(&same.old_rights));
+        assert!(!same.new_rights.contains(NOT_DETERMINABLE));
+        assert!(same.new_rights.ends_with("(0x00120089)"));
     }
 }

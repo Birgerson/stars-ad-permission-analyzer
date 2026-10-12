@@ -57,7 +57,9 @@ Organization`.
      data"; the summary card reads "Not determinable";
    - GUI: Analyze rights label and scan-row label in the same wording,
      status-derived reasons listed with the markers, undeterminable rows
-     never shown as unremarkable;
+     never shown as unremarkable; the Delta tab states old and new rights
+     the same way and names a flip as the reason "determinability"
+     (added 2026-10-12, review finding CR-9);
    - explanation path (CLI, CSV `explanation`, HTML details, GUI steps) —
      added 2026-10-12, review finding CR-5: the path is built from the
      finished result, its "NTFS effective", "Share permission" and
