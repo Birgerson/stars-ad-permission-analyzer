@@ -98,10 +98,17 @@ that applies.
   explicit ACE list. Administrative system shares (`STYPE_SPECIAL`) are
   hidden unless `--include-admin` is passed; a hidden `$` data share is
   not administrative and is always listed, flagged as hidden. A share whose DACL could not be read is
-  listed *with its reason* rather than dropped. The GUI's **`Shares`
-  tab** shows the same inventory (admin shares behind a checkbox) and
-  additionally resolves ACE SIDs to account names where the local LSA
-  can.
+  listed *with its reason* rather than dropped. A share that reports **no
+  security descriptor** (`C$`, `ADMIN$`) reads NOT DETERMINABLE — its
+  built-in default (administrators and backup operators) is not visible,
+  so it is never shown as unrestricted (ADR 0075). The GUI's **`Shares`
+  tab** and `adpa shares` resolve the ACE SIDs to account names — on the
+  share server for its own accounts and groups.
+- **Share provenance** (ADR 0074): the explanation lists each share ACE
+  that applies to the account with what it granted or denied — from the
+  same DACL read as the share mask — and names the side that limits the
+  result ("Limited by the share: NTFS grants Modify, the share allows Read
+  & Execute").
 
 ### Active Directory trust inventory (read-only)
 
@@ -125,7 +132,19 @@ that applies.
   `NetLocalGroupGetMembers` (ADR 0029) — the mediator layer (e.g.
   `Domain Admins → BUILTIN\Administrators`) is visible in the path.
 - **SID → name table** is built once per scan; every explanation
-  path renders `DOMAIN\Name` instead of raw SIDs.
+  path renders `DOMAIN\Name` instead of raw SIDs — including the analysed
+  account, the local groups and a member server's own accounts, resolved
+  on that server.
+- **Every bit accounted for** (ADR 0074): the `[granted …]` steps add up to
+  the NTFS result (invariant test over 3000 generated DACLs). Step 2
+  states how the access is evaluated ("Evaluated as: network logon over
+  SMB — the token receives …"); NULL / empty DACLs and "no ACE applies"
+  have their own steps; every ACE that only bounds the result is listed as
+  `UNCERTAIN` with its reason; decisive memberships are marked; a Deny
+  step separates what it takes away from what it denies in advance.
+- **Long membership lists** collapse in the GUI Analyze tab and the HTML
+  report to the memberships that matter (decisive, deny-only, uncertain);
+  CSV, JSON and the CLI keep the full list.
 
 ### Scan, persistence, and export
 
@@ -445,8 +464,14 @@ permanently not part of the product:
     `LocalAccountTokenFilterPolicy` = 1 (the built-in Administrator only with
     `FilterAdministratorToken` = 1) — ADR 0070; domain accounts are not
     filtered over the network.
-  Stars cannot see elevation or these policies: Deny ACEs for the groups
-  apply, Allow ACEs give a range (`UacFilteredGroups`).
+  Stars reads `LocalAccountTokenFilterPolicy` / `FilterAdministratorToken`
+  read-only from the target (ADR 0076, lab matrix of all combinations):
+  over SMB the filtering of a local account is then exact (marker
+  `RemoteUacPolicy`), and so is the built-in Administrator on a local path
+  with `FilterAdministratorToken` = 0 (unsplit token). A local session's
+  elevation is not visible to any policy: there Deny ACEs for the groups
+  apply and Allow ACEs give a range (`UacFilteredGroups`). Unreadable
+  policies give the same range.
 - **Cryptographic Operators** is deny-only in a filtered token and absent —
   over the network too — when the account is also in another filtered group
   (lab) — its token entry is always bounded, never assumed, whichever source

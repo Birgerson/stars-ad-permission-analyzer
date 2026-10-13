@@ -52,7 +52,12 @@ To answer them, Stars reads:
 - **NTFS DACL** of every path — allow / deny ACEs, explicit and
   inherited entries, inheritance flags, owner.
 - **SMB share DACL** and combines it restrictively with the NTFS mask
-  (Share ∩ NTFS).
+  (Share ∩ NTFS), listing each share ACE and the side that limits the
+  result.
+- **User Account Control and anonymous policies** of the target, read-only
+  (`LocalAccountTokenFilterPolicy`, `FilterAdministratorToken`,
+  `EveryoneIncludesAnonymous`) — so a local administrator over SMB gets an
+  exact answer instead of a range.
 - **Reparse points / junctions / symlinks** — followed; a real cycle
   (a junction back into its own parent chain) and a duplicate target
   (two junctions to the same directory) are told apart and each surfaced
@@ -688,6 +693,9 @@ tabs once a mode other than Off is selected (range 1–600, default 10).
 - Accounts and groups that exist only on that server (its own local
   accounts and groups) are **named** by asking the server itself; a SID
   nobody can resolve stays visible as the SID.
+- Over SMB Stars also reads, read-only, a few policy values from the target server's registry — `EnableLUA`, `LocalAccountTokenFilterPolicy`, `FilterAdministratorToken`, `EveryoneIncludesAnonymous` — to decide User Account Control and anonymous access exactly (remote registry, `KEY_QUERY_VALUE` only). On Windows Server the *Remote Registry* service may start on demand for such a read (a Windows trigger start); Stars changes nothing. If the read is denied or the service is disabled, the result stays an honest range. Rights needed: the
+  same administrative access to the server that reading its shares and
+  local groups already requires.
 
 **Reading the CLI `analyze` report:** "Resolved Groups" lists every group
 of the evaluated token — domain and local — once, with name, SID and

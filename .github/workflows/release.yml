@@ -141,8 +141,14 @@ jobs:
             - No additional software required (self-contained EXE)
 
             ### Features
-            - NTFS ACL analysis with the full permission path, and a
-              path-centric "who has access?" trustee view
+            - NTFS ACL analysis with the full permission path — every bit of
+              the result accounted for, share ACEs and the limiting side
+              included — and a path-centric "who has access?" trustee view
+            - Results that cannot be determined read NOT DETERMINABLE with
+              the reason and the range — never a guessed value as fact
+            - User Account Control, Guest and anonymous decided from the
+              target's policies (read-only), exact for local administrators
+              over SMB
             - Recursive tree scan with a live result table, cancellable
             - Risk analysis — 6 rules emitting 11 finding types (Full Control,
               Write Access incl. partial content write, permission/owner change,
