@@ -10,6 +10,32 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-10-13
+
+**Local administrators: exact instead of a range.**
+
+User Account Control decides whether a local administrator's token is
+filtered. Until now Stars could not see the deciding policies and gave a
+local administrator over SMB "between No access and Full Control". Stars
+now reads them read-only from the target (remote registry) and decides
+exactly — from a lab matrix of all policy combinations measured with real
+SMB access and real logon tokens.
+
+**Verification (2026-10-13):** MS-01 campaign — 81 formerly bounded rows
+now exact, 45 of them checked against real SMB access, 0 violations; a
+local scan for the built-in Administrator 27 of 27 rows identical to the
+Windows authorization oracle; the domain campaign unchanged (21,184 factual
+rows identical to Windows). 906 automated tests.
+
+Why minor: a new capability (reading the target's UAC policy) and a new
+informational marker (`RemoteUacPolicy`); additions only.
+
+### Known issues
+
+- A session's elevation on a local path stays bounded (except the built-in
+  Administrator with `FilterAdministratorToken` = 0); Everyone in an
+  anonymous token stays bounded (`EveryoneIncludesAnonymous` is not read).
+
 ### Added
 
 - **Remote UAC decided from the target's policies** (ADR 0076, known
