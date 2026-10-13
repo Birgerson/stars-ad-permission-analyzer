@@ -735,7 +735,11 @@ pub fn print_risk_findings(findings: &[RiskFinding]) {
 /// listed with the failure reason instead of being dropped, and unevaluated
 /// ACEs are called out per share so a mask is never presented as complete
 /// when it is not.
-pub fn print_shares(result: &ShareScanResult, include_admin: bool) {
+pub fn print_shares(
+    result: &ShareScanResult,
+    include_admin: bool,
+    sid_names: &BTreeMap<String, String>,
+) {
     header("SMB Shares (read-only)");
 
     let visible: Vec<&Share> = result
@@ -787,11 +791,11 @@ pub fn print_shares(result: &ShareScanResult, include_admin: bool) {
                     // Review CR-15: no security descriptor is not "unrestricted".
                     ShareDacl::NoSecurityDescriptor => {
                         println!("    Permissions  : NOT DETERMINABLE — no security descriptor reported;");
-                        println!("                   the server applies a built-in default (an");
                         println!(
-                            "                   administrative share admits only administrators"
+                            "                   the server applies a built-in default Stars cannot"
                         );
-                        println!("                   and backup operators)");
+                        println!("                   see (C$, ADMIN$: administrators and backup");
+                        println!("                   operators only)");
                     }
                     ShareDacl::Acl(perms) if perms.is_empty() => {
                         println!("    Permissions  : empty DACL — no access via this share");
@@ -806,7 +810,8 @@ pub fn print_shares(result: &ShareScanResult, include_admin: bool) {
                             let label = NormalizedRights::new(p.mask.0).label();
                             println!(
                                 "      {kind}  {:<46}  {label} (0x{:08X})",
-                                p.sid.0, p.mask.0
+                                trustee_label(&p.sid.0, sid_names),
+                                p.mask.0
                             );
                         }
                     }

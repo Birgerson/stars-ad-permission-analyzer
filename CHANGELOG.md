@@ -12,6 +12,13 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **`adpa shares` names the share trustees** (review finding CR-4,
+  completed): the CLI share listing printed bare SIDs; it now resolves them
+  — on the server itself for its own accounts and groups. The "no security
+  descriptor" text no longer claims the administrators-only default for
+  every such share (not true for `IPC$`), only for `C$` / `ADMIN$`, where
+  it is lab-verified (ADR 0075).
+
 - **Guest and anonymous: the exact rule, measured** (ADR 0072 amended,
   known limitation L17 largely closed). Real Guest tokens (network and
   interactive) and the anonymous token measured on a Windows Server 2025
