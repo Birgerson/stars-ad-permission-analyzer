@@ -71,6 +71,25 @@ The documented behaviour is confirmed. Decision, replacing points 1–2:
 - The marker `GuestOrAnonymousToken` names both; the "Evaluated as" step
   and the UNCERTAIN reason say the same.
 
+## EveryoneIncludesAnonymous read from the target (2026-10-14, L17)
+
+`anon-token.ps1` on MS-01: the anonymous token has **no groups** with
+`EveryoneIncludesAnonymous` = 0 and exactly **Everyone** with 1 (value
+restored afterwards). Stars now reads the value read-only from the target
+(`ad_resolver::read_everyone_includes_anonymous`, `HKLM\SYSTEM\
+CurrentControlSet\Control\Lsa`, remote registry, `KEY_QUERY_VALUE`):
+`permission_engine::engine::anonymous_everyone` maps absent / 0 → no
+Everyone, 1 → Everyone, anything else → not read (bounded, as before).
+`PermissionEvaluationInput::anonymous_everyone` carries it; the token,
+the bounds, the local-group expansion (`expand_local_groups_with`), the
+share token and the "Evaluated as" step follow it. Live: `S-1-5-7` over
+`F05_LocalGroupEveryone` — with 0 no Everyone, with 1 Everyone and the
+local group `msg_every` through it.
+
+Not measured: whether a real SMB null session carries `NETWORK` (Stars
+adds it for every SMB logon) — an anonymous result over SMB keeps that
+assumption.
+
 ## Consequences
 
 - No Guest or anonymous right is stated as a fact through a well-known the

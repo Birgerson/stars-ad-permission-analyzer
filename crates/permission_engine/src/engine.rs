@@ -56,6 +56,10 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         for filtered in &input.uac_filtered_group_sids {
             user_sids.remove(&filtered.0);
         }
+        // L17: EveryoneIncludesAnonymous read from the target decides Everyone.
+        if anonymous_gets_everyone(&input.identity.sid.0, input.anonymous_everyone) {
+            user_sids.insert(SID_EVERYONE.to_owned());
+        }
         // Lab (ADR 0071): Windows leaves Cryptographic Operators out of the
         // token when the account is also in another UAC-filtered group — over
         // the network too — and makes it deny-only in a filtered token. A
@@ -167,7 +171,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         // Review CR-8: Guest / anonymous — Authenticated Users (and, for
         // anonymous, Everyone) bound the result.
         logon_dependent_groups.extend(
-            identity_uncertain_well_knowns(&input.identity.sid.0)
+            uncertain_well_knowns_with(&input.identity.sid.0, input.anonymous_everyone)
                 .iter()
                 .map(|s| (*s).to_owned()),
         );
@@ -311,11 +315,18 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         }
         // ADR 0072: name the well-knowns a Guest / anonymous token lacks
         // (absent) or may lack (uncertain).
-        let guest_sids: Vec<String> = identity_absent_well_knowns(&input.identity.sid.0)
+        let mut guest_sids: Vec<String> = identity_absent_well_knowns(&input.identity.sid.0)
             .iter()
-            .chain(identity_uncertain_well_knowns(&input.identity.sid.0))
+            .chain(uncertain_well_knowns_with(
+                &input.identity.sid.0,
+                input.anonymous_everyone,
+            ))
             .map(|s| (*s).to_owned())
             .collect();
+        // L17: Everyone read as absent from an anonymous token is named too.
+        if input.identity.sid.0 == SID_ANONYMOUS_LOGON && input.anonymous_everyone == Some(false) {
+            guest_sids.push(SID_EVERYONE.to_owned());
+        }
         if !guest_sids.is_empty() {
             diagnostics.push(PermissionDiagnostic::GuestOrAnonymousToken { sids: guest_sids });
         }
@@ -423,6 +434,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             uncertain_sids: &logon_dependent_groups,
             uncertain_owner,
             uac_certain_reason: uac_certain_reason.as_deref(),
+            anonymous_everyone: input.anonymous_everyone,
             ntfs_determinable: result.ntfs_determinable(),
             share_determinable: result.share_determinable(),
             effective_determinable: result.effective_determinable(),
@@ -532,12 +544,36 @@ pub fn expand_local_groups(
     groups: &[LocalGroupDescriptor],
     access_context: AccessContext,
 ) -> LocalGroupExpansion {
-    let token =
+    expand_local_groups_with(
+        user_sid,
+        sid_history,
+        memberships,
+        groups,
+        access_context,
+        None,
+    )
+}
+
+/// [`expand_local_groups`] with `EveryoneIncludesAnonymous` as read from the
+/// target (L17): a local group an anonymous logon reaches through Everyone is
+/// then a membership (1) or none (0) instead of uncertain.
+pub fn expand_local_groups_with(
+    user_sid: &str,
+    sid_history: &[Sid],
+    memberships: &[GroupMembership],
+    groups: &[LocalGroupDescriptor],
+    access_context: AccessContext,
+    anonymous_everyone: Option<bool>,
+) -> LocalGroupExpansion {
+    let mut token =
         build_token_sids_with_context(user_sid, sid_history, memberships, &[], access_context);
+    if anonymous_gets_everyone(user_sid, anonymous_everyone) {
+        token.insert(SID_EVERYONE.to_owned());
+    }
     let mut out = LocalGroupExpansion::default();
     // Review CR-8: a local group reached only through a well-known a Guest /
     // anonymous token may lack is uncertain, not a membership.
-    let uncertain_well_knowns = identity_uncertain_well_knowns(user_sid);
+    let uncertain_well_knowns = uncertain_well_knowns_with(user_sid, anonymous_everyone);
     for group in groups {
         let mut certain: Vec<Sid> = group
             .members
@@ -628,6 +664,37 @@ pub fn identity_uncertain_well_knowns(user_sid: &str) -> &'static [&'static str]
         &[SID_EVERYONE]
     } else {
         &[]
+    }
+}
+
+/// The uncertain well-knowns once the target's `EveryoneIncludesAnonymous`
+/// is known (L17): with a value read, Everyone is decided for an anonymous
+/// logon (measured on MS-01: 0 → absent, 1 → present) and no longer
+/// uncertain.
+pub fn uncertain_well_knowns_with(
+    user_sid: &str,
+    anonymous_everyone: Option<bool>,
+) -> &'static [&'static str] {
+    if user_sid == SID_ANONYMOUS_LOGON && anonymous_everyone.is_some() {
+        &[]
+    } else {
+        identity_uncertain_well_knowns(user_sid)
+    }
+}
+
+/// Whether an anonymous token certainly carries Everyone (L17).
+pub fn anonymous_gets_everyone(user_sid: &str, anonymous_everyone: Option<bool>) -> bool {
+    user_sid == SID_ANONYMOUS_LOGON && anonymous_everyone == Some(true)
+}
+
+/// `EveryoneIncludesAnonymous` as read from the target (L17): absent or 0 →
+/// `Some(false)`, 1 → `Some(true)`; any other or unreadable value → `None`
+/// (stays bounded, never guessed).
+pub fn anonymous_everyone(value: &PolicyDword) -> Option<bool> {
+    match value {
+        PolicyDword::Absent | PolicyDword::Value(0) => Some(false),
+        PolicyDword::Value(1) => Some(true),
+        _ => None,
     }
 }
 
@@ -1269,7 +1336,7 @@ fn uncertain_ace_reason(
                 .to_owned(),
         );
     }
-    if identity_uncertain_well_knowns(user_sid).contains(&sid) {
+    if identity_uncertain_well_knowns(user_sid).contains(&sid) && uncertain_sids.contains(sid) {
         return Some(
             "Everyone is in an anonymous token only if the target sets \
              EveryoneIncludesAnonymous = 1 — Stars does not read that policy (ADR 0072)"
@@ -1425,18 +1492,39 @@ pub fn access_context_summary(context: AccessContext) -> &'static str {
 /// rules as `build_token_sids_with_context`, `identity_uncertain_well_knowns`
 /// and `uac_filtered_groups`, so the text and the computation agree.
 pub fn access_context_step(context: AccessContext, user_sid: &str) -> String {
-    let uncertain = identity_uncertain_well_knowns(user_sid);
+    access_context_step_with(context, user_sid, None)
+}
+
+/// [`access_context_step`] with `EveryoneIncludesAnonymous` as read from the
+/// target (L17).
+pub fn access_context_step_with(
+    context: AccessContext,
+    user_sid: &str,
+    anonymous_everyone: Option<bool>,
+) -> String {
+    let uncertain = uncertain_well_knowns_with(user_sid, anonymous_everyone);
     let absent = identity_absent_well_knowns(user_sid);
     let universal = match (
         uncertain.contains(&SID_EVERYONE),
         absent.contains(&SID_AUTHENTICATED_USERS),
     ) {
+        (false, true) if user_sid == SID_ANONYMOUS_LOGON => {
+            if anonymous_gets_everyone(user_sid, anonymous_everyone) {
+                "Everyone (S-1-1-0) — the target sets EveryoneIncludesAnonymous = 1; no \
+                 Authenticated Users (anonymous logon)"
+                    .to_owned()
+            } else {
+                "no Everyone and no Authenticated Users — the target leaves \
+                 EveryoneIncludesAnonymous at 0 (anonymous logon)"
+                    .to_owned()
+            }
+        }
         (false, false) => "Everyone (S-1-1-0), Authenticated Users (S-1-5-11)".to_owned(),
         (false, true) => {
             "Everyone (S-1-1-0); no Authenticated Users (a Guest token never has it)".to_owned()
         }
-        _ => "no Authenticated Users (anonymous logon); Everyone only if the target sets \
-              EveryoneIncludesAnonymous = 1 — not read, so bounded"
+        (true, _) => "no Authenticated Users (anonymous logon); Everyone only if the target \
+                      sets EveryoneIncludesAnonymous = 1 — not read, so bounded"
             .to_owned(),
     };
     let summary = access_context_summary(context);
@@ -1512,6 +1600,8 @@ struct ExplanationInput<'a> {
     uncertain_owner: Option<&'a str>,
     /// ADR 0076: remote UAC certainly filters the deny-only groups — why.
     uac_certain_reason: Option<&'a str>,
+    /// L17: EveryoneIncludesAnonymous as read from the target.
+    anonymous_everyone: Option<bool>,
     /// Determinability of the three values, from the finished result
     /// (`EffectivePermission::ntfs_determinable` etc., review CR-5).
     ntfs_determinable: bool,
@@ -1547,6 +1637,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         uncertain_sids,
         uncertain_owner,
         uac_certain_reason,
+        anonymous_everyone,
         ntfs_determinable,
         share_determinable,
         effective_determinable,
@@ -1572,7 +1663,11 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     // 1c. Review CR-6: how the access is evaluated and which SIDs that adds
     // to the token — memberships "via … → INTERACTIVE → …" are explained by
     // this step, and so are the bounds of LOCAL and UAC-filtered groups.
-    steps.push(access_context_step(access_context, &identity.sid.0));
+    steps.push(access_context_step_with(
+        access_context,
+        &identity.sid.0,
+        anonymous_everyone,
+    ));
 
     // 2. Group memberships.
     //
@@ -2156,6 +2251,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2182,6 +2278,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2208,6 +2305,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2234,6 +2332,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3115,6 +3214,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3145,6 +3245,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3171,6 +3272,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3738,6 +3840,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 4,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3767,6 +3870,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3829,6 +3933,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -3867,6 +3972,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -4539,6 +4645,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -4690,6 +4797,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4726,6 +4834,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4761,6 +4870,7 @@ mod tests {
             logon_dependent_group_sids: Vec::new(),
             uac_filtered_group_sids: Vec::new(),
             remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+            anonymous_everyone: None,
             access_context: AccessContext::Unspecified,
             unsupported_share_ace_count: 0,
             sid_names: std::collections::BTreeMap::new(),
@@ -5119,6 +5229,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5160,6 +5271,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5200,6 +5312,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5237,6 +5350,7 @@ mod tests {
                     logon_dependent_group_sids: Vec::new(),
                     uac_filtered_group_sids: Vec::new(),
                     remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                    anonymous_everyone: None,
                     access_context: AccessContext::Unspecified,
                     unsupported_share_ace_count: 0,
                     sid_names: std::collections::BTreeMap::new(),
@@ -5292,6 +5406,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5326,6 +5441,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5398,6 +5514,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -5460,6 +5577,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5508,6 +5626,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5559,6 +5678,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5598,6 +5718,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 // Key setting: local-looking input, explicit RemoteSmb —
                 // mirrors what CLI/GUI now produce via for_path_with_smb
                 // when --smb-server / --share-name is provided.
@@ -5631,6 +5752,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::LocalInteractive,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5809,6 +5931,7 @@ mod tests {
                 logon_dependent_group_sids: vec![Sid(LG_ORG.into())],
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::RemoteSmb,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5840,6 +5963,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: vec![Sid(ADMINS.into())],
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::RemoteSmb,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -6001,6 +6125,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::RemoteSmb,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -6593,6 +6718,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: vec![Sid(ADMINS.into())],
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone: None,
                 access_context: AccessContext::LocalInteractive,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -6961,6 +7087,7 @@ mod tests {
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: vec![Sid(ADMINS.into())],
                 remote_uac,
+                anonymous_everyone: None,
                 access_context: AccessContext::RemoteSmb,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -6995,5 +7122,101 @@ mod tests {
         // Unknown keeps the range (ADR 0070).
         let p = eval_remote_uac(RemoteUacFiltering::Unknown);
         assert!(logon_marker(&p).is_some());
+    }
+
+    // --- L17: EveryoneIncludesAnonymous read from the target ---
+
+    fn eval_anonymous(anonymous_everyone: Option<bool>) -> EffectivePermission {
+        let mut input = base_input(
+            user(SID_ANONYMOUS_LOGON),
+            fso(None, vec![allow_ace(SID_EVERYONE, MASK_READ, false)]),
+        );
+        input.access_context = AccessContext::RemoteSmb;
+        input.anonymous_everyone = anonymous_everyone;
+        DefaultPermissionEngine.evaluate(input).unwrap()
+    }
+
+    /// Measured on MS-01: the anonymous token has Everyone exactly when
+    /// EveryoneIncludesAnonymous = 1. Read → exact; not read → bounded.
+    #[test]
+    fn everyone_for_an_anonymous_logon_follows_the_policy_read() {
+        let off = eval_anonymous(Some(false));
+        assert_eq!(off.ntfs_mask.0, 0);
+        assert!(logon_marker(&off).is_none() && off.effective_determinable());
+        assert!(off.diagnostics.iter().any(|d| matches!(
+            d,
+            PermissionDiagnostic::GuestOrAnonymousToken { sids } if sids.contains(&SID_EVERYONE.to_owned())
+        )));
+        let on = eval_anonymous(Some(true));
+        assert_eq!(on.ntfs_mask.0, expand_generic_rights(MASK_READ));
+        assert!(logon_marker(&on).is_none() && on.effective_determinable());
+        let unknown = eval_anonymous(None);
+        assert!(logon_marker(&unknown).is_some(), "not read: bounded");
+        for (p, needle) in [
+            (&off, "no Everyone and no Authenticated Users"),
+            (&on, "EveryoneIncludesAnonymous = 1"),
+            (&unknown, "not read, so bounded"),
+        ] {
+            assert!(
+                p.path_explanation.steps[1].contains(needle),
+                "{:?}",
+                p.path_explanation.steps[1]
+            );
+        }
+    }
+
+    #[test]
+    fn local_group_through_everyone_for_anonymous_follows_the_policy_read() {
+        let groups = vec![local_group("S-1-5-32-545", "Users", &[SID_EVERYONE])];
+        let with = |v| {
+            expand_local_groups_with(
+                SID_ANONYMOUS_LOGON,
+                &[],
+                &[],
+                &groups,
+                AccessContext::RemoteSmb,
+                v,
+            )
+        };
+        assert_eq!(certain_names(&with(Some(true))), vec!["Users"]);
+        let off = with(Some(false));
+        assert!(off.certain.is_empty() && uncertain_names(&off).is_empty());
+        assert_eq!(uncertain_names(&with(None)), vec!["Users"]);
+    }
+
+    /// The step agrees with the token for an anonymous logon in every case.
+    #[test]
+    fn access_context_step_agrees_with_the_anonymous_token() {
+        for v in [None, Some(false), Some(true)] {
+            let mut token = build_token_sids_with_context(
+                SID_ANONYMOUS_LOGON,
+                &[],
+                &[],
+                &[],
+                AccessContext::RemoteSmb,
+            );
+            if anonymous_gets_everyone(SID_ANONYMOUS_LOGON, v) {
+                token.insert(SID_EVERYONE.to_owned());
+            }
+            let step = access_context_step_with(AccessContext::RemoteSmb, SID_ANONYMOUS_LOGON, v);
+            assert_eq!(
+                token.contains(SID_EVERYONE),
+                step.contains("Everyone (S-1-1-0)"),
+                "{v:?}: {step}"
+            );
+            assert!(!step.contains("Authenticated Users (S-1-5-11)"));
+        }
+        assert_eq!(
+            anonymous_everyone(&adpa_core::model::PolicyDword::Absent),
+            Some(false)
+        );
+        assert_eq!(
+            anonymous_everyone(&adpa_core::model::PolicyDword::Value(1)),
+            Some(true)
+        );
+        assert_eq!(
+            anonymous_everyone(&adpa_core::model::PolicyDword::Value(7)),
+            None
+        );
     }
 }

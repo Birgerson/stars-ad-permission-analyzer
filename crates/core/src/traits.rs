@@ -137,6 +137,10 @@ pub struct PermissionEvaluationInput {
     /// do not apply), `Unknown` keeps them bounded. Callers pass
     /// `NotFiltered` with an empty `uac_filtered_group_sids`.
     pub remote_uac: RemoteUacFiltering,
+    /// ADR 0072 / L17: `EveryoneIncludesAnonymous` read from the target —
+    /// `Some(true)` puts Everyone into an anonymous token, `Some(false)`
+    /// leaves it out; `None` (not read) keeps it bounded.
+    pub anonymous_everyone: Option<bool>,
     /// Access context (local interactive / remote SMB / unspecified).
     /// Controls which well-known SIDs are added to the token implicitly
     /// (e.g. `NETWORK` for SMB, `INTERACTIVE` for local). The default
