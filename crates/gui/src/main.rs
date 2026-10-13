@@ -3562,7 +3562,7 @@ fn format_share_line(perm: &EffectivePermission) -> String {
             )
         }
         ShareEvalStatus::ReadFailed(reason) => {
-            format!("Share DACL read failed: {reason} — result may be incomplete.")
+            format!("Share permissions not determinable: {reason} — result may be incomplete.")
         }
     }
 }

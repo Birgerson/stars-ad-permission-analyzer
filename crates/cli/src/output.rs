@@ -300,7 +300,9 @@ fn share_line(result: &EffectivePermission) -> String {
             rights_statement(mask.0, result.share_determinable())
         }
         (ShareEvalStatus::ReadFailed(_), _) => {
-            format!("{NOT_DETERMINABLE} — the share permissions could not be read (see below)")
+            format!(
+                "{NOT_DETERMINABLE} — the share permissions are not determinable (reason below)"
+            )
         }
         (ShareEvalStatus::Unrestricted, _) => {
             "no restriction (NULL share DACL) — effective follows NTFS".to_owned()

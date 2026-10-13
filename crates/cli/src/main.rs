@@ -1044,7 +1044,7 @@ async fn run_analyze(
 
     if let adpa_core::model::ShareMaskStatus::ReadFailed(ref msg) = share_status {
         println!(
-            "[Warning] Share DACL could not be read — result is incomplete (effective_mask reflects NTFS only). ({msg})"
+            "[Warning] Share permissions not determinable — result is incomplete (effective_mask reflects NTFS only). ({msg})"
         );
     }
     if unsupported_share_ace_count > 0 {
@@ -1322,7 +1322,7 @@ async fn run_scan(
 
     if let adpa_core::model::ShareMaskStatus::ReadFailed(ref msg) = scan_share_status {
         println!(
-            "[Warning] Share DACL could not be read — scan results are incomplete (effective masks reflect NTFS only). ({msg})"
+            "[Warning] Share permissions not determinable — scan results are incomplete (effective masks reflect NTFS only). ({msg})"
         );
     }
     if scan_unsupported_share_ace_count > 0 {
@@ -2622,7 +2622,9 @@ fn scan_wide_uncertainty(
         ));
     }
     if let adpa_core::model::ShareMaskStatus::ReadFailed(msg) = share_status {
-        reasons.push(format!("The share permissions could not be read ({msg})."));
+        reasons.push(format!(
+            "The share permissions are not determinable ({msg})."
+        ));
     }
     if unsupported_share_ace_count > 0 {
         reasons.push(format!(
