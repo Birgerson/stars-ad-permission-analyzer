@@ -1779,18 +1779,31 @@ fn collect_local_groups_on(
     // ADR 0076: over SMB the target's policies decide remote UAC for a
     // local account — filtered groups become certainly deny-only, or are
     // enabled; unreadable policies keep them bounded.
+    // On a local path only the built-in Administrator with
+    // FilterAdministratorToken = 0 is decided (full token, measured).
     #[cfg(windows)]
-    let remote_uac = if access_context == AccessContext::RemoteSmb
-        && local_account
-        && !uac_filtered.is_empty()
-    {
-        let policy = ad_resolver::read_target_uac_policy(server);
-        permission_engine::engine::remote_uac_filtering(
-            identity.sid.0.ends_with("-500"),
-            &policy.enable_lua,
-            &policy.local_account_token_filter_policy,
-            &policy.filter_administrator_token,
-        )
+    let remote_uac = if local_account && !uac_filtered.is_empty() {
+        let builtin_administrator = identity.sid.0.ends_with("-500");
+        match access_context {
+            AccessContext::RemoteSmb => {
+                let policy = ad_resolver::read_target_uac_policy(server);
+                permission_engine::engine::remote_uac_filtering(
+                    builtin_administrator,
+                    &policy.enable_lua,
+                    &policy.local_account_token_filter_policy,
+                    &policy.filter_administrator_token,
+                )
+            }
+            AccessContext::LocalInteractive if builtin_administrator => {
+                let policy = ad_resolver::read_target_uac_policy(server);
+                permission_engine::engine::local_uac_filtering(
+                    true,
+                    &policy.enable_lua,
+                    &policy.filter_administrator_token,
+                )
+            }
+            _ => adpa_core::model::RemoteUacFiltering::Unknown,
+        }
     } else {
         adpa_core::model::RemoteUacFiltering::Unknown
     };

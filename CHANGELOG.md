@@ -20,7 +20,10 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   measured with real SMB access. A local administrator over SMB now gets an
   exact result instead of "between No access and Full Control"; the marker
   `RemoteUacPolicy` and the explanation name the values read. Unreadable
-  policies keep the bounded result.
+  policies keep the bounded result. On a local path the built-in
+  Administrator with `FilterAdministratorToken` = 0 (the default) is exact
+  as well — its interactive token is not split (measured); other accounts
+  stay bounded, because a session's elevation is not visible.
 
 ## [1.10.0] — 2026-10-13
 

@@ -1375,6 +1375,40 @@ pub fn remote_uac_filtering(
     }
 }
 
+/// User Account Control for the **interactive** token on the target itself
+/// (ADR 0076, lab-measured 2026-10-13 on MS-01 with real `LogonUser`
+/// tokens): the built-in Administrator (RID 500) gets an unsplit, full token
+/// when `FilterAdministratorToken` = 0 (the default); with 1 — and every
+/// other account always — the token is limited, and whether the session is
+/// elevated is a property of the logon Stars cannot see, so that stays
+/// `Unknown` (bounded).
+pub fn local_uac_filtering(
+    builtin_administrator: bool,
+    enable_lua: &PolicyDword,
+    filter_administrator_token: &PolicyDword,
+) -> RemoteUacFiltering {
+    if !builtin_administrator {
+        return RemoteUacFiltering::Unknown;
+    }
+    let lua = match enable_lua {
+        PolicyDword::Absent | PolicyDword::Value(1) => true,
+        _ => return RemoteUacFiltering::Unknown,
+    };
+    let fat = match filter_administrator_token {
+        PolicyDword::Absent | PolicyDword::Value(0) => false,
+        _ => return RemoteUacFiltering::Unknown,
+    };
+    if lua && !fat {
+        RemoteUacFiltering::NotFiltered {
+            reason: "read from the target: FilterAdministratorToken = 0 — the built-in \
+                     Administrator's interactive token is not split (full token, measured)"
+                .to_owned(),
+        }
+    } else {
+        RemoteUacFiltering::Unknown
+    }
+}
+
 /// Short name of the evaluated logon (review CR-6) — for report headers.
 pub fn access_context_summary(context: AccessContext) -> &'static str {
     match context {
@@ -6891,6 +6925,28 @@ mod tests {
             panic!()
         };
         assert!(reason.contains("LocalAccountTokenFilterPolicy = 0 (not set, default)"));
+    }
+
+    /// Local interactive: only RID 500 with FAT = 0 is decided (measured).
+    #[test]
+    fn local_uac_decides_only_the_unsplit_builtin_administrator() {
+        use adpa_core::model::PolicyDword::{Absent, Value};
+        assert!(matches!(
+            local_uac_filtering(true, &Absent, &Absent),
+            RemoteUacFiltering::NotFiltered { .. }
+        ));
+        assert_eq!(
+            local_uac_filtering(true, &Absent, &Value(1)),
+            RemoteUacFiltering::Unknown
+        );
+        assert_eq!(
+            local_uac_filtering(false, &Absent, &Absent),
+            RemoteUacFiltering::Unknown
+        );
+        assert_eq!(
+            local_uac_filtering(true, &Value(0), &Absent),
+            RemoteUacFiltering::Unknown
+        );
     }
 
     fn eval_remote_uac(remote_uac: RemoteUacFiltering) -> EffectivePermission {
