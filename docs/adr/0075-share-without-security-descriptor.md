@@ -47,7 +47,7 @@ no share-level restriction.
   schema change; its CLI warning says "could not be read", the reason text
   says why. A dedicated status is a later, schema-versioned change.
 - Lab verification (2026-10-13, MS-01, real SMB access): `C$` admits
-  `MS-01\Administrator` and the domain account `CORPt_uac01` (local
+  `MS-01\Administrator` and the domain account `CORP\rt_uac01` (local
   administrator, not filtered over SMB) and **denies** the UAC-filtered local
   administrator `msadmin2` and the plain user `msuser1` — the old
   "every principal passes the share layer" was wrong for them.
