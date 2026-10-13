@@ -10,34 +10,43 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-### Fixed
+## [1.10.0] — 2026-10-13
 
-- **`adpa shares` names the share trustees** (review finding CR-4,
-  completed): the CLI share listing printed bare SIDs; it now resolves them
-  — on the server itself for its own accounts and groups. The "no security
-  descriptor" text no longer claims the administrators-only default for
-  every such share (not true for `IPC$`), only for `C$` / `ADMIN$`, where
-  it is lab-verified (ADR 0075).
+**How every right comes about — traceable in every surface, lab-proven.**
 
-- **Guest and anonymous: the exact rule, measured** (ADR 0072 amended,
-  known limitation L17 largely closed). Real Guest tokens (network and
-  interactive) and the anonymous token measured on a Windows Server 2025
-  member server: Authenticated Users is never in them, a Guest token
-  always has Everyone, the anonymous token has Everyone only with
-  `EveryoneIncludesAnonymous` = 1. Authenticated Users ACEs therefore no
-  longer bound a Guest or anonymous result — they do not apply, and the
-  result is exact; only Everyone stays bounded for an anonymous logon
-  (the policy is not read).
+Completes the code review of 2026-10-12 (priorities 2–4) and the lab proofs
+(priority 5). The explanation path now accounts for every bit of a result
+(an invariant test over 3000 generated DACLs), states how the access is
+evaluated, lists every ACE that only bounds a result with its own reason,
+explains NULL / empty DACLs and the share side ACE by ACE, and names the
+limiting side. Names replace raw SIDs, also for a member server's own
+accounts. Two misinformation defects found along the way are fixed: a share
+without security descriptor (`C$`, `ADMIN$`) was reported as unrestricted,
+and Guest / anonymous rights now follow a real token measurement.
 
-- **A share without security descriptor is no longer "unrestricted"**
-  (finding CR-15, ADR 0075). For the administrative shares (`C$`,
-  `ADMIN$`, `IPC$`) Windows reports no security descriptor; Stars treated
-  that as a NULL DACL — "every principal passes the share layer" — and an
-  analysis over `\\server\C$\…` combined NTFS with an unrestricted share,
-  although such a share admits only administrators and backup operators.
-  Now the share permission reads NOT DETERMINABLE with the reason in
-  `adpa shares`, the Shares tab, the trustee view and every analysis; a
-  real NULL DACL is unchanged.
+**Lab proofs (2026-10-13, two-forest lab + member server MS-01):** CR-1 (a
+local administrator over SMB is never granted a share right through
+Administrators as fact — real SMB access confirms), Guest / anonymous tokens
+measured (ADR 0072), `C$` default measured (ADR 0075), names resolved on the
+target server, the UAC / INTERACTIVE texts and NULL / empty DACL steps
+reviewed against real output, a share-limited result confirmed by real SMB
+access, the MS-01 campaign (108 exact, 81 bounded, 75 against real SMB
+access, 0 violations) and the domain campaign against the Windows
+authorization oracle (32 identities, 21,184 rows stated as fact, all
+identical to Windows).
+
+Why minor: new explanation steps, the share provenance and named share
+trustees are visible features; no public API or on-disk format was removed,
+the additions (`DeltaReason::DeterminabilityChanged`,
+`ShareDacl::NoSecurityDescriptor`, `GuestOrAnonymousToken`) are additive.
+
+### Known issues
+
+- L15 (remainder), L16 carried forward; L17 reduced to: Everyone in an
+  anonymous token is bounded (`EveryoneIncludesAnonymous` is not read).
+- A share without security descriptor is carried as the status
+  "share DACL read failed" with the precise reason (a dedicated status is a
+  later, schema-versioned change, ADR 0075).
 
 ### Added
 
@@ -46,19 +55,11 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   account is listed in the explanation path with what it granted or
   denied (from the same DACL read as the share mask), and a step names the
   limiting side — share or NTFS.
-
 - **Decisive memberships marked, deletion through the folder named**
   (review findings CR-12, CR-14, ADR 0074). A membership whose group's ACE
   decided bits of the result is marked `[decisive — …]`; a file whose
   result lacks DELETE notes that "Delete subfolders and files" on the
   parent folder still allows deleting it.
-
-### Changed
-
-- **Deny wording** (review finding CR-13, ADR 0074): the Deny aggregation
-  step separates bits a Deny really takes away (an Allow ACE of the token
-  would otherwise grant them) from bits it only denies in advance.
-
 - **Bounded results are traceable in the explanation path** (review
   finding CR-3, ADR 0074). The ACEs that only bound a result (UAC-filtered
   groups, logon-dependent SIDs, Cryptographic Operators, Guest /
@@ -71,7 +72,6 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 - **NULL DACL, empty DACL and "no ACE applies" are explained** (review
   finding CR-10, ADR 0074) — a NULL-DACL row no longer reads "Full
   Control" without a reason.
-
 - **The explanation path states how the access is evaluated** (review
   finding CR-6, ADR 0074). A new step 2 names the evaluated logon (network
   logon over SMB / interactive logon at the target, not elevated / no
@@ -83,8 +83,38 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 - **Invariant test for the explanation path** (ADR 0074): over 3000
   generated DACLs the path accounts for every bit of the NTFS result.
 
+### Changed
+
+- **Deny wording** (review finding CR-13, ADR 0074): the Deny aggregation
+  step separates bits a Deny really takes away (an Allow ACE of the token
+  would otherwise grant them) from bits it only denies in advance.
+
 ### Fixed
 
+- **`adpa shares` names the share trustees** (review finding CR-4,
+  completed): the CLI share listing printed bare SIDs; it now resolves them
+  — on the server itself for its own accounts and groups. The "no security
+  descriptor" text no longer claims the administrators-only default for
+  every such share (not true for `IPC$`), only for `C$` / `ADMIN$`, where
+  it is lab-verified (ADR 0075).
+- **Guest and anonymous: the exact rule, measured** (ADR 0072 amended,
+  known limitation L17 largely closed). Real Guest tokens (network and
+  interactive) and the anonymous token measured on a Windows Server 2025
+  member server: Authenticated Users is never in them, a Guest token
+  always has Everyone, the anonymous token has Everyone only with
+  `EveryoneIncludesAnonymous` = 1. Authenticated Users ACEs therefore no
+  longer bound a Guest or anonymous result — they do not apply, and the
+  result is exact; only Everyone stays bounded for an anonymous logon
+  (the policy is not read).
+- **A share without security descriptor is no longer "unrestricted"**
+  (finding CR-15, ADR 0075). For the administrative shares (`C$`,
+  `ADMIN$`, `IPC$`) Windows reports no security descriptor; Stars treated
+  that as a NULL DACL — "every principal passes the share layer" — and an
+  analysis over `\\server\C$\…` combined NTFS with an unrestricted share,
+  although such a share admits only administrators and backup operators.
+  Now the share permission reads NOT DETERMINABLE with the reason in
+  `adpa shares`, the Shares tab, the trustee view and every analysis; a
+  real NULL DACL is unchanged.
 - **CLI `analyze` report readable without matching SIDs by hand**
   (review finding CR-11). "Resolved Groups" listed only the domain groups,
   as bare SIDs; the DACL listing and "Matching ACEs" showed SIDs only, no
@@ -93,7 +123,6 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   Control"). Now: every token group once with name, SID and source; ACEs
   with trustee names, expanded rights next to the raw mask, inherit-only
   marked, the DACL in stored order.
-
 - **Names instead of raw SIDs where Stars knows them** (review finding
   CR-4). The SID → name table was built from the domain groups and a
   lookup on the analysing machine only: local groups (named on the target
