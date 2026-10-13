@@ -72,8 +72,15 @@ a typed, structured explanation is a later feature.
    only") — the old text called every denied bit "removed".
 6. **CR-12 — which membership mattered.** A membership whose group has an
    ACE that decided bits of this result is marked `[decisive — …]`; a group
-   whose ACE matched but decided nothing is not. (Collapsing the full list
-   is a frontend matter and stays open.)
+   whose ACE matched but decided nothing is not. **Collapsing (2026-10-14):**
+   above `MEMBERSHIP_COLLAPSE_THRESHOLD` (10) membership steps, the GUI
+   Analyze tab and the HTML report collapse the memberships that did not
+   matter — `collapsible_steps` / `is_collapsible_membership_step` in the
+   engine are the single rule: decisive, deny-only, uncertain memberships
+   and an unknown chain always stay visible. The GUI shows one toggle line
+   ("▼ Show N further memberships (not decisive for this result)") and keeps
+   the step numbers of the full path; the HTML report uses `<details>` per
+   collapsed run. CSV, JSON and the CLI keep the full list.
 7. **CR-14 — deleting a file through its folder.** For a file whose result
    lacks DELETE, a note says that "Delete subfolders and files"
    (`FILE_DELETE_CHILD`) on the parent folder still allows deleting it —
@@ -117,6 +124,6 @@ a typed, structured explanation is a later feature.
 | DACL states | CR-10 | shipped |
 | Bounded results traceable | CR-3 | shipped |
 | Deny wording | CR-13 | shipped |
-| Decisive memberships | CR-12 | shipped (list collapsing open) |
+| Decisive memberships | CR-12 | shipped, list collapsing in GUI / HTML 2026-10-14 |
 | Deletion through the folder | CR-14 | shipped |
 | Share provenance, limiting side | CR-7 | shipped |
