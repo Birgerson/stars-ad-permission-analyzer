@@ -938,7 +938,8 @@ pub enum ShareEvalStatus {
     /// NTFS computation. Dedicated variant so the report does not surface a
     /// fake "special" share mask `0xFFFFFFFF`.
     Unrestricted,
-    /// Share DACL read failed — result shows NTFS permissions only (potentially incomplete).
+    /// Share permissions not determinable (read failed, or no security descriptor —
+    /// ADR 0075) — result shows NTFS permissions only (potentially incomplete).
     ReadFailed(String),
 }
 
@@ -958,7 +959,8 @@ pub enum ShareMaskStatus {
     /// from `Applied(0xFFFFFFFF)` to avoid confusing audit semantics with a
     /// real "special access" mask.
     Unrestricted,
-    /// Share DACL read failed — effective_mask is uncertain and must be treated
+    /// Share permissions not determinable (read failed, or no security descriptor —
+    /// ADR 0075) — effective_mask is uncertain and must be treated
     /// as incomplete downstream.
     ReadFailed(String),
 }
@@ -1093,7 +1095,7 @@ impl EffectivePermission {
         if let ShareEvalStatus::ReadFailed(reason) = &self.share_status {
             out.push(Uncertainty {
                 layer: UncertainLayer::Share,
-                reason: format!("The share permissions could not be read ({reason})."),
+                reason: format!("The share permissions are not determinable ({reason})."),
             });
         }
         let has_ntfs_marker = self

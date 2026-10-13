@@ -1998,7 +1998,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         }
         ShareEvalStatus::ReadFailed(reason) => {
             steps.push(format!(
-                "Share DACL read failed ({reason}): the share permission is {NOT_DETERMINABLE} — \
+                "Share permissions not determinable ({reason}): the share permission is {NOT_DETERMINABLE} — \
                  the displayed effective mask is NTFS-only and incomplete; the share can only \
                  restrict the NTFS right above, never extend it"
             ));
@@ -2742,7 +2742,7 @@ mod tests {
         );
         assert!(
             p.path_explanation.steps.iter().any(|s| {
-                s.contains("Share DACL read failed")
+                s.contains("Share permissions not determinable")
                     && s.contains("access denied")
                     && s.contains("incomplete")
             }),
@@ -6261,7 +6261,7 @@ mod tests {
             cr5_dacl(),
             ShareMaskStatus::ReadFailed("access denied".to_owned()),
         );
-        let s = step(&p, "Share DACL read failed").expect("read-failed step");
+        let s = step(&p, "Share permissions not determinable").expect("read-failed step");
         assert!(s.contains(NOT_DETERMINABLE) && s.contains("never extend"));
         assert_path_agrees_with_result(&p);
     }

@@ -10,6 +10,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Changed
+
+- **"Share permissions not determinable" instead of "could not be read"**
+  (ADR 0075 follow-up). The share status is used for a failed read and for
+  a share without security descriptor (`C$`, `ADMIN$`); the warning, the
+  result line, the reason and the explanation step said "could not be
+  read" / "read failed" for both. They now say "not determinable" and the
+  reason says which case it is.
+
 ## [1.11.0] — 2026-10-13
 
 **Local administrators: exact instead of a range.**
