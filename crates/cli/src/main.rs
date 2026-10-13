@@ -98,7 +98,7 @@ enum Commands {
         /// 1–600. Only takes effect together with --server.
         #[arg(long)]
         ldap_timeout: Option<u64>,
-        /// Optional CSV export path
+        /// Optional export path — `.csv`, `.json` or `.html`; the extension picks the format
         #[arg(short = 'o', long)]
         output: Option<String>,
         /// SMB server for share permissions (auto-detected for UNC paths)
@@ -158,9 +158,11 @@ enum Commands {
         /// SQLite database file for results (created if absent)
         #[arg(long)]
         db: Option<String>,
+        /// Directory levels below --path (0 = only the path itself; default:
+        /// unlimited; maximum 512)
         #[arg(long)]
         max_depth: Option<u32>,
-        /// Optional CSV export path
+        /// Optional export path — `.csv`, `.json` or `.html`; the extension picks the format
         #[arg(short = 'o', long)]
         output: Option<String>,
         /// SMB server for share permissions (auto-detected for UNC paths)
