@@ -814,6 +814,11 @@ every surface says:
   the explanation with what it grants or denies, and a step says which
   side limits the result ("Limited by the share: NTFS grants Modify, the
   share allows Read & Execute — the share removes …").
+- **Long membership lists** (more than 10 groups): the GUI Analyze tab and
+  the HTML report collapse the memberships that did not matter for the
+  result behind "▼ Show N further memberships (not decisive for this
+  result)". Memberships marked decisive, deny-only or uncertain always stay
+  visible; the step numbers are those of the full path, as in the CSV.
 - Further aids in the explanation: memberships whose group's ACE decided
   the result are marked `[decisive]`; the Deny step says which bits a Deny
   really takes away and which it only denies in advance; for a file

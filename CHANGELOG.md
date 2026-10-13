@@ -12,6 +12,13 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Added
 
+- **Long membership lists collapse to what matters** (review finding CR-12,
+  ADR 0074). With more than 10 memberships, the GUI Analyze tab and the
+  HTML report hide the memberships that did not matter for the result
+  behind one toggle / `<details>`; decisive, deny-only and uncertain ones
+  always stay visible. The rule lives in the engine
+  (`collapsible_steps`); CSV, JSON and the CLI keep the full list.
+
 - **Everyone for an anonymous logon decided from the target** (ADR 0072,
   known limitation L17 closed). Stars reads `EveryoneIncludesAnonymous`
   read-only from the target and puts Everyone into an anonymous token

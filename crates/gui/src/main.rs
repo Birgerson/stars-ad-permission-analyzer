@@ -428,6 +428,18 @@ slint::slint! {
         selective-auth: bool,
     }
 
+    // One step of the Analyze permission path (review CR-12): `number` is
+    // the step's number in the full path (CSV / CLI numbering), `collapsible`
+    // marks a membership that did not matter for the result, `toggle` is the
+    // single line that shows / hides those (`hidden_count` of them).
+    export struct StepVm {
+        number: int,
+        text: string,
+        collapsible: bool,
+        toggle: bool,
+        hidden_count: int,
+    }
+
     // A row in the scan result.
     export struct ScanRowVm {
         path: string,
@@ -578,7 +590,9 @@ slint::slint! {
         in property <string> a-rights-label;
         in property <string> a-mask-hex;
         in property <string> a-share-line;
-        in property <[string]> a-explanation;
+        in property <[StepVm]> a-explanation;
+        in-out property <bool> a-show-all-members: false;
+        callback a-toggle-members();
         // Structured diagnostic markers of the analyzed permission
         // (gui review 2026-07-26, GUI-1). Empty = nothing to report.
         in property <[DiagnosticVm]> a-diagnostics;
@@ -1087,9 +1101,27 @@ slint::slint! {
                                         text: "Permission path:";
                                         font-size: 14px;
                                     }
+                                    // Review CR-12: in a long membership list
+                                    // the memberships that did not matter are
+                                    // collapsed behind one toggle line;
+                                    // decisive, deny-only and uncertain ones
+                                    // always stay visible.
+                                    // The model holds only the visible steps
+                                    // (Rust filters on toggle), so a collapsed
+                                    // step leaves no gap in the layout.
                                     for step[i] in root.a-explanation: Text {
-                                        text: (i + 1) + ". " + step;
+                                        text: step.toggle
+                                            ? (root.a-show-all-members
+                                                ? "▲ Hide the " + step.hidden_count + " further memberships"
+                                                : "▼ Show " + step.hidden_count + " further memberships (not decisive for this result)")
+                                            : step.number + ". " + step.text;
+                                        color: step.toggle ? Theme.correct : Theme.text-primary;
                                         wrap: word-wrap;
+                                        TouchArea {
+                                            enabled: step.toggle;
+                                            mouse-cursor: step.toggle ? pointer : default;
+                                            clicked => { root.a-toggle-members(); }
+                                        }
                                     }
 
                                     // GUI-1 (gui review 2026-07-26): the
@@ -2863,6 +2895,17 @@ thread_local! {
     /// app start; keystroke filtering runs purely locally against this
     /// cache without a worker round-trip.
     static IDENTITY_CACHE: RefCell<Vec<IdentitySuggestion>> = const { RefCell::new(Vec::new()) };
+    /// Review CR-12: the full Analyze path (all view rows) of the last
+    /// result; the shown model is filtered from it on toggle.
+    static ANALYZE_STEPS: RefCell<Vec<StepVm>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The visible rows: collapsible memberships only when shown (review CR-12).
+fn visible_steps(all: &[StepVm], show_all: bool) -> Vec<StepVm> {
+    all.iter()
+        .filter(|s| show_all || !s.collapsible)
+        .cloned()
+        .collect()
 }
 
 fn run_ui(_log_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -2944,6 +2987,17 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
 
     // Click on a suggestion: take the name, close the list, immediately
     // resolve the SID — saves the user a second click.
+    // Review CR-12: show / hide the memberships that did not matter.
+    {
+        let weak = ui.as_weak();
+        ui.on_a_toggle_members(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let show_all = !ui.get_a_show_all_members();
+            ui.set_a_show_all_members(show_all);
+            let rows = ANALYZE_STEPS.with(|s| visible_steps(&s.borrow(), show_all));
+            ui.set_a_explanation(slint::ModelRc::new(slint::VecModel::from(rows)));
+        });
+    }
     {
         let weak = ui.as_weak();
         ui.on_pick_analyze_suggestion(move |name, sid| {
@@ -3086,7 +3140,7 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         ui.set_a_rights_label("".into());
         ui.set_a_mask_hex("".into());
         ui.set_a_share_line("".into());
-        ui.set_a_explanation(empty_string_model());
+        ui.set_a_explanation(slint::ModelRc::new(slint::VecModel::<StepVm>::default()));
 
         if let Err(e) = req_tx.send(WorkerRequest::Analyze {
             path,
@@ -3479,13 +3533,12 @@ fn apply_analyze_result(
             ui.set_a_rights_label(rights_label.into());
             ui.set_a_mask_hex(format!("0x{effective_raw:08X}").into());
             ui.set_a_share_line(format_share_line(&perm).into());
-            let steps: Vec<slint::SharedString> = perm
-                .path_explanation
-                .steps
-                .iter()
-                .map(|s| slint::SharedString::from(s.as_str()))
-                .collect();
-            ui.set_a_explanation(slint::ModelRc::new(slint::VecModel::from(steps)));
+            ui.set_a_show_all_members(false);
+            let all = step_vms(&perm.path_explanation.steps);
+            ui.set_a_explanation(slint::ModelRc::new(slint::VecModel::from(visible_steps(
+                &all, false,
+            ))));
+            ANALYZE_STEPS.with(|s| *s.borrow_mut() = all);
             // GUI-1 (gui review 2026-07-26): surface the structured
             // diagnostics of this very result. Before this, the Analyze tab
             // — the single-path view an admin reaches for first — dropped
@@ -4372,10 +4425,34 @@ fn pump_worker_events(ui: &MainWindow) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn empty_string_model() -> slint::ModelRc<slint::SharedString> {
-    slint::ModelRc::new(slint::VecModel::<slint::SharedString>::from(Vec::<
-        slint::SharedString,
-    >::new()))
+/// The Analyze path as view rows (review CR-12): one toggle line before the
+/// first collapsible membership; which steps are collapsible is the
+/// engine's rule (`collapsible_steps`), not the GUI's.
+fn step_vms(steps: &[String]) -> Vec<StepVm> {
+    let collapsible = permission_engine::engine::collapsible_steps(steps);
+    let hidden = collapsible.iter().filter(|c| **c).count();
+    let mut out = Vec::with_capacity(steps.len() + 1);
+    let mut toggle_placed = false;
+    for (i, (text, collapse)) in steps.iter().zip(&collapsible).enumerate() {
+        if *collapse && !toggle_placed {
+            out.push(StepVm {
+                number: 0,
+                text: slint::SharedString::new(),
+                collapsible: false,
+                toggle: true,
+                hidden_count: i32::try_from(hidden).unwrap_or(i32::MAX),
+            });
+            toggle_placed = true;
+        }
+        out.push(StepVm {
+            number: i32::try_from(i + 1).unwrap_or(i32::MAX),
+            text: text.as_str().into(),
+            collapsible: *collapse,
+            toggle: false,
+            hidden_count: 0,
+        });
+    }
+    out
 }
 
 fn empty_row_model() -> slint::ModelRc<ScanRowVm> {
@@ -4592,7 +4669,7 @@ fn show_fatal_dialog(title: &str, message: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_share_line, severity_visual};
+    use super::{format_share_line, severity_visual, step_vms, StepVm};
     use adpa_core::model::{
         AccessMask, EffectivePermission, Identity, IdentityKind, LocalGroupEvalStatus,
         NormalizedPath, PermissionPath, RiskSeverity, ShareEvalStatus, Sid,
@@ -4681,5 +4758,31 @@ mod tests {
         .map(|s| severity_visual(s).0)
         .collect();
         assert_eq!(labels, ["Info", "Low", "Medium", "High", "Critical"]);
+    }
+
+    /// Review CR-12: one toggle before the first collapsible membership,
+    /// numbers as in the full path.
+    #[test]
+    fn step_vms_place_one_toggle_and_keep_the_numbering() {
+        let mut steps = vec!["User: u (S-1-5-21-1-2-3-1000)".to_owned()];
+        for i in 0..12 {
+            steps.push(format!("Member of G{i} (S-1-5-21-1-2-3-{i}) [direct]"));
+        }
+        steps.push("NTFS effective: Read (0x00120089)".to_owned());
+        let vms = step_vms(&steps);
+        let toggles: Vec<&StepVm> = vms.iter().filter(|v| v.toggle).collect();
+        assert_eq!(toggles.len(), 1);
+        assert_eq!(toggles[0].hidden_count, 12);
+        assert!(
+            vms[1].toggle,
+            "placed before the first collapsed membership"
+        );
+        assert_eq!(vms.last().unwrap().number, 14);
+        assert!(!vms.last().unwrap().collapsible);
+        let short = step_vms(&steps[..5]);
+        assert!(short.iter().all(|v| !v.toggle && !v.collapsible));
+        // Collapsed: user, toggle, effective step; expanded: everything.
+        assert_eq!(super::visible_steps(&vms, false).len(), 3);
+        assert_eq!(super::visible_steps(&vms, true).len(), vms.len());
     }
 }

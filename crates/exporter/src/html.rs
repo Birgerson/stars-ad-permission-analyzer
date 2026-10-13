@@ -127,6 +127,7 @@ tr:hover td{background:#111d2e}
 details summary{cursor:pointer;color:#64b5f6;font-size:11px}
 details[open] summary{margin-bottom:4px}
 .step{padding:2px 0;color:#cfd8dc;font-size:11px}
+.memberships>summary{cursor:pointer;color:#90caf9;font-size:11px;padding:2px 0}
 </style>
 </head>
 <body>
@@ -204,12 +205,39 @@ fn write_permissions_table(
         let share = p.share_mask.map(|m| NormalizedRights::new(m.0));
         let name = p.identity.name.as_deref().unwrap_or(&p.identity.sid.0);
 
-        let steps_html: String = p
+        // Review CR-12: in a long membership list the memberships that did
+        // not matter are collapsed (`<details>`); decisive, deny-only and
+        // uncertain ones always stay visible. One rule, from the engine.
+        let collapsible = permission_engine::engine::collapsible_steps(&p.path_explanation.steps);
+        let mut steps_html = String::new();
+        let mut details_open = false;
+        for (idx, (step, collapse)) in p
             .path_explanation
             .steps
             .iter()
-            .map(|s| format!("<div class=\"step\">• {}</div>", escape_html(s)))
-            .collect();
+            .zip(&collapsible)
+            .enumerate()
+        {
+            if *collapse && !details_open {
+                // The size of this collapsed run, not of all of them.
+                let hidden = collapsible[idx..].iter().take_while(|c| **c).count();
+                steps_html.push_str(&format!(
+                    "<details class=\"memberships\"><summary>{hidden} further membership(s) — \
+                     not decisive for this result</summary>"
+                ));
+                details_open = true;
+            } else if !*collapse && details_open {
+                steps_html.push_str("</details>");
+                details_open = false;
+            }
+            steps_html.push_str(&format!(
+                "<div class=\"step\">• {}</div>",
+                escape_html(step)
+            ));
+        }
+        if details_open {
+            steps_html.push_str("</details>");
+        }
 
         // The diagnostics column unifies four incompleteness sources:
         //   1. Parser gap: unevaluated ACE types.

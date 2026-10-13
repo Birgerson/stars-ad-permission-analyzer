@@ -1476,6 +1476,34 @@ pub fn local_uac_filtering(
     }
 }
 
+/// Review CR-12 (frontends): above this many membership steps a frontend
+/// may collapse the memberships that did not matter for the result.
+pub const MEMBERSHIP_COLLAPSE_THRESHOLD: usize = 10;
+
+/// A membership step a frontend may collapse: neither decisive for the
+/// result nor carrying a reason to look at it (deny-only, uncertain, an
+/// unknown chain). Every other step always stays visible.
+pub fn is_collapsible_membership_step(step: &str) -> bool {
+    step.starts_with("Member of ")
+        && !["[decisive", "[deny-only", "[uncertain", "chain unknown"]
+            .iter()
+            .any(|marker| step.contains(marker))
+}
+
+/// Per step of a path: may it be collapsed? All `false` while the path has
+/// at most [`MEMBERSHIP_COLLAPSE_THRESHOLD`] membership steps — a short list
+/// is shown in full. The single rule for the GUI and the HTML report.
+pub fn collapsible_steps(steps: &[String]) -> Vec<bool> {
+    let memberships = steps.iter().filter(|s| s.starts_with("Member of ")).count();
+    if memberships <= MEMBERSHIP_COLLAPSE_THRESHOLD {
+        return vec![false; steps.len()];
+    }
+    steps
+        .iter()
+        .map(|s| is_collapsible_membership_step(s))
+        .collect()
+}
+
 /// Short name of the evaluated logon (review CR-6) — for report headers.
 pub fn access_context_summary(context: AccessContext) -> &'static str {
     match context {
@@ -7218,5 +7246,44 @@ mod tests {
             anonymous_everyone(&adpa_core::model::PolicyDword::Value(7)),
             None
         );
+    }
+
+    // --- Review CR-12 (frontends): collapsible memberships ---
+
+    #[test]
+    fn only_long_lists_collapse_and_never_what_matters() {
+        let member = |i: usize, marker: &str| {
+            format!("Member of G{i} (S-1-5-21-1-2-3-{i}) [direct]{marker}")
+        };
+        let mut steps = vec!["User: u (S-1-5-21-1-2-3-1000)".to_owned()];
+        for i in 0..MEMBERSHIP_COLLAPSE_THRESHOLD {
+            steps.push(member(i, ""));
+        }
+        assert!(
+            collapsible_steps(&steps).iter().all(|c| !c),
+            "short list in full"
+        );
+        steps.push(member(
+            90,
+            " [decisive — an ACE for this group decides bits of this result]",
+        ));
+        steps.push(member(91, " [deny-only in this token — …]"));
+        steps.push(member(
+            92,
+            " [uncertain — present in the token only for certain logons]",
+        ));
+        steps.push("Member of G93 (S-1-5-21-1-2-3-93) [membership confirmed, exact chain unknown — source: LDAP]".to_owned());
+        steps.push(
+            "Allow ACE [explicit] for G90 → Read (0x00120089) [granted Read (0x00120089)]"
+                .to_owned(),
+        );
+        let c = collapsible_steps(&steps);
+        assert!(!c[0], "the user step stays");
+        assert_eq!(
+            c.iter().filter(|x| **x).count(),
+            MEMBERSHIP_COLLAPSE_THRESHOLD
+        );
+        let last = steps.len() - 1;
+        assert!(!c[last] && !c[last - 1] && !c[last - 2] && !c[last - 3] && !c[last - 4]);
     }
 }
