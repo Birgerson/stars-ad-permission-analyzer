@@ -777,7 +777,9 @@ the target and decides remote UAC exactly (lab matrix of all four
 combinations). It stays a range only when the policies cannot be read
 (remote registry unreachable or denied, `EnableLUA` = 0, unexpected
 values) — and for a **local session**, whose elevation is a property of the
-logon that no policy reveals.
+logon that no policy reveals. Exception: the built-in Administrator with
+`FilterAdministratorToken` = 0 has an unsplit full token, also decided
+exactly (measured).
 
 ---
 

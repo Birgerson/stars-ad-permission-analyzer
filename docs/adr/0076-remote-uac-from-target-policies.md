@@ -49,6 +49,17 @@ Lab matrix (2026-10-13, MS-01, Windows Server 2025, real SMB access with
    the target: …" and lists the Allow ACE "[not applied — the group is
    deny-only in this token: …]".
 
+5. **Local interactive (amended 2026-10-13).** Real `LogonUser` tokens on
+   MS-01: the built-in Administrator (RID 500) with
+   `FilterAdministratorToken` = 0 gets an **unsplit, full** token
+   (elevation type 1, Administrators enabled); with 1, and every other
+   account always, the token is limited (elevation type 3, Administrators
+   deny-only) — and a limited session can be elevated, which no policy
+   reveals. `local_uac_filtering` therefore decides only the first case
+   (`NotFiltered`); everything else stays bounded. Live: a local scan of
+   `C:\MSData` on MS-01 for `MS-01\Administrator` — 27 of 27 rows exact and
+   identical to the Windows authorization oracle (before: ranges).
+
 ## Consequences
 
 - A local administrator over SMB gets an exact result whenever the target's

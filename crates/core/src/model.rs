@@ -1777,13 +1777,13 @@ impl PermissionDiagnostic {
                 groups.join("; ")
             ),
             PermissionDiagnostic::RemoteUacPolicy { filtered, reason } => format!(
-                "Remote User Account Control {} — {reason}.",
+                "User Account Control {} — {reason}.",
                 if *filtered {
-                    "filters this local account's network token: the administrative groups are \
+                    "filters this local account's token: the administrative groups are \
                      deny-only, their Allow ACEs do not apply"
                 } else {
-                    "does not filter this local account's network token: the administrative \
-                     groups are enabled"
+                    "does not filter this local account's token: the administrative groups \
+                     are enabled"
                 }
             ),
             PermissionDiagnostic::GuestOrAnonymousToken { sids } => format!(
