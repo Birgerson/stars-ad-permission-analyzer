@@ -1031,6 +1031,7 @@ async fn handle_analyze(
         logon_dependent: logon_dependent_group_sids,
         uac_filtered: uac_filtered_group_sids,
         remote_uac,
+        anonymous_everyone,
         status: local_group_status,
         ..
     } = collect_local_group_sids_for_path(
@@ -1056,6 +1057,7 @@ async fn handle_analyze(
         &uac_filtered_group_sids,
         access_context,
         &remote_uac,
+        anonymous_everyone,
     );
 
     // SID→name table for the explanation path. DACL trustees are resolved
@@ -1098,6 +1100,7 @@ async fn handle_analyze(
             logon_dependent_group_sids,
             uac_filtered_group_sids,
             remote_uac: remote_uac.clone(),
+            anonymous_everyone,
             access_context,
             unsupported_share_ace_count,
             sid_names,
@@ -1375,6 +1378,8 @@ struct LocalGroupResolution {
     uac_filtered: Vec<adpa_core::model::Sid>,
     /// ADR 0076: remote UAC decided from the target's policies.
     remote_uac: adpa_core::model::RemoteUacFiltering,
+    /// L17: EveryoneIncludesAnonymous read from the target.
+    anonymous_everyone: Option<bool>,
     status: adpa_core::model::LocalGroupEvalStatus,
 }
 
@@ -1433,6 +1438,18 @@ fn collect_local_groups_on(
     access_context: AccessContext,
     local_account: bool,
 ) -> LocalGroupResolution {
+    // L17: EveryoneIncludesAnonymous of the target decides Everyone for an
+    // anonymous logon; an unreadable value keeps it bounded.
+    #[cfg(windows)]
+    let anonymous_everyone = if identity.sid.0 == permission_engine::engine::SID_ANONYMOUS_LOGON {
+        permission_engine::engine::anonymous_everyone(
+            &ad_resolver::read_everyone_includes_anonymous(server),
+        )
+    } else {
+        None
+    };
+    #[cfg(not(windows))]
+    let anonymous_everyone: Option<bool> = None;
     use adpa_core::model::LocalGroupEvalStatus;
 
     let table = match ad_resolver::read_local_group_table(server) {
@@ -1457,16 +1474,18 @@ fn collect_local_groups_on(
                     access_context,
                 ),
                 remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
+                anonymous_everyone,
                 status: LocalGroupEvalStatus::NotAvailable(msg),
             };
         }
     };
-    let expansion = permission_engine::engine::expand_local_groups(
+    let expansion = permission_engine::engine::expand_local_groups_with(
         &identity.sid.0,
         &identity.sid_history,
         domain_memberships,
         &table.groups,
         access_context,
+        anonymous_everyone,
     );
     // Labels for the mediator step of each chain (account, domain groups);
     // well-known SIDs are looked up by the builder.
@@ -1561,6 +1580,7 @@ fn collect_local_groups_on(
         logon_dependent_names,
         uac_filtered,
         remote_uac,
+        anonymous_everyone,
         status,
     }
 }
@@ -1654,6 +1674,7 @@ async fn handle_scan(
         logon_dependent: logon_dependent_group_sids,
         uac_filtered: uac_filtered_group_sids,
         remote_uac,
+        anonymous_everyone,
         status: local_group_status,
         ..
     } = collect_local_group_sids_for_path(
@@ -1696,6 +1717,7 @@ async fn handle_scan(
             &uac_filtered_group_sids,
             root_access_context,
             &remote_uac,
+            anonymous_everyone,
         );
     if scan_unsupported_share_ace_count > 0 {
         let msg = format!(
@@ -1794,6 +1816,7 @@ async fn handle_scan(
             logon_dependent_group_sids: logon_dependent_group_sids.clone(),
             uac_filtered_group_sids: uac_filtered_group_sids.clone(),
             remote_uac: remote_uac.clone(),
+            anonymous_everyone,
             access_context: scan_access_context,
             unsupported_share_ace_count: scan_unsupported_share_ace_count,
             sid_names: scan_sid_names.clone(),
@@ -2985,6 +3008,7 @@ fn resolve_share_status(
     uac_filtered_group_sids: &[adpa_core::model::Sid],
     access_context: AccessContext,
     remote_uac: &adpa_core::model::RemoteUacFiltering,
+    anonymous_everyone: Option<bool>,
 ) -> (
     adpa_core::model::ShareMaskStatus,
     usize,
@@ -3011,6 +3035,7 @@ fn resolve_share_status(
             remote_uac,
             adpa_core::model::RemoteUacFiltering::Filtered { .. }
         ),
+        anonymous_everyone,
     );
     (r.status, r.unevaluated, r.decisions)
 }
@@ -3295,6 +3320,7 @@ mod tests {
             &[],
             AccessContext::LocalInteractive,
             &adpa_core::model::RemoteUacFiltering::Unknown,
+            None,
         );
         assert!(matches!(
             status,

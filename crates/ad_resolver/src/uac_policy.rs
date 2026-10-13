@@ -105,6 +105,43 @@ pub fn read_target_uac_policy(server: Option<&str>) -> TargetUacPolicy {
     }
 }
 
+const LSA: &str = r"SYSTEM\CurrentControlSet\Control\Lsa";
+
+/// `EveryoneIncludesAnonymous` of `server` (`None` = this machine) — whether
+/// an anonymous token carries Everyone (L17, measured on MS-01: 0 → no, 1 →
+/// yes). Read-only, like [`read_target_uac_policy`].
+pub fn read_everyone_includes_anonymous(server: Option<&str>) -> PolicyDword {
+    let machine = match server {
+        Some(s) => match validation::net::validate_smb_server(s) {
+            Ok(v) => Some(wide(&format!(r"\\{}", v.0))),
+            Err(_) => return PolicyDword::Unreadable("invalid server name".to_owned()),
+        },
+        None => None,
+    };
+    let mut root: HKEY = std::ptr::null_mut();
+    // SAFETY: as in read_target_uac_policy.
+    let rc = unsafe {
+        RegConnectRegistryW(
+            machine.as_ref().map_or(std::ptr::null(), |m| m.as_ptr()),
+            HKEY_LOCAL_MACHINE,
+            &mut root,
+        )
+    };
+    if rc != ERROR_SUCCESS {
+        return PolicyDword::Unreadable(format!("remote registry not reachable (error {rc})"));
+    }
+    let root = KeyGuard(root);
+    let path = wide(LSA);
+    let mut key: HKEY = std::ptr::null_mut();
+    // SAFETY: valid root handle, null-terminated path, read-only access mask.
+    let rc = unsafe { RegOpenKeyExW(root.0, path.as_ptr(), 0, KEY_QUERY_VALUE, &mut key) };
+    if rc != ERROR_SUCCESS {
+        return PolicyDword::Unreadable(format!("Lsa key not readable (error {rc})"));
+    }
+    let key = KeyGuard(key);
+    query_dword(key.0, "everyoneincludesanonymous")
+}
+
 /// One REG_DWORD value; any other type or size is `Unreadable` — values
 /// from the OS are validated like input.
 fn query_dword(key: HKEY, name: &str) -> PolicyDword {
@@ -148,6 +185,18 @@ mod tests {
 
     /// The local machine's values are readable (or absent) — a smoke test
     /// of the read path; it never writes.
+    #[test]
+    fn local_everyone_includes_anonymous_is_readable() {
+        assert!(!matches!(
+            read_everyone_includes_anonymous(None),
+            PolicyDword::Unreadable(_)
+        ));
+        assert!(matches!(
+            read_everyone_includes_anonymous(Some(r"bad\server")),
+            PolicyDword::Unreadable(_)
+        ));
+    }
+
     #[test]
     fn local_policy_is_readable() {
         let p = read_target_uac_policy(None);

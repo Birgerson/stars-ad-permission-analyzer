@@ -471,6 +471,7 @@ pub fn resolve_share_mask_status(
     uac_filtered_group_sids: &[Sid],
     access_context: AccessContext,
     uac_filter_certain: bool,
+    anonymous_everyone: Option<bool>,
 ) -> (ShareMaskStatus, usize) {
     let r = resolve_share_mask_status_explained(
         path,
@@ -484,6 +485,7 @@ pub fn resolve_share_mask_status(
         uac_filtered_group_sids,
         access_context,
         uac_filter_certain,
+        anonymous_everyone,
     );
     (r.status, r.unevaluated)
 }
@@ -544,6 +546,8 @@ pub fn resolve_share_mask_status_explained(
     access_context: AccessContext,
     // ADR 0076: the UAC groups are certainly deny-only (policies read).
     uac_filter_certain: bool,
+    // L17: EveryoneIncludesAnonymous as read from the target.
+    anonymous_everyone: Option<bool>,
 ) -> ShareResolution {
     let smb_ctx = match validation::path::SmbAuditContext::resolve(path, smb_server, share_name) {
         Some(c) => c,
@@ -568,6 +572,17 @@ pub fn resolve_share_mask_status_explained(
         access_context,
     );
     token.deny_only_certain = uac_filter_certain;
+    // L17: with the policy read, Everyone is decided for an anonymous logon.
+    if user_sid == permission_engine::engine::SID_ANONYMOUS_LOGON && anonymous_everyone.is_some() {
+        token
+            .uncertain
+            .remove(permission_engine::engine::SID_EVERYONE);
+        if anonymous_everyone == Some(true) {
+            token
+                .enabled
+                .insert(permission_engine::engine::SID_EVERYONE.to_owned());
+        }
+    }
 
     match get_share_dacl(&server, &share) {
         Err(e) => {
@@ -1152,6 +1167,7 @@ mod tests {
             &[],
             AccessContext::LocalInteractive,
             false,
+            None,
         );
         assert!(
             matches!(status, ShareMaskStatus::NotApplicable),

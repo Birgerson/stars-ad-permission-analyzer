@@ -10,6 +10,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Added
+
+- **Everyone for an anonymous logon decided from the target** (ADR 0072,
+  known limitation L17 closed). Stars reads `EveryoneIncludesAnonymous`
+  read-only from the target and puts Everyone into an anonymous token
+  exactly when it is 1 (measured: 0 → no groups, 1 → Everyone). Anonymous
+  results are no longer bounded by Everyone ACEs when the value is
+  readable; the explanation names the value.
+
 ### Changed
 
 - **"Share permissions not determinable" instead of "could not be read"**

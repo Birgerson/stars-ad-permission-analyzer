@@ -52,4 +52,4 @@ pub use sam::{
 };
 pub use trusts::resolve_domain_trusts;
 #[cfg(windows)]
-pub use uac_policy::{read_target_uac_policy, TargetUacPolicy};
+pub use uac_policy::{read_everyone_includes_anonymous, read_target_uac_policy, TargetUacPolicy};

@@ -783,27 +783,16 @@ exactly (measured).
 
 ---
 
-## L17 — Guest and anonymous tokens (measured; anonymous Everyone still bounded)
+## L17 — Guest and anonymous tokens (closed 2026-10-14)
 
-**Priority:** Low — review finding CR-8 (ADR 0072), **largely closed
-2026-10-13** by a lab measurement.
+**Priority:** Low — review finding CR-8 (ADR 0072).
 
-### Problem (remaining)
-
-A real Guest token and the anonymous token were measured: Authenticated
-Users is never in them (now exact). Everyone is in the anonymous token only
-when the target sets `EveryoneIncludesAnonymous` = 1 — Stars does not read
-that policy.
-
-### Effect
-
-For an anonymous logon, ACEs for Everyone bound the result (marker
-`GuestOrAnonymousToken` + `LogonDependentTrustees`). Guest results are exact.
-
-### Solution sketch
-
-Read `EveryoneIncludesAnonymous` read-only from the target server (remote
-registry, where permitted and validated) to make the anonymous case exact.
+Real Guest and anonymous tokens were measured (2026-10-13): Authenticated
+Users is never in them. `EveryoneIncludesAnonymous` is now read read-only
+from the target (2026-10-14): Everyone in an anonymous token is exact (0 →
+absent, 1 → present). Only when the value cannot be read does an Everyone
+ACE bound an anonymous result. Not measured: `NETWORK` in a real SMB null
+session (Stars assumes it, as for every SMB logon).
 
 ---
 
@@ -827,7 +816,7 @@ registry, where permitted and validated) to make the anonymous case exact.
 | L14 — Junction cycles over UNC | Medium | **yes** (ReparseCycle / ReparseDuplicateTarget, as locally) | **closed 2026-10-10** (ADR 0062: volume serial + file ID on UNC scans) |
 | L15 — Trusted-domain SID reported as orphaned | Medium | **yes** (IdentityNotResolvable, names the trust partner) | **classification closed 2026-10-10** (ADR 0064); resolving the memberships via GC / trusted DC still open |
 | L16 — UAC policies / session elevation not visible | Low | **yes** (UacFilteredGroups, RemoteUacPolicy) | **network case closed 2026-10-13** (ADR 0076); local session elevation stays bounded |
-| L17 — Guest / anonymous tokens | Low | **yes** (GuestOrAnonymousToken) | **Guest exact, Authenticated Users exact (measured 2026-10-13)**; anonymous Everyone bounded until `EveryoneIncludesAnonymous` is read |
+| L17 — Guest / anonymous tokens | Low | **yes** (GuestOrAnonymousToken) | **closed 2026-10-14** — Guest, Authenticated Users and anonymous Everyone exact (policy read); bounded only when the policy is unreadable |
 
 ## Contribution policy
 
