@@ -10,6 +10,32 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-10-14
+
+**Anonymous logons exact, long membership lists readable.**
+
+Stars now reads `EveryoneIncludesAnonymous` from the target, so an
+anonymous logon's Everyone is decided exactly (measured: 0 → no groups,
+1 → Everyone) — known limitation L17 is closed. Accounts with many groups
+no longer drown the answer: the GUI Analyze tab and the HTML report
+collapse the memberships that did not matter for the result, while
+decisive, deny-only and uncertain ones always stay visible.
+
+**Verification (2026-10-14):** anonymous token measured on MS-01 with both
+policy values; live analysis of `S-1-5-7` follows the value read; HTML
+report for an account with 66 memberships and the GUI for an account with
+23 collapsed memberships checked (screenshots). 912 automated tests.
+
+Why minor: a new read (`EveryoneIncludesAnonymous`) and a new frontend
+behaviour; additions only.
+
+### Known issues
+
+- A local session's elevation stays bounded (except the built-in
+  Administrator with `FilterAdministratorToken` = 0). Whether a real SMB
+  null session carries `NETWORK` is not measured; Stars assumes it, as for
+  every SMB logon.
+
 ### Added
 
 - **Long membership lists collapse to what matters** (review finding CR-12,
