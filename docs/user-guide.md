@@ -697,13 +697,7 @@ tabs once a mode other than Off is selected (range 1–600, default 10).
   same administrative access to the server that reading its shares and
   local groups already requires.
 
-**Reading the CLI `analyze` report:** "Resolved Groups" lists every group
-of the evaluated token — domain and local — once, with name, SID and
-source. The DACL is listed in **stored order** (the order Windows
-evaluates it), each ACE with trustee name and SID, its rights with generic
-bits expanded (`GENERIC_ALL` reads Full Control, the raw mask stays
-visible) and an `[inherit-only — not applied to this object]` mark where
-the ACE only propagates to children.
+**Reading the CLI `analyze` report:** see [Reading the `analyze` report](#reading-the-analyze-report) in the CLI section.
 
 **Manual SMB context** (CLI flags `--smb-server` / `--share-name` or
 GUI "SMB context" checkbox):
@@ -975,7 +969,90 @@ contain the answer for `alice` *and* the full ACE listing for `X`
 
 ## The CLI
 
-`adpa.exe` ships alongside `adpa-gui.exe`.
+`adpa.exe` ships alongside `adpa-gui.exe`. It does everything the GUI does
+and suits scripts, scheduled audits and reproducible evidence.
+
+### Before you start
+
+**Which account Stars uses.** Stars reads as the Windows account it runs
+under. To read a server with other credentials, open an SMB session first —
+the session also serves the share, local-group and registry reads:
+
+```powershell
+net use \\fileserver\IPC$ /user:CORP\audit-admin   # prompts for the password
+adpa analyze --path '\\fileserver\Data$\Finance' --user 'CORP\alice'
+net use \\fileserver\IPC$ /delete
+```
+
+**Rights needed on the target server** (all read-only):
+
+| What Stars reads | Needed for | Typically requires |
+| --- | --- | --- |
+| NTFS security descriptors | every result | "Read permissions" (`READ_CONTROL`) on each object — Stars uses no backup privilege; an object it cannot read is listed as an error, never skipped silently |
+| Local groups (`NetLocalGroupEnum` / members) | local group memberships of the account | administrator on the server |
+| Share DACL (`NetShareGetInfo` 502) | the share side of `\\server\share` paths, `adpa shares` | administrator on the server |
+| Registry: `LocalAccountTokenFilterPolicy`, `FilterAdministratorToken`, `EnableLUA`, `EveryoneIncludesAnonymous` | exact User Account Control / anonymous results | administrator on the server; the *Remote Registry* service may start on demand |
+
+What Stars cannot read is **never** guessed: the result then reads
+`NOT DETERMINABLE` with the reason (see
+["NOT DETERMINABLE"](#not-determinable--when-stars-cannot-give-the-answer)).
+
+**With or without LDAP.** With `--server` (plus `--base-dn`, `--bind-dn` or
+`--ldap-signing`) Stars resolves domain accounts and nested groups over LDAP
+— see [Active Directory binding](#active-directory-binding-optional).
+Without `--server` it uses SAM/LSA: a **local account of the target
+server** is resolved on that server and is exact; a **domain account** gets
+only its direct groups, and the result says so (`NOT DETERMINABLE`, nested
+groups unknown). On a domain controller SAM/LSA is the recommended mode.
+
+**Bind password.** Set the environment variable `ADPA_BIND_PASSWORD` — the
+option `--bind-password` is visible in the process list and the shell
+history. `--ldap-signing` binds with your Windows logon (Kerberos) and needs
+no password at all.
+
+**PowerShell quoting.** Put paths in **single quotes** — a share like
+`Data$` in double quotes can be taken as a variable: `'\\fs01\Data$\HR'`.
+
+**Export formats.**
+
+| Command | `--output` formats | Notes |
+| --- | --- | --- |
+| `analyze`, `scan` | `.csv`, `.json`, `.html` — the extension picks the format | the HTML report collapses long membership lists |
+| `groups`, `members` | `.json`, `.csv` | |
+| `shares`, `trusts`, `runs`, `errors`, `check-update` | console only | |
+
+An existing file is never overwritten silently: add `--force`. The export
+directory must exist. Exports contain paths and identities — treat them as
+confidential.
+
+**Exit codes.** `0` — the command ran (a `NOT DETERMINABLE` result is a
+correct answer, not an error); `1` — the command failed (invalid input,
+unreachable server, bind error, export refused). Scripts should check the
+exit code **and** the `determinable` column (CSV) / field (JSON).
+
+**All options.**
+
+| Option | Commands | Meaning |
+| --- | --- | --- |
+| `-p, --path` | analyze, scan | local path or `\\server\share\…` (long paths and `\\?\` forms accepted) |
+| `-u, --user` | analyze, scan, groups | `name`, `DOMAIN\user`, UPN or SID (see [Identity input forms](#identity-input-forms)) |
+| `-g, --group` | members | `name`, `DOMAIN\group` or SID |
+| `-s, --server` | LDAP commands; shares | LDAP server (DC); for `shares` the file server |
+| `-b, --base-dn` | LDAP commands | search base, e.g. `DC=corp,DC=local` |
+| `--bind-dn` | LDAP commands | bind account: `DOMAIN\user`, UPN or DN |
+| `--ldap-signing` | LDAP commands | Kerberos sign + seal with the current logon, no password |
+| `--insecure-ldap` | LDAP commands | plain LDAP on port 389 — test labs only |
+| `--global-catalog` | LDAP commands | forest-wide lookup via the Global Catalog (marked: only universal groups replicate fully) |
+| `--ldap-timeout` | LDAP commands | seconds per LDAP operation, 1–600 (default 10) |
+| `--smb-server`, `--share-name` | analyze, scan | share context for a local path; both or neither (auto-detected for UNC paths) |
+| `--max-depth` | scan | directory levels below `--path`: `0` = only the path, default unlimited, maximum 512 |
+| `--db` | scan; runs, errors | SQLite file for the scan history; without it `scan` stores **no** history (nothing for `runs`, `errors` or the Delta tab) |
+| `-o, --output`, `--force` | see Export formats | |
+| `--include-admin` | shares | also list `C$`, `ADMIN$`, `IPC$` |
+| `--run-id` | errors | run id as listed by `runs` |
+| `--source` | check-update | HTTPS update source |
+
+`adpa <command> --help` shows the same, per command.
 
 ### Analyze a single path
 
@@ -990,6 +1067,38 @@ Set the environment variable `ADPA_BIND_PASSWORD` for the bind
 password — that is safer than the `--bind-password` option, which
 remains visible in the process listing.
 
+### Reading the `analyze` report
+
+The console report is built top-down, from the identity to the answer:
+
+1. **Identity** — the account as resolved, its SID, status and kind, and
+   **Evaluated** — how the access is evaluated (network logon over SMB,
+   interactive logon at the target, …). A note says when groups may be
+   missing (no LDAP) or when the account is a local account of the server.
+2. **Resolved Groups** — every group of the evaluated token, domain and
+   local, once each, with name, SID and source.
+3. **DACL** — owner, inheritance state and every ACE in **stored order**
+   (the order Windows evaluates), with trustee name and SID, the rights
+   with generic bits expanded and the raw mask, and
+   `[inherit-only — not applied to this object]` where an ACE only reaches
+   children.
+4. **Diagnostic markers** — what Stars knew and did not know (see
+   [Reading findings](#reading-findings--diagnostic-markers)).
+5. **Matching ACEs** — the ACEs whose trustee is in the token.
+6. **Effective Rights** — the NTFS, share and resulting right; a value that
+   cannot be determined reads `NOT DETERMINABLE`, followed by **Why not
+   determinable** with every reason.
+7. **Explanation Path** — the numbered steps: the evaluated logon, the
+   memberships (decisive ones marked `[decisive]`, deny-only and uncertain
+   ones marked), each ACE with what it granted or denied — `[UNCERTAIN — …]`
+   for one that only bounds the result — the NTFS value, each share ACE,
+   the share value, the effective value and the side that limits it.
+8. **Risk Findings** — the risk rules on the result; "may have" where the
+   result is not determinable.
+
+The CSV `explanation` column, the HTML details and the GUI show the same
+explanation path.
+
 ### Recursive scan
 
 ```powershell
@@ -1001,6 +1110,10 @@ adpa scan --path "\\fileserver\projects" --user "CORP\alice" `
 
 `Ctrl-C` triggers a cooperative shutdown — the current path is
 finished, then Stars terminates cleanly.
+
+Without `--db` the scan is printed and exported but **not stored** — add
+`--db` to compare it later (`runs`, `errors`, the GUI's Delta tab). Paths
+the scan could not read are listed as errors and kept with the run.
 
 ### Show a user's groups
 
@@ -1159,7 +1272,9 @@ the cross-forest caveat yourself — see
 
 ### More options
 
-`adpa --help` lists everything.
+`adpa --help` lists the commands, `adpa <command> --help` the options of
+one command (the table under [Before you start](#before-you-start) shows
+them all).
 
 ---
 

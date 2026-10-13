@@ -10,7 +10,22 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Fixed
+
+- **CLI help:** `analyze` / `scan --output` said "Optional CSV export
+  path" although `.json` and `.html` work too (the extension picks the
+  format); `--max-depth` had no help text (0 = only the path, default
+  unlimited, maximum 512).
+
 ### Changed
+
+- **User guide, CLI section** for administrators: which account Stars
+  reads as and how to use other credentials (`net use`), the rights needed
+  on the target server, working with and without LDAP, the bind password
+  and `--ldap-signing`, PowerShell quoting of `$` shares, export formats per
+  command, exit codes (a NOT DETERMINABLE result is not an error), a table
+  of all options, how to read the `analyze` report, and that `scan` without
+  `--db` stores no history.
 
 - **Overview documentation brought up to date** with v1.10–v1.12: README
   (data flow now names the read-only remote-registry read of the target's
