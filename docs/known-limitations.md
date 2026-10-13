@@ -778,32 +778,27 @@ remains a range.
 
 ---
 
-## L17 — Guest and anonymous tokens are bounded, not lab-measured
+## L17 — Guest and anonymous tokens (measured; anonymous Everyone still bounded)
 
-**Priority:** Medium — review finding CR-8 (2026-10-12, ADR 0072)
+**Priority:** Low — review finding CR-8 (ADR 0072), **largely closed
+2026-10-13** by a lab measurement.
 
-### Problem
+### Problem (remaining)
 
-Microsoft documents that the built-in Guest account is not a member of
-`Authenticated Users`, and that an anonymous logon is in neither
-`Authenticated Users` nor — unless `EveryoneIncludesAnonymous` = 1 —
-`Everyone`. The lab that could measure real Guest and anonymous tokens was
-not available when the fix was made, and Stars does not read
-`EveryoneIncludesAnonymous`.
+A real Guest token and the anonymous token were measured: Authenticated
+Users is never in them (now exact). Everyone is in the anonymous token only
+when the target sets `EveryoneIncludesAnonymous` = 1 — Stars does not read
+that policy.
 
 ### Effect
 
-For these identities ACEs for the named well-knowns bound the result
-(marker `GuestOrAnonymousToken` + `LogonDependentTrustees`): the shown value
-follows the documentation, the upper bound covers the opposite. Never wrong,
-but a range where one ACE for them decides.
+For an anonymous logon, ACEs for Everyone bound the result (marker
+`GuestOrAnonymousToken` + `LogonDependentTrustees`). Guest results are exact.
 
 ### Solution sketch
 
-Measure a real Guest network token and an anonymous session (with and
-without `EveryoneIncludesAnonymous`) in the lab; if they confirm the
-documentation, replace the bound by the exact rule. The policy value could
-additionally be read read-only from the target server.
+Read `EveryoneIncludesAnonymous` read-only from the target server (remote
+registry, where permitted and validated) to make the anonymous case exact.
 
 ---
 
@@ -827,7 +822,7 @@ additionally be read read-only from the target server.
 | L14 — Junction cycles over UNC | Medium | **yes** (ReparseCycle / ReparseDuplicateTarget, as locally) | **closed 2026-10-10** (ADR 0062: volume serial + file ID on UNC scans) |
 | L15 — Trusted-domain SID reported as orphaned | Medium | **yes** (IdentityNotResolvable, names the trust partner) | **classification closed 2026-10-10** (ADR 0064); resolving the memberships via GC / trusted DC still open |
 | L16 — UAC policies / session elevation not visible | Medium | **yes** (UacFilteredGroups, bounded result) | partly — the network case via a read-only policy read of the target server |
-| L17 — Guest / anonymous tokens not lab-measured | Medium | **yes** (GuestOrAnonymousToken, bounded result) | yes — lab measurement, then the exact rule (ADR 0072) |
+| L17 — Guest / anonymous tokens | Low | **yes** (GuestOrAnonymousToken) | **Guest exact, Authenticated Users exact (measured 2026-10-13)**; anonymous Everyone bounded until `EveryoneIncludesAnonymous` is read |
 
 ## Contribution policy
 

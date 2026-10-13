@@ -1,8 +1,9 @@
 # ADR 0072 — Guest and anonymous tokens
 
 ## Status
-Accepted (2026-10-12). Closes review finding CR-8 conservatively; the exact
-rule follows a lab measurement (see Verification).
+Accepted (2026-10-12). Closes review finding CR-8. **Amended 2026-10-13:**
+the lab measurement replaced the bound by the exact rule (see "Lab
+measurement").
 
 ## Context
 
@@ -45,6 +46,30 @@ share token.
 **Next lab:** measure a real Guest network token and an anonymous session
 (with and without `EveryoneIncludesAnonymous`); if they confirm the
 documentation, replace the bound by the exact rule.
+
+## Lab measurement (2026-10-13)
+
+`guest-token.ps1` on MS-01 (Windows Server 2025, member server): the Guest
+account enabled with a random password only for the measurement and
+restored afterwards; real tokens from `LogonUser` and the anonymous token
+from `ImpersonateAnonymousToken`.
+
+| Token | Everyone | Authenticated Users |
+| --- | --- | --- |
+| Guest, network logon | present | **absent** |
+| Guest, interactive logon | present | **absent** |
+| Anonymous (`EveryoneIncludesAnonymous` = 0, the default) | **absent** | **absent** |
+
+The documented behaviour is confirmed. Decision, replacing points 1–2:
+
+- `identity_absent_well_knowns`: Guest and ANONYMOUS LOGON → Authenticated
+  Users is **certainly absent** — not in the token, its ACEs do not apply,
+  no range; a local group reached only through it is no membership.
+- `identity_uncertain_well_knowns`: ANONYMOUS LOGON → Everyone stays
+  **uncertain**, because it depends on `EveryoneIncludesAnonymous`, which
+  Stars does not read. A Guest token always has Everyone.
+- The marker `GuestOrAnonymousToken` names both; the "Evaluated as" step
+  and the UNCERTAIN reason say the same.
 
 ## Consequences
 
