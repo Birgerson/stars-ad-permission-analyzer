@@ -12,6 +12,16 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **Guest and anonymous: the exact rule, measured** (ADR 0072 amended,
+  known limitation L17 largely closed). Real Guest tokens (network and
+  interactive) and the anonymous token measured on a Windows Server 2025
+  member server: Authenticated Users is never in them, a Guest token
+  always has Everyone, the anonymous token has Everyone only with
+  `EveryoneIncludesAnonymous` = 1. Authenticated Users ACEs therefore no
+  longer bound a Guest or anonymous result — they do not apply, and the
+  result is exact; only Everyone stays bounded for an anonymous logon
+  (the policy is not read).
+
 - **A share without security descriptor is no longer "unrestricted"**
   (finding CR-15, ADR 0075). For the administrative shares (`C$`,
   `ADMIN$`, `IPC$`) Windows reports no security descriptor; Stars treated

@@ -486,14 +486,11 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      with this SID would get; an ACE naming it is a dead entry.");
             }
             PermissionDiagnostic::GuestOrAnonymousToken { sids } => {
-                println!("  [!] Guest / anonymous logon: Windows does not put these SIDs into");
-                println!("      this token the way it does for other accounts:");
-                for s in sids {
-                    println!("        - {s}");
-                }
-                println!("      (Authenticated Users excludes Guest and anonymous; Everyone");
-                println!("      excludes anonymous unless EveryoneIncludesAnonymous = 1.)");
-                println!("      ACEs for them bound the result.");
+                // ADR 0072: the model's summary is the single wording.
+                println!(
+                    "  [!] {}",
+                    PermissionDiagnostic::GuestOrAnonymousToken { sids: sids.clone() }.summary()
+                );
             }
             PermissionDiagnostic::UacFilteredGroups { groups } => {
                 println!("  [!] User Account Control may filter these groups out of the token");

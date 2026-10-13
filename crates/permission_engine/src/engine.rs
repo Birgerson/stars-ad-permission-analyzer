@@ -284,12 +284,15 @@ impl PermissionEvaluator for DefaultPermissionEngine {
                 .collect();
             diagnostics.push(PermissionDiagnostic::UacFilteredGroups { groups });
         }
-        // Review CR-8: name the well-knowns a Guest / anonymous token lacks.
-        let guest_uncertain = identity_uncertain_well_knowns(&input.identity.sid.0);
-        if !guest_uncertain.is_empty() {
-            diagnostics.push(PermissionDiagnostic::GuestOrAnonymousToken {
-                sids: guest_uncertain.iter().map(|s| (*s).to_owned()).collect(),
-            });
+        // ADR 0072: name the well-knowns a Guest / anonymous token lacks
+        // (absent) or may lack (uncertain).
+        let guest_sids: Vec<String> = identity_absent_well_knowns(&input.identity.sid.0)
+            .iter()
+            .chain(identity_uncertain_well_knowns(&input.identity.sid.0))
+            .map(|s| (*s).to_owned())
+            .collect();
+        if !guest_sids.is_empty() {
+            diagnostics.push(PermissionDiagnostic::GuestOrAnonymousToken { sids: guest_sids });
         }
         // ADR 0067: groups left out of the token — visible, never silent.
         if !input.resolution.excluded_non_security_groups.is_empty() {
@@ -459,11 +462,13 @@ pub fn build_token_sids_with_context(
         sids.insert(local.0.clone());
     }
     // Implicit well-known principals present in every Windows access token —
-    // except where Windows documents otherwise for the Guest account and
-    // anonymous logons (review CR-8): those stay uncertain, never assumed.
+    // except for the Guest account and anonymous logons (ADR 0072, measured):
+    // Authenticated Users is absent, Everyone is uncertain for anonymous.
     let uncertain_well_knowns = identity_uncertain_well_knowns(user_sid);
+    let absent_well_knowns = identity_absent_well_knowns(user_sid);
     for well_known in [SID_EVERYONE, SID_AUTHENTICATED_USERS] {
-        if !uncertain_well_knowns.contains(&well_known) {
+        if !uncertain_well_knowns.contains(&well_known) && !absent_well_knowns.contains(&well_known)
+        {
             sids.insert(well_known.to_string());
         }
     }
@@ -575,17 +580,26 @@ pub fn is_guest_account(sid: &str) -> bool {
         .is_some_and(|(domain, rid)| rid == "501" && domain.split('-').count() == 3)
 }
 
+/// The universal well-knowns **certainly absent** from this identity's token
+/// (ADR 0072, lab-measured 2026-10-13 on Windows Server 2025): a real Guest
+/// token (network and interactive logon) and the anonymous token carry no
+/// `Authenticated Users`.
+pub fn identity_absent_well_knowns(user_sid: &str) -> &'static [&'static str] {
+    if user_sid == SID_ANONYMOUS_LOGON || is_guest_account(user_sid) {
+        &[SID_AUTHENTICATED_USERS]
+    } else {
+        &[]
+    }
+}
+
 /// The universal well-knowns whose presence in this identity's token is
-/// uncertain (review CR-8, ADR 0072): Microsoft documents that the Guest
-/// account is not in `Authenticated Users`, and that an anonymous logon is in
-/// neither `Authenticated Users` nor — unless `EveryoneIncludesAnonymous` is
-/// set — `Everyone`. Until a real Guest / anonymous token is measured in the
-/// lab they are bounded, not assumed in either direction.
+/// **uncertain** (ADR 0072): `Everyone` is in the anonymous token only when
+/// the target sets `EveryoneIncludesAnonymous` = 1 (measured: absent with the
+/// default 0). Stars does not read that policy, so ACEs for `Everyone` bound
+/// an anonymous result. A Guest token always carries `Everyone` (measured).
 pub fn identity_uncertain_well_knowns(user_sid: &str) -> &'static [&'static str] {
     if user_sid == SID_ANONYMOUS_LOGON {
-        &[SID_AUTHENTICATED_USERS, SID_EVERYONE]
-    } else if is_guest_account(user_sid) {
-        &[SID_AUTHENTICATED_USERS]
+        &[SID_EVERYONE]
     } else {
         &[]
     }
@@ -1226,8 +1240,8 @@ fn uncertain_ace_reason(
     }
     if identity_uncertain_well_knowns(user_sid).contains(&sid) {
         return Some(
-            "Windows documents this SID as absent from a Guest / anonymous token (ADR 0072, \
-             not lab-measured)"
+            "Everyone is in an anonymous token only if the target sets \
+             EveryoneIncludesAnonymous = 1 — Stars does not read that policy (ADR 0072)"
                 .to_owned(),
         );
     }
@@ -1282,15 +1296,18 @@ pub fn access_context_summary(context: AccessContext) -> &'static str {
 /// and `uac_filtered_groups`, so the text and the computation agree.
 pub fn access_context_step(context: AccessContext, user_sid: &str) -> String {
     let uncertain = identity_uncertain_well_knowns(user_sid);
+    let absent = identity_absent_well_knowns(user_sid);
     let universal = match (
         uncertain.contains(&SID_EVERYONE),
-        uncertain.contains(&SID_AUTHENTICATED_USERS),
+        absent.contains(&SID_AUTHENTICATED_USERS),
     ) {
         (false, false) => "Everyone (S-1-1-0), Authenticated Users (S-1-5-11)".to_owned(),
         (false, true) => {
-            "Everyone (S-1-1-0); Authenticated Users is not assumed (Guest account)".to_owned()
+            "Everyone (S-1-1-0); no Authenticated Users (a Guest token never has it)".to_owned()
         }
-        _ => "neither Everyone nor Authenticated Users is assumed (anonymous logon)".to_owned(),
+        _ => "no Authenticated Users (anonymous logon); Everyone only if the target sets \
+              EveryoneIncludesAnonymous = 1 — not read, so bounded"
+            .to_owned(),
     };
     let summary = access_context_summary(context);
     match context {
@@ -5839,10 +5856,10 @@ mod tests {
         assert!(normal.contains(SID_EVERYONE) && normal.contains(SID_AUTHENTICATED_USERS));
     }
 
-    /// Guest: an Authenticated Users ACE bounds the result (shown without
-    /// it, as Microsoft documents) instead of counting as a fact.
+    /// Guest (measured): Authenticated Users is certainly not in the token —
+    /// its ACE does not apply, the result is exact.
     #[test]
-    fn authenticated_users_ace_bounds_a_guest_result() {
+    fn authenticated_users_ace_never_applies_to_a_guest() {
         let p = eval_with_context(
             user(GUEST),
             vec![],
@@ -5857,11 +5874,8 @@ mod tests {
             AccessContext::RemoteSmb,
         );
         assert_eq!(p.ntfs_mask.0, expand_generic_rights(MASK_READ));
-        let (sids, min, max) = logon_marker(&p).expect("bounded");
-        assert_eq!(sids, vec![SID_AUTHENTICATED_USERS.to_string()]);
-        assert_eq!(min, expand_generic_rights(MASK_READ));
-        assert_eq!(max, expand_generic_rights(MASK_MODIFY | MASK_READ));
-        assert!(!p.effective_determinable());
+        assert!(logon_marker(&p).is_none(), "exact, no range");
+        assert!(p.effective_determinable());
         assert!(p.diagnostics.iter().any(|d| matches!(
             d,
             PermissionDiagnostic::GuestOrAnonymousToken { sids } if sids == &vec![SID_AUTHENTICATED_USERS.to_string()]
@@ -5905,10 +5919,10 @@ mod tests {
         assert_eq!((min, max), (0, expand_generic_rights(MASK_READ)));
     }
 
-    /// A local group a Guest reaches only through Authenticated Users is
-    /// uncertain, not a membership.
+    /// A local group a Guest could reach only through Authenticated Users is
+    /// not a membership (measured: a Guest network token has no Users).
     #[test]
-    fn local_group_through_authenticated_users_is_uncertain_for_a_guest() {
+    fn local_group_through_authenticated_users_is_no_membership_for_a_guest() {
         let groups = vec![local_group(
             "S-1-5-32-545",
             "Users",
@@ -5916,7 +5930,7 @@ mod tests {
         )];
         let e = expand_local_groups(GUEST, &[], &[], &groups, AccessContext::RemoteSmb);
         assert!(e.certain.is_empty());
-        assert_eq!(uncertain_names(&e), vec!["Users"]);
+        assert!(uncertain_names(&e).is_empty());
         let normal = expand_local_groups(USER, &[], &[], &groups, AccessContext::RemoteSmb);
         assert_eq!(certain_names(&normal), vec!["Users"]);
     }
@@ -6101,13 +6115,12 @@ mod tests {
             ("global catalog", |i| {
                 i.resolution.group_resolution_via_global_catalog = true
             }),
-            ("guest", |i| {
-                i.identity = user("S-1-5-21-1000-1000-1000-501");
-                i.file_system_object.dacl.push(allow_ace(
-                    SID_AUTHENTICATED_USERS,
-                    MASK_FULL_CONTROL,
-                    false,
-                ));
+            // ADR 0072: Everyone is uncertain for an anonymous logon.
+            ("anonymous", |i| {
+                i.identity = user(SID_ANONYMOUS_LOGON);
+                i.file_system_object
+                    .dacl
+                    .push(allow_ace(SID_EVERYONE, MASK_FULL_CONTROL, false));
             }),
             ("disabled (informational only)", |i| {
                 i.identity.disabled = true

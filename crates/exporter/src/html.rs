@@ -505,14 +505,14 @@ fn write_permissions_table(
                     );
                 }
                 PermissionDiagnostic::GuestOrAnonymousToken { sids } => {
+                    // ADR 0072: the model's summary is the single wording.
+                    let summary =
+                        PermissionDiagnostic::GuestOrAnonymousToken { sids: sids.clone() }
+                            .summary();
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-medium\" \
-                         title=\"Guest / anonymous logon: Windows does not put {} into this \
-                         token the way it does for other accounts (Authenticated Users excludes \
-                         Guest and anonymous; Everyone excludes anonymous unless \
-                         EveryoneIncludesAnonymous = 1). ACEs for them bound the result.\">⚠ \
-                         Guest / anonymous token</span>",
-                        escape_html(&sids.join(", "))
+                        "<span class=\"badge badge-medium\" title=\"{}\">⚠ Guest / anonymous \
+                         token</span>",
+                        escape_html(&summary)
                     ));
                 }
                 PermissionDiagnostic::UacFilteredGroups { groups } => {

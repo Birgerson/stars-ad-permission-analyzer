@@ -1508,10 +1508,10 @@ mod tests {
         assert_eq!(uncertain, 1);
     }
 
-    /// Review CR-8: the share token of a Guest has Authenticated Users as
-    /// uncertain, never enabled.
+    /// ADR 0072 (measured): the share token of a Guest has no Authenticated
+    /// Users — neither enabled nor uncertain.
     #[test]
-    fn share_token_of_a_guest_bounds_authenticated_users() {
+    fn share_token_of_a_guest_has_no_authenticated_users() {
         let token = share_token(
             "S-1-5-21-7-7-7-501",
             &[],
@@ -1523,7 +1523,7 @@ mod tests {
         );
         assert!(token.enabled.contains("S-1-1-0"));
         assert!(!token.enabled.contains("S-1-5-11"));
-        assert!(token.uncertain.contains("S-1-5-11"));
+        assert!(!token.uncertain.contains("S-1-5-11"));
         let dacl = ShareDacl::Acl(vec![make_perm(
             "S",
             "S-1-5-11",
@@ -1532,7 +1532,7 @@ mod tests {
         )]);
         let (mask, uncertain) = evaluate_share_dacl(&dacl, &token, AccessContext::RemoteSmb);
         assert_eq!(mask.map(|m| m.0), Some(0));
-        assert_eq!(uncertain, 1);
+        assert_eq!(uncertain, 0, "exact: the ACE does not apply");
     }
 
     /// A logon-dependent local group passed by the caller is never enabled,

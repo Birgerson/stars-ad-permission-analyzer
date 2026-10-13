@@ -718,9 +718,11 @@ login:
 2. All domain group SIDs from `memberships`.
 3. All local server group SIDs from `local_group_sids`.
 4. Universal well-knowns: `Everyone` (S-1-1-0),
-   `Authenticated Users` (S-1-5-11) — except for the Guest account (no
-   Authenticated Users) and ANONYMOUS LOGON (neither), whose missing
-   well-knowns are bounded (`identity_uncertain_well_knowns`, ADR 0072).
+   `Authenticated Users` (S-1-5-11) — except for the Guest account and
+   ANONYMOUS LOGON: Authenticated Users is absent (`identity_absent_well_knowns`,
+   lab-measured), Everyone is uncertain for anonymous only
+   (`identity_uncertain_well_knowns`, `EveryoneIncludesAnonymous` not read;
+   ADR 0072).
 5. **Context-specific well-knowns** from `access_context`:
    - `RemoteSmb` → `NETWORK` (S-1-5-2).
    - `LocalInteractive` → `INTERACTIVE` (S-1-5-4). `LOCAL` (S-1-2-0) is
