@@ -720,9 +720,10 @@ login:
 4. Universal well-knowns: `Everyone` (S-1-1-0),
    `Authenticated Users` (S-1-5-11) — except for the Guest account and
    ANONYMOUS LOGON: Authenticated Users is absent (`identity_absent_well_knowns`,
-   lab-measured), Everyone is uncertain for anonymous only
-   (`identity_uncertain_well_knowns`, `EveryoneIncludesAnonymous` not read;
-   ADR 0072).
+   lab-measured); Everyone for anonymous follows the target's
+   `EveryoneIncludesAnonymous` (`PermissionEvaluationInput::anonymous_everyone`,
+   read by `ad_resolver::read_everyone_includes_anonymous`; uncertain only
+   when unreadable — `uncertain_well_knowns_with`, ADR 0072).
 5. **Context-specific well-knowns** from `access_context`:
    - `RemoteSmb` → `NETWORK` (S-1-5-2).
    - `LocalInteractive` → `INTERACTIVE` (S-1-5-4). `LOCAL` (S-1-2-0) is
@@ -732,6 +733,21 @@ login:
 This distinction is critical: an ACE on `NETWORK` only matches in
 SMB evaluation, not in a local one. Stars must know the context to
 be correct.
+
+**User Account Control from the target's policies (ADR 0076).** The
+groups UAC may filter (`uac_filtered_groups`) are deny-only. Whether a
+local account's token is really filtered is decided from the target's
+registry (`ad_resolver::read_target_uac_policy`, remote registry,
+`KEY_QUERY_VALUE` only): `remote_uac_filtering` over SMB (non-RID-500
+filtered iff `LocalAccountTokenFilterPolicy` = 0; RID 500 iff
+`FilterAdministratorToken` = 1 and `LocalAccountTokenFilterPolicy` = 0),
+`local_uac_filtering` on a local path (only RID 500 with
+`FilterAdministratorToken` = 0 is decided: unsplit token). The result
+travels as `PermissionEvaluationInput::remote_uac`: `Filtered` → Allow ACEs
+of those groups certainly do not apply (`logon_dependent_bounds`, owner
+rule, `ShareToken::deny_only_certain`); `NotFiltered` → the frontends
+pass no filtered groups; `Unknown` → bounded as before. The values read
+are named by the marker `RemoteUacPolicy`.
 
 ### 6.3 Step 2 — walk the DACL (allow before deny)
 
@@ -836,6 +852,18 @@ chapter 10).
 - Allow ACE [inherited] for BUILTIN\Users (S-1-5-32-545) → Read & Execute (0x001200A9) [granted Read & Execute (0x001200A9)]
 - NTFS effective: Read & Execute (0x001200A9)
 ```
+
+For the frontends, `collapsible_steps` / `is_collapsible_membership_step`
+(more than `MEMBERSHIP_COLLAPSE_THRESHOLD` = 10 membership steps) mark the
+memberships that may be collapsed — never a decisive, deny-only or
+uncertain one; the GUI (`StepVm`, toggle filtered in Rust) and the HTML
+report (`<details>`) use that rule.
+
+Share ACE steps come from `share_scanner::share_ace_decisions` (same DACL
+read and same walk as the share mask) via `share_decision_steps` and
+`attach_share_provenance`; a share without security descriptor is
+`ShareDacl::NoSecurityDescriptor` → share permission not determinable
+(ADR 0075).
 
 Step 2 states the evaluated logon and the implicit SIDs it adds
 (`access_context_step`, review CR-6, ADR 0074). The test

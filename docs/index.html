@@ -71,7 +71,7 @@
       <div class="card"><h3>Explainable permission paths</h3><p>Every result comes with the full chain: identity &rarr; group &rarr; ACE &rarr; normalized right &rarr; effective right. No black box.</p></div>
       <div class="card"><h3>Correct, not approximate</h3><p>Windows AccessCheck semantics: stored-order DACL evaluation, Deny precedence, inheritance breaks, generic-rights expansion, NTFS &cap; Share combination.</p></div>
       <div class="card"><h3>OWNER RIGHTS (S-1-3-4)</h3><p>Handles the implicit owner grant and OWNER RIGHTS ACEs exactly &mdash; where many tools over-report the owner's access. <a href="https://github.com/Birgerson/stars-ad-permission-analyzer/blob/main/docs/owner-rights-sid-s-1-3-4.md">Read more</a>.</p></div>
-      <div class="card"><h3>Honest about uncertainty</h3><p>When something cannot be fully resolved, Stars flags it with a diagnostic marker instead of pretending the result is complete.</p></div>
+      <div class="card"><h3>Honest about uncertainty</h3><p>When something cannot be fully resolved, the result reads NOT DETERMINABLE with the reason and the range &mdash; never a guessed value stated as fact. Verified bit for bit against Windows itself in a two-forest lab.</p></div>
       <div class="card"><h3>Hardened DCs, no certificate</h3><p>Signed LDAP (SASL GSSAPI/Kerberos sign &amp; seal) lets Stars query a hardened Windows Server 2022/2025 DC that enforces LDAP signing &mdash; without an LDAPS certificate.</p></div>
       <div class="card"><h3>Strictly read-only</h3><p>No release will ever write to NTFS, SMB or AD. No agent on target systems. No telemetry, no phone-home.</p></div>
     </div>
@@ -81,7 +81,8 @@
     <h2>What Stars analyzes</h2>
     <ul class="facts">
       <li><b>NTFS</b> DACLs &mdash; allow/deny, explicit/inherited, special rights</li>
-      <li><b>SMB shares</b> &mdash; share permissions and the NTFS &cap; Share result</li>
+      <li><b>SMB shares</b> &mdash; share permissions ACE by ACE and the NTFS &cap; Share result, with the side that limits it</li>
+      <li><b>User Account Control, Guest and anonymous</b> &mdash; decided from the target's policies (read-only), so a local administrator over SMB gets an exact answer</li>
       <li><b>Active Directory</b> &mdash; nested groups, primary group, FSPs, disabled accounts, <b>sIDHistory</b> (migrated users and groups, evaluated into the token)</li>
       <li><b>Effective rights</b> per user, with risk findings</li>
       <li><b>Reports</b> &mdash; CSV, JSON, HTML; SQLite scan history and delta comparison</li>

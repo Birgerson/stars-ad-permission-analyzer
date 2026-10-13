@@ -13,7 +13,8 @@ Stars fits if **at least one** of these is true for you:
 - You work with nested AD groups, local server groups (`BUILTIN\Administrators`, `Users`), Deny ACEs, and SMB shares whose restriction must be combined with the NTFS DACL.
 - You just need to know **which groups a user is in** — including the nested chain and whether any of them are *privileged* (Domain Admins and the like) — without picking a path. The `Groups` tab / `adpa groups` answers exactly that.
 - You need the reverse: **who is in this group?** — including the members whose *primary group* it is, which a naive `member` read misses entirely (`adpa members`).
-- You want to see **which SMB shares a server publishes and who passes the share layer** — with NULL DACL (“no share-level restriction”) kept distinct from an empty DACL (“no access”), because they mean opposite things (`adpa shares`).
+- You want to see **which SMB shares a server publishes and who passes the share layer** — with NULL DACL (“no share-level restriction”) kept distinct from an empty DACL (“no access”), because they mean opposite things, and a share without security descriptor (`C$`, `ADMIN$`) never shown as unrestricted (`adpa shares`).
+- You need an exact answer for **local administrators over SMB** — Stars reads the server's User Account Control policies (read-only) instead of guessing whether the admin token is filtered.
 - You need to know whether a **trust filters SIDs or gates authentication** (`adpa trusts`) — the settings that decide whether a cross-forest or migrated SID really grants what a DACL promises.
 - You want to know **what a stored scan could not read** — every run keeps its error list (those paths are missing from the results), visible via `adpa runs` / `adpa errors --run-id <ID>` or the ⚠ button in the GUI's Delta tab.
 - You want a permission snapshot of a directory tree (e.g. 5000 dirs) as CSV/JSON/HTML.

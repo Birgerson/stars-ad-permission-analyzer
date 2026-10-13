@@ -98,7 +98,7 @@ A level stands alone only when the mask is **exactly** that level; every right b
 Stars is a **local tool**. Concretely:
 
 - **No telemetry, no phone-home.** Stars never contacts an external server on its own, neither during install nor while running.
-- **No network connections beyond the targets you explicitly enter** — i.e. LDAP/LDAPS to the DC you configure, plus SMB to the servers whose shares you analyze. The single exception is the **manual update check** (since v1.8.0): it contacts its configured HTTPS source **only when you click the button** — never at startup, never on a timer — and it downloads nothing.
+- **No network connections beyond the targets you explicitly enter** — i.e. LDAP/LDAPS to the DC you configure, plus SMB to the servers whose shares you analyze. Over SMB Stars also reads, read-only, a few policy values from the target server's registry — `EnableLUA`, `LocalAccountTokenFilterPolicy`, `FilterAdministratorToken`, `EveryoneIncludesAnonymous` — to decide User Account Control and anonymous access exactly (remote registry, `KEY_QUERY_VALUE` only). On Windows Server the *Remote Registry* service may start on demand for such a read (a Windows trigger start); Stars changes nothing. If the read is denied or the service is disabled, the result stays an honest range. The single exception is the **manual update check** (since v1.8.0): it contacts its configured HTTPS source **only when you click the button** — never at startup, never on a timer — and it downloads nothing.
 - **No auto-update.** Stars can *tell* you when a newer version is published (manual check, ADR 0061), but installation stays entirely in your hands.
 - **No crash reports to third parties.** If Stars crashes, the error stays in the local log file (see below).
 
@@ -243,19 +243,37 @@ Stars resolves users and groups via LDAP:
 Stars takes share permissions into account when computing effective access:
 
 - Enumeration of all shares on a server
-- NULL DACL (everyone has full access) vs. empty DACL (nobody has access) — Stars distinguishes both cases correctly
-- Combined NTFS + share rights: `effective = NTFS ∩ Share`
+- NULL DACL (everyone has full access) vs. empty DACL (nobody has access) — Stars distinguishes both cases correctly; a share that reports **no security descriptor** (`C$`, `ADMIN$`) is never shown as unrestricted — its built-in default is not visible, so it reads NOT DETERMINABLE
+- Combined NTFS + share rights: `effective = NTFS ∩ Share` — each share ACE is listed with what it granted or denied, and the path names the side that limits the result
+- Share trustees by name, also a member server's own accounts and groups (resolved on that server)
+
+#### User Account Control, Guest and anonymous
+
+- **User Account Control** filters administrative groups (deny-only). Stars reads the target's `LocalAccountTokenFilterPolicy` / `FilterAdministratorToken` read-only and decides it exactly — for local accounts over SMB, and for the built-in Administrator on a local path; a local session's elevation, which no policy reveals, stays an honest range
+- **Guest and anonymous:** Authenticated Users is never in their token (measured); Everyone in an anonymous token follows the target's `EveryoneIncludesAnonymous`
 
 #### Effective permissions
 
 The core result is the permission that actually applies — with a complete explanation:
 
 ```
-User max.muster → member of "Accounting" → member of "FileServer_Read"
-→ Allow ACE [inherited] for FileServer_Read → NTFS: Read & Execute
+User max.muster
+→ Evaluated as: network logon over SMB — the token receives NETWORK, Everyone, Authenticated Users
+→ member of "Accounting" → member of "FileServer_Read" [decisive]
+→ Allow ACE [inherited] for FileServer_Read → Read & Execute [granted Read & Execute]
+→ NTFS effective: Read & Execute
+→ Share ACE Allow for Everyone → Change [share grants Change]
 → Share permission: Change
 → Effective (NTFS ∩ Share): Read & Execute
+→ Limited by NTFS: the share allows Change, NTFS grants Read & Execute
 ```
+
+Every bit of the result is accounted for by a step (checked by an
+invariant test over thousands of generated DACLs). An ACE that may or may
+not apply — User Account Control, a logon-dependent SID — is listed as
+`UNCERTAIN` with its own reason, and the result then reads NOT
+DETERMINABLE with the range. In a long membership list the GUI and the
+HTML report collapse the memberships that did not matter.
 
 ## Using Stars
 

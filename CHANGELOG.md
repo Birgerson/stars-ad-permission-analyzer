@@ -10,6 +10,17 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Changed
+
+- **Overview documentation brought up to date** with v1.10–v1.12: README
+  (data flow now names the read-only remote-registry read of the target's
+  UAC / anonymous policies and the on-demand start of the Remote Registry
+  service; UAC, Guest / anonymous, share provenance, the explanation
+  example), features-and-limitations (a stale "Stars cannot see these
+  policies" corrected), technical documentation (remote UAC, collapsing,
+  share provenance, no-descriptor shares), user guide, the project page,
+  "Can Stars help you?" and the release-notes feature list.
+
 ## [1.12.0] — 2026-10-14
 
 **Anonymous logons exact, long membership lists readable.**
