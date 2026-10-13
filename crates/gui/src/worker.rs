@@ -2587,8 +2587,8 @@ pub fn shares_to_view(
                         // Review CR-15: no security descriptor is not "unrestricted".
                         ShareDacl::NoSecurityDescriptor => (
                             "NOT DETERMINABLE — the server reports no security descriptor and \
-                             applies a built-in default (an administrative share admits only \
-                             administrators and backup operators)."
+                             applies a built-in default Stars cannot see (C$, ADMIN$: \
+                             administrators and backup operators only)."
                                 .to_owned(),
                             1,
                             Vec::new(),

@@ -46,5 +46,13 @@ no share-level restriction.
 - The status is carried as `ReadFailed` so persisted data and JSON need no
   schema change; its CLI warning says "could not be read", the reason text
   says why. A dedicated status is a later, schema-versioned change.
-- Lab follow-up: confirm the server's default for a non-administrator, a
-  backup operator and a filtered local administrator over `C$`.
+- Lab verification (2026-10-13, MS-01, real SMB access): `C$` admits
+  `MS-01\Administrator` and the domain account `CORPt_uac01` (local
+  administrator, not filtered over SMB) and **denies** the UAC-filtered local
+  administrator `msadmin2` and the plain user `msuser1` — the old
+  "every principal passes the share layer" was wrong for them.
+- Wording (amended 2026-10-13): the texts no longer claim the default for
+  every share without a descriptor — `IPC$` behaves differently (anonymous
+  sessions) — but name it for `C$` / `ADMIN$` only: "the server applies a
+  built-in default Stars cannot see (C$, ADMIN$: administrators and backup
+  operators only)".

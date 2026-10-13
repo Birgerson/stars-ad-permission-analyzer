@@ -503,7 +503,7 @@ pub struct ShareResolution {
 /// The reason stated when a share has no security descriptor (review
 /// CR-15) — carried as `ShareMaskStatus::ReadFailed`, whose meaning is "the
 /// share permission is not determinable".
-pub const NO_SECURITY_DESCRIPTOR_REASON: &str = "the server reports no security descriptor for this share — it applies a built-in default instead (an administrative share such as C$ or ADMIN$ admits only administrators and backup operators); the share permission is not determinable";
+pub const NO_SECURITY_DESCRIPTOR_REASON: &str = "the server reports no security descriptor for this share — it applies a built-in default Stars cannot see (for C$ and ADMIN$: administrators and backup operators only, lab-verified); the share permission is not determinable";
 
 /// What one share ACE decided for the token (review CR-7).
 #[derive(Debug, Clone, PartialEq, Eq)]

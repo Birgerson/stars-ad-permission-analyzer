@@ -2081,7 +2081,21 @@ fn run_shares(server: &str, include_admin: bool) -> anyhow::Result<()> {
         ));
     }
 
-    output::print_shares(&result, include_admin);
+    // Review CR-4: share trustees by name — resolved on the server itself,
+    // whose own accounts and groups this machine does not know.
+    #[cfg(windows)]
+    let sid_names = {
+        let mut resolver = ad_resolver::SidNameResolver::new_for_target(&[], Some(server.as_str()));
+        for (_, scan) in &result.share_dacls {
+            if let share_scanner::ShareDacl::Acl(perms) = &scan.dacl {
+                resolver.resolve(perms.iter().map(|p| p.sid.0.clone()));
+            }
+        }
+        resolver.into_map()
+    };
+    #[cfg(not(windows))]
+    let sid_names = std::collections::BTreeMap::new();
+    output::print_shares(&result, include_admin, &sid_names);
     Ok(())
 }
 
