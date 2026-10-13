@@ -470,6 +470,7 @@ pub fn resolve_share_mask_status(
     logon_dependent_group_sids: &[Sid],
     uac_filtered_group_sids: &[Sid],
     access_context: AccessContext,
+    uac_filter_certain: bool,
 ) -> (ShareMaskStatus, usize) {
     let r = resolve_share_mask_status_explained(
         path,
@@ -482,6 +483,7 @@ pub fn resolve_share_mask_status(
         logon_dependent_group_sids,
         uac_filtered_group_sids,
         access_context,
+        uac_filter_certain,
     );
     (r.status, r.unevaluated)
 }
@@ -540,6 +542,8 @@ pub fn resolve_share_mask_status_explained(
     logon_dependent_group_sids: &[Sid],
     uac_filtered_group_sids: &[Sid],
     access_context: AccessContext,
+    // ADR 0076: the UAC groups are certainly deny-only (policies read).
+    uac_filter_certain: bool,
 ) -> ShareResolution {
     let smb_ctx = match validation::path::SmbAuditContext::resolve(path, smb_server, share_name) {
         Some(c) => c,
@@ -554,7 +558,7 @@ pub fn resolve_share_mask_status_explained(
     let server = smb_ctx.server;
     let share = smb_ctx.share;
 
-    let token = share_token(
+    let mut token = share_token(
         user_sid,
         sid_history,
         memberships,
@@ -563,6 +567,7 @@ pub fn resolve_share_mask_status_explained(
         uac_filtered_group_sids,
         access_context,
     );
+    token.deny_only_certain = uac_filter_certain;
 
     match get_share_dacl(&server, &share) {
         Err(e) => {
@@ -628,6 +633,10 @@ pub struct ShareToken {
     /// Groups whose presence is uncertain in both directions: reachable only
     /// through a logon-dependent SID, or Cryptographic Operators.
     pub uncertain: std::collections::HashSet<String>,
+    /// ADR 0076: remote UAC certainly filters the `deny_only` groups (read
+    /// from the target's policies) — their Allow ACEs do not apply instead
+    /// of being uncertain.
+    pub deny_only_certain: bool,
 }
 
 /// Builds the share token from the same inputs as the NTFS token, and —
@@ -681,6 +690,7 @@ pub fn share_token(
         enabled,
         deny_only,
         uncertain,
+        deny_only_certain: false,
     }
 }
 
@@ -719,7 +729,7 @@ pub fn evaluate_share_dacl(
         !enabled(&p.sid.0)
             && (token.uncertain.contains(&p.sid.0)
                 || permission_engine::engine::is_logon_dependent_sid(&p.sid.0, context)
-                || (p.kind == AceKind::Allow && deny_only(&p.sid.0)))
+                || (p.kind == AceKind::Allow && deny_only(&p.sid.0) && !token.deny_only_certain))
     };
     let uncertain: Vec<&SharePermission> = perms.iter().filter(|p| uncertain_sid(p)).collect();
     let maybe = |sid: &str| uncertain.iter().any(|u| u.sid.0 == sid);
@@ -763,7 +773,9 @@ pub fn share_ace_decisions(
             let uncertain = !enabled(&p.sid.0)
                 && (token.uncertain.contains(&p.sid.0)
                     || permission_engine::engine::is_logon_dependent_sid(&p.sid.0, context)
-                    || (p.kind == AceKind::Allow && deny_only(&p.sid.0)));
+                    || (p.kind == AceKind::Allow
+                        && deny_only(&p.sid.0)
+                        && !token.deny_only_certain));
             let outcome = if applies {
                 let bits = expand_generic_rights(p.mask.0) & !(granted | denied);
                 match p.kind {
@@ -1139,6 +1151,7 @@ mod tests {
             &[],
             &[],
             AccessContext::LocalInteractive,
+            false,
         );
         assert!(
             matches!(status, ShareMaskStatus::NotApplicable),
@@ -1420,6 +1433,7 @@ mod tests {
             enabled: enabled.clone(),
             deny_only: Default::default(),
             uncertain: uncertain.clone(),
+            deny_only_certain: false,
         };
         evaluate_share_dacl(dacl, &token, context).1
     }
@@ -2138,5 +2152,41 @@ mod tests {
         )
         .is_empty());
         assert!(NO_SECURITY_DESCRIPTOR_REASON.contains("not determinable"));
+    }
+
+    // --- ADR 0076: certainly filtered groups on the share side ---
+
+    #[test]
+    fn certainly_filtered_share_allow_does_not_apply() {
+        let mut token = share_token(
+            "S-1-5-21-7-7-7-1001",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[Sid("S-1-5-32-544".into())],
+            AccessContext::RemoteSmb,
+        );
+        let dacl = ShareDacl::Acl(vec![make_perm(
+            "S",
+            "S-1-5-32-544",
+            0x001F_01FF,
+            AceKind::Allow,
+        )]);
+        assert_eq!(
+            evaluate_share_dacl(&dacl, &token, AccessContext::RemoteSmb).1,
+            1
+        );
+        token.deny_only_certain = true;
+        let (mask, uncertain) = evaluate_share_dacl(&dacl, &token, AccessContext::RemoteSmb);
+        assert_eq!(
+            (mask.map(|m| m.0), uncertain),
+            (Some(0), 0),
+            "exact: no share right"
+        );
+        assert_eq!(
+            share_ace_decisions(&dacl, &token, AccessContext::RemoteSmb)[0].outcome,
+            ShareAceOutcome::NotApplicable
+        );
     }
 }

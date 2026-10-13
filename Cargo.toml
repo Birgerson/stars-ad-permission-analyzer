@@ -49,6 +49,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_NetworkManagement_NetManagement",
     "Win32_NetworkManagement_WNet",
     "Win32_System_SystemInformation",
+    "Win32_System_Registry",
 ] }
 
 # LDAP / Active Directory

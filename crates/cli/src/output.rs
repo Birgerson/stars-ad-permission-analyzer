@@ -485,6 +485,10 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      nobody can log on with it. The rights shown are what a logon");
                 println!("      with this SID would get; an ACE naming it is a dead entry.");
             }
+            PermissionDiagnostic::RemoteUacPolicy { .. } => {
+                // ADR 0076: the model's summary is the single wording.
+                println!("  [i] {}", d.summary());
+            }
             PermissionDiagnostic::GuestOrAnonymousToken { sids } => {
                 // ADR 0072: the model's summary is the single wording.
                 println!(

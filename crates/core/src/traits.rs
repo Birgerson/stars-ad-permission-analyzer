@@ -8,7 +8,8 @@ use async_trait::async_trait;
 use crate::error::CoreError;
 use crate::model::{
     AccessContext, EffectivePermission, FileSystemObject, GroupMembership, Identity,
-    LocalGroupEvalStatus, PathTrustees, RiskFinding, ScanError, ShareMaskStatus, Sid,
+    LocalGroupEvalStatus, PathTrustees, RemoteUacFiltering, RiskFinding, ScanError,
+    ShareMaskStatus, Sid,
 };
 
 pub struct ScanRequest {
@@ -131,6 +132,11 @@ pub struct PermissionEvaluationInput {
     /// (ADR 0070). Deny ACEs for them apply; Allow ACEs bound the result.
     /// Empty by default.
     pub uac_filtered_group_sids: Vec<Sid>,
+    /// Remote UAC decided from the target's policies (ADR 0076): `Filtered`
+    /// makes `uac_filtered_group_sids` certainly deny-only (their Allow ACEs
+    /// do not apply), `Unknown` keeps them bounded. Callers pass
+    /// `NotFiltered` with an empty `uac_filtered_group_sids`.
+    pub remote_uac: RemoteUacFiltering,
     /// Access context (local interactive / remote SMB / unspecified).
     /// Controls which well-known SIDs are added to the token implicitly
     /// (e.g. `NETWORK` for SMB, `INTERACTIVE` for local). The default

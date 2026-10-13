@@ -504,6 +504,14 @@ fn write_permissions_table(
                             .to_string(),
                     );
                 }
+                PermissionDiagnostic::RemoteUacPolicy { .. } => {
+                    // ADR 0076: the model's summary is the single wording.
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-neutral\" title=\"{}\">ℹ Remote UAC from target \
+                         policy</span>",
+                        escape_html(&d.summary())
+                    ));
+                }
                 PermissionDiagnostic::GuestOrAnonymousToken { sids } => {
                     // ADR 0072: the model's summary is the single wording.
                     let summary =
