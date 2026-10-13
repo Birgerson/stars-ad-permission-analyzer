@@ -1030,6 +1030,7 @@ async fn handle_analyze(
         memberships: local_group_memberships,
         logon_dependent: logon_dependent_group_sids,
         uac_filtered: uac_filtered_group_sids,
+        remote_uac,
         status: local_group_status,
         ..
     } = collect_local_group_sids_for_path(
@@ -1054,6 +1055,7 @@ async fn handle_analyze(
         &logon_dependent_group_sids,
         &uac_filtered_group_sids,
         access_context,
+        &remote_uac,
     );
 
     // SID→name table for the explanation path. DACL trustees are resolved
@@ -1095,6 +1097,7 @@ async fn handle_analyze(
             local_group_status,
             logon_dependent_group_sids,
             uac_filtered_group_sids,
+            remote_uac: remote_uac.clone(),
             access_context,
             unsupported_share_ace_count,
             sid_names,
@@ -1370,6 +1373,8 @@ struct LocalGroupResolution {
     /// Token groups User Account Control may filter for this access
     /// (ADR 0070/0071) — deny-only for the engine.
     uac_filtered: Vec<adpa_core::model::Sid>,
+    /// ADR 0076: remote UAC decided from the target's policies.
+    remote_uac: adpa_core::model::RemoteUacFiltering,
     status: adpa_core::model::LocalGroupEvalStatus,
 }
 
@@ -1451,6 +1456,7 @@ fn collect_local_groups_on(
                     local_account,
                     access_context,
                 ),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 status: LocalGroupEvalStatus::NotAvailable(msg),
             };
         }
@@ -1481,6 +1487,34 @@ fn collect_local_groups_on(
     // them as deny-only.
     let uac_filtered =
         uac_filtered_token_groups(domain_memberships, &all_sids, local_account, access_context);
+    // ADR 0076: over SMB the target's policies decide remote UAC for a
+    // local account — filtered groups become certainly deny-only, or are
+    // enabled; unreadable policies keep them bounded.
+    #[cfg(windows)]
+    let remote_uac = if access_context == AccessContext::RemoteSmb
+        && local_account
+        && !uac_filtered.is_empty()
+    {
+        let policy = ad_resolver::read_target_uac_policy(server);
+        permission_engine::engine::remote_uac_filtering(
+            identity.sid.0.ends_with("-500"),
+            &policy.enable_lua,
+            &policy.local_account_token_filter_policy,
+            &policy.filter_administrator_token,
+        )
+    } else {
+        adpa_core::model::RemoteUacFiltering::Unknown
+    };
+    #[cfg(not(windows))]
+    let remote_uac = adpa_core::model::RemoteUacFiltering::Unknown;
+    let uac_filtered = if matches!(
+        remote_uac,
+        adpa_core::model::RemoteUacFiltering::NotFiltered { .. }
+    ) {
+        Vec::new()
+    } else {
+        uac_filtered
+    };
     let sids = all_sids;
     let logon_dependent = expansion
         .logon_dependent
@@ -1513,6 +1547,7 @@ fn collect_local_groups_on(
         logon_dependent,
         logon_dependent_names,
         uac_filtered,
+        remote_uac,
         status,
     }
 }
@@ -1605,6 +1640,7 @@ async fn handle_scan(
         memberships: local_group_memberships,
         logon_dependent: logon_dependent_group_sids,
         uac_filtered: uac_filtered_group_sids,
+        remote_uac,
         status: local_group_status,
         ..
     } = collect_local_group_sids_for_path(
@@ -1646,6 +1682,7 @@ async fn handle_scan(
             &logon_dependent_group_sids,
             &uac_filtered_group_sids,
             root_access_context,
+            &remote_uac,
         );
     if scan_unsupported_share_ace_count > 0 {
         let msg = format!(
@@ -1743,6 +1780,7 @@ async fn handle_scan(
             local_group_status: local_group_status.clone(),
             logon_dependent_group_sids: logon_dependent_group_sids.clone(),
             uac_filtered_group_sids: uac_filtered_group_sids.clone(),
+            remote_uac: remote_uac.clone(),
             access_context: scan_access_context,
             unsupported_share_ace_count: scan_unsupported_share_ace_count,
             sid_names: scan_sid_names.clone(),
@@ -2933,6 +2971,7 @@ fn resolve_share_status(
     logon_dependent_group_sids: &[adpa_core::model::Sid],
     uac_filtered_group_sids: &[adpa_core::model::Sid],
     access_context: AccessContext,
+    remote_uac: &adpa_core::model::RemoteUacFiltering,
 ) -> (
     adpa_core::model::ShareMaskStatus,
     usize,
@@ -2955,6 +2994,10 @@ fn resolve_share_status(
         logon_dependent_group_sids,
         uac_filtered_group_sids,
         access_context,
+        matches!(
+            remote_uac,
+            adpa_core::model::RemoteUacFiltering::Filtered { .. }
+        ),
     );
     (r.status, r.unevaluated, r.decisions)
 }
@@ -3238,6 +3281,7 @@ mod tests {
             &[],
             &[],
             AccessContext::LocalInteractive,
+            &adpa_core::model::RemoteUacFiltering::Unknown,
         );
         assert!(matches!(
             status,

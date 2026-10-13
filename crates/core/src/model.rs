@@ -200,6 +200,32 @@ impl Identity {
 /// targeting `INTERACTIVE` (S-1-5-4) only apply to local logons. `LOCAL`
 /// (S-1-2-0) is in some local logons' tokens and not in others, so it is
 /// bounded (ADR 0069).
+/// A DWORD policy value read from a target's registry (ADR 0076).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PolicyDword {
+    /// The value exists and is a REG_DWORD.
+    Value(u32),
+    /// The key is readable and the value does not exist (= Windows default).
+    Absent,
+    /// The key or value could not be read, or has an unexpected type.
+    Unreadable(String),
+}
+
+/// Whether remote User Account Control filters a local account's network
+/// token on the target (ADR 0076) — decided from the target's policies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RemoteUacFiltering {
+    /// Not known (policies not read or not decisive): filtered groups are
+    /// bounded, as before (ADR 0070).
+    #[default]
+    Unknown,
+    /// The token is certainly filtered: the groups are deny-only, their
+    /// Allow ACEs do not apply. `reason` names the policy values.
+    Filtered { reason: String },
+    /// The token is certainly not filtered: the groups are enabled.
+    NotFiltered { reason: String },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AccessContext {
     /// Local interactive evaluation — `INTERACTIVE` is added to the token
@@ -1511,11 +1537,17 @@ pub enum PermissionDiagnostic {
     /// The analysed account is the built-in **Guest** account (RID 501 of a
     /// machine or domain) or ANONYMOUS LOGON. Microsoft documents that such
     /// a token carries no `Authenticated Users`, and an anonymous token no
-    /// `Everyone` unless `EveryoneIncludesAnonymous` is set. Not yet
-    /// lab-verified, so ACEs for these SIDs bound the result
-    /// (`LogonDependentTrustees`) instead of counting as a fact — review
-    /// finding CR-8, ADR 0072. Notice.
+    /// `Everyone` unless `EveryoneIncludesAnonymous` is set — lab-measured
+    /// 2026-10-13: Authenticated Users is absent (exact), Everyone for
+    /// anonymous stays bounded (policy not read). ADR 0072. Notice.
     GuestOrAnonymousToken { sids: Vec<String> },
+
+    /// Remote User Account Control was decided from the target's policies
+    /// (ADR 0076): `filtered` — the local account's network token is
+    /// filtered (the UAC groups are deny-only, their Allow ACEs do not
+    /// apply) or not (the groups are enabled). `reason` names the values
+    /// read. Informational: it makes the result exact instead of a range.
+    RemoteUacPolicy { filtered: bool, reason: String },
 }
 
 /// Account state as it may be stated to a reader — the single source for
@@ -1744,6 +1776,16 @@ impl PermissionDiagnostic {
                 groups.len(),
                 groups.join("; ")
             ),
+            PermissionDiagnostic::RemoteUacPolicy { filtered, reason } => format!(
+                "Remote User Account Control {} — {reason}.",
+                if *filtered {
+                    "filters this local account's network token: the administrative groups are \
+                     deny-only, their Allow ACEs do not apply"
+                } else {
+                    "does not filter this local account's network token: the administrative \
+                     groups are enabled"
+                }
+            ),
             PermissionDiagnostic::GuestOrAnonymousToken { sids } => format!(
                 "Guest / anonymous logon: {} not in this token the way it is for other \
                  accounts — Authenticated Users is never in a Guest or anonymous token \
@@ -1819,7 +1861,8 @@ impl PermissionDiagnostic {
             // The bounds it causes carry the uncertainty (LogonDependentTrustees);
             // with no Allow ACE for a filtered group the result is exact.
             | PermissionDiagnostic::UacFilteredGroups { .. }
-            | PermissionDiagnostic::GuestOrAnonymousToken { .. } => None,
+            | PermissionDiagnostic::GuestOrAnonymousToken { .. }
+            | PermissionDiagnostic::RemoteUacPolicy { .. } => None,
         }
     }
 
@@ -1843,7 +1886,8 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::GroupSidHistoryEvaluated { .. }
             | PermissionDiagnostic::GroupResolutionViaGlobalCatalog
             | PermissionDiagnostic::IdentityOrphaned
-            | PermissionDiagnostic::NonSecurityGroupsExcluded { .. } => DiagnosticSeverity::Neutral,
+            | PermissionDiagnostic::NonSecurityGroupsExcluded { .. }
+            | PermissionDiagnostic::RemoteUacPolicy { .. } => DiagnosticSeverity::Neutral,
             // Worth a look — a hidden Deny among skipped ACEs could change the
             // result.
             PermissionDiagnostic::UnsupportedShareAces { .. }
@@ -2651,6 +2695,10 @@ mod tests {
             },
             PermissionDiagnostic::GuestOrAnonymousToken {
                 sids: vec!["S-1-5-11".into()],
+            },
+            PermissionDiagnostic::RemoteUacPolicy {
+                filtered: true,
+                reason: "r".into(),
             },
         ];
         for d in &all {

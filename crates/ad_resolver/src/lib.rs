@@ -24,6 +24,8 @@ pub mod resolver;
 pub mod sam;
 pub mod sid_util;
 pub mod trusts;
+#[cfg(windows)]
+pub mod uac_policy;
 
 pub use config::{LdapConfig, TlsMode};
 #[cfg(windows)]
@@ -49,3 +51,5 @@ pub use sam::{
     resolve_identity_via_sam, SamResolution, SidNameResolver,
 };
 pub use trusts::resolve_domain_trusts;
+#[cfg(windows)]
+pub use uac_policy::{read_target_uac_policy, TargetUacPolicy};

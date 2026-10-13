@@ -769,12 +769,15 @@ Wherever an Allow ACE for such a group decides the result, it reads
 bound the unfiltered one. Deny ACEs for the groups always apply. The result
 is never wrong, but for administrators it is often a range.
 
-### Solution sketch
+### Status (2026-10-13)
 
-Read the two policy values read-only from the target server (remote
-registry, where permitted and validated) to decide the network case
-exactly; the elevation of a local session stays a property of the logon and
-remains a range.
+**The network case is closed** (ADR 0076): Stars reads
+`LocalAccountTokenFilterPolicy` / `FilterAdministratorToken` read-only from
+the target and decides remote UAC exactly (lab matrix of all four
+combinations). It stays a range only when the policies cannot be read
+(remote registry unreachable or denied, `EnableLUA` = 0, unexpected
+values) — and for a **local session**, whose elevation is a property of the
+logon that no policy reveals.
 
 ---
 
@@ -821,7 +824,7 @@ registry, where permitted and validated) to make the anonymous case exact.
 | L13 — IPv6 literals rejected as server addresses | Low | n/a (explicit validation error) | yes — bracket handling (LDAP) + `ipv6-literal.net` (UNC/NetAPI), must be built and lab-verified together |
 | L14 — Junction cycles over UNC | Medium | **yes** (ReparseCycle / ReparseDuplicateTarget, as locally) | **closed 2026-10-10** (ADR 0062: volume serial + file ID on UNC scans) |
 | L15 — Trusted-domain SID reported as orphaned | Medium | **yes** (IdentityNotResolvable, names the trust partner) | **classification closed 2026-10-10** (ADR 0064); resolving the memberships via GC / trusted DC still open |
-| L16 — UAC policies / session elevation not visible | Medium | **yes** (UacFilteredGroups, bounded result) | partly — the network case via a read-only policy read of the target server |
+| L16 — UAC policies / session elevation not visible | Low | **yes** (UacFilteredGroups, RemoteUacPolicy) | **network case closed 2026-10-13** (ADR 0076); local session elevation stays bounded |
 | L17 — Guest / anonymous tokens | Low | **yes** (GuestOrAnonymousToken) | **Guest exact, Authenticated Users exact (measured 2026-10-13)**; anonymous Everyone bounded until `EveryoneIncludesAnonymous` is read |
 
 ## Contribution policy

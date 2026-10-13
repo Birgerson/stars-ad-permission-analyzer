@@ -10,6 +10,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Added
+
+- **Remote UAC decided from the target's policies** (ADR 0076, known
+  limitation L16 network case closed). Stars reads `EnableLUA`,
+  `LocalAccountTokenFilterPolicy` and `FilterAdministratorToken` read-only
+  through the remote registry and decides whether a local account's
+  network token is filtered — from a lab matrix of all four combinations
+  measured with real SMB access. A local administrator over SMB now gets an
+  exact result instead of "between No access and Full Control"; the marker
+  `RemoteUacPolicy` and the explanation name the values read. Unreadable
+  policies keep the bounded result.
+
 ## [1.10.0] — 2026-10-13
 
 **How every right comes about — traceable in every surface, lab-proven.**

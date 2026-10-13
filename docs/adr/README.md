@@ -85,3 +85,4 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0073 | Risk rules judge the upper bound |
 | 0074 | Explanation path v2: every right traceable |
 | 0075 | A share without security descriptor is not determinable |
+| 0076 | Remote UAC decided from the target's policies |

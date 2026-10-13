@@ -22,7 +22,8 @@ use adpa_core::{
         format_also_via, AccessContext, AccessMask, AceEntry, AceKind, ContributingAce,
         EffectivePermission, GroupMembership, Identity, LocalGroupDescriptor, LocalGroupEntry,
         LocalGroupExpansion, MembershipHop, MembershipPathSource, PermissionDiagnostic,
-        PermissionPath, ShareEvalStatus, ShareMaskStatus, Sid, UncertainLayer, Uncertainty,
+        PermissionPath, PolicyDword, RemoteUacFiltering, ShareEvalStatus, ShareMaskStatus, Sid,
+        UncertainLayer, Uncertainty,
     },
     traits::{PermissionEvaluationInput, PermissionEvaluator},
 };
@@ -104,12 +105,19 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             .collect();
         // The owner is a filtered group of the token: whether the implicit
         // owner grant (and OWNER RIGHTS ACEs) apply depends on the filtering.
+        // ADR 0076: remote UAC decided from the target's policies — the
+        // filtered groups are then certainly deny-only (not bounded).
+        let uac_certain_reason: Option<String> = match &input.remote_uac {
+            RemoteUacFiltering::Filtered { reason } => Some(reason.clone()),
+            _ => None,
+        };
+        let uac_filter_certain = uac_certain_reason.is_some();
         let uncertain_owner: Option<&str> = input
             .file_system_object
             .owner_sid
             .as_ref()
             .map(|o| o.0.as_str())
-            .filter(|o| deny_only_sids.contains(*o));
+            .filter(|o| deny_only_sids.contains(*o) && !uac_filter_certain);
 
         // NULL DACL means "no access control" — Windows grants everyone full access.
         // An empty DACL (dacl == [] && null_dacl == false) by contrast denies everything.
@@ -174,6 +182,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
                 &deny_only_sids,
                 owner_implicit_bits,
                 uncertain_owner,
+                uac_filter_certain,
             )
         };
 
@@ -283,6 +292,22 @@ impl PermissionEvaluator for DefaultPermissionEngine {
                 })
                 .collect();
             diagnostics.push(PermissionDiagnostic::UacFilteredGroups { groups });
+        }
+        // ADR 0076: the target's policies decided remote UAC — say so.
+        match &input.remote_uac {
+            RemoteUacFiltering::Filtered { reason } => {
+                diagnostics.push(PermissionDiagnostic::RemoteUacPolicy {
+                    filtered: true,
+                    reason: reason.clone(),
+                })
+            }
+            RemoteUacFiltering::NotFiltered { reason } => {
+                diagnostics.push(PermissionDiagnostic::RemoteUacPolicy {
+                    filtered: false,
+                    reason: reason.clone(),
+                })
+            }
+            RemoteUacFiltering::Unknown => {}
         }
         // ADR 0072: name the well-knowns a Guest / anonymous token lacks
         // (absent) or may lack (uncertain).
@@ -397,6 +422,7 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             is_directory: input.file_system_object.is_directory,
             uncertain_sids: &logon_dependent_groups,
             uncertain_owner,
+            uac_certain_reason: uac_certain_reason.as_deref(),
             ntfs_determinable: result.ntfs_determinable(),
             share_determinable: result.share_determinable(),
             effective_determinable: result.effective_determinable(),
@@ -892,6 +918,9 @@ pub fn logon_dependent_bounds(
     deny_only_groups: &HashSet<String>,
     owner_implicit_bits: u32,
     uncertain_owner: Option<&str>,
+    // ADR 0076: the deny-only groups are certainly filtered — their Allow
+    // ACEs do not apply instead of bounding the result.
+    uac_filter_certain: bool,
 ) -> Option<LogonDependentBounds> {
     let mut uncertain: Vec<String> = dacl
         .iter()
@@ -900,7 +929,9 @@ pub fn logon_dependent_bounds(
         .filter(|ace| {
             is_logon_dependent_sid(&ace.sid.0, context)
                 || logon_dependent_groups.contains(&ace.sid.0)
-                || (ace.kind == AceKind::Allow && deny_only_groups.contains(&ace.sid.0))
+                || (ace.kind == AceKind::Allow
+                    && deny_only_groups.contains(&ace.sid.0)
+                    && !uac_filter_certain)
                 || (uncertain_owner.is_some() && ace.sid.0 == SID_OWNER_RIGHTS)
         })
         .map(|ace| ace.sid.0.clone())
@@ -1279,6 +1310,71 @@ pub fn attach_share_provenance(path: &mut PermissionPath, share_steps: Vec<Strin
     }
 }
 
+/// Remote UAC for a local account's network logon, decided from the
+/// target's policies (ADR 0076). Lab matrix (MS-01, Windows Server 2025,
+/// real SMB access, all four combinations): a local account other than the
+/// built-in Administrator is filtered exactly when
+/// `LocalAccountTokenFilterPolicy` = 0; the built-in Administrator (RID 500)
+/// exactly when `FilterAdministratorToken` = 1 and
+/// `LocalAccountTokenFilterPolicy` = 0. An absent value is the Windows
+/// default 0 (`EnableLUA`: 1). `EnableLUA` = 0, a value other than 0 / 1 or
+/// an unreadable value leave it `Unknown` — never guessed.
+pub fn remote_uac_filtering(
+    builtin_administrator: bool,
+    enable_lua: &PolicyDword,
+    local_account_token_filter_policy: &PolicyDword,
+    filter_administrator_token: &PolicyDword,
+) -> RemoteUacFiltering {
+    fn flag(v: &PolicyDword, default: bool) -> Option<bool> {
+        match v {
+            PolicyDword::Value(0) => Some(false),
+            PolicyDword::Value(1) => Some(true),
+            PolicyDword::Absent => Some(default),
+            PolicyDword::Value(_) | PolicyDword::Unreadable(_) => None,
+        }
+    }
+    fn shown(v: &PolicyDword) -> String {
+        match v {
+            PolicyDword::Value(n) => n.to_string(),
+            PolicyDword::Absent => "0 (not set, default)".to_owned(),
+            PolicyDword::Unreadable(e) => format!("unreadable ({e})"),
+        }
+    }
+    let (Some(lua), Some(latfp), Some(fat)) = (
+        flag(enable_lua, true),
+        flag(local_account_token_filter_policy, false),
+        flag(filter_administrator_token, false),
+    ) else {
+        return RemoteUacFiltering::Unknown;
+    };
+    if !lua {
+        // UAC disabled entirely — not measured in the lab, so not decided.
+        return RemoteUacFiltering::Unknown;
+    }
+    let values = format!(
+        "read from the target: LocalAccountTokenFilterPolicy = {}, FilterAdministratorToken = {}",
+        shown(local_account_token_filter_policy),
+        shown(filter_administrator_token)
+    );
+    if latfp {
+        RemoteUacFiltering::NotFiltered {
+            reason: format!(
+                "{values} — remote User Account Control does not filter local accounts"
+            ),
+        }
+    } else if builtin_administrator && !fat {
+        RemoteUacFiltering::NotFiltered {
+            reason: format!("{values} — the built-in Administrator keeps its full network token"),
+        }
+    } else {
+        RemoteUacFiltering::Filtered {
+            reason: format!(
+                "{values} — remote User Account Control filters this local account's network token"
+            ),
+        }
+    }
+}
+
 /// Short name of the evaluated logon (review CR-6) — for report headers.
 pub fn access_context_summary(context: AccessContext) -> &'static str {
     match context {
@@ -1380,6 +1476,8 @@ struct ExplanationInput<'a> {
     uncertain_sids: &'a HashSet<String>,
     /// The owner when it is a UAC-filtered group (implicit grant uncertain).
     uncertain_owner: Option<&'a str>,
+    /// ADR 0076: remote UAC certainly filters the deny-only groups — why.
+    uac_certain_reason: Option<&'a str>,
     /// Determinability of the three values, from the finished result
     /// (`EffectivePermission::ntfs_determinable` etc., review CR-5).
     ntfs_determinable: bool,
@@ -1414,6 +1512,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         is_directory,
         uncertain_sids,
         uncertain_owner,
+        uac_certain_reason,
         ntfs_determinable,
         share_determinable,
         effective_determinable,
@@ -1482,10 +1581,15 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         // so where the administrator reads it.
         let group = gm.group_sid.0.as_str();
         if deny_only_sids.contains(group) {
-            step.push_str(&format!(
-                " [deny-only in a filtered token: {}]",
-                uac_filter_reason(access_context)
-            ));
+            match uac_certain_reason {
+                Some(reason) => step.push_str(&format!(
+                    " [deny-only in this token — {reason}; its Allow ACEs do not apply]"
+                )),
+                None => step.push_str(&format!(
+                    " [deny-only in a filtered token: {}]",
+                    uac_filter_reason(access_context)
+                )),
+            }
         } else if uncertain_sids.contains(group) {
             step.push_str(" [uncertain — present in the token only for certain logons]");
         }
@@ -1523,6 +1627,27 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     let mut uncertain_ace_steps = 0usize;
     for (idx, ace) in dacl.iter().enumerate() {
         if !ace_matches(ace, match_sids, deny_only_sids) {
+            // ADR 0076: an Allow for a certainly filtered group is listed
+            // with the reason it does not apply.
+            if let Some(reason) = uac_certain_reason.filter(|_| {
+                ace.kind == AceKind::Allow
+                    && ace_applies_to_current_object(ace)
+                    && deny_only_sids.contains(&ace.sid.0)
+            }) {
+                let scope = if ace.inherited {
+                    "[inherited]"
+                } else {
+                    "[explicit]"
+                };
+                steps.push(format!(
+                    "Allow ACE {scope} for {} → {} (0x{:08X}) [not applied — the group is deny-only \
+                     in this token: {reason}]",
+                    display_for_sid(&ace.sid, None, sid_names),
+                    NormalizedRights::new(expand_generic_rights(ace.mask.0)).display_name(),
+                    ace.mask.0,
+                ));
+                continue;
+            }
             // Review CR-3: an ACE that only bounds the result is listed like
             // the others, with its own reason.
             if let Some(reason) = uncertain_ace_reason(
@@ -1996,6 +2121,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2021,6 +2147,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2046,6 +2173,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2071,6 +2199,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2951,6 +3080,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -2980,6 +3110,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3005,6 +3136,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3571,6 +3703,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 4,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3599,6 +3732,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -3660,6 +3794,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -3697,6 +3832,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -4368,6 +4504,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -4518,6 +4655,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4553,6 +4691,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4587,6 +4726,7 @@ mod tests {
             local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
             logon_dependent_group_sids: Vec::new(),
             uac_filtered_group_sids: Vec::new(),
+            remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
             access_context: AccessContext::Unspecified,
             unsupported_share_ace_count: 0,
             sid_names: std::collections::BTreeMap::new(),
@@ -4944,6 +5084,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -4984,6 +5125,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5023,6 +5165,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5059,6 +5202,7 @@ mod tests {
                     local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                     logon_dependent_group_sids: Vec::new(),
                     uac_filtered_group_sids: Vec::new(),
+                    remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                     access_context: AccessContext::Unspecified,
                     unsupported_share_ace_count: 0,
                     sid_names: std::collections::BTreeMap::new(),
@@ -5113,6 +5257,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5146,6 +5291,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5217,6 +5363,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names,
@@ -5278,6 +5425,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5325,6 +5473,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5375,6 +5524,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::Unspecified,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5413,6 +5563,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 // Key setting: local-looking input, explicit RemoteSmb —
                 // mirrors what CLI/GUI now produce via for_path_with_smb
                 // when --smb-server / --share-name is provided.
@@ -5445,6 +5596,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::NotQueried,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::LocalInteractive,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5622,6 +5774,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
                 logon_dependent_group_sids: vec![Sid(LG_ORG.into())],
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::RemoteSmb,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5652,6 +5805,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: vec![Sid(ADMINS.into())],
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::RemoteSmb,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -5812,6 +5966,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: Vec::new(),
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::RemoteSmb,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -6403,6 +6558,7 @@ mod tests {
                 local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
                 logon_dependent_group_sids: Vec::new(),
                 uac_filtered_group_sids: vec![Sid(ADMINS.into())],
+                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
                 access_context: AccessContext::LocalInteractive,
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
@@ -6700,5 +6856,88 @@ mod tests {
             vec!["Share ACE Allow for X".into()],
         );
         assert_eq!(p.path_explanation.steps, before);
+    }
+
+    // --- ADR 0076: remote UAC from the target's policies ---
+
+    /// The lab matrix (MS-01, real SMB access, 2026-10-13).
+    #[test]
+    fn remote_uac_follows_the_measured_policy_matrix() {
+        use adpa_core::model::PolicyDword::{Absent, Unreadable, Value};
+        let d = |rid500: bool, latfp, fat| remote_uac_filtering(rid500, &Absent, &latfp, &fat);
+        let filtered = |r: RemoteUacFiltering| matches!(r, RemoteUacFiltering::Filtered { .. });
+        let not = |r: RemoteUacFiltering| matches!(r, RemoteUacFiltering::NotFiltered { .. });
+        // local administrator (not RID 500): filtered exactly when LATFP = 0
+        assert!(filtered(d(false, Absent, Absent)));
+        assert!(not(d(false, Value(1), Absent)));
+        assert!(filtered(d(false, Absent, Value(1))));
+        assert!(not(d(false, Value(1), Value(1))));
+        // built-in Administrator: filtered exactly when FAT = 1 and LATFP = 0
+        assert!(not(d(true, Absent, Absent)));
+        assert!(not(d(true, Value(1), Absent)));
+        assert!(filtered(d(true, Value(0), Value(1))));
+        assert!(not(d(true, Value(1), Value(1))));
+        // never guessed: UAC off, unexpected values, unreadable values
+        assert_eq!(
+            remote_uac_filtering(false, &Value(0), &Absent, &Absent),
+            RemoteUacFiltering::Unknown
+        );
+        assert_eq!(d(false, Value(2), Absent), RemoteUacFiltering::Unknown);
+        assert_eq!(
+            d(false, Unreadable("denied".into()), Absent),
+            RemoteUacFiltering::Unknown
+        );
+        let RemoteUacFiltering::Filtered { reason } = d(false, Absent, Absent) else {
+            panic!()
+        };
+        assert!(reason.contains("LocalAccountTokenFilterPolicy = 0 (not set, default)"));
+    }
+
+    fn eval_remote_uac(remote_uac: RemoteUacFiltering) -> EffectivePermission {
+        DefaultPermissionEngine
+            .evaluate(PermissionEvaluationInput {
+                identity: user(USER),
+                group_memberships: vec![membership(USER, ADMINS)],
+                file_system_object: fso(None, vec![allow_ace(ADMINS, MASK_FULL_CONTROL, false)]),
+                share_status: ShareMaskStatus::NotApplicable,
+                local_group_sids: vec![Sid(ADMINS.into())],
+                local_group_status: adpa_core::model::LocalGroupEvalStatus::Applied,
+                logon_dependent_group_sids: Vec::new(),
+                uac_filtered_group_sids: vec![Sid(ADMINS.into())],
+                remote_uac,
+                access_context: AccessContext::RemoteSmb,
+                unsupported_share_ace_count: 0,
+                sid_names: std::collections::BTreeMap::new(),
+                resolution: ResolutionProvenance::default(),
+            })
+            .unwrap()
+    }
+
+    /// Certainly filtered: the Administrators Allow does not apply — an
+    /// exact "no access" instead of a range, and the path says why.
+    #[test]
+    fn certainly_filtered_admin_group_gives_an_exact_result() {
+        let p = eval_remote_uac(RemoteUacFiltering::Filtered {
+            reason: "read from the target: LocalAccountTokenFilterPolicy = 0".into(),
+        });
+        assert_eq!(p.ntfs_mask.0, 0);
+        assert!(logon_marker(&p).is_none(), "no range");
+        assert!(p.effective_determinable());
+        let steps = &p.path_explanation.steps;
+        assert!(steps
+            .iter()
+            .any(|s| s.starts_with("Member of") && s.contains("deny-only in this token")));
+        assert!(steps
+            .iter()
+            .any(|s| s.starts_with("Allow ACE")
+                && s.contains("[not applied — the group is deny-only")));
+        assert!(!steps.iter().any(|s| s.contains("[UNCERTAIN")));
+        assert!(p.diagnostics.iter().any(|d| matches!(
+            d,
+            PermissionDiagnostic::RemoteUacPolicy { filtered: true, .. }
+        )));
+        // Unknown keeps the range (ADR 0070).
+        let p = eval_remote_uac(RemoteUacFiltering::Unknown);
+        assert!(logon_marker(&p).is_some());
     }
 }
