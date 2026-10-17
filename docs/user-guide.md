@@ -190,6 +190,8 @@ user can effectively do there.
 
 ### `Graph` tab — the result as a diagram
 
+![Stars Graph tab (v1.13.0) — the same result as a lane diagram: account, the four token groups an ACE names plus "+69 further groups", a red Deny ACE and a green Allow ACE leading to the NTFS result, two green share ACEs routed below the boxes, and the effective right with the share value](screenshots/stars-graph-tab.png)
+
 **Purpose:** See at a glance how the last `Analyze` result comes about:
 which group brings which ACE, which ACE decided which bits, and where the
 share limits the result.
