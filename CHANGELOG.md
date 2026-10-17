@@ -10,6 +10,14 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+## [1.15.0] — 2026-10-17
+
+**The graph names every group.**
+
+The box "+N further groups" now says which groups those are — in the HTML
+tooltip and under the graph in the GUI — and the new option "Show all
+groups" draws each of them. No result changes.
+
 ### Added
 
 - **Graph: the further groups are named** — the box "+N further groups"
