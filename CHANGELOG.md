@@ -21,7 +21,9 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   groups only on a DC, no domain accounts from outside the domain) and
   that only security groups are listed; the Analyze section names all
   five modes, the Scan Tree section the field at all.
-- **Screenshots** of the Analyze, Graph and Groups tabs taken on v1.13.0.
+- **Screenshots** of every tab shown in the docs retaken on v1.13.0 (Analyze,
+  Graph, Groups, Members, Trusts, Shares) — the Shares view now shows the
+  trustee names that v1.11 resolves on the server instead of raw SIDs.
 
 ## [1.13.0] — 2026-10-17
 
