@@ -112,8 +112,10 @@ a typed, structured explanation is a later feature.
   ("NTFS effective:", "Share permission:", "Effective (NTFS ∩ Share):",
   "Deny aggregation:") keep working. The value steps keep the
   `(0x…)` mask as the first hex value of their line.
-- Live review against real lab output (UAC / INTERACTIVE texts on MS-01)
-  follows in the next lab run (review P5).
+- Live review against real lab output done 2026-10-13 (review P5): the
+  UAC / INTERACTIVE texts for `rt_uac01` on MS-01, the NULL / empty DACL
+  steps on DC-01 and the share provenance against real SMB access
+  (testfile 9.4).
 
 ## Steps
 

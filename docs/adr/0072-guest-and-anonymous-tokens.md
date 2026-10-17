@@ -94,5 +94,7 @@ assumption.
 
 - No Guest or anonymous right is stated as a fact through a well-known the
   token may not carry.
-- Until the lab measurement, results for these identities read "between …
-  and …" wherever such an ACE decides them.
+- Since the measurement (2026-10-13) Guest and anonymous results are exact
+  for Authenticated Users; since 2026-10-14 also for Everyone in an
+  anonymous token, whenever `EveryoneIncludesAnonymous` is readable. Only
+  an unreadable value still gives "between … and …".
