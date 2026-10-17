@@ -10,6 +10,17 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+## [1.14.0] — 2026-10-17
+
+**Accounts of a partner domain, exact.**
+
+An account of a trusted domain is now resolved on that domain's own domain
+controller, and its token is built the way Windows builds it for a
+resource in your domain — before, such results were NOT DETERMINABLE.
+Verified against Windows on every determinable lab row; every other
+result is unchanged (22,396 rows compared with v1.13.0). Plus a decision
+table for the Mode field and fresh screenshots of every tab.
+
 ### Added
 
 - **Accounts of a trusted domain resolved exactly** (ADR 0078, closes known
