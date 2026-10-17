@@ -155,7 +155,9 @@ user can effectively do there.
 - **Target** — path, local (`C:\data\…`) or UNC (`\\server\share\…`).
 - **Identity resolution** — the **Mode** field (Off, LDAPS, Plain LDAP,
   Global Catalog, Signed LDAP) and, for every mode but Off, the LDAP
-  connection fields. Which mode fits your situation:
+  connection fields, and optionally a connection to a DC of a trusted
+  domain ([Accounts of a trusted domain](#accounts-of-a-trusted-domain)).
+  Which mode fits your situation:
   [Which mode to choose](#which-mode-to-choose). Identity input:
   [Identity input forms](#identity-input-forms).
 - **SMB share (optional)** — SMB server and share name. Auto-detected
@@ -266,6 +268,9 @@ panel; this tab answers the question directly.
     LDAP** resolve the memberships **recursively** in AD — the complete
     list.
   - The **Members** direction always needs one of the LDAP modes.
+  - For an account of a **trusted** domain tick *"Also resolve accounts of
+    a trusted domain"* — see
+    [Accounts of a trusted domain](#accounts-of-a-trusted-domain).
 
   With a mode other than Off, a **`Timeout (s)`** field (1–600, default 10)
   appears — raise it on large or deeply nested domains where the recursive
@@ -631,6 +636,7 @@ choice is made with `--server` (+ `--insecure-ldap`, `--global-catalog`,
 | **Several domains / a forest**, accounts or groups from other domains | **Global Catalog** | forest-wide lookups; flagged as possibly incomplete (only universal groups replicate fully to the GC) |
 | **Local accounts of a file server** (`FS01\svc_backup`) in `Analyze` / `Scan Tree` | **Off** | exact — Stars reads the account on the server of the analysed path |
 | `Groups` → **Members**, or the `Trusts` tab | any LDAP mode (not Off) | needs a directory connection |
+| Accounts of a **trusted (partner) domain** | an LDAP mode **plus** the trusted-domain section | exact rights; see [Accounts of a trusted domain](#accounts-of-a-trusted-domain) |
 | **Isolated test lab** only | **Plain LDAP** | like LDAPS, but the password crosses the network in plain text |
 
 ### LDAP configuration
@@ -735,6 +741,63 @@ For **full** forest coverage:
   are flagged potentially incomplete, because only **universal** groups
   replicate fully to the Global Catalog. The same LDAPS certificate-trust
   rules as above apply (port 3269 is TLS).
+
+### Accounts of a trusted domain
+
+An account of a **trusted** domain (for example a partner domain behind an
+external or forest trust) has its groups in **its own** domain — the
+configured domain does not know them. Without help Stars reports such an
+account as **not resolvable** and the result as NOT DETERMINABLE.
+
+Give Stars a second, read-only connection to a **domain controller of the
+trusted domain**:
+
+- **GUI** (`Analyze`, `Scan Tree`, `Groups` → *Member of*): under the LDAP
+  fields tick **"Also resolve accounts of a trusted domain"** and fill in
+  *Trusted DC*, *Trusted base DN* and — unless the mode is Signed LDAP —
+  *Trusted bind DN* and *Trusted password*.
+- **CLI:** `--trust-server`, `--trust-base-dn`, `--trust-bind-dn`; the
+  password comes **only** from the environment variable
+  `ADPA_TRUST_BIND_PASSWORD`.
+
+```powershell
+$env:ADPA_BIND_PASSWORD       = '<password of the configured domain account>'
+$env:ADPA_TRUST_BIND_PASSWORD = '<password of the partner domain account>'
+adpa.exe analyze --path "\\fs01\Projects" --user S-1-5-21-…-1108 `
+  --server dc01.corp.local --base-dn "DC=corp,DC=local" --bind-dn "CORP\stars-svc" `
+  --trust-server dc01.partner.local --trust-base-dn "DC=partner,DC=local" `
+  --trust-bind-dn "PARTNER\stars-read"
+```
+
+The bind account must belong to **the trusted domain**: a simple bind with
+an account of your own domain is refused across the trust. With Signed
+LDAP (`--ldap-signing`) your Windows logon is used for both connections.
+The connection uses the same encryption mode and timeout as the main one.
+
+Stars then counts what Windows counts for a resource in **your** domain
+(measured in the lab):
+
+- the account's **global and universal** groups in its domain — its
+  builtin and domain-local groups there do **not** count and are named
+  as left out;
+- the trust's **SID filtering**: on a quarantined trust (the default for
+  an external trust) every SID that does not belong to the trusted domain
+  — including `sIDHistory` — is removed and named;
+- the **domain-local groups of your domain** that contain one of those
+  SIDs as a Foreign Security Principal, with the whole chain
+  (account → partner group → your group);
+- your servers' builtin and local groups, as for any account (e.g.
+  `BUILTIN\Users` through Authenticated Users).
+
+The connection is used **only** for an account your domain classifies as
+belonging to that trusted domain; every other account is resolved exactly
+as without it. Not modelled, and therefore reported instead of assumed:
+**Selective Authentication** ("allowed to authenticate" on the target) and,
+on a trust without quarantine, SIDs of a third domain. `This Organization`
+stays a range for every account.
+
+Identity input: the **SID**, or a name the Windows machine Stars runs on
+can resolve (a domain member resolves `PARTNER\user` across the trust).
 
 ### Large or deeply nested domains — `--ldap-timeout`
 
@@ -945,6 +1008,7 @@ exact wording, lives in
 | `IdentityLookupFailed { reason }` | high | **yes** | LDAP identity lookup failed with a technical error (bind, timeout, DC unreachable). The analysis ran with a placeholder identity and an empty token — ACEs targeting domain groups may be missing. `reason` carries the underlying error. |
 | `GroupResolutionFailed { reason }` | high | **yes** | Recursive group resolution failed or was skipped (e.g. cross-domain path with no GC crawl). ACEs on domain groups may be missing. `reason` carries the underlying error. |
 | `IdentityNotResolvable { reason }` | high | **yes** | The SID could not be resolved and is **not** proven orphaned — e.g. an account of the trusted domain named in `reason`. Its memberships are unknown, so the computed rights can be too low or too high. |
+| `TrustedDomainAccountResolved { domain, home_only_groups, sid_filtered }` | info | no | An account of a trusted domain, resolved on a DC of that domain (ADR 0078): its global and universal groups there count, plus your domain-local groups it reaches through a Foreign Security Principal. Names the memberships that apply only inside the trusted domain and the SIDs the trust's SID filtering removes. The result is exact. |
 | `IdentityOrphaned` | info | no | The account no longer exists in the configured domain. Nobody can log on with the SID; an ACE naming it is a dead entry. |
 | `GroupResolutionIncomplete { reason }` | high | **yes** | The group resolution succeeded, but `reason` names groups that are missing from the evaluated token — a primary group outside the base, groups outside a base that is only an OU, a group without a readable SID, an unresolvable local group. |
 | `GuestOrAnonymousToken { sids }` | medium | no (an anonymous bound is) | The analysed account is the Guest account or an anonymous logon. Windows never puts Authenticated Users into such a token (measured), so its ACEs do not apply; for an anonymous logon, Everyone counts only if the server sets `EveryoneIncludesAnonymous` — Stars gives a range there. |
@@ -1136,6 +1200,7 @@ exit code **and** the `determinable` column (CSV) / field (JSON).
 | `--insecure-ldap` | LDAP commands | plain LDAP on port 389 — test labs only |
 | `--global-catalog` | LDAP commands | forest-wide lookup via the Global Catalog (marked: only universal groups replicate fully) |
 | `--ldap-timeout` | LDAP commands | seconds per LDAP operation, 1–600 (default 10) |
+| `--trust-server`, `--trust-base-dn`, `--trust-bind-dn` | analyze, scan, groups | optional connection to a DC of a **trusted** domain, password via `ADPA_TRUST_BIND_PASSWORD` — see [Accounts of a trusted domain](#accounts-of-a-trusted-domain) |
 | `--smb-server`, `--share-name` | analyze, scan | share context for a local path; both or neither (auto-detected for UNC paths) |
 | `--max-depth` | scan | directory levels below `--path`: `0` = only the path, default unlimited, maximum 512 |
 | `--db` | scan; runs, errors | SQLite file for the scan history; without it `scan` stores **no** history (nothing for `runs`, `errors` or the Delta tab) |
@@ -1416,7 +1481,9 @@ object for it. Every other unresolvable SID — an account of a trusted
 domain, of another domain, or one outside a base that is only an OU — is
 reported as **not resolvable** (`Kind: Unknown`, marker
 `IdentityNotResolvable` naming the reason, e.g. the trusted domain), and
-the result is marked incomplete.
+the result is marked incomplete. For an account of a trusted domain, a
+connection to that domain's DC resolves it exactly — see
+[Accounts of a trusted domain](#accounts-of-a-trusted-domain).
 
 If you still see `Orphaned`, check:
 

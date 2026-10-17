@@ -707,24 +707,46 @@ pub async fn search_token_groups(
     ldap: &mut Ldap,
     dn: &str,
 ) -> Result<Option<Vec<String>>, CoreError> {
+    search_constructed_sid_list(ldap, dn, "tokenGroups").await
+}
+
+/// ADR 0078: the SIDs of the constructed `tokenGroupsGlobalAndUniversal`
+/// attribute of `dn` — the global and universal security groups (transitive,
+/// incl. the primary group) the domain controller hands to **other**
+/// domains. Unlike `tokenGroups` it holds no builtin and no domain-local
+/// group of the account's own domain: those apply only inside that domain.
+/// Base search only; `Ok(None)` when the attribute is not returned.
+pub async fn search_token_groups_global_and_universal(
+    ldap: &mut Ldap,
+    dn: &str,
+) -> Result<Option<Vec<String>>, CoreError> {
+    search_constructed_sid_list(ldap, dn, "tokenGroupsGlobalAndUniversal").await
+}
+
+/// Reads a constructed, multi-valued SID attribute of `dn` (base search).
+async fn search_constructed_sid_list(
+    ldap: &mut Ldap,
+    dn: &str,
+    attr: &str,
+) -> Result<Option<Vec<String>>, CoreError> {
     let (rs, _res) = ldap
-        .search(dn, Scope::Base, "(objectClass=*)", vec!["tokenGroups"])
+        .search(dn, Scope::Base, "(objectClass=*)", vec![attr])
         .await
-        .map_err(|e| CoreError::LdapQuery(format!("tokenGroups search failed: {e}")))?
+        .map_err(|e| CoreError::LdapQuery(format!("{attr} search failed: {e}")))?
         .success()
-        .map_err(|e| CoreError::LdapQuery(format!("tokenGroups search result error: {e}")))?;
+        .map_err(|e| CoreError::LdapQuery(format!("{attr} search result error: {e}")))?;
     let Some(entry) = rs.into_iter().next().map(RawEntry::from_search_entry) else {
         return Ok(None);
     };
-    if entry.value_count("tokenGroups") == 0 {
+    if entry.value_count(attr) == 0 {
         return Ok(None);
     }
     let mut sids = Vec::new();
-    for bytes in entry.all_values("tokenGroups") {
+    for bytes in entry.all_values(attr) {
         // Validate every value: a SID the DC returns that does not parse is
         // an error, not something to skip.
         let sid = crate::sid_util::bytes_to_sid_str(bytes).map_err(|e| {
-            CoreError::LdapQuery(format!("tokenGroups of {dn}: unreadable SID value ({e})"))
+            CoreError::LdapQuery(format!("{attr} of {dn}: unreadable SID value ({e})"))
         })?;
         sids.push(sid);
     }

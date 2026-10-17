@@ -97,6 +97,38 @@ pub struct LdapParams {
     /// where the GUI was stuck at the fixed 10 s and ran into a timeout on
     /// dense domains.
     pub timeout_secs: Option<u64>,
+    /// ADR 0078 (L15): optional connection to a domain controller of a
+    /// trusted domain — mirrors the CLI `--trust-*` flags. Same encryption
+    /// mode and timeout as the main connection.
+    pub trust: Option<TrustParams>,
+}
+
+/// ADR 0078: connection to a domain controller of a trusted domain. The
+/// password is held in memory only and masked in `Debug`.
+#[derive(Clone)]
+pub struct TrustParams {
+    pub server: String,
+    pub base_dn: String,
+    pub bind_dn: String,
+    pub password: String,
+}
+
+impl std::fmt::Debug for TrustParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TrustParams")
+            .field("server", &self.server)
+            .field("base_dn", &self.base_dn)
+            .field("bind_dn", &self.bind_dn)
+            .field(
+                "password",
+                &if self.password.is_empty() {
+                    "<empty>"
+                } else {
+                    "***"
+                },
+            )
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for LdapParams {
@@ -115,6 +147,7 @@ impl std::fmt::Debug for LdapParams {
             .field("global_catalog", &self.global_catalog)
             .field("signing", &self.signing)
             .field("timeout_secs", &self.timeout_secs)
+            .field("trust", &self.trust)
             .finish()
     }
 }
@@ -160,10 +193,47 @@ impl LdapParams {
                     global_catalog: mode == 3,
                     signing: mode == 4,
                     timeout_secs: Some(clamped as u64),
+                    trust: None,
                 })
             }
             _ => None,
         }
+    }
+
+    /// ADR 0078: adds the trusted-domain connection when `enabled`. A
+    /// disabled section leaves the parameters exactly as before.
+    pub fn with_trust(
+        mut self,
+        enabled: bool,
+        server: String,
+        base_dn: String,
+        bind_dn: String,
+        password: String,
+    ) -> Self {
+        self.trust = enabled.then_some(TrustParams {
+            server,
+            base_dn,
+            bind_dn,
+            password,
+        });
+        self
+    }
+
+    /// ADR 0078: `LdapConfig` of the trusted-domain connection — same
+    /// encryption mode and timeout as the main one, never a Global Catalog.
+    pub fn trust_config(&self) -> Option<LdapConfig> {
+        let t = self.trust.as_ref()?;
+        let mut config = if self.signing {
+            LdapConfig::new_signed(&t.server, &t.base_dn)
+        } else if self.insecure {
+            LdapConfig::new_insecure(&t.server, &t.base_dn, &t.bind_dn, &t.password)
+        } else {
+            LdapConfig::new(&t.server, &t.base_dn, &t.bind_dn, &t.password)
+        };
+        if let Some(secs) = self.timeout_secs {
+            config.timeout_secs = secs;
+        }
+        Some(config)
     }
 
     /// Builds the `LdapConfig` for these parameters, choosing the right port
@@ -972,6 +1042,32 @@ fn validate_connection_inputs(
                     .map_err(|e| format!("Invalid bind identity: {e}"))?
                     .0
             };
+            // ADR 0078: the trusted-domain connection is validated like the
+            // main one, before anything reaches the directory.
+            let trust = match &p.trust {
+                Some(t) => {
+                    let server = validate_ldap_endpoint(&t.server)
+                        .map_err(|e| format!("Invalid trusted-domain server: {e}"))?
+                        .0;
+                    let base_dn = validate_dn(&t.base_dn)
+                        .map_err(|e| format!("Invalid trusted-domain base DN: {e}"))?
+                        .0;
+                    let bind_dn = if p.signing && t.bind_dn.trim().is_empty() {
+                        String::new()
+                    } else {
+                        validate_bind_identity(&t.bind_dn)
+                            .map_err(|e| format!("Invalid trusted-domain bind identity: {e}"))?
+                            .0
+                    };
+                    Some(TrustParams {
+                        server,
+                        base_dn,
+                        bind_dn,
+                        password: t.password.clone(),
+                    })
+                }
+                None => None,
+            };
             Some(LdapParams {
                 server,
                 base_dn,
@@ -981,6 +1077,7 @@ fn validate_connection_inputs(
                 global_catalog: p.global_catalog,
                 signing: p.signing,
                 timeout_secs: p.timeout_secs,
+                trust,
             })
         }
         None => None,
@@ -1924,6 +2021,7 @@ async fn handle_search(
         global_catalog: ldap.global_catalog,
         signing: ldap.signing,
         timeout_secs: ldap.timeout_secs,
+        trust: Default::default(),
     }
     .to_config();
 
@@ -2844,6 +2942,13 @@ async fn resolve_identity_sids(
     if let Some(params) = ldap {
         let config = params.to_config();
         let resolver = std::sync::Arc::new(LdapResolver::new(config));
+        // ADR 0078: optional trusted-domain connection (same as the CLI).
+        let trusted_backend = params.trust_config().map(|c| {
+            std::sync::Arc::new(ad_resolver::LdapTrustedDomainBackend::new(
+                std::sync::Arc::new(LdapResolver::new(c)),
+                resolver.clone(),
+            )) as std::sync::Arc<dyn ad_resolver::TrustedDomainBackend>
+        });
         let backend = LdapIdentityBackend::new(resolver);
         // Central principal pipeline. `PrincipalInput::Auto` lets LDAP resolve
         // a name / UPN / SID by itself — the same auto-dispatch the CLI uses.
@@ -2856,6 +2961,10 @@ async fn resolve_identity_sids(
         let principal = PrincipalResolver::new(backend, Some(WindowsLsaBackend));
         #[cfg(not(windows))]
         let principal: PrincipalResolver<_, NoLsaBackend> = PrincipalResolver::new(backend, None);
+        let principal = match trusted_backend {
+            Some(b) => principal.with_trusted_domain(b),
+            None => principal,
+        };
         return principal
             .resolve(PrincipalInput::Auto(trimmed.to_owned()))
             .await
@@ -2925,6 +3034,7 @@ async fn resolve_identity_sids(
         resolved_via_global_catalog: false,
         group_resolution_gaps,
         excluded_groups: Vec::new(),
+        trusted_domain: Default::default(),
     })
 }
 

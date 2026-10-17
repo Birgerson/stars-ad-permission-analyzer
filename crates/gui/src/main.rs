@@ -525,6 +525,66 @@ slint::slint! {
         sid: string,
     }
 
+    // ADR 0078 (L15): optional connection to a domain controller of a
+    // trusted domain — one component for Analyze, Scan Tree and Groups so the
+    // three tabs cannot drift apart. Mirrors the CLI `--trust-*` flags.
+    component TrustDomainFields inherits VerticalBox {
+        in-out property <bool>   enabled;
+        in-out property <string> server;
+        in-out property <string> base-dn;
+        in-out property <string> bind-dn;
+        in-out property <string> secret;
+        in property <bool>       signing;
+        padding: 0px;
+        spacing: Theme.spacing-sm;
+        HorizontalBox {
+            padding: 0px;
+            spacing: Theme.spacing-sm;
+            CheckBox {
+                text: "Also resolve accounts of a trusted domain";
+                checked <=> root.enabled;
+            }
+            HelpTip {
+                tip: "Optional. For an account of a TRUSTED domain (e.g. a partner domain), the configured domain does not know its groups. With a connection to a domain controller of that trusted domain, Stars resolves the account there, the way Windows builds its token for a resource here:\n\n• its global and universal groups there (as that DC hands them to other domains) — its builtin and domain-local groups there do not count and are named as left out;\n• the trust's SID filtering (quarantine);\n• the domain-local groups of this domain it reaches through a Foreign Security Principal.\n\nUsed only for accounts that belong to that trusted domain; every other account is resolved exactly as without it. Same encryption mode and timeout as above.";
+            }
+        }
+        if root.enabled: GridBox {
+            spacing: Theme.spacing-sm;
+            Row {
+                Text { text: "Trusted DC:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                LineEdit {
+                    placeholder-text: "dc01.partner.local";
+                    text <=> root.server;
+                }
+                HelpTip { tip: "Domain controller of the trusted domain (FQDN; with Signed LDAP it must be the FQDN)."; }
+            }
+            Row {
+                Text { text: "Trusted base DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                LineEdit {
+                    placeholder-text: "DC=partner,DC=local";
+                    text <=> root.base-dn;
+                }
+                HelpTip { tip: "Domain root of the trusted domain, e.g. DC=partner,DC=local."; }
+            }
+            if !root.signing: Row {
+                Text { text: "Trusted bind DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                LineEdit {
+                    placeholder-text: "PARTNER\\user  ·  user@partner.local";
+                    text <=> root.bind-dn;
+                }
+                HelpTip { tip: "An account OF THE TRUSTED DOMAIN. A simple bind with an account of this domain is refused across the trust (measured: error 52e). With Signed LDAP the current Windows logon is used instead."; }
+            }
+            if !root.signing: Row {
+                Text { text: "Trusted password:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                LineEdit {
+                    input-type: password;
+                    text <=> root.secret;
+                }
+                HelpTip { tip: "Password of the trusted bind account. Not persisted, only held in memory for the running session."; }
+            }
+        }
+    }
+
     export component MainWindow inherits Window {
         title: "Stars — AD Permission Analyzer";
         preferred-width: 1100px;
@@ -590,6 +650,12 @@ slint::slint! {
         in-out property <string> a-ldap-bind-dn;
         in-out property <string> a-ldap-password;
         in-out property <int>    a-ldap-timeout: 10;
+        // ADR 0078: optional trusted-domain connection.
+        in-out property <bool>   a-trust-enabled: false;
+        in-out property <string> a-trust-server;
+        in-out property <string> a-trust-base-dn;
+        in-out property <string> a-trust-bind-dn;
+        in-out property <string> a-trust-password;
 
         in-out property <bool>   a-smb-enabled;
         in-out property <string> a-smb-server;
@@ -652,6 +718,12 @@ slint::slint! {
         in-out property <string> s-ldap-bind-dn;
         in-out property <string> s-ldap-password;
         in-out property <int>    s-ldap-timeout: 10;
+        // ADR 0078: optional trusted-domain connection.
+        in-out property <bool>   s-trust-enabled: false;
+        in-out property <string> s-trust-server;
+        in-out property <string> s-trust-base-dn;
+        in-out property <string> s-trust-bind-dn;
+        in-out property <string> s-trust-password;
 
         in-out property <bool>   s-smb-enabled;
         in-out property <string> s-smb-server;
@@ -744,6 +816,12 @@ slint::slint! {
         in-out property <string> g-ldap-bind-dn;
         in-out property <string> g-ldap-password;
         in-out property <int>    g-ldap-timeout: 10;
+        // ADR 0078: optional trusted-domain connection.
+        in-out property <bool>   g-trust-enabled: false;
+        in-out property <string> g-trust-server;
+        in-out property <string> g-trust-base-dn;
+        in-out property <string> g-trust-bind-dn;
+        in-out property <string> g-trust-password;
 
         in property <bool>   g-is-running;
         in property <string> g-status;
@@ -1034,6 +1112,14 @@ slint::slint! {
                                                 tip: "LDAP operation timeout in seconds (1–600, default 10).\n\nRaise this on large or deeply nested domains: the recursive membership query (LDAP_MATCHING_RULE_IN_CHAIN) can need longer than 10 s, otherwise resolution is reported as timed out and incomplete.";
                                             }
                                         }
+                                    }
+                                    if root.a-ldap-mode > 0: TrustDomainFields {
+                                        enabled <=> root.a-trust-enabled;
+                                        server <=> root.a-trust-server;
+                                        base-dn <=> root.a-trust-base-dn;
+                                        bind-dn <=> root.a-trust-bind-dn;
+                                        secret <=> root.a-trust-password;
+                                        signing: root.a-ldap-mode == 4;
                                     }
                                 }
                             }
@@ -1440,6 +1526,14 @@ slint::slint! {
                                             }
                                         }
                                     }
+                                    if root.g-ldap-mode > 0 && root.g-direction == 0: TrustDomainFields {
+                                        enabled <=> root.g-trust-enabled;
+                                        server <=> root.g-trust-server;
+                                        base-dn <=> root.g-trust-base-dn;
+                                        bind-dn <=> root.g-trust-bind-dn;
+                                        secret <=> root.g-trust-password;
+                                        signing: root.g-ldap-mode == 4;
+                                    }
                                 }
                             }
 
@@ -1792,6 +1886,14 @@ slint::slint! {
                                                 tip: "LDAP operation timeout in seconds (1–600, default 10).\n\nRaise this on large or deeply nested domains: the recursive membership query (LDAP_MATCHING_RULE_IN_CHAIN) can need longer than 10 s, otherwise resolution is reported as timed out and incomplete.";
                                             }
                                         }
+                                    }
+                                    if root.s-ldap-mode > 0: TrustDomainFields {
+                                        enabled <=> root.s-trust-enabled;
+                                        server <=> root.s-trust-server;
+                                        base-dn <=> root.s-trust-base-dn;
+                                        bind-dn <=> root.s-trust-bind-dn;
+                                        secret <=> root.s-trust-password;
+                                        signing: root.s-ldap-mode == 4;
                                     }
                                 }
                             }
@@ -3187,7 +3289,16 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             ui.get_a_ldap_bind_dn().to_string(),
             ui.get_a_ldap_password().to_string(),
             ui.get_a_ldap_timeout(),
-        );
+        )
+        .map(|l| {
+            l.with_trust(
+                ui.get_a_trust_enabled(),
+                ui.get_a_trust_server().to_string(),
+                ui.get_a_trust_base_dn().to_string(),
+                ui.get_a_trust_bind_dn().to_string(),
+                ui.get_a_trust_password().to_string(),
+            )
+        });
 
         let (smb_server, share_name) = if ui.get_a_smb_enabled() {
             (
@@ -3275,7 +3386,16 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
                 ui.get_g_ldap_bind_dn().to_string(),
                 ui.get_g_ldap_password().to_string(),
                 ui.get_g_ldap_timeout(),
-            );
+            )
+            .map(|l| {
+                l.with_trust(
+                    ui.get_g_trust_enabled(),
+                    ui.get_g_trust_server().to_string(),
+                    ui.get_g_trust_base_dn().to_string(),
+                    ui.get_g_trust_bind_dn().to_string(),
+                    ui.get_g_trust_password().to_string(),
+                )
+            });
             let members_direction = ui.get_g_direction() == 1;
             ui.set_g_is_running(true);
             ui.set_g_has_result(false);
@@ -3846,7 +3966,16 @@ fn wire_scan_tab(
                 ui.get_s_ldap_bind_dn().to_string(),
                 ui.get_s_ldap_password().to_string(),
                 ui.get_s_ldap_timeout(),
-            );
+            )
+            .map(|l| {
+                l.with_trust(
+                    ui.get_s_trust_enabled(),
+                    ui.get_s_trust_server().to_string(),
+                    ui.get_s_trust_base_dn().to_string(),
+                    ui.get_s_trust_bind_dn().to_string(),
+                    ui.get_s_trust_password().to_string(),
+                )
+            });
 
             let (smb_server, share_name) = if ui.get_s_smb_enabled() {
                 (

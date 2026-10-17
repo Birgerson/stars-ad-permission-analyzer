@@ -53,6 +53,32 @@ struct Cli {
     command: Commands,
 }
 
+/// ADR 0078 (known limitation L15): optional connection to a domain
+/// controller of a **trusted** domain. Used only for an identity the
+/// configured domain classifies as an account of that trusted domain; every
+/// other identity is resolved exactly as without these flags.
+#[derive(clap::Args, Debug, Clone, Default)]
+struct TrustArgs {
+    /// Domain controller of a trusted domain (e.g. `dc01.partner.local`). An
+    /// account of that domain is then resolved there: its global and
+    /// universal groups, the trust's SID filtering, and the domain-local
+    /// groups of this domain it reaches through Foreign Security Principals.
+    /// Requires --server. Uses the same encryption mode (--insecure-ldap /
+    /// --ldap-signing) and --ldap-timeout as the main connection.
+    #[arg(long)]
+    trust_server: Option<String>,
+    /// Base DN of the trusted domain (its domain root, e.g.
+    /// `DC=partner,DC=local`). Required with --trust-server.
+    #[arg(long)]
+    trust_base_dn: Option<String>,
+    /// Bind account **of the trusted domain** (`DOMAIN\user`, UPN or DN) —
+    /// a simple bind of an account of this domain is refused across the
+    /// trust. The password is read from the `ADPA_TRUST_BIND_PASSWORD`
+    /// environment variable only. Not needed with --ldap-signing.
+    #[arg(long)]
+    trust_bind_dn: Option<String>,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Analyze effective permissions for a user on a single path.
@@ -98,6 +124,8 @@ enum Commands {
         /// 1–600. Only takes effect together with --server.
         #[arg(long)]
         ldap_timeout: Option<u64>,
+        #[command(flatten)]
+        trust: TrustArgs,
         /// Optional export path — `.csv`, `.json` or `.html`; the extension picks the format
         #[arg(short = 'o', long)]
         output: Option<String>,
@@ -155,6 +183,8 @@ enum Commands {
         /// 1–600. Only takes effect together with --server.
         #[arg(long)]
         ldap_timeout: Option<u64>,
+        #[command(flatten)]
+        trust: TrustArgs,
         /// SQLite database file for results (created if absent)
         #[arg(long)]
         db: Option<String>,
@@ -209,6 +239,8 @@ enum Commands {
         /// takes effect together with --server.
         #[arg(long)]
         ldap_timeout: Option<u64>,
+        #[command(flatten)]
+        trust: TrustArgs,
         /// Optional export path (`.json` or `.csv`).
         #[arg(short = 'o', long)]
         output: Option<String>,
@@ -358,6 +390,7 @@ async fn main() -> anyhow::Result<()> {
             global_catalog,
             ldap_signing,
             ldap_timeout,
+            trust,
             output,
             smb_server,
             share_name,
@@ -378,6 +411,7 @@ async fn main() -> anyhow::Result<()> {
                     global_catalog,
                     ldap_signing,
                     ldap_timeout,
+                    trust,
                     force,
                 },
             )
@@ -394,6 +428,7 @@ async fn main() -> anyhow::Result<()> {
             global_catalog,
             ldap_signing,
             ldap_timeout,
+            trust,
             db,
             max_depth,
             output,
@@ -418,6 +453,7 @@ async fn main() -> anyhow::Result<()> {
                     global_catalog,
                     ldap_signing,
                     ldap_timeout,
+                    trust,
                     force,
                 },
             )
@@ -433,6 +469,7 @@ async fn main() -> anyhow::Result<()> {
             global_catalog,
             ldap_signing,
             ldap_timeout,
+            trust,
             output,
             force,
         } => {
@@ -447,6 +484,7 @@ async fn main() -> anyhow::Result<()> {
                     global_catalog,
                     ldap_signing,
                     ldap_timeout,
+                    trust,
                     output,
                     force,
                 },
@@ -477,6 +515,8 @@ async fn main() -> anyhow::Result<()> {
                     global_catalog,
                     ldap_signing,
                     ldap_timeout,
+                    // `members` lists a group of the configured domain.
+                    trust: TrustArgs::default(),
                     output,
                     force,
                 },
@@ -736,6 +776,73 @@ fn build_ldap_config(
     Ok(config)
 }
 
+/// ADR 0078: the [`LdapConfig`] for the optional trusted-domain connection,
+/// `Ok(None)` without --trust-server. Every input is validated here; the
+/// password comes only from `ADPA_TRUST_BIND_PASSWORD`. Same encryption mode
+/// and timeout as the main connection; never a Global Catalog bind.
+fn build_trust_ldap_config(
+    trust: &TrustArgs,
+    insecure_ldap: bool,
+    ldap_signing: bool,
+    ldap_timeout: Option<u64>,
+) -> anyhow::Result<Option<LdapConfig>> {
+    let Some(server) = trust.trust_server.as_deref() else {
+        if trust.trust_base_dn.is_some() || trust.trust_bind_dn.is_some() {
+            return Err(anyhow::anyhow!(
+                "--trust-base-dn / --trust-bind-dn need --trust-server."
+            ));
+        }
+        return Ok(None);
+    };
+    let server = validate_ldap_endpoint(server)
+        .map_err(|e| anyhow::anyhow!("Invalid --trust-server: {e}"))?
+        .0;
+    let base = trust
+        .trust_base_dn
+        .as_deref()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "--trust-base-dn is required with --trust-server (the trusted domain's root, \
+                 e.g. DC=partner,DC=local)."
+            )
+        })
+        .and_then(|d| validate_dn(d).map_err(|e| anyhow::anyhow!("Invalid --trust-base-dn: {e}")))?
+        .0;
+    let mut config = if ldap_signing {
+        LdapConfig::new_signed(&server, &base)
+    } else {
+        let bind = trust
+            .trust_bind_dn
+            .as_deref()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--trust-bind-dn is required with --trust-server: an account of the trusted \
+                     domain (a simple bind of an account of this domain is refused across the \
+                     trust). Tip: --ldap-signing binds with the current Windows logon."
+                )
+            })
+            .and_then(|d| {
+                validate_bind_identity(d)
+                    .map_err(|e| anyhow::anyhow!("Invalid --trust-bind-dn: {e}"))
+            })?
+            .0;
+        let password = std::env::var("ADPA_TRUST_BIND_PASSWORD").map_err(|_| {
+            anyhow::anyhow!(
+                "ADPA_TRUST_BIND_PASSWORD environment variable is required with --trust-bind-dn."
+            )
+        })?;
+        if insecure_ldap {
+            LdapConfig::new_insecure(&server, &base, &bind, &password)
+        } else {
+            LdapConfig::new(&server, &base, &bind, &password)
+        }
+    };
+    if let Some(secs) = ldap_timeout {
+        config.timeout_secs = secs;
+    }
+    Ok(Some(config))
+}
+
 // CLI-internal plumbing helper: it forwards the validated connection inputs
 // to the resolver. The argument list mirrors the CLI flags 1:1; bundling them
 // into a struct here would only add an indirection without improving clarity.
@@ -751,6 +858,7 @@ async fn resolve_identity(
     ldap_signing: bool,
     ldap_timeout: Option<u64>,
     account_server: Option<&str>,
+    trust: &TrustArgs,
 ) -> anyhow::Result<ResolvedIdentity> {
     // No silent skip: an --ldap-timeout without --server has no LDAP to apply to.
     if ldap_timeout.is_some() && server.is_none() {
@@ -758,6 +866,14 @@ async fn resolve_identity(
             "[WARNING] --ldap-timeout has no effect without --server; the SAM/LSA \
              fallback path performs no LDAP query and ignores it."
         );
+    }
+    // ADR 0078: a trusted-domain connection needs the main connection — the
+    // configured domain decides which SIDs belong to a trusted domain.
+    if server.is_none() && trust.trust_server.is_some() {
+        return Err(anyhow::anyhow!(
+            "--trust-server requires --server: the configured domain's directory decides \
+             which accounts belong to the trusted domain."
+        ));
     }
     if let Some(server) = server {
         let config = build_ldap_config(
@@ -770,7 +886,15 @@ async fn resolve_identity(
             ldap_signing,
             ldap_timeout,
         )?;
+        let trusted_config =
+            build_trust_ldap_config(trust, insecure_ldap, ldap_signing, ldap_timeout)?;
         let ldap_resolver = std::sync::Arc::new(LdapResolver::new(config));
+        let trusted_backend = trusted_config.map(|c| {
+            std::sync::Arc::new(ad_resolver::LdapTrustedDomainBackend::new(
+                std::sync::Arc::new(LdapResolver::new(c)),
+                ldap_resolver.clone(),
+            )) as std::sync::Arc<dyn ad_resolver::TrustedDomainBackend>
+        });
         let backend = LdapIdentityBackend::new(ldap_resolver);
 
         // Review 2026-06-04 round 3 finding 1.
@@ -780,6 +904,10 @@ async fn resolve_identity(
         #[cfg(not(windows))]
         let principal_resolver: PrincipalResolver<_, NoLsaBackend> =
             PrincipalResolver::new(backend, None);
+        let principal_resolver = match trusted_backend {
+            Some(b) => principal_resolver.with_trusted_domain(b),
+            None => principal_resolver,
+        };
 
         let resolution = principal_resolver
             .resolve(PrincipalInput::Auto(user.to_owned()))
@@ -853,6 +981,7 @@ async fn resolve_identity(
                 resolved_via_global_catalog: false,
                 group_resolution_gaps: sam_res.gaps,
                 excluded_groups: Vec::new(),
+                trusted_domain: Default::default(),
             };
             Ok(ResolvedIdentity {
                 resolution,
@@ -901,6 +1030,7 @@ async fn resolve_identity(
                 resolved_via_global_catalog: false,
                 group_resolution_gaps: Vec::new(),
                 excluded_groups: Vec::new(),
+                trusted_domain: None,
             };
             Ok(ResolvedIdentity {
                 resolution,
@@ -922,6 +1052,7 @@ struct AnalyzeOptions {
     global_catalog: bool,
     ldap_signing: bool,
     ldap_timeout: Option<u64>,
+    trust: TrustArgs,
     force: bool,
 }
 
@@ -942,6 +1073,7 @@ async fn run_analyze(
         global_catalog,
         ldap_signing,
         ldap_timeout,
+        trust,
         force,
     } = opts;
 
@@ -997,6 +1129,7 @@ async fn run_analyze(
         ldap_signing,
         ldap_timeout,
         account_server.as_deref(),
+        &trust,
     )
     .await?;
 
@@ -1184,6 +1317,7 @@ struct ScanOptions {
     global_catalog: bool,
     ldap_signing: bool,
     ldap_timeout: Option<u64>,
+    trust: TrustArgs,
     force: bool,
 }
 
@@ -1206,6 +1340,7 @@ async fn run_scan(
         global_catalog,
         ldap_signing,
         ldap_timeout,
+        trust,
         force,
     } = opts;
 
@@ -1264,6 +1399,7 @@ async fn run_scan(
         ldap_signing,
         ldap_timeout,
         account_server.as_deref(),
+        &trust,
     )
     .await?;
 
@@ -1934,6 +2070,7 @@ struct GroupsOptions {
     global_catalog: bool,
     ldap_signing: bool,
     ldap_timeout: Option<u64>,
+    trust: TrustArgs,
     output: Option<String>,
     force: bool,
 }
@@ -1951,6 +2088,7 @@ async fn run_groups(
         global_catalog,
         ldap_signing,
         ldap_timeout,
+        trust,
         output,
         force,
     } = opts;
@@ -2004,6 +2142,7 @@ async fn run_groups(
         ldap_signing,
         ldap_timeout,
         None,
+        &trust,
     )
     .await?;
     let mut resolved = resolved;
@@ -2042,6 +2181,7 @@ async fn run_members(
         global_catalog,
         ldap_signing,
         ldap_timeout,
+        trust: _,
         output,
         force,
     } = opts;
@@ -2879,6 +3019,7 @@ mod tests {
                     ldap_timeout: None,
                     output: None,
                     force: false,
+                    trust: Default::default(),
                 },
             ))
             .expect_err("members without --server must be refused");

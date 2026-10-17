@@ -339,6 +339,7 @@ pub fn local_account_principal(r: LocalAccountResolution) -> crate::principal::P
         resolved_via_global_catalog: false,
         group_resolution_gaps: r.gaps,
         excluded_groups: Vec::new(),
+        trusted_domain: Default::default(),
     }
 }
 

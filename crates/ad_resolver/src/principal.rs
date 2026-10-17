@@ -101,6 +101,9 @@ pub enum IdentityScopeStatus {
     Unresolvable { reason: String },
     /// LDAP connection itself failed.
     LookupFailed { reason: String },
+    /// ADR 0078 (L15): an account of a trusted domain, resolved on a domain
+    /// controller of that domain through the optional second connection.
+    ResolvedInTrustedDomain { domain: String },
 }
 
 /// What the configured directory can tell about a SID it holds no object
@@ -118,7 +121,12 @@ pub enum SidDomainRelation {
     /// covers only part of it — the account may exist outside the base.
     ConfiguredDomainPartialBase { base_dn: String },
     /// The SID belongs to a domain the configured domain trusts.
-    TrustedDomain { partner: String },
+    /// `domain_sid` and `attributes` come from the trust object (ADR 0078).
+    TrustedDomain {
+        partner: String,
+        domain_sid: String,
+        attributes: adpa_core::model::TrustAttributes,
+    },
     /// The SID belongs to another domain that is neither the configured one
     /// nor listed among its trusts.
     OtherDomain { domain_sid: String },
@@ -138,10 +146,10 @@ impl SidDomainRelation {
                  whether the account exists elsewhere in the domain is unknown",
                 sid.0
             )),
-            SidDomainRelation::TrustedDomain { partner } => Some(format!(
-                "SID {} belongs to the trusted domain {partner}; Stars resolves accounts and \
-                 group memberships only in the configured domain, so this account's \
-                 memberships in {partner} are unknown",
+            SidDomainRelation::TrustedDomain { partner, .. } => Some(format!(
+                "SID {} belongs to the trusted domain {partner}; its group memberships in \
+                 {partner} are unknown — they can be resolved with a connection to a domain \
+                 controller of {partner} (CLI --trust-server, ADR 0078)",
                 sid.0
             )),
             SidDomainRelation::OtherDomain { domain_sid } => Some(format!(
@@ -219,6 +227,9 @@ pub struct PrincipalResolution {
     /// Groups left out of the token (distribution groups and groups reached
     /// only through one, ADR 0067).
     pub excluded_groups: Vec<String>,
+    /// ADR 0078 (L15): `Some` for an account of a trusted domain resolved on
+    /// a domain controller of that domain; `None` on every other path.
+    pub trusted_domain: Option<adpa_core::traits::TrustedDomainProvenance>,
 }
 
 impl PrincipalResolution {
@@ -277,6 +288,7 @@ impl PrincipalResolution {
             group_resolution_failure_reason,
             identity_resolved_via_fsp: self.resolved_via_fsp,
             group_resolution_via_global_catalog: self.resolved_via_global_catalog,
+            trusted_domain: self.trusted_domain.clone(),
         }
     }
 
@@ -338,6 +350,17 @@ impl PrincipalResolution {
         ));
         if flags.identity_resolved_via_fsp || flags.identity_not_in_configured_ldap_base {
             d.push(PermissionDiagnostic::TrustBoundaryEffectsNotModeled);
+        }
+        // ADR 0078: same markers and order as the engine.
+        if let Some(t) = &flags.trusted_domain {
+            d.push(PermissionDiagnostic::TrustedDomainAccountResolved {
+                domain: t.domain.clone(),
+                home_only_groups: t.home_only_groups.clone(),
+                sid_filtered: t.sid_filtered.clone(),
+            });
+            if t.selective_authentication {
+                d.push(PermissionDiagnostic::TrustBoundaryEffectsNotModeled);
+            }
         }
         d
     }
@@ -423,6 +446,36 @@ pub trait IdentityBackend: Send + Sync {
             reason: "the identity backend cannot read the directory context".to_owned(),
         }
     }
+}
+
+/// The trust a SID belongs to, as the configured domain's trust object
+/// describes it (ADR 0078).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustContext {
+    pub partner: String,
+    pub domain_sid: String,
+    pub attributes: adpa_core::model::TrustAttributes,
+}
+
+/// Optional second directory connection to a domain controller of a
+/// **trusted** domain (ADR 0078, known limitation L15). The principal
+/// pipeline asks it only for a SID the configured domain classifies as
+/// belonging to a trusted domain — no other path consults it.
+#[allow(clippy::double_must_use)]
+#[async_trait]
+pub trait TrustedDomainBackend: Send + Sync {
+    /// Domain SID of the trusted domain this connection serves, read from
+    /// its directory; `None` when it could not be read.
+    async fn served_domain_sid(&self) -> Option<String>;
+
+    /// Resolves an account of the trusted domain: identity and groups there,
+    /// filtered to what crosses the trust, plus the resource-domain groups
+    /// it reaches through Foreign Security Principals.
+    async fn resolve_account(
+        &self,
+        sid: &Sid,
+        trust: &TrustContext,
+    ) -> Result<PrincipalResolution, CoreError>;
 }
 
 /// LSA backend for Windows reverse lookups.
@@ -559,6 +612,8 @@ where
 {
     identity_backend: B,
     lsa_backend: Option<L>,
+    /// ADR 0078: optional connection to a trusted domain's DC.
+    trusted_backend: Option<Arc<dyn TrustedDomainBackend>>,
 }
 
 impl<B, L> PrincipalResolver<B, L>
@@ -570,7 +625,15 @@ where
         Self {
             identity_backend,
             lsa_backend,
+            trusted_backend: None,
         }
+    }
+
+    /// ADR 0078: adds the optional connection to a domain controller of a
+    /// trusted domain. Without it the pipeline behaves exactly as before.
+    pub fn with_trusted_domain(mut self, backend: Arc<dyn TrustedDomainBackend>) -> Self {
+        self.trusted_backend = Some(backend);
+        self
     }
 
     /// Full resolution — the single public entry point.
@@ -637,6 +700,7 @@ where
                     resolved_via_global_catalog: self.identity_backend.is_forest_wide(),
                     group_resolution_gaps: group_gaps,
                     excluded_groups,
+                    trusted_domain: Default::default(),
                 })
             }
             None => {
@@ -696,6 +760,7 @@ where
                     resolved_via_global_catalog: self.identity_backend.is_forest_wide(),
                     group_resolution_gaps: group_gaps,
                     excluded_groups,
+                    trusted_domain: Default::default(),
                 })
             }
             None => Err(CoreError::Validation(format!(
@@ -739,6 +804,7 @@ where
                     resolved_via_global_catalog: self.identity_backend.is_forest_wide(),
                     group_resolution_gaps: group_gaps,
                     excluded_groups,
+                    trusted_domain: Default::default(),
                 })
             }
             Ok(None) => self.fall_back_to_lsa(&sid).await,
@@ -759,6 +825,9 @@ where
     /// see it (ADR 0064, lab finding AD3-1).
     async fn classify_unresolved(&self, sid: &Sid) -> PrincipalResolution {
         let relation = self.identity_backend.classify_unresolved_sid(sid).await;
+        if let Some(resolution) = self.resolve_in_trusted_domain(sid, &relation).await {
+            return resolution;
+        }
         match relation.unresolvable_reason(sid) {
             None => {
                 debug!(sid = %sid.0, "LDAP + LSA miss in the fully covered domain — orphaned");
@@ -768,6 +837,62 @@ where
                 debug!(sid = %sid.0, ?relation, "LDAP + LSA miss — not resolvable");
                 self.unresolvable_resolution(sid.clone(), reason)
             }
+        }
+    }
+
+    /// ADR 0078: a SID of a trusted domain, and a connection to that domain
+    /// is configured → resolve it there. `None` when no connection serves
+    /// this trust; a failure there is still "not resolvable", now with the
+    /// reason, never a guess.
+    async fn resolve_in_trusted_domain(
+        &self,
+        sid: &Sid,
+        relation: &SidDomainRelation,
+    ) -> Option<PrincipalResolution> {
+        let SidDomainRelation::TrustedDomain {
+            partner,
+            domain_sid,
+            attributes,
+        } = relation
+        else {
+            return None;
+        };
+        let backend = self.trusted_backend.as_ref()?;
+        let served = backend.served_domain_sid().await;
+        if !served
+            .as_deref()
+            .is_some_and(|s| s.eq_ignore_ascii_case(domain_sid))
+        {
+            let reason = match served {
+                Some(other) => format!(
+                    "SID {} belongs to the trusted domain {partner} ({domain_sid}), but the \
+                     configured trusted-domain connection serves another domain ({other})",
+                    sid.0
+                ),
+                None => format!(
+                    "SID {} belongs to the trusted domain {partner}; the domain SID of the \
+                     configured trusted-domain connection could not be read, so it is not \
+                     known to serve {partner}",
+                    sid.0
+                ),
+            };
+            return Some(self.unresolvable_resolution(sid.clone(), reason));
+        }
+        let trust = TrustContext {
+            partner: partner.clone(),
+            domain_sid: domain_sid.clone(),
+            attributes: *attributes,
+        };
+        match backend.resolve_account(sid, &trust).await {
+            Ok(resolution) => Some(resolution),
+            Err(e) => Some(self.unresolvable_resolution(
+                sid.clone(),
+                format!(
+                    "SID {} belongs to the trusted domain {partner}; resolving it on the \
+                     configured domain controller of {partner} failed: {e}",
+                    sid.0
+                ),
+            )),
         }
     }
 
@@ -818,6 +943,7 @@ where
                     resolved_via_global_catalog: false,
                     group_resolution_gaps: Vec::new(),
                     excluded_groups: Vec::new(),
+                    trusted_domain: Default::default(),
                 })
             }
             Err(e) => {
@@ -914,6 +1040,7 @@ where
             resolved_via_global_catalog: self.identity_backend.is_forest_wide(),
             group_resolution_gaps: group_gaps,
             excluded_groups,
+            trusted_domain: Default::default(),
         })
     }
 
@@ -976,6 +1103,7 @@ where
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
             excluded_groups: Vec::new(),
+            trusted_domain: Default::default(),
         }
     }
 
@@ -1004,6 +1132,7 @@ where
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
             excluded_groups: Vec::new(),
+            trusted_domain: Default::default(),
         }
     }
 
@@ -1030,17 +1159,18 @@ where
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
             excluded_groups: Vec::new(),
+            trusted_domain: Default::default(),
         }
     }
 }
 
 /// Reads `disabled` from an LDAP-sourced identity.
-fn disabled_from_ldap(identity: &Identity) -> DisabledStatus {
+pub(crate) fn disabled_from_ldap(identity: &Identity) -> DisabledStatus {
     DisabledStatus::Known(identity.disabled)
 }
 
 /// Pushes the two structured markers matching the scope status.
-fn push_diagnostics(
+pub(crate) fn push_diagnostics(
     diagnostics: &mut Vec<PermissionDiagnostic>,
     scope: &IdentityScopeStatus,
     disabled_status: DisabledStatus,
@@ -1405,9 +1535,181 @@ mod tests {
     async fn unresolved_sid_of_a_trusted_domain_is_not_orphaned() {
         let res = resolve_unresolved(Some(SidDomainRelation::TrustedDomain {
             partner: "ext.test".to_owned(),
+            domain_sid: "S-1-5-21-1667335488-272840759-1416816776".to_owned(),
+            attributes: adpa_core::model::TrustAttributes::from_bits(0x4),
         }))
         .await;
         assert_unresolvable(&res, "trusted domain ext.test");
+    }
+
+    // --- ADR 0078: the optional trusted-domain connection ---
+
+    const TRUST_DOMAIN_SID: &str = "S-1-5-21-1667335488-272840759-1416816776";
+
+    /// Fake trusted-domain backend: counts calls, serves a configurable
+    /// domain SID, answers with a fixed resolution or an error.
+    struct FakeTrusted {
+        served: Option<String>,
+        fail: bool,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl TrustedDomainBackend for FakeTrusted {
+        async fn served_domain_sid(&self) -> Option<String> {
+            self.served.clone()
+        }
+        async fn resolve_account(
+            &self,
+            sid: &Sid,
+            trust: &TrustContext,
+        ) -> Result<PrincipalResolution, CoreError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.fail {
+                return Err(CoreError::LdapQuery("bind refused".to_owned()));
+            }
+            Ok(PrincipalResolution {
+                sid: sid.clone(),
+                identity: Identity {
+                    sid: sid.clone(),
+                    name: Some("ext_partner04".into()),
+                    domain: Some(trust.partner.clone()),
+                    kind: IdentityKind::User,
+                    disabled: false,
+                    user_principal_name: None,
+                    sid_history_count: 0,
+                    sid_history: Vec::new(),
+                },
+                memberships: Vec::new(),
+                scope_status: IdentityScopeStatus::ResolvedInTrustedDomain {
+                    domain: trust.partner.clone(),
+                },
+                group_resolution_status: GroupResolutionStatus::LdapRecursive,
+                disabled_status: DisabledStatus::Known(false),
+                diagnostics: Vec::new(),
+                resolved_via_fsp: false,
+                resolved_via_global_catalog: false,
+                group_resolution_gaps: Vec::new(),
+                excluded_groups: Vec::new(),
+                trusted_domain: Some(adpa_core::traits::TrustedDomainProvenance {
+                    domain: trust.partner.clone(),
+                    home_only_groups: vec!["Users (S-1-5-32-545)".into()],
+                    sid_filtered: Vec::new(),
+                    selective_authentication: trust.attributes.selective_authentication(),
+                }),
+            })
+        }
+    }
+
+    fn fake_trusted(served: Option<&str>, fail: bool) -> Arc<FakeTrusted> {
+        Arc::new(FakeTrusted {
+            served: served.map(str::to_owned),
+            fail,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    fn trusted_relation(attributes: u32) -> SidDomainRelation {
+        SidDomainRelation::TrustedDomain {
+            partner: "ext.test".to_owned(),
+            domain_sid: TRUST_DOMAIN_SID.to_owned(),
+            attributes: adpa_core::model::TrustAttributes::from_bits(attributes),
+        }
+    }
+
+    async fn resolve_with_trusted(
+        relation: SidDomainRelation,
+        trusted: Arc<FakeTrusted>,
+    ) -> PrincipalResolution {
+        let sid = Sid(format!("{TRUST_DOMAIN_SID}-1108"));
+        PrincipalResolver::new(
+            FakeLdapBackend::with_relation(relation),
+            Some(FakeLsaBackend::new()),
+        )
+        .with_trusted_domain(trusted)
+        .resolve(PrincipalInput::Sid(sid))
+        .await
+        .expect("resolution must succeed")
+    }
+
+    #[tokio::test]
+    async fn a_trusted_domain_sid_is_resolved_through_the_trusted_connection() {
+        let trusted = fake_trusted(Some(TRUST_DOMAIN_SID), false);
+        let res = resolve_with_trusted(trusted_relation(0x4), trusted.clone()).await;
+        assert_eq!(trusted.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(matches!(
+            res.scope_status,
+            IdentityScopeStatus::ResolvedInTrustedDomain { .. }
+        ));
+        let flags = res.engine_flags();
+        assert!(flags.identity_unresolvable_reason.is_none());
+        assert!(!flags.identity_not_in_configured_ldap_base);
+        let diags = res.membership_diagnostics();
+        assert!(diags.iter().any(|d| matches!(
+            d,
+            PermissionDiagnostic::TrustedDomainAccountResolved { domain, .. } if domain == "ext.test"
+        )));
+        assert!(!diags.contains(&PermissionDiagnostic::TrustBoundaryEffectsNotModeled));
+    }
+
+    /// Selective Authentication is not modelled: the trust caveat stays.
+    #[tokio::test]
+    async fn selective_authentication_keeps_the_trust_caveat() {
+        let trusted = fake_trusted(Some(TRUST_DOMAIN_SID), false);
+        let res = resolve_with_trusted(trusted_relation(0x4 | 0x10), trusted).await;
+        assert!(res
+            .membership_diagnostics()
+            .contains(&PermissionDiagnostic::TrustBoundaryEffectsNotModeled));
+    }
+
+    /// A connection to the wrong domain is never used for the account.
+    #[tokio::test]
+    async fn a_connection_to_another_domain_is_not_used() {
+        let trusted = fake_trusted(Some("S-1-5-21-9-9-9"), false);
+        let res = resolve_with_trusted(trusted_relation(0x4), trusted.clone()).await;
+        assert_eq!(trusted.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_unresolvable(&res, "serves another domain");
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_connection_domain_is_not_used() {
+        let trusted = fake_trusted(None, false);
+        let res = resolve_with_trusted(trusted_relation(0x4), trusted.clone()).await;
+        assert_eq!(trusted.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_unresolvable(&res, "could not be read");
+    }
+
+    /// A failure on the trusted DC stays "not resolvable", with the reason.
+    #[tokio::test]
+    async fn a_failure_on_the_trusted_dc_is_not_resolvable_with_the_reason() {
+        let trusted = fake_trusted(Some(TRUST_DOMAIN_SID), true);
+        let res = resolve_with_trusted(trusted_relation(0x4), trusted).await;
+        assert_unresolvable(&res, "bind refused");
+    }
+
+    /// No other classification consults the trusted connection — the
+    /// paths that existed before ADR 0078 stay exactly as they were.
+    #[tokio::test]
+    async fn no_other_relation_consults_the_trusted_connection() {
+        for relation in [
+            SidDomainRelation::ConfiguredDomainWholeBase,
+            SidDomainRelation::ConfiguredDomainPartialBase {
+                base_dn: "OU=x,DC=corp,DC=test".into(),
+            },
+            SidDomainRelation::OtherDomain {
+                domain_sid: TRUST_DOMAIN_SID.into(),
+            },
+            SidDomainRelation::Unknown { reason: "r".into() },
+        ] {
+            let trusted = fake_trusted(Some(TRUST_DOMAIN_SID), false);
+            let res = resolve_with_trusted(relation.clone(), trusted.clone()).await;
+            assert_eq!(
+                trusted.calls.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "{relation:?}"
+            );
+            assert!(res.trusted_domain.is_none());
+        }
     }
 
     #[tokio::test]
@@ -1983,6 +2285,7 @@ mod tests {
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
             excluded_groups: Vec::new(),
+            trusted_domain: Default::default(),
         };
         let d = res.membership_diagnostics();
         assert!(
@@ -2015,6 +2318,7 @@ mod tests {
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
             excluded_groups: Vec::new(),
+            trusted_domain: Default::default(),
         };
         let d = res.membership_diagnostics();
         assert!(
@@ -2055,6 +2359,7 @@ mod tests {
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
             excluded_groups: Vec::new(),
+            trusted_domain: Default::default(),
         };
         let d = res.membership_diagnostics();
         assert!(
@@ -2094,6 +2399,7 @@ mod tests {
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
             excluded_groups: Vec::new(),
+            trusted_domain: Default::default(),
         };
         let report = res.into_membership_report(true);
         assert_eq!(
@@ -2132,6 +2438,7 @@ mod tests {
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
             excluded_groups: Vec::new(),
+            trusted_domain: Default::default(),
         };
         let report = res.into_membership_report(true);
         assert_eq!(report.memberships.len(), 1);
@@ -2181,6 +2488,7 @@ mod tests {
             resolved_via_global_catalog: false,
             group_resolution_gaps: Vec::new(),
             excluded_groups: Vec::new(),
+            trusted_domain: Default::default(),
         };
         let report = res.into_membership_report(true);
         assert_eq!(report.memberships.len(), 1);

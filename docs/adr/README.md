@@ -87,3 +87,4 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0075 | A share without security descriptor is not determinable |
 | 0076 | Remote UAC decided from the target's policies |
 | 0077 | Permission graph: the explanation path as a lane diagram |
+| 0078 | Accounts of a trusted domain, resolved on its domain controller |

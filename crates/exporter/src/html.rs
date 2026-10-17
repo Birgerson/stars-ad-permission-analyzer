@@ -494,6 +494,15 @@ fn write_permissions_table(
                          evaluated</span>"
                     ));
                 }
+                // ADR 0078: the full wording comes from `summary()`, so the
+                // report says what the CLI and GUI say.
+                PermissionDiagnostic::TrustedDomainAccountResolved { domain, .. } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-neutral\" title=\"{}\">ℹ resolved in trusted domain {}</span>",
+                        escape_html(&d.summary()),
+                        escape_html(domain)
+                    ));
+                }
                 PermissionDiagnostic::TrustBoundaryEffectsNotModeled => {
                     diag_parts.push(
                         "<span class=\"badge badge-neutral\" \

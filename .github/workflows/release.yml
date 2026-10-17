@@ -161,6 +161,8 @@ jobs:
             - Delta comparison between two scan runs, with per-run error evidence
             - Optional LDAP / Active Directory identity resolution
               (LDAPS, Global Catalog, Kerberos-signed bind)
+            - Accounts of a trusted domain resolved on its domain controller
+              (global and universal groups, SID filtering, FSP chains)
             - Optional SMB share permission overlay and share inventory
               (CLI and GUI Shares tab; hidden `$` data shares are flagged)
             - Read-only AD trust inventory (CLI and GUI Trusts tab)

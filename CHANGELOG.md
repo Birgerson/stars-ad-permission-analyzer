@@ -10,6 +10,23 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Added
+
+- **Accounts of a trusted domain resolved exactly** (ADR 0078, closes known
+  limitation L15). An optional, read-only connection to a domain
+  controller of the trusted domain (CLI `--trust-server`,
+  `--trust-base-dn`, `--trust-bind-dn`, password via
+  `ADPA_TRUST_BIND_PASSWORD`; GUI section "Also resolve accounts of a
+  trusted domain" in Analyze, Scan Tree and Groups). Stars then builds the
+  account's token as Windows does for a resource in your domain: its
+  global and universal groups (`tokenGroupsGlobalAndUniversal`), the
+  trust's SID filtering (quarantine), and your domain-local groups it
+  reaches through Foreign Security Principals — with the full chain. New
+  informational marker `TrustedDomainAccountResolved`. Before, such
+  results were NOT DETERMINABLE. Lab: identical to the Windows Authz
+  oracle on every determinable row; v1.13.0 vs. this change without the
+  new options identical on 22,396 rows.
+
 ### Changed
 
 - **User guide — the Mode field of "Identity resolution":** a new table

@@ -1593,6 +1593,25 @@ pub enum PermissionDiagnostic {
     /// Incompleteness trigger; Concern.
     IdentityNotResolvable { reason: String },
 
+    /// ADR 0078 (known limitation L15): the account belongs to a trusted
+    /// domain and was resolved on a domain controller **of that domain**
+    /// (second, optional directory connection). Its groups there count the
+    /// way Windows counts them for a resource in this domain: only the
+    /// global and universal groups the trusted DC itself hands to other
+    /// domains (`tokenGroupsGlobalAndUniversal`), plus the domain-local
+    /// groups of this domain that contain one of those SIDs as a Foreign
+    /// Security Principal. `home_only_groups` are memberships that apply only
+    /// inside the trusted domain (its builtin and domain-local groups) and
+    /// were left out; `sid_filtered` are SIDs the trust's SID filtering
+    /// (quarantine) removes. Informational — the token is complete.
+    TrustedDomainAccountResolved {
+        domain: String,
+        #[serde(default)]
+        home_only_groups: Vec<String>,
+        #[serde(default)]
+        sid_filtered: Vec<String>,
+    },
+
     /// The SID belongs to the configured domain, the configured base covers
     /// that whole domain, and the directory has no object for it: the
     /// account no longer exists (orphaned / deleted). Nobody can log on with
@@ -1858,6 +1877,31 @@ impl PermissionDiagnostic {
                  list may be incomplete."
                     .to_owned()
             }
+            PermissionDiagnostic::TrustedDomainAccountResolved {
+                domain,
+                home_only_groups,
+                sid_filtered,
+            } => {
+                let mut s = format!(
+                    "Account of the trusted domain {domain}, resolved on a domain controller of \
+                     {domain}: its global and universal groups there count (as Windows hands them \
+                     to other domains), plus the domain-local groups of this domain it reaches \
+                     through a Foreign Security Principal."
+                );
+                if !home_only_groups.is_empty() {
+                    s.push_str(&format!(
+                        " Left out because they apply only inside {domain}: its memberships in {}.                          (Builtin groups of this domain, such as Users through Authenticated                          Users, are evaluated on their own.)",
+                        home_only_groups.join(", ")
+                    ));
+                }
+                if !sid_filtered.is_empty() {
+                    s.push_str(&format!(
+                        " Removed by the trust's SID filtering: {}.",
+                        sid_filtered.join(", ")
+                    ));
+                }
+                s
+            }
             PermissionDiagnostic::IdentityNotResolvable { reason } => format!(
                 "The identity could not be resolved: {reason}. Its group memberships are \
                  unknown, so the rights computed for the bare SID can be too low or too high."
@@ -1961,6 +2005,7 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::GroupResolutionIncomplete { .. } => Some(UncertainLayer::Token),
             // Informational — the result itself is exact.
             PermissionDiagnostic::NonCanonicalDaclOrder { .. }
+            | PermissionDiagnostic::TrustedDomainAccountResolved { .. }
             | PermissionDiagnostic::InheritedDenyAfterInheritedAllow { .. }
             | PermissionDiagnostic::IdentityDisabled
             | PermissionDiagnostic::IdentityDisabledStatusUnknown
@@ -1986,6 +2031,7 @@ impl PermissionDiagnostic {
         match self {
             // Correct or expected context — no action, grey.
             PermissionDiagnostic::NonCanonicalDaclOrder { .. }
+            | PermissionDiagnostic::TrustedDomainAccountResolved { .. }
             | PermissionDiagnostic::InheritedDenyAfterInheritedAllow { .. }
             | PermissionDiagnostic::IdentityDisabled
             | PermissionDiagnostic::IdentityDisabledStatusUnknown

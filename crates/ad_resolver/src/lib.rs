@@ -23,6 +23,7 @@ pub mod resolver;
 #[cfg(windows)]
 pub mod sam;
 pub mod sid_util;
+pub mod trusted;
 pub mod trusts;
 #[cfg(windows)]
 pub mod uac_policy;
@@ -42,7 +43,7 @@ pub use principal::WindowsLsaBackend;
 pub use principal::{
     DisabledStatus, EngineFlags, GroupResolutionStatus, IdentityBackend, IdentityScopeStatus,
     LdapIdentityBackend, LsaAccountInfo, LsaBackend, PrincipalInput, PrincipalResolution,
-    PrincipalResolver,
+    PrincipalResolver, TrustContext, TrustedDomainBackend,
 };
 pub use resolver::LdapResolver;
 #[cfg(windows)]
@@ -50,6 +51,7 @@ pub use sam::{
     build_sid_name_map, build_sid_name_map_for_target, identity_display, lookup_sid_for_account,
     resolve_identity_via_sam, SamResolution, SidNameResolver,
 };
+pub use trusted::LdapTrustedDomainBackend;
 pub use trusts::resolve_domain_trusts;
 #[cfg(windows)]
 pub use uac_policy::{read_everyone_includes_anonymous, read_target_uac_policy, TargetUacPolicy};

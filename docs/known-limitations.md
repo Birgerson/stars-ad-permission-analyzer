@@ -754,10 +754,20 @@ trigger) — never as orphaned; the result is marked incomplete. Only a SID
 of the configured domain, searched with a base that covers the whole
 domain, is still called orphaned.
 
-**Remaining:** the account's group memberships in the trusted domain are
-not resolved, so the rights computed for it stay incomplete. That needs a
-second directory connection (Global Catalog of the trusted forest or a DC
-of the trusted domain).
+**Closed 2026-10-17 (ADR 0078).** With an optional connection to a domain
+controller of the trusted domain (CLI `--trust-server` / `--trust-base-dn` /
+`--trust-bind-dn`, GUI section "Also resolve accounts of a trusted domain")
+Stars resolves such an account there and builds its token the way Windows
+builds it for a resource in the configured domain: its global and universal
+groups (`tokenGroupsGlobalAndUniversal` of the trusted DC), the trust's SID
+filtering (quarantine), and the domain-local groups of the configured domain
+it reaches through Foreign Security Principals. Lab: identical to the
+Windows Authz oracle on every determinable row. Without the connection the
+result stays "not resolvable", and the reason names the option.
+
+**What stays open:** Selective Authentication and the SID filtering of a
+forest trust for third-domain SIDs are not modelled (reported, never
+assumed); `This Organization` stays logon-dependent for every account.
 
 ---
 
@@ -828,7 +838,7 @@ session (Stars assumes it, as for every SMB logon).
 | L12 — Manual updates / `update_manager` extension point | Low | n/a | by design; fail-closed seam, implement a real verifier only if in-app updates are required |
 | L13 — IPv6 literals rejected as server addresses | Low | n/a (explicit validation error) | yes — bracket handling (LDAP) + `ipv6-literal.net` (UNC/NetAPI), must be built and lab-verified together |
 | L14 — Junction cycles over UNC | Medium | **yes** (ReparseCycle / ReparseDuplicateTarget, as locally) | **closed 2026-10-10** (ADR 0062: volume serial + file ID on UNC scans) |
-| L15 — Trusted-domain SID reported as orphaned | Medium | **yes** (IdentityNotResolvable, names the trust partner) | **classification closed 2026-10-10** (ADR 0064); resolving the memberships via GC / trusted DC still open |
+| L15 — Accounts of a trusted domain | Medium | **yes** (IdentityNotResolvable without, TrustedDomainAccountResolved with the trusted-domain connection) | **closed 2026-10-17** (classification ADR 0064, resolution on the trusted DC ADR 0078) |
 | L16 — UAC policies / session elevation not visible | Low | **yes** (UacFilteredGroups, RemoteUacPolicy) | **network case closed 2026-10-13** (ADR 0076); local session elevation stays bounded |
 | L17 — Guest / anonymous tokens | Low | **yes** (GuestOrAnonymousToken) | **closed 2026-10-14** — Guest, Authenticated Users and anonymous Everyone exact (policy read); bounded only when the policy is unreadable |
 

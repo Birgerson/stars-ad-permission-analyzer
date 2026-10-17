@@ -318,12 +318,80 @@ impl LdapResolver {
             {
                 return Ok(SidDomainRelation::TrustedDomain {
                     partner: trust.partner,
+                    domain_sid: sid_domain.to_owned(),
+                    attributes: trust.attributes,
                 });
             }
         }
         Ok(SidDomainRelation::OtherDomain {
             domain_sid: sid_domain.to_owned(),
         })
+    }
+
+    /// ADR 0078: `tokenGroupsGlobalAndUniversal` of the account with this
+    /// SID — what its domain hands to other domains. `Ok(None)` when the
+    /// account has no object here or the attribute is not returned.
+    pub async fn token_groups_global_and_universal(
+        &self,
+        sid: &Sid,
+    ) -> Result<Option<Vec<String>>, CoreError> {
+        ldap_client::with_timeout(
+            "token_groups_global_and_universal",
+            ldap_client::ldap_timeout(&self.config),
+            async {
+                let mut ldap = ldap_client::connect(&self.config).await?;
+                let entry =
+                    ldap_client::search_by_sid(&mut ldap, &self.config.base_dn, &sid.0).await;
+                let result = match entry {
+                    Ok(Some(e)) => {
+                        ldap_client::search_token_groups_global_and_universal(&mut ldap, &e.dn)
+                            .await
+                    }
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(e),
+                };
+                ldap_client::disconnect(ldap).await;
+                result
+            },
+        )
+        .await
+    }
+
+    /// ADR 0078: `true` when the configured base holds an object with this
+    /// SID — for a SID of a trusted domain, its Foreign Security Principal.
+    pub async fn has_object_for_sid(&self, sid: &Sid) -> Result<bool, CoreError> {
+        ldap_client::with_timeout(
+            "has_object_for_sid",
+            ldap_client::ldap_timeout(&self.config),
+            async {
+                let mut ldap = ldap_client::connect(&self.config).await?;
+                let found = ldap_client::search_by_sid(&mut ldap, &self.config.base_dn, &sid.0)
+                    .await
+                    .map(|e| e.is_some());
+                ldap_client::disconnect(ldap).await;
+                found
+            },
+        )
+        .await
+    }
+
+    /// ADR 0078: the domain SID of the configured base's domain. `Ok(None)`
+    /// when the base names no domain or the SID is not readable.
+    pub async fn configured_domain_sid(&self) -> Result<Option<String>, CoreError> {
+        let Some(root) = domain_root_dn(&self.config.base_dn) else {
+            return Ok(None);
+        };
+        ldap_client::with_timeout(
+            "configured_domain_sid",
+            ldap_client::ldap_timeout(&self.config),
+            async {
+                let mut ldap = ldap_client::connect(&self.config).await?;
+                let sid = ldap_client::search_domain_sid(&mut ldap, &root).await;
+                ldap_client::disconnect(ldap).await;
+                Ok(sid?.filter(|d| is_domain_sid(d)))
+            },
+        )
+        .await
     }
 
     /// `true` when the configuration targets the Global Catalog.
@@ -1340,7 +1408,7 @@ pub fn extract_sid_from_entry(entry: &RawEntry) -> Option<Sid> {
 /// Domain part of a domain-account SID (`S-1-5-21-a-b-c-RID` →
 /// `S-1-5-21-a-b-c`), `None` for any other SID shape. Validates every
 /// component as a number so a malformed value never classifies.
-fn account_domain_of(sid: &Sid) -> Option<String> {
+pub(crate) fn account_domain_of(sid: &Sid) -> Option<String> {
     let parts: Vec<&str> = sid.0.split('-').collect();
     if parts.len() != 8 || !parts[0].eq_ignore_ascii_case("S") || parts[1..4] != ["1", "5", "21"] {
         return None;
