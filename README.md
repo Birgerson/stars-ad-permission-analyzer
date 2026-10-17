@@ -410,7 +410,7 @@ Shows the last `Analyze` result as a lane diagram, read left to right: account �
 
 #### `Groups` tab
 
-![Stars Groups tab (v1.8.0) — direction toggle "Member of", the identity "Administrator" resolved to its group memberships, with a red "member of Administrators" privileged banner, each membership labelled by how it arose (direct, local group), and the SAM/LSA-fallback diagnostic](docs/screenshots/stars-groups-tab.png)
+![Stars Groups tab (v1.13.0) — direction "Member of" with Plain LDAP against the lab DC: a test user resolved to its seven security groups — primary group, direct global, universal and domain local groups, and the nested chain global → universal → domain local, each labelled with how it arose — and a Diagnostics line naming the four groups left out because they are distribution groups or reached only through one](docs/screenshots/stars-groups-tab.png)
 
 Answers a pure identity question — **"which groups is this user (or group) in?"** — without touching a path or computing rights. A **direction toggle** flips it to the reverse question, **"who is in this group?"** (see below).
 

@@ -153,8 +153,10 @@ user can effectively do there.
 **Fields (sections inside the tab):**
 
 - **Target** — path, local (`C:\data\…`) or UNC (`\\server\share\…`).
-- **Identity resolution** — user/group via live search or direct
-  SID, plus mode (Off = SAM/LSA, LDAPS, plaintext LDAP). See
+- **Identity resolution** — the **Mode** field (Off, LDAPS, Plain LDAP,
+  Global Catalog, Signed LDAP) and, for every mode but Off, the LDAP
+  connection fields. Which mode fits your situation:
+  [Which mode to choose](#which-mode-to-choose). Identity input:
   [Identity input forms](#identity-input-forms).
 - **SMB share (optional)** — SMB server and share name. Auto-detected
   for UNC paths; on local paths on a share, set manually if you also
@@ -251,13 +253,23 @@ panel; this tab answers the question directly.
   appears (local users, groups, well-known identities with `[U]`/`[G]`/
   `[L]`/`[W]` markers), so similarly named accounts are easy to tell
   apart.
-- **Identity resolution** — the same modes as `Analyze` (Off = SAM/LSA,
-  LDAPS, plaintext LDAP, Global Catalog, Signed LDAP). On a DC, Off is
-  enough — but note it returns only **direct** global groups, so a
-  marker tells you when nested groups were not recursively resolved.
-  When a mode other than Off is selected, a **`Timeout (s)`** field
-  (1–600, default 10) appears — raise it on large or deeply nested
-  domains where the recursive query needs longer than 10 s.
+- **Identity resolution → Mode** — the same five modes and connection
+  fields as in `Analyze`; see [Which mode to choose](#which-mode-to-choose)
+  and [LDAP configuration](#ldap-configuration) for the fields. In short:
+  - **Off** (SAM/LSA) asks the Windows machine Stars runs on. On a domain
+    controller that works, but it returns only the **direct** groups — a
+    warning line ("No AD/LDAP connection — only direct (SAM/LSA) groups
+    resolved") and a diagnostic say so, nested groups are missing. On a
+    machine **outside** the domain, Off cannot find domain accounts at all
+    ("… is not known on this machine") — pick an LDAP mode.
+  - **LDAPS**, **Plain LDAP** (test only), **Global Catalog** or **Signed
+    LDAP** resolve the memberships **recursively** in AD — the complete
+    list.
+  - The **Members** direction always needs one of the LDAP modes.
+
+  With a mode other than Off, a **`Timeout (s)`** field (1–600, default 10)
+  appears — raise it on large or deeply nested domains where the recursive
+  query needs longer than 10 s.
 
 **Result:**
 
@@ -276,6 +288,13 @@ panel; this tab answers the question directly.
 - the same diagnostic markers as elsewhere (SAM/LSA fallback, FSP,
   Global Catalog, outside-base, `sIDHistory`, a resolution timeout), so
   an incomplete list never looks complete.
+
+**Only security groups are listed** — exactly the groups Windows puts into
+the logon token. Distribution groups (of any scope — domain local, global,
+universal), and security groups reached **only through** a distribution
+group, are left out because they never grant access; a Diagnostics line
+names each one and why ("distribution group" / "reached only through a
+distribution group"), so nothing disappears silently.
 
 To check what the identity can actually access, switch to `Analyze` or
 `Scan Tree`.
@@ -321,8 +340,9 @@ nesting (the full member tree) is planned.
 
 **Fields:**
 
-- **Root path**, **identity**, **SMB server** / **share name** as in
-  `Analyze`.
+- **Root path**, **identity**, **identity resolution (Mode)**, **SMB
+  server** / **share name** as in `Analyze` — see
+  [Which mode to choose](#which-mode-to-choose).
 - **Maximum scan depth** — protects against runaway walks; empty =
   unbounded.
 - **Start scan** — cancellable any time via the cancel button; the
@@ -595,21 +615,40 @@ in forests with hundreds of thousands of identities.
   server's account, never the one of the machine Stars runs on. For local
   administrators see `UacFilteredGroups` below (ADR 0070).
 
+### Which mode to choose
+
+The **Mode** field sits in the **"Identity resolution"** section of the
+`Analyze`, `Scan Tree` and `Groups` tabs (both directions). The `Trusts`
+tab uses the same connection fields without Off. In the CLI the same
+choice is made with `--server` (+ `--insecure-ldap`, `--global-catalog`,
+`--ldap-signing`); without `--server` it is Off.
+
+| Your situation | Mode | What you get |
+| --- | --- | --- |
+| Stars runs **on a domain controller**, quick check | **Off** | direct groups only; nested domain groups missing — a diagnostic says so |
+| Stars runs on a **workstation or member server**, domain accounts | **LDAPS**, or **Signed LDAP** when the DC enforces LDAP signing and has no trusted certificate | complete recursive memberships |
+| Machine **outside the domain** (e.g. an audit laptop) | **LDAPS** / **Signed LDAP** — Off cannot find domain accounts there | complete recursive memberships |
+| **Several domains / a forest**, accounts or groups from other domains | **Global Catalog** | forest-wide lookups; flagged as possibly incomplete (only universal groups replicate fully to the GC) |
+| **Local accounts of a file server** (`FS01\svc_backup`) in `Analyze` / `Scan Tree` | **Off** | exact — Stars reads the account on the server of the analysed path |
+| `Groups` → **Members**, or the `Trusts` tab | any LDAP mode (not Off) | needs a directory connection |
+| **Isolated test lab** only | **Plain LDAP** | like LDAPS, but the password crosses the network in plain text |
+
 ### LDAP configuration
 
-In the **"Identity resolution"** section (inside the `Analyze` and
-`Scan Tree` tabs) under **"LDAP mode"**:
+The five entries of the **Mode** field, as the GUI shows them:
 
-- **0 — Off (SAM/LSA)**: no LDAP, only local APIs.
-- **1 — LDAPS (encrypted, port 636)** — standard for production
+- **Off — use SAM/LSA (recommended on a DC)**: no LDAP, only the Windows
+  APIs of the machine Stars runs on (and, for a local account, of the
+  target server).
+- **LDAPS — encrypted, port 636** — standard for production
   environments.
-- **2 — Plain LDAP (port 389)** — **test only**. Password flows in
+- **Plain LDAP — port 389 (test only)** — the password flows in
   plain text.
-- **3 — Global Catalog (LDAPS, port 3269)** — forest-wide identity and
+- **Global Catalog — forest-wide, port 3269 (LDAPS)** — forest-wide identity and
   group lookups; the base DN may be left empty. Same certificate
   requirements as LDAPS (see below). Memberships are flagged potentially
   incomplete because only universal groups replicate fully to the GC.
-- **4 — Signed LDAP (Kerberos sign & seal, port 389)** — the **cert-free**
+- **Signed LDAP — Kerberos sign & seal, port 389** — the **cert-free**
   way to query a hardened DC that enforces LDAP signing. The bind is
   encrypted and integrity-protected by Kerberos, so **no LDAPS certificate
   is needed**. It uses the **current Windows logon** (single sign-on): no
@@ -635,6 +674,8 @@ Fields (all auto-trimmed before use):
   account is `Get-ADUser <name> -Properties distinguishedName`.
 - **Password** — bind password. **Never stored**, only valid for the
   current session.
+- **Timeout (s)** — LDAP operation timeout, 1–600 s, default 10; see
+  [Large or deeply nested domains](#large-or-deeply-nested-domains----ldap-timeout).
 
 ### LDAPS certificate requirements (read this before using LDAPS)
 

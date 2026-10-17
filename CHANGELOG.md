@@ -10,6 +10,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Changed
+
+- **User guide — the Mode field of "Identity resolution":** a new table
+  "Which mode to choose" (DC, workstation, machine outside the domain,
+  forest, local accounts, Members / Trusts, test lab); the chapter named
+  only the Analyze and Scan Tree tabs although the field is also in the
+  Groups tab, used numbers the GUI does not show and an outdated label.
+  The Groups tab section now says what Off can and cannot do (direct
+  groups only on a DC, no domain accounts from outside the domain) and
+  that only security groups are listed; the Analyze section names all
+  five modes, the Scan Tree section the field at all.
+- **Screenshots** of the Analyze, Graph and Groups tabs taken on v1.13.0.
+
 ## [1.13.0] — 2026-10-17
 
 **The permission path as a picture — and one false warning less.**
