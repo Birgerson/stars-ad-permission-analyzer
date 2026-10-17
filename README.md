@@ -16,7 +16,7 @@ For every user, the tool shows the effective access rights that actually apply t
 
 > **Stars is exclusively a read-and-analyze tool. It does not modify any permissions, groups, or AD objects.**
 
-![Stars Analyze tab (v1.8.0) — the analysis of C:\Windows for "Administrator": effective right "Modify (M)" with access mask, the numbered permission path from the user through its groups to the deciding ACEs, and the Diagnostics block naming the SAM/LSA fallback so the result's limits are visible in the tab itself](docs/screenshots/stars-analyze-tab.png)
+![Stars Analyze tab (v1.13.0) — a lab domain user on a member server's share, resolved via LDAP: effective right "Read & Execute + Delete" with access mask and the share line (NTFS ∩ Share), then the numbered permission path — how the access is evaluated (network logon over SMB), the 70 memberships that did not matter collapsed behind one toggle, the two decisive groups, the Deny ACE and what it takes away, the share ACEs with what each grants, and the closing "Limited by NTFS" step](docs/screenshots/stars-analyze-tab.png)
 
 ## Contents
 
@@ -403,6 +403,8 @@ Actions:
 - **Who has access?** — path-centric trustee table of all ACEs (NTFS and share separated); unreadable ACLs, partially unevaluated ACEs and empty DACLs appear as explicit diagnostic rows.
 
 #### `Graph` tab
+
+![Stars Graph tab (v1.13.0) — the same result as a lane diagram: account, the four token groups an ACE names plus "+69 further groups", a red Deny ACE and a green Allow ACE leading to the NTFS result, two green share ACEs routed below the boxes, and the effective right with the share value](docs/screenshots/stars-graph-tab.png)
 
 Shows the last `Analyze` result as a lane diagram, read left to right: account → token groups → NTFS ACEs → NTFS → share ACEs → result. Green: an Allow decided bits · red: a Deny decided bits · amber dashed: uncertain (logon / session) · grey dashed: no effect, inherit-only or deny-only. Only groups an ACE names get a box; the rest is "+N further groups". The graph is drawn from the result's own decisions — the same as the numbered permission path, nothing computed anew — and the HTML report embeds the same diagram per row (ADR 0077).
 
