@@ -683,6 +683,12 @@ slint::slint! {
         in property <image>  gr-image;
         in property <[GraphTextVm]> gr-texts;
         in property <bool>   gr-has-graph;
+        // "Show all groups": every membership without an ACE as its own box.
+        in-out property <bool> gr-all-groups: false;
+        callback gr-toggle-all-groups();
+        // The memberships no ACE on this object names (the "+N further
+        // groups"), one per line; empty when there are none.
+        in property <string> gr-further-groups;
         in property <string> gr-caption: "Run an analysis in the Analyze tab first — the graph shows its last result.";
 
         callback analyze-clicked();
@@ -1334,6 +1340,11 @@ slint::slint! {
                             font-size: 11px;
                             wrap: word-wrap;
                         }
+                        if root.gr-has-graph: CheckBox {
+                            text: "Show all groups (also those no ACE on this object names)";
+                            checked <=> root.gr-all-groups;
+                            toggled => { root.gr-toggle-all-groups(); }
+                        }
                         if root.gr-has-graph: ScrollView {
                             vertical-stretch: 1;
                             viewport-width: max(self.visible-width, root.gr-image.width * 1px);
@@ -1355,6 +1366,12 @@ slint::slint! {
                                 // both themes, like in the HTML report.
                                 color: t.strong ? #1f2937 : #6b7280;
                             }
+                        }
+                        if root.gr-has-graph && root.gr-further-groups != "": Text {
+                            text: root.gr-further-groups;
+                            color: Theme.text-secondary;
+                            font-size: 11px;
+                            wrap: word-wrap;
                         }
                         if !root.gr-has-graph: Rectangle { vertical-stretch: 1; }
                     }
@@ -3064,6 +3081,8 @@ thread_local! {
     /// Review CR-12: the full Analyze path (all view rows) of the last
     /// result; the shown model is filtered from it on toggle.
     static ANALYZE_STEPS: RefCell<Vec<StepVm>> = const { RefCell::new(Vec::new()) };
+    /// The result the Graph tab shows, so "Show all groups" can redraw it.
+    static GRAPH_RESULT: RefCell<Option<EffectivePermission>> = const { RefCell::new(None) };
 }
 
 /// The visible rows: collapsible memberships only when shown (review CR-12).
@@ -3156,6 +3175,16 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
     // Review CR-12: show / hide the memberships that did not matter.
     {
         let weak = ui.as_weak();
+        let weak_graph = ui.as_weak();
+        ui.on_gr_toggle_all_groups(move || {
+            let Some(ui) = weak_graph.upgrade() else {
+                return;
+            };
+            let perm = GRAPH_RESULT.with(|g| g.borrow().clone());
+            if let Some(perm) = perm {
+                draw_graph(&ui, &perm);
+            }
+        });
         ui.on_a_toggle_members(move || {
             let Some(ui) = weak.upgrade() else { return };
             let show_all = !ui.get_a_show_all_members();
@@ -3693,8 +3722,32 @@ fn handle_groups_done(ui: &MainWindow, result: Result<GroupsViewData, String>) {
     }
 }
 
+/// The memberships no ACE on this object names, for the line under the
+/// graph — empty when there are none.
+fn further_groups_text(groups: &[String]) -> String {
+    if groups.is_empty() {
+        return String::new();
+    }
+    // Names only — the SIDs are in the boxes ("Show all groups"), the
+    // Analyze path and the Groups tab.
+    let names: Vec<&str> = groups
+        .iter()
+        .map(|g| match g.rfind(" (S-") {
+            Some(i) => &g[..i],
+            None => g.as_str(),
+        })
+        .collect();
+    format!(
+        "Further groups of the account — no ACE on this object names them, so they do not change this result ({}): {}",
+        names.len(),
+        names.join(" · ")
+    )
+}
+
 /// ADR 0077: no graph shown, with the reason why.
 fn clear_graph(ui: &MainWindow, caption: &str) {
+    GRAPH_RESULT.with(|g| *g.borrow_mut() = None);
+    ui.set_gr_further_groups("".into());
     ui.set_gr_has_graph(false);
     ui.set_gr_image(slint::Image::default());
     ui.set_gr_texts(slint::ModelRc::new(
@@ -3709,7 +3762,16 @@ fn clear_graph(ui: &MainWindow, caption: &str) {
 /// at the layout's coordinates. No graph is drawn for a result without a
 /// trace; a render failure is said, not hidden.
 fn apply_graph(ui: &MainWindow, perm: &EffectivePermission) {
-    let Some(graph) = viz::permission_graph(perm) else {
+    GRAPH_RESULT.with(|g| *g.borrow_mut() = Some(perm.clone()));
+    draw_graph(ui, perm);
+}
+
+/// Draws `perm` with the current "Show all groups" setting.
+fn draw_graph(ui: &MainWindow, perm: &EffectivePermission) {
+    let opts = viz::GraphOptions {
+        all_groups: ui.get_gr_all_groups(),
+    };
+    let Some(graph) = viz::permission_graph_with(perm, opts) else {
         clear_graph(
             ui,
             "No graph for this result: no ACE on this object reaches the account or its groups. The permission path in the Analyze tab explains the result (for example a missing or empty DACL).",
@@ -3733,6 +3795,14 @@ fn apply_graph(ui: &MainWindow, perm: &EffectivePermission) {
                 })
                 .collect();
             ui.set_gr_texts(slint::ModelRc::new(slint::VecModel::from(texts)));
+            // The list is for the compact view; with every group drawn it
+            // would only repeat the boxes.
+            let further = if opts.all_groups {
+                String::new()
+            } else {
+                further_groups_text(&graph.further_groups)
+            };
+            ui.set_gr_further_groups(further.into());
             ui.set_gr_has_graph(true);
             ui.set_gr_caption(
                 format!(

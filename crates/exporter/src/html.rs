@@ -928,6 +928,7 @@ mod tests {
             }],
             groups: vec![],
             other_groups: 0,
+            other: Default::default(),
         };
         let mut s = String::new();
         write_permissions_table(&mut s, std::slice::from_ref(&p)).unwrap();

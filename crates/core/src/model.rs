@@ -1096,6 +1096,11 @@ pub struct PermissionTrace {
     /// Memberships without an ACE in `aces` — shown as "+N further groups".
     #[serde(default)]
     pub other_groups: usize,
+    /// Those memberships themselves (name, route), so the graph can name
+    /// them or draw each one. Same order as the membership list; empty for
+    /// results stored before it existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub other: Vec<TraceGroup>,
 }
 
 impl PermissionTrace {

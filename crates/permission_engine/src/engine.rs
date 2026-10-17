@@ -2315,10 +2315,35 @@ fn trace_groups(
         };
         groups.push(group);
     }
+    // The memberships no ACE names — named, so the graph can list them.
+    let other: Vec<TraceGroup> = merged
+        .iter()
+        .filter(|m| !seen.contains(&m.group_sid.0))
+        .map(|gm| {
+            let sid = gm.group_sid.0.as_str();
+            TraceGroup {
+                sid: gm.group_sid.clone(),
+                display: match gm.group_name.as_deref().filter(|n| !n.is_empty()) {
+                    Some(name) => format!("{name} ({sid})"),
+                    None => trustee_with_sid(&gm.group_sid, sid_names),
+                },
+                route: membership_route(gm, sid_names),
+                state: if deny_only_sids.contains(sid) {
+                    TraceGroupState::DenyOnly
+                } else if uncertain_sids.contains(sid) {
+                    TraceGroupState::Uncertain
+                } else {
+                    TraceGroupState::Member
+                },
+                decisive: false,
+            }
+        })
+        .collect();
     PermissionTrace {
         aces,
         other_groups: merged.len().saturating_sub(memberships_used),
         groups,
+        other,
     }
 }
 
@@ -7711,6 +7736,9 @@ mod tests {
             "no ACE → not in the graph"
         );
         assert_eq!(t.other_groups, 1, "IDLE is counted, not shown");
+        assert_eq!(t.other.len(), 1, "and named for the graph");
+        assert_eq!(t.other[0].sid.0, IDLE);
+        assert!(!t.other[0].decisive);
         let effect = |sid: &str, kind: AceKind| {
             t.aces
                 .iter()

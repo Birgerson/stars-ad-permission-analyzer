@@ -228,6 +228,18 @@ names the account or one of its groups — the permission path in the
 Lines that skip a lane run below the boxes, so a line never passes
 through a box it does not connect.
 
+**Further groups.** Only groups an ACE on this object names get a box of
+their own; the account's other memberships do not change this result and
+are one box, "+N further groups". They are not hidden:
+
+- the line **under the graph** names them all;
+- in the HTML report the box's **tooltip** names them (the first 40, then
+  "… and N more");
+- **"Show all groups"** (checkbox above the graph) draws each of them as
+  its own grey dashed box with its route ("direct", "via A → B") and "no
+  ACE here". The columns are then aligned at the top, so the account, the
+  ACEs and the result stay in view next to the long group column.
+
 **Limits:** long names are shortened (the HTML report shows the full text
 as a tooltip); the graph shows the last `Analyze` result only — not scan
 rows and not results loaded from the scan history. The numbered
