@@ -484,6 +484,32 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      Members from other domains of the forest are not visible");
                 println!("      here — in a multi-domain forest the list may be incomplete.");
             }
+            PermissionDiagnostic::TrustedDomainAccountResolved {
+                domain,
+                home_only_groups,
+                sid_filtered,
+            } => {
+                println!("  [i] Account of the trusted domain {domain}, resolved on a domain");
+                println!("      controller of {domain}: its global and universal groups there");
+                println!("      count (as Windows hands them to other domains), plus the");
+                println!("      domain-local groups of this domain reached through a Foreign");
+                println!("      Security Principal.");
+                if !home_only_groups.is_empty() {
+                    println!("      Left out — its memberships in these groups of {domain}");
+                    println!("      apply only inside {domain}:");
+                    for g in home_only_groups {
+                        println!("        - {g}");
+                    }
+                    println!("      (Builtin groups of this domain, such as Users through");
+                    println!("      Authenticated Users, are evaluated on their own.)");
+                }
+                if !sid_filtered.is_empty() {
+                    println!("      Removed by the trust's SID filtering:");
+                    for s in sid_filtered {
+                        println!("        - {s}");
+                    }
+                }
+            }
             PermissionDiagnostic::IdentityNotResolvable { reason } => {
                 println!("  [!] The identity could not be resolved: {reason}.");
                 println!("      Its group memberships are unknown — the rights computed for");
@@ -636,14 +662,25 @@ pub fn print_membership_report(report: &MembershipReport, user_input: &str) {
 
     section("Next");
     println!("  \u{2192} Check this identity's effective rights on a target:");
-    println!(
-        "      adpa scan --user \"{}\" --path <root>",
+    // ADR 0078: an account of a trusted domain is found by its SID (its name
+    // is not in the configured domain), with the same --trust-* options.
+    let trusted = report
+        .diagnostics
+        .iter()
+        .any(|d| matches!(d, PermissionDiagnostic::TrustedDomainAccountResolved { .. }));
+    let user = if trusted {
+        report.identity.sid.0.as_str()
+    } else {
         report
             .identity
             .name
             .as_deref()
             .unwrap_or(&report.identity.sid.0)
-    );
+    };
+    println!("      adpa scan --user \"{user}\" --path <root>");
+    if trusted {
+        println!("      (with the same --trust-server / --trust-base-dn / --trust-bind-dn)");
+    }
 }
 
 /// Prints the group-members report (`members` command): the group header, the

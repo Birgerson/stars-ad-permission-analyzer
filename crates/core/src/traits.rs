@@ -88,6 +88,27 @@ pub struct ResolutionProvenance {
     /// (ADR 0067). The engine pushes `NonSecurityGroupsExcluded` so the
     /// exclusion is visible.
     pub excluded_non_security_groups: Vec<String>,
+    /// ADR 0078 (L15): `Some` when the identity is an account of a trusted
+    /// domain that was resolved on a domain controller of that domain. The
+    /// engine pushes `TrustedDomainAccountResolved` (informational) and —
+    /// only when the trust uses Selective Authentication, which Stars does
+    /// not model — `TrustBoundaryEffectsNotModeled`. `None` everywhere else,
+    /// so no other result changes.
+    pub trusted_domain: Option<TrustedDomainProvenance>,
+}
+
+/// How an account of a trusted domain was resolved (ADR 0078).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TrustedDomainProvenance {
+    /// DNS name of the trusted domain (`trustPartner`).
+    pub domain: String,
+    /// Memberships that apply only inside the trusted domain (its builtin
+    /// and domain-local groups) — left out of the token, named here.
+    pub home_only_groups: Vec<String>,
+    /// SIDs the trust's SID filtering (quarantine) removes.
+    pub sid_filtered: Vec<String>,
+    /// `true` when the trust uses Selective Authentication.
+    pub selective_authentication: bool,
 }
 
 /// Group memberships of a principal plus every reason the set may be

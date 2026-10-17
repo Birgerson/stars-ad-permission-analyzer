@@ -249,6 +249,7 @@ out; the report font is Arial.
 | `GroupResolutionFailed { reason }` | Concern | **yes** | Recursive group resolution failed or was skipped; domain-group ACEs may be missing. `reason` carries the original error. |
 | `PersistedEvidenceDecodeFailed { detail }` | Concern | **yes** | A persisted (historical) row could not be fully decoded; the reconstructed result may be less complete than originally stored. |
 | `IdentityNotResolvable { reason }` | Concern | **yes** | The SID could not be resolved and is **not** proven orphaned — it belongs to a trusted domain (named), another domain, lies outside a base that is only an OU, or its domain could not be determined. Its memberships are unknown; the rights computed for the bare SID can be too low or too high (ADR 0064). |
+| `TrustedDomainAccountResolved { domain, home_only_groups, sid_filtered }` | Neutral | no | Account of a trusted domain resolved on a DC of that domain (ADR 0078): global and universal groups there, the trust's SID filtering, and the domain-local groups of the configured domain reached through Foreign Security Principals. Exact. |
 | `IdentityOrphaned` | Neutral | no | The SID belongs to the configured domain, the base covers that whole domain, and no object exists: the account no longer exists. Nobody can log on with it; an ACE naming it is a dead entry (ADR 0064). |
 | `GroupResolutionIncomplete { reason }` | Concern | **yes** | A successful group resolution may still lack groups — a primary group that could not be read, a group without a readable SID, memberships in groups outside the resolved set (e.g. outside a base that is only an OU), an unresolvable local group. `reason` names them (ADR 0066). |
 | `GuestOrAnonymousToken { sids }` | Notice | no (an anonymous bound is) | The account is the built-in Guest (RID 501) or ANONYMOUS LOGON. Lab-measured (ADR 0072): Authenticated Users is never in such a token — its ACEs do not apply; Everyone is in an anonymous token only with `EveryoneIncludesAnonymous` = 1, which Stars does not read — its ACEs bound an anonymous result. |
@@ -435,6 +436,16 @@ permanently not part of the product:
   `IdentityNotResolvable`, naming the trusted or foreign domain) when
   nothing can resolve it. `Orphaned` requires evidence: a SID of the
   configured domain with a base that covers the whole domain (ADR 0064).
+- **Accounts of a trusted domain** (ADR 0078): with an optional connection
+  to a DC of the trusted domain (`--trust-server` …, GUI section "Also
+  resolve accounts of a trusted domain") such an account is resolved
+  exactly — its global and universal groups there
+  (`tokenGroupsGlobalAndUniversal`), the trust's SID filtering
+  (quarantine), and the domain-local groups of the configured domain it
+  reaches through Foreign Security Principals; matched the Windows Authz
+  oracle on every determinable lab row. Not modelled: Selective
+  Authentication and a forest trust's filtering of third-domain SIDs
+  (reported, never assumed).
   The account status reads "unknown" whenever it was not read — never
   "Active" by default.
 

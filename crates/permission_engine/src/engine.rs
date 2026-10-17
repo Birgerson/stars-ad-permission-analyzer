@@ -390,6 +390,20 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         {
             diagnostics.push(PermissionDiagnostic::TrustBoundaryEffectsNotModeled);
         }
+        // ADR 0078 (L15): an account of a trusted domain resolved on a DC of
+        // that domain. SID filtering (quarantine) is applied by the resolver;
+        // Selective Authentication is not modelled, so only then the trust
+        // caveat. Same markers and order as the membership view.
+        if let Some(t) = &input.resolution.trusted_domain {
+            diagnostics.push(PermissionDiagnostic::TrustedDomainAccountResolved {
+                domain: t.domain.clone(),
+                home_only_groups: t.home_only_groups.clone(),
+                sid_filtered: t.sid_filtered.clone(),
+            });
+            if t.selective_authentication {
+                diagnostics.push(PermissionDiagnostic::TrustBoundaryEffectsNotModeled);
+            }
+        }
 
         let mut result = EffectivePermission {
             identity: input.identity,
@@ -5494,6 +5508,49 @@ mod tests {
             "trust-boundary marker must fire when resolved via FSP; got {:?}",
             result.diagnostics
         );
+    }
+
+    /// ADR 0078: an account of a trusted domain resolved on a DC of that
+    /// domain carries the informational marker; the trust caveat only when
+    /// the trust uses Selective Authentication (not modelled). The result
+    /// stays exact — the marker is no incompleteness trigger.
+    #[test]
+    fn trusted_domain_account_marker_and_caveat_only_with_selective_auth() {
+        for selective in [false, true] {
+            let mut input = base_input(
+                user(USER),
+                fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            );
+            input.resolution.trusted_domain = Some(adpa_core::traits::TrustedDomainProvenance {
+                domain: "ext.test".into(),
+                home_only_groups: vec!["Users (S-1-5-32-545)".into()],
+                sid_filtered: Vec::new(),
+                selective_authentication: selective,
+            });
+            let result = DefaultPermissionEngine.evaluate(input).unwrap();
+            assert!(result.diagnostics.iter().any(|d| matches!(
+                d,
+                PermissionDiagnostic::TrustedDomainAccountResolved { domain, .. } if domain == "ext.test"
+            )));
+            assert_eq!(
+                result
+                    .diagnostics
+                    .contains(&PermissionDiagnostic::TrustBoundaryEffectsNotModeled),
+                selective
+            );
+            assert!(result.effective_determinable(), "informational only");
+        }
+        // Without the provenance nothing changes.
+        let plain = DefaultPermissionEngine
+            .evaluate(base_input(
+                user(USER),
+                fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            ))
+            .unwrap();
+        assert!(!plain
+            .diagnostics
+            .iter()
+            .any(|d| matches!(d, PermissionDiagnostic::TrustedDomainAccountResolved { .. })));
     }
 
     /// The trust-boundary marker also fires when the identity is outside the

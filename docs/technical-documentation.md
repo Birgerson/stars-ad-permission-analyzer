@@ -426,6 +426,7 @@ enum IdentityScopeStatus {
     OrphanedSid,                        // LDAP + LSA miss, SID of the fully covered domain
     Unresolvable { reason: String },    // LDAP + LSA miss, not proven gone (ADR 0064)
     LookupFailed { reason: String },    // LDAP connection error
+    ResolvedInTrustedDomain { domain: String }, // resolved on a trusted DC (ADR 0078)
 }
 ```
 
@@ -454,6 +455,29 @@ domain, searched with a base covering that whole domain, becomes
 `OrphanedSid`; a trusted-domain, other-domain or partial-base SID becomes
 `Unresolvable` with a reason and the incompleteness marker
 `IdentityNotResolvable`.
+
+**Accounts of a trusted domain (ADR 0078).** `SidDomainRelation::TrustedDomain`
+carries the trust's domain SID and `TrustAttributes`. When a
+`TrustedDomainBackend` is attached (`PrincipalResolver::with_trusted_domain`)
+and its own domain SID equals the trust's, `classify_unresolved` hands the
+SID to it instead of returning `Unresolvable`; no other path consults it.
+`ad_resolver::trusted::LdapTrustedDomainBackend` resolves the account on the
+trusted DC with a second `LdapResolver`, then three pure, unit-tested steps:
+`select_cross_domain_memberships` keeps the groups in the account's
+`tokenGroupsGlobalAndUniversal` (`ldap_client::search_token_groups_global_and_universal`)
+and names the rest as home-only; `apply_sid_filtering` removes, on a
+quarantined trust, every SID (group, `sIDHistory` of account and groups —
+list and count) not of the trusted domain, and on any other trust turns
+such a SID into a gap; for every remaining SID with an FSP in the
+configured domain (`LdapResolver::has_object_for_sid`) the resource
+resolver's memberships are joined with `chain_through`, which continues the
+home path. The result carries `TrustedDomainProvenance` in
+`PrincipalResolution::trusted_domain` → `ResolutionProvenance::trusted_domain`;
+the engine and the membership view push `TrustedDomainAccountResolved`
+(informational) and, only with Selective Authentication,
+`TrustBoundaryEffectsNotModeled`. Frontends: CLI `TrustArgs`
+(`--trust-*`, `build_trust_ldap_config`), GUI `LdapParams::trust` /
+`TrustParams`, Slint component `TrustDomainFields` shared by three tabs.
 
 ```rust
 
