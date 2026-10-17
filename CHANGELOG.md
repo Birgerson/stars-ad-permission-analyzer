@@ -10,6 +10,17 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Added
+
+- **Graph: the further groups are named** — the box "+N further groups"
+  (memberships no ACE on this object names) now lists them in its tooltip
+  in the HTML report and in a line under the graph in the GUI. New GUI
+  option **"Show all groups"** draws each of them as its own grey dashed
+  box; the columns are then top-aligned so account, ACEs and result stay
+  in view. The trace in JSON gains the additive field `other`. The default
+  graph is unchanged otherwise (checked: 15 of 15 report graphs identical
+  apart from the tooltip).
+
 ## [1.14.0] — 2026-10-17
 
 **Accounts of a partner domain, exact.**

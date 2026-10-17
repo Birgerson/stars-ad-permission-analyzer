@@ -151,7 +151,10 @@ that applies.
   (green Allow decided bits, red Deny decided bits, amber dashed
   uncertain, grey dashed no effect / inherit-only / deny-only). It is
   drawn from the engine's own decisions (`trace`, also in JSON), checked
-  against the explanation steps by the same invariant test. Limits: the
+  against the explanation steps by the same invariant test. The
+  memberships no ACE names are one box "+N further groups", named under
+  the graph and in its tooltip; "Show all groups" draws each of them.
+  Limits: the
   GUI shows the last Analyze result only; the report embeds graphs for
   the first 500 rows and says so for the rest; results loaded from the
   scan history have no graph (the trace is not stored).

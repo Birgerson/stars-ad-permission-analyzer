@@ -72,6 +72,16 @@ by re-reading the DACL or re-matching SIDs could disagree with the engine.
 
 ## Consequences
 
+- **Addendum (2026-10-17, after user feedback):** "+N further groups" did
+  not say which groups those are. The trace now also carries them
+  (`PermissionTrace::other`, name and route; omitted from JSON when empty,
+  so older results stay valid and keep the plain count). The box's tooltip
+  names them (first 40), the GUI lists them under the graph, and the GUI
+  option "Show all groups" (`viz::GraphOptions::all_groups`) draws each as
+  a grey dashed box. In that view the columns are top-aligned and a
+  lane-skipping edge runs just below the lanes it crosses, not below the
+  whole group column. The default layout is unchanged — v1.14.0 vs. this
+  change: 15 of 15 report graphs identical apart from the named tooltip.
 - JSON export gains the additive field `trace` (omitted when empty); old
   readers ignore it.
 - The trace is **not** stored in the SQLite scan history. Results loaded

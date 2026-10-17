@@ -149,13 +149,16 @@ pub struct GraphLayout {
     pub height: f64,
     /// Every text of the graph — lane headers, node lines, legend.
     pub texts: Vec<GraphText>,
+    /// `name (SID)` of every membership no ACE on this object names — for a
+    /// frontend that lists them next to the graph.
+    pub further_groups: Vec<String>,
     title: String,
     nodes: Vec<Node>,
     edges: Vec<Edge>,
     /// (x, y, look) of each legend swatch.
     legend: Vec<(f64, f64, Look)>,
-    /// y of the first routing track.
-    track_y0: f64,
+    /// y of each routing track, by track index.
+    track_ys: Vec<f64>,
 }
 
 fn effect_look(ace: &AceOutcome) -> Look {
@@ -216,9 +219,27 @@ fn short_name(display: &str) -> &str {
     }
 }
 
+/// How much of the token the graph draws.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GraphOptions {
+    /// `false` (default): the memberships no ACE names are one box
+    /// "+N further groups" (their names in its tooltip). `true`: each of them
+    /// gets its own grey dashed box.
+    pub all_groups: bool,
+}
+
+/// How many names the "+N further groups" tooltip lists before it says
+/// how many more there are.
+const TOOLTIP_NAMES: usize = 40;
+
 /// The permission graph of one result, or `None` when the result carries
 /// no trace (no ACE on the object, or a result stored before ADR 0077).
 pub fn permission_graph(p: &EffectivePermission) -> Option<GraphLayout> {
+    permission_graph_with(p, GraphOptions::default())
+}
+
+/// [`permission_graph`] with options.
+pub fn permission_graph_with(p: &EffectivePermission, opts: GraphOptions) -> Option<GraphLayout> {
     if p.trace.is_empty() {
         return None;
     }
@@ -315,18 +336,66 @@ pub fn permission_graph(p: &EffectivePermission) -> Option<GraphLayout> {
         );
         group_nodes.push((g.sid.0.clone(), idx, group_look(g)));
     }
-    if p.trace.other_groups > 0 {
+    // The memberships no ACE names: one box each, or one summary box that
+    // names them in its tooltip. A result stored before the names existed
+    // (`other` empty, only the count) keeps the summary box.
+    let further_groups: Vec<String> = p.trace.other.iter().map(|g| g.display.clone()).collect();
+    let drawn_individually = if opts.all_groups {
+        p.trace.other.len()
+    } else {
+        0
+    };
+    if opts.all_groups {
+        for g in &p.trace.other {
+            let state = match g.state {
+                TraceGroupState::DenyOnly => " · deny-only",
+                TraceGroupState::Uncertain => " · uncertain",
+                _ => "",
+            };
+            let idx = push(
+                &mut nodes,
+                1,
+                vec![
+                    shorten(short_name(&g.display)),
+                    shorten(&format!("{}{state} · no ACE here", g.route)),
+                ],
+                format!(
+                    "{} — {}{state} — no ACE on this object names it",
+                    g.display, g.route
+                ),
+                Look::Inactive,
+                NODE_H,
+            );
+            group_nodes.push((g.sid.0.clone(), idx, Look::Inactive));
+        }
+    }
+    let summarised = p.trace.other_groups.saturating_sub(drawn_individually);
+    if summarised > 0 {
+        let mut title =
+            format!("{summarised} further memberships — no ACE on this object names them");
+        if !opts.all_groups && !further_groups.is_empty() {
+            let listed: Vec<&str> = further_groups
+                .iter()
+                .take(TOOLTIP_NAMES)
+                .map(String::as_str)
+                .collect();
+            title.push_str(": ");
+            title.push_str(&listed.join(", "));
+            if further_groups.len() > TOOLTIP_NAMES {
+                title.push_str(&format!(
+                    " … and {} more",
+                    further_groups.len() - TOOLTIP_NAMES
+                ));
+            }
+        }
         push(
             &mut nodes,
             1,
             vec![
-                format!("+{} further groups", p.trace.other_groups),
+                format!("+{summarised} further groups"),
                 "no ACE on this object".to_owned(),
             ],
-            format!(
-                "{} further memberships — no ACE on this object names them",
-                p.trace.other_groups
-            ),
+            title,
             Look::Inactive,
             NODE_H,
         );
@@ -450,8 +519,15 @@ pub fn permission_graph(p: &EffectivePermission) -> Option<GraphLayout> {
         col.iter().map(|i| nodes[*i].h).sum::<f64>() + GAP_Y * (col.len().saturating_sub(1)) as f64
     };
     let max_h = columns.iter().map(|c| col_h(c, &nodes)).fold(0.0, f64::max);
+    // With every group drawn the group lane is far taller than the rest;
+    // top-aligned columns keep account, ACEs and result in view next to the
+    // groups an ACE names (those come first). Default: centred.
     for col in &columns {
-        let mut y = MARGIN + HEADER_H + (max_h - col_h(col, &nodes)) / 2.0;
+        let mut y = if opts.all_groups {
+            MARGIN + HEADER_H
+        } else {
+            MARGIN + HEADER_H + (max_h - col_h(col, &nodes)) / 2.0
+        };
         for i in col {
             nodes[*i].y = y;
             y += nodes[*i].h + GAP_Y;
@@ -522,6 +598,25 @@ pub fn permission_graph(p: &EffectivePermission) -> Option<GraphLayout> {
         }
     }
     let track_y0 = MARGIN + HEADER_H + max_h + TRACK_GAP;
+    // Default: every track below all nodes. With every group drawn the group
+    // lane is very tall; a track then only has to clear the lanes the edge
+    // actually crosses, so it runs right below those instead of diving under
+    // the whole group lane. Distinct offsets keep the tracks apart.
+    let mut track_ys = vec![0.0; tracks];
+    for e in &edges {
+        let Some(t) = e.track else { continue };
+        track_ys[t] = if opts.all_groups {
+            let (from, to) = (nodes[e.from].col, nodes[e.to].col);
+            let crossed_bottom = nodes
+                .iter()
+                .filter(|n| n.col > from && n.col < to)
+                .map(|n| n.y + n.h)
+                .fold(MARGIN + HEADER_H, f64::max);
+            crossed_bottom + TRACK_GAP * (t + 1) as f64
+        } else {
+            track_y0 + t as f64 * TRACK_GAP
+        };
+    }
     let tracks_h = if tracks > 0 {
         TRACK_GAP * (tracks + 1) as f64
     } else {
@@ -578,11 +673,12 @@ pub fn permission_graph(p: &EffectivePermission) -> Option<GraphLayout> {
         width,
         height,
         texts,
+        further_groups,
         title: format!("Permission graph — {}", p.path.0),
         nodes,
         edges,
         legend,
-        track_y0,
+        track_ys,
     })
 }
 
@@ -618,7 +714,7 @@ impl GraphLayout {
                 // Down into the gap after the source lane, along the track
                 // below the nodes, up in the gap before the target lane.
                 Some(t) => {
-                    let ty = self.track_y0 + t as f64 * TRACK_GAP;
+                    let ty = self.track_ys[t];
                     let (xa, xb) = (x1 + GAP_X, x2 - GAP_X);
                     let (ma, mb) = (x1 + GAP_X / 2.0, x2 - GAP_X / 2.0);
                     format!(
@@ -788,6 +884,7 @@ mod tests {
                 group("S-1-1-0", "Everyone", TraceGroupState::Implicit),
             ],
             other_groups: 57,
+            other: Default::default(),
         }
     }
 
@@ -837,6 +934,7 @@ mod tests {
             )],
             groups: vec![],
             other_groups: 3,
+            other: Default::default(),
         };
         let g = permission_graph(&result(t, None)).unwrap();
         assert!(has_text(&g, "the account itself"));
@@ -873,8 +971,8 @@ mod tests {
         }
         // Everyone → share ACE, and NTFS → result past the share lane.
         assert_eq!(tracks.len(), 2);
-        assert!(g.track_y0 > bottom);
-        assert!(g.track_y0 + 2.0 * TRACK_GAP < g.height - LEGEND_H);
+        assert!(g.track_ys[0] > bottom);
+        assert!(g.track_ys[0] + 2.0 * TRACK_GAP < g.height - LEGEND_H);
     }
 
     /// A lane without any ACE for the account carries an explicit node.
@@ -889,6 +987,7 @@ mod tests {
             )],
             groups: vec![group("S-1-1-0", "Everyone", TraceGroupState::Implicit)],
             other_groups: 0,
+            other: Default::default(),
         };
         let g = permission_graph(&result(t, Some(0x0012_00A9))).unwrap();
         let empty: Vec<&Node> = g
@@ -899,6 +998,118 @@ mod tests {
         assert_eq!(empty.len(), 1, "only the NTFS lane is empty");
         assert_eq!(empty[0].col, 2);
         assert_eq!(empty[0].look, Look::Inactive);
+    }
+
+    fn with_other_groups() -> PermissionTrace {
+        let mut t = trace();
+        t.other_groups = 2;
+        t.other = vec![
+            group("S-1-5-21-1-2-3-3001", "Idle A", TraceGroupState::Member),
+            group("S-1-5-21-1-2-3-3002", "Idle B <&>", TraceGroupState::Member),
+        ];
+        t
+    }
+
+    /// Default view: one summary box whose tooltip names the groups.
+    #[test]
+    fn further_groups_are_named_in_the_summary_tooltip() {
+        let g = permission_graph(&result(with_other_groups(), None)).unwrap();
+        assert!(has_text(&g, "+2 further groups"));
+        assert_eq!(g.further_groups.len(), 2);
+        let svg = g.to_svg();
+        assert!(svg.contains("Idle A (S-1-5-21-1-2-3-3001)"));
+        assert!(svg.contains("Idle B &lt;&amp;&gt;"), "names are escaped");
+    }
+
+    /// "Show all groups": each one its own grey box, linked to the account,
+    /// and no summary box left.
+    #[test]
+    fn all_groups_draws_each_membership() {
+        let g = permission_graph_with(
+            &result(with_other_groups(), None),
+            GraphOptions { all_groups: true },
+        )
+        .unwrap();
+        assert!(!g.texts.iter().any(|t| t.text.contains("further groups")));
+        for name in ["Idle A", "Idle B <&>"] {
+            let i = g.nodes.iter().position(|n| n.lines[0] == name).unwrap();
+            assert_eq!(g.nodes[i].look, Look::Inactive);
+            assert!(g.edges.iter().any(|e| e.from == 0 && e.to == i));
+        }
+        // Top-aligned: every column starts right under the headers, so the
+        // account and the ACEs stay in view next to a long group lane.
+        let first_y = |col: usize| {
+            g.nodes
+                .iter()
+                .filter(|n| n.col == col)
+                .map(|n| n.y)
+                .fold(f64::MAX, f64::min)
+        };
+        for col in 0..4 {
+            assert_eq!(first_y(col), MARGIN + HEADER_H, "lane {col}");
+        }
+    }
+
+    /// With every group drawn, a lane-skipping edge clears only the lanes it
+    /// crosses — never a node — instead of diving under the tall group lane.
+    /// The default view keeps every track below all nodes.
+    #[test]
+    fn tracks_clear_only_the_crossed_lanes_with_all_groups() {
+        let mut t = with_other_groups();
+        for i in 0..20 {
+            t.other.push(group(
+                &format!("S-1-5-21-1-2-3-{}", 4000 + i),
+                "Idle",
+                TraceGroupState::Member,
+            ));
+        }
+        t.other_groups = t.other.len();
+        let p = result(t, Some(0x0012_00A9));
+        let g = permission_graph_with(&p, GraphOptions { all_groups: true }).unwrap();
+        let group_bottom = g
+            .nodes
+            .iter()
+            .filter(|n| n.col == 1)
+            .map(|n| n.y + n.h)
+            .fold(0.0, f64::max);
+        for e in g.edges.iter().filter(|e| e.track.is_some()) {
+            let ty = g.track_ys[e.track.unwrap()];
+            let (from, to) = (g.nodes[e.from].col, g.nodes[e.to].col);
+            for n in g.nodes.iter().filter(|n| n.col > from && n.col < to) {
+                assert!(ty > n.y + n.h, "the track passes below every crossed node");
+            }
+            assert!(ty < group_bottom, "no dive under the whole group lane");
+        }
+        let d = permission_graph(&p).unwrap();
+        for (i, y) in d.track_ys.iter().enumerate() {
+            assert_eq!(
+                *y,
+                d.track_ys[0] + i as f64 * TRACK_GAP,
+                "default unchanged"
+            );
+        }
+        let all_bottom = d.nodes.iter().map(|n| n.y + n.h).fold(0.0, f64::max);
+        assert!(d.track_ys[0] > all_bottom, "default: below every node");
+    }
+
+    /// The default view stays centred (unchanged by the option).
+    #[test]
+    fn default_view_stays_centred() {
+        let g = permission_graph(&result(with_other_groups(), None)).unwrap();
+        let account = g.nodes.iter().find(|n| n.col == 0).unwrap();
+        assert!(
+            account.y > MARGIN + HEADER_H,
+            "account centred on the group lane"
+        );
+    }
+
+    /// A result stored before the names existed keeps its summary box.
+    #[test]
+    fn a_count_without_names_stays_a_summary() {
+        let mut t = trace();
+        t.other_groups = 5;
+        let g = permission_graph_with(&result(t, None), GraphOptions { all_groups: true }).unwrap();
+        assert!(has_text(&g, "+5 further groups"));
     }
 
     #[test]
