@@ -145,6 +145,16 @@ that applies.
 - **Long membership lists** collapse in the GUI Analyze tab and the HTML
   report to the memberships that matter (decisive, deny-only, uncertain);
   CSV, JSON and the CLI keep the full list.
+- **Permission graph** (ADR 0077): the GUI `Graph` tab and the HTML
+  report draw the path as a lane diagram — account → token groups →
+  NTFS ACEs → NTFS → share ACEs → result, coloured by what each ACE did
+  (green Allow decided bits, red Deny decided bits, amber dashed
+  uncertain, grey dashed no effect / inherit-only / deny-only). It is
+  drawn from the engine's own decisions (`trace`, also in JSON), checked
+  against the explanation steps by the same invariant test. Limits: the
+  GUI shows the last Analyze result only; the report embeds graphs for
+  the first 500 rows and says so for the rest; results loaded from the
+  scan history have no graph (the trace is not stored).
 
 ### Scan, persistence, and export
 

@@ -10,6 +10,22 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Added
+
+- **Permission graph** (ADR 0077): a new GUI tab **Graph** shows the last
+  Analyze result as a lane diagram — account → token groups → NTFS ACEs →
+  NTFS → share ACEs → result. Green: an Allow decided bits; red: a Deny
+  decided bits; amber dashed: uncertain; grey dashed: no effect,
+  inherit-only or deny-only. Only groups an ACE names get a box, the rest
+  is "+N further groups"; an ACE on the account itself and an ACE lane
+  without any ACE for the account have their own box; lines that skip a
+  lane run below the boxes. The HTML report embeds the same diagram per
+  row (first 500 rows; further rows say so). Drawn from the engine's own
+  decisions — the new field `trace` of each result (also in JSON, omitted
+  when empty), checked against the explanation steps by the invariant
+  test. New crate `viz` (presentation only). The trace is not stored in
+  the scan history.
+
 ### Fixed
 
 - **CLI help:** `analyze` / `scan --output` said "Optional CSV export

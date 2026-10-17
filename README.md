@@ -160,7 +160,7 @@ It consists of two programs:
 
 | Program | Description |
 |---------|-------------|
-| `adpa-gui.exe` | Graphical interface (GUI) with seven tabs: Analyze, Groups, Scan Tree, Delta, Trusts, Shares, Info |
+| `adpa-gui.exe` | Graphical interface (GUI) with eight tabs: Analyze, Graph, Groups, Scan Tree, Delta, Trusts, Shares, Info |
 | `adpa.exe` | Command-line interface (CLI) for scripting and automation |
 
 Both programs analyze the same data and use the same permission logic.
@@ -273,7 +273,10 @@ invariant test over thousands of generated DACLs). An ACE that may or may
 not apply — User Account Control, a logon-dependent SID — is listed as
 `UNCERTAIN` with its own reason, and the result then reads NOT
 DETERMINABLE with the range. In a long membership list the GUI and the
-HTML report collapse the memberships that did not matter.
+HTML report collapse the memberships that did not matter. The `Graph`
+tab and the HTML report draw the same path as a lane diagram — which
+group brings which ACE, which ACE decided which bits, where the share
+limits the result.
 
 ## Using Stars
 
@@ -381,9 +384,9 @@ adpa.exe analyze --path "\\fileserver\Accounting\Reports" --user S-1-5-21-...
 ```
 Stars detects the UNC path automatically and factors the share permission into the calculation.
 
-### GUI — the seven tabs
+### GUI — the eight tabs
 
-Stars has exactly **seven tabs:** `Analyze`, `Groups`, `Scan Tree`, `Delta`, `Trusts`, `Shares`, `Info`. "Identity", "Trustees", and "Risk findings" are not separate tabs — they are sections inside the real tabs.
+Stars has exactly **eight tabs:** `Analyze`, `Graph`, `Groups`, `Scan Tree`, `Delta`, `Trusts`, `Shares`, `Info`. "Identity", "Trustees", and "Risk findings" are not separate tabs — they are sections inside the real tabs.
 
 #### `Analyze` tab
 
@@ -398,6 +401,10 @@ Inputs:
 Actions:
 - **Analyze** — identity-bound evaluation (NTFS and share rights, effective permission, full explanation chain), including a **Diagnostics block** listing every marker of this result (ℹ informational, ⚠ warning) — an understated right or an incomplete group resolution is visible right here, not only in exports.
 - **Who has access?** — path-centric trustee table of all ACEs (NTFS and share separated); unreadable ACLs, partially unevaluated ACEs and empty DACLs appear as explicit diagnostic rows.
+
+#### `Graph` tab
+
+Shows the last `Analyze` result as a lane diagram, read left to right: account → token groups → NTFS ACEs → NTFS → share ACEs → result. Green: an Allow decided bits · red: a Deny decided bits · amber dashed: uncertain (logon / session) · grey dashed: no effect, inherit-only or deny-only. Only groups an ACE names get a box; the rest is "+N further groups". The graph is drawn from the result's own decisions — the same as the numbered permission path, nothing computed anew — and the HTML report embeds the same diagram per row (ADR 0077).
 
 #### `Groups` tab
 
@@ -548,6 +555,7 @@ crates/
 ├── risk_engine/        — risk rules (6 implemented)
 ├── persistence/        — SQLite cache and scan history
 ├── exporter/           — CSV, JSON, HTML export
+├── viz/                — permission graph layout and SVG (presentation only)
 ├── update_manager/     — secure update installation
 ├── validation/         — input validation
 ├── cli/                — command-line program (adpa.exe)

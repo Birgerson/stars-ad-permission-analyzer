@@ -16,7 +16,7 @@ SMB permissions **without changing anything**.
 1. [What can Stars do?](#what-can-stars-do)
 2. [Installation and prerequisites](#installation-and-prerequisites)
 3. [First run — the GUI](#first-run--the-gui)
-4. [The seven GUI tabs](#the-five-gui-tabs)
+4. [The eight GUI tabs](#the-five-gui-tabs)
 5. [Identity input forms](#identity-input-forms)
 6. [Active Directory binding (optional)](#active-directory-binding-optional)
 7. [Local paths vs. SMB shares](#local-paths-vs-smb-shares)
@@ -121,13 +121,14 @@ access).
 
 ## First run — the GUI
 
-After starting Stars the main window shows **seven tabs:** `Analyze`,
-`Groups`, `Scan Tree`, `Delta`, `Trusts`, `Shares`, `Info`. **Recommended first workflow:**
+After starting Stars the main window shows **eight tabs:** `Analyze`,
+`Graph`, `Groups`, `Scan Tree`, `Delta`, `Trusts`, `Shares`, `Info`. **Recommended first workflow:**
 
 1. Open the **`Analyze`** tab — type an identity (user/group + SID)
    and a path. Hit "Analyze".
 2. Read the result: effective right, full explanation chain,
-   diagnostic markers.
+   diagnostic markers. The **`Graph`** tab shows the same result as a
+   diagram.
 3. Optional: "Who has access?" for the path-centric trustee table.
 
 If you only want to see what Stars can do at all, start with any local
@@ -136,13 +137,13 @@ and shows the engine in action.
 
 > **Important on terminology:** "Identity", "Trustees", and "Risk
 > findings" are **not separate tabs**. They are sections inside the
-> five real tabs (`Analyze`, `Groups`, `Scan Tree`, `Delta`, `Info`).
+> real tabs (`Analyze`, `Groups`, `Scan Tree`, `Delta`, `Info`).
 
 ---
 
 <a name="the-five-gui-tabs"></a>
 
-## The seven GUI tabs
+## The eight GUI tabs
 
 ### `Analyze` tab — single-path analysis
 
@@ -186,6 +187,45 @@ user can effectively do there.
   that the Analyze tab silently dropped every marker, so an
   understated right (unevaluated `sIDHistory`) or a flat SAM-fallback
   group resolution looked like a clean, complete answer.
+
+### `Graph` tab — the result as a diagram
+
+**Purpose:** See at a glance how the last `Analyze` result comes about:
+which group brings which ACE, which ACE decided which bits, and where the
+share limits the result.
+
+The graph is drawn from the result itself — the same decisions as the
+numbered permission path, nothing computed anew. Read it left to right:
+
+| Lane | What it shows |
+| --- | --- |
+| Account | the analyzed user or group |
+| Token groups | only the groups an ACE on this object names, with their route (`direct`, `via A → B`, `implicit`) and state (`deny-only`, `uncertain`, `decisive`); "the account itself" when an ACE names the account directly; "+N further groups" for all the others |
+| NTFS ACEs | each ACE that reaches the account, with its effect |
+| NTFS | the NTFS result |
+| Share ACEs | only when a share was evaluated |
+| Result | the effective right and the share value |
+
+**Colours:**
+
+- **green** — an Allow decided bits (on its layer: a green share ACE
+  decided share bits even when NTFS grants nothing),
+- **red** — a Deny decided bits,
+- **amber dashed** — uncertain: the group is in the token only for certain
+  logons or session states (for example an elevated session),
+- **grey dashed** — no effect, inherit-only (not on this object), or not
+  applied because the group is deny-only.
+
+A lane with "no ACE reaches the account" means that no ACE of that layer
+names the account or one of its groups — the permission path in the
+`Analyze` tab says why (for example an ACE only for interactive logons).
+Lines that skip a lane run below the boxes, so a line never passes
+through a box it does not connect.
+
+**Limits:** long names are shortened (the HTML report shows the full text
+as a tooltip); the graph shows the last `Analyze` result only — not scan
+rows and not results loaded from the scan history. The numbered
+permission path stays the complete explanation.
 
 ### `Groups` tab — which groups is a user in?
 
@@ -889,7 +929,10 @@ Via the **Export** menu (or `--output` flag in the CLI):
   markers as a comma-separated variant list.
 - **JSON** — variant-tagged diagnostic markers (`{ "kind":
   "IdentityNotInConfiguredLdapBase" }`), including `reason` texts for
-  the Failed markers. Suitable for scripts and SIEM ingest.
+  the Failed markers. Suitable for scripts and SIEM ingest. Each result
+  also carries `trace` — the structured form of the permission path that
+  the graph is drawn from (ACE outcomes and the groups they reach the
+  account through); it is left out when empty.
 - **HTML** — fully formatted audit report (Arial, dark theme) with:
   - risk findings sorted by severity, a Microsoft-blue `confirmed` badge
     for the ones whose evaluation was complete,
@@ -898,7 +941,12 @@ Via the **Export** menu (or `--output` flag in the CLI):
     grey (`ℹ`, expected/context), amber (`⚠`, worth a look), orange-red
     (`⚠`, likely a real gap). See the colour legend in
     [features-and-limitations.md](features-and-limitations.md).
-  - scan errors in their own section.
+  - scan errors in their own section,
+  - per row, next to the explanation, a collapsed **permission graph** —
+    the same diagram as the GUI's `Graph` tab, with the full texts as
+    tooltips. A report embeds graphs for the first 500 rows; further
+    rows say "Permission graph not embedded" (analyze such a path on
+    its own to see its graph).
 
 **The file extension picks the format** — in the CLI (`--output
 report.json`) and, since the gui review 2026-07-26, in the GUI too: the

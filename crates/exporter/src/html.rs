@@ -127,6 +127,8 @@ tr:hover td{background:#111d2e}
 details summary{cursor:pointer;color:#64b5f6;font-size:11px}
 details[open] summary{margin-bottom:4px}
 .step{padding:2px 0;color:#cfd8dc;font-size:11px}
+.graph-scroll{overflow-x:auto;max-width:900px;margin-top:6px;border-radius:6px}
+.graph-scroll svg{display:block}
 .memberships>summary{cursor:pointer;color:#90caf9;font-size:11px;padding:2px 0}
 </style>
 </head>
@@ -193,13 +195,18 @@ fn write_risk_table(s: &mut String, findings: &[RiskFinding]) -> Result<(), Core
     Ok(())
 }
 
+/// ADR 0077: the report embeds the permission graph for this many rows at
+/// most (about 4 KB each) — a scan of a large file server must not grow the
+/// report without bound. Rows beyond it say so in their explanation.
+const GRAPH_EMBED_LIMIT: usize = 500;
+
 fn write_permissions_table(
     s: &mut String,
     permissions: &[adpa_core::model::EffectivePermission],
 ) -> Result<(), CoreError> {
     s.push_str("<h2>Effective Permissions</h2>\n");
     s.push_str("<table><thead><tr><th>Path</th><th>User</th><th>Effective</th><th>NTFS</th><th>Share</th><th>Diagnostics</th><th>Explanation</th></tr></thead><tbody>\n");
-    for p in permissions {
+    for (row, p) in permissions.iter().enumerate() {
         let eff = NormalizedRights::new(p.effective_mask.0);
         let ntfs = NormalizedRights::new(p.ntfs_mask.0);
         let share = p.share_mask.map(|m| NormalizedRights::new(m.0));
@@ -237,6 +244,20 @@ fn write_permissions_table(
         }
         if details_open {
             steps_html.push_str("</details>");
+        }
+        // ADR 0077: the permission graph of this result, the same SVG as in
+        // the GUI's Graph tab. Built from the result only; every text in it
+        // is XML-escaped by `viz`.
+        if row >= GRAPH_EMBED_LIMIT {
+            if !p.trace.is_empty() {
+                steps_html.push_str(&format!(
+                    "<div class=\"step\">• Permission graph not embedded: the report embeds it for the first {GRAPH_EMBED_LIMIT} rows only. Analyze this path on its own to see it.</div>"
+                ));
+            }
+        } else if let Some(svg) = viz::permission_graph_svg(p) {
+            steps_html.push_str(&format!(
+                "<details class=\"graph\"><summary>permission graph</summary><div class=\"graph-scroll\">{svg}</div></details>"
+            ));
         }
 
         // The diagnostics column unifies four incompleteness sources:
@@ -869,6 +890,41 @@ mod tests {
             diagnostics: vec![],
             trace: Default::default(),
         }
+    }
+
+    /// ADR 0077: a result with a trace carries its permission graph; one
+    /// without (stored before the trace existed) carries none.
+    #[test]
+    fn permissions_table_embeds_the_permission_graph() {
+        use adpa_core::model::{AceEffect, AceKind, AceOutcome, PermissionTrace, TraceLayer};
+        let mut s = String::new();
+        write_permissions_table(&mut s, &[perm()]).unwrap();
+        assert!(!s.contains("<svg"), "no trace, no graph");
+        let mut p = perm();
+        p.trace = PermissionTrace {
+            aces: vec![AceOutcome {
+                layer: TraceLayer::Ntfs,
+                kind: AceKind::Allow,
+                sid: p.identity.sid.clone(),
+                trustee: "test.user <&>".to_owned(),
+                mask: AccessMask(0x0012_0089),
+                inherited: false,
+                effect: AceEffect::Decided { bits: 0x0012_0089 },
+            }],
+            groups: vec![],
+            other_groups: 0,
+        };
+        let mut s = String::new();
+        write_permissions_table(&mut s, std::slice::from_ref(&p)).unwrap();
+        assert!(s.contains("permission graph</summary>") && s.contains("<svg"));
+        assert!(s.contains("test.user &lt;&amp;&gt;") && !s.contains("test.user <&>"));
+
+        // Beyond the limit the graph is not embedded, and the row says so.
+        let rows = vec![p; super::GRAPH_EMBED_LIMIT + 1];
+        let mut s = String::new();
+        write_permissions_table(&mut s, &rows).unwrap();
+        assert_eq!(s.matches("<svg").count(), super::GRAPH_EMBED_LIMIT);
+        assert_eq!(s.matches("Permission graph not embedded").count(), 1);
     }
 
     #[test]

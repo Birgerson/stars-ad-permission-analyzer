@@ -10,6 +10,7 @@ members = [
     "crates/risk_engine",
     "crates/persistence",
     "crates/exporter",
+    "crates/viz",
     "crates/update_manager",
     "crates/validation",
     "crates/cli",

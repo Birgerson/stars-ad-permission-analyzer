@@ -8,6 +8,7 @@ authors.workspace = true
 adpa_core = { path = "../core" }
 permission_engine = { path = "../permission_engine" }
 share_scanner = { path = "../share_scanner" }
+viz = { path = "../viz" }
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
