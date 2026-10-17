@@ -8,7 +8,7 @@
 Stars fits if **at least one** of these is true for you:
 
 - You are sitting on a fileserver and need to know: *“Who can do what on `D:\Shares\Finance` — and through which group chain?”*
-- You need to explain after an audit finding **why** a user has Modify (or why not).
+- You need to explain after an audit finding **why** a user has Modify (or why not) — as a step-by-step path and as a diagram that shows which group brings which ACE (GUI `Graph` tab, HTML report).
 - You want a tool that changes **nothing** in AD, NTFS, or SMB — not even “just to fix it”.
 - You work with nested AD groups, local server groups (`BUILTIN\Administrators`, `Users`), Deny ACEs, and SMB shares whose restriction must be combined with the NTFS DACL.
 - You just need to know **which groups a user is in** — including the nested chain and whether any of them are *privileged* (Domain Admins and the like) — without picking a path. The `Groups` tab / `adpa groups` answers exactly that.

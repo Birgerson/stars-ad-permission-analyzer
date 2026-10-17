@@ -1071,6 +1071,103 @@ pub struct EffectivePermission {
     /// finding 3).
     #[serde(default)]
     pub diagnostics: Vec<PermissionDiagnostic>,
+
+    /// The structured twin of the explanation path (ADR 0077): what each
+    /// relevant ACE did and which token group it reached the account
+    /// through — for the permission graph and machine consumers. Empty for
+    /// results stored before it existed.
+    #[serde(default, skip_serializing_if = "PermissionTrace::is_empty")]
+    pub trace: PermissionTrace,
+}
+
+/// ADR 0077: the structured explanation of one result — only what the
+/// permission graph needs: the ACEs that applied or may apply, and the
+/// token groups they reached the account through.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PermissionTrace {
+    /// NTFS ACEs first (stored order), then share ACEs (stored order).
+    #[serde(default)]
+    pub aces: Vec<AceOutcome>,
+    /// The token groups (and implicit well-knowns) an ACE in `aces` names —
+    /// not every membership: a result of an account in thousands of groups
+    /// stays small.
+    #[serde(default)]
+    pub groups: Vec<TraceGroup>,
+    /// Memberships without an ACE in `aces` — shown as "+N further groups".
+    #[serde(default)]
+    pub other_groups: usize,
+}
+
+impl PermissionTrace {
+    pub fn is_empty(&self) -> bool {
+        self.aces.is_empty() && self.groups.is_empty() && self.other_groups == 0
+    }
+}
+
+/// Which DACL an ACE of the trace belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TraceLayer {
+    Ntfs,
+    Share,
+}
+
+/// What one ACE did for the result (ADR 0077) — the same decision the
+/// explanation path states in words.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AceOutcome {
+    pub layer: TraceLayer,
+    pub kind: AceKind,
+    pub sid: Sid,
+    /// `DOMAIN\name (SID)`, or the SID when no name is known.
+    pub trustee: String,
+    pub mask: AccessMask,
+    pub inherited: bool,
+    pub effect: AceEffect,
+}
+
+/// The effect of one ACE on the result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "effect")]
+pub enum AceEffect {
+    /// Applied and decided these bits (Allow: granted, Deny: denied).
+    Decided { bits: u32 },
+    /// Applied, but every bit was already decided by an earlier ACE.
+    NoEffect,
+    /// Matches the token but only propagates to children.
+    InheritOnly,
+    /// Whether it applies depends on the logon / session (it bounds the
+    /// result).
+    Uncertain { reason: String },
+    /// Certainly does not apply although its trustee is a token group — an
+    /// Allow for a certainly deny-only group (ADR 0076).
+    NotApplied { reason: String },
+}
+
+/// How a token group of the trace is held in the token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TraceGroupState {
+    /// A membership, enabled in the token.
+    Member,
+    /// A membership that is deny-only (User Account Control).
+    DenyOnly,
+    /// Present only for certain logons or session states.
+    Uncertain,
+    /// An implicit well-known of every token of this logon (Everyone,
+    /// Authenticated Users, NETWORK, INTERACTIVE, …).
+    Implicit,
+}
+
+/// A token group the trace refers to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceGroup {
+    pub sid: Sid,
+    /// `DOMAIN\name (SID)`, or the SID when no name is known.
+    pub display: String,
+    /// `direct`, `via A → B`, or the reason of an implicit / uncertain SID.
+    pub route: String,
+    pub state: TraceGroupState,
+    /// An ACE for this group decided bits of the result.
+    pub decisive: bool,
 }
 
 impl EffectivePermission {
@@ -2561,7 +2658,23 @@ mod tests {
             unsupported_ace_count: 0,
             matched_aces: vec![],
             diagnostics: vec![],
+            trace: Default::default(),
         }
+    }
+
+    /// ADR 0077: an empty trace is not written, and rows written before
+    /// the trace existed still load.
+    #[test]
+    fn trace_is_optional_in_serialised_results() {
+        let p = permission();
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("\"trace\""), "{json}");
+        let back: EffectivePermission = serde_json::from_str(&json).unwrap();
+        assert!(back.trace.is_empty());
+        let mut q = permission();
+        q.trace.other_groups = 3;
+        let json = serde_json::to_string(&q).unwrap();
+        assert!(json.contains("\"other_groups\":3"), "{json}");
     }
 
     /// Review CR-2: the upper bound a risk rule judges.

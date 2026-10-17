@@ -144,6 +144,9 @@ jobs:
             - NTFS ACL analysis with the full permission path — every bit of
               the result accounted for, share ACEs and the limiting side
               included — and a path-centric "who has access?" trustee view
+            - Permission graph: the same path as a lane diagram (account →
+              groups → ACEs → NTFS → share → result) in the GUI Graph tab
+              and the HTML report
             - Results that cannot be determined read NOT DETERMINABLE with
               the reason and the range — never a guessed value as fact
             - User Account Control, Guest and anonymous decided from the

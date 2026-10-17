@@ -1,0 +1,10 @@
+[package]
+name = "viz"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Permission graph (ADR 0077): lane layout and SVG of one EffectivePermission — presentation only, no permission logic"
+
+[dependencies]
+adpa_core = { path = "../core" }
+permission_engine = { path = "../permission_engine" }

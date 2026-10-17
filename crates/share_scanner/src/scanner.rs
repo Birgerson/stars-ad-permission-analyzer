@@ -868,6 +868,43 @@ pub fn share_decision_steps(
     steps
 }
 
+/// ADR 0077: the share ACE decisions as trace entries for the permission
+/// graph — the same decisions as [`share_decision_steps`]; ACEs whose
+/// trustee is not in the token are left out, as there.
+pub fn share_ace_outcomes(
+    decisions: &[ShareAceDecision],
+    sid_names: &std::collections::BTreeMap<String, String>,
+) -> Vec<adpa_core::model::AceOutcome> {
+    use adpa_core::model::{AceEffect, AceOutcome, TraceLayer};
+    decisions
+        .iter()
+        .filter_map(|d| {
+            let effect = match d.outcome {
+                ShareAceOutcome::Decided(bits) => AceEffect::Decided { bits },
+                ShareAceOutcome::NoEffect => AceEffect::NoEffect,
+                ShareAceOutcome::Uncertain => AceEffect::Uncertain {
+                    reason: "the trustee is in the token only for certain logons or session \
+                             states; not in the shown share value"
+                        .to_owned(),
+                },
+                ShareAceOutcome::NotApplicable => return None,
+            };
+            Some(AceOutcome {
+                layer: TraceLayer::Share,
+                kind: d.kind,
+                sid: d.sid.clone(),
+                trustee: match sid_names.get(&d.sid.0) {
+                    Some(name) => format!("{name} ({})", d.sid.0),
+                    None => d.sid.0.clone(),
+                },
+                mask: d.mask,
+                inherited: false,
+                effect,
+            })
+        })
+        .collect()
+}
+
 /// Stored-order share walk with separate Allow / Deny predicates — the same
 /// per-bit "first decision wins" rule as [`effective_share_mask`].
 fn share_walk(

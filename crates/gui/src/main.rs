@@ -432,6 +432,17 @@ slint::slint! {
     // the step's number in the full path (CSV / CLI numbering), `collapsible`
     // marks a membership that did not matter for the result, `toggle` is the
     // single line that shows / hides those (`hidden_count` of them).
+    // ADR 0077: one text of the permission graph, drawn natively on top of
+    // the shape-only SVG (Slint's SVG renderer has no fonts). `y` is the top
+    // of the text box in graph pixels.
+    export struct GraphTextVm {
+        x: float,
+        y: float,
+        text: string,
+        strong: bool,
+        bold: bool,
+    }
+
     export struct StepVm {
         number: int,
         text: string,
@@ -601,6 +612,12 @@ slint::slint! {
         in property <[TrusteeRowVm]> a-trustees;
         in property <bool>           a-has-trustees;
         in property <bool>           a-trustees-running;
+        // ADR 0077: the permission graph of the last Analyze result — the
+        // same SVG the HTML report embeds, rendered from the result's trace.
+        in property <image>  gr-image;
+        in property <[GraphTextVm]> gr-texts;
+        in property <bool>   gr-has-graph;
+        in property <string> gr-caption: "Run an analysis in the Analyze tab first — the graph shows its last result.";
 
         callback analyze-clicked();
         callback analyze-trustees-clicked();
@@ -1207,6 +1224,53 @@ slint::slint! {
                                 }
                             }
                         }
+                    }
+                }
+
+                // ============================================================
+                // Tab: Graph (ADR 0077)
+                // ============================================================
+                Tab {
+                    title: "Graph";
+
+                    VerticalBox {
+                        padding: Theme.spacing-md;
+                        spacing: Theme.spacing-sm;
+
+                        Text {
+                            text: root.gr-caption;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: "Read left to right: account → token groups → ACEs → NTFS → share → result. Green: an Allow decided bits · red: a Deny decided bits · amber dashed: uncertain (counts only for certain logons) · grey dashed: no effect, inherit-only or deny-only. The numbered permission path in the Analyze tab is the full explanation; hover tooltips are in the HTML report.";
+                            color: Theme.text-muted;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                        if root.gr-has-graph: ScrollView {
+                            vertical-stretch: 1;
+                            viewport-width: max(self.visible-width, root.gr-image.width * 1px);
+                            viewport-height: max(self.visible-height, root.gr-image.height * 1px);
+                            Image {
+                                x: 0px;
+                                y: 0px;
+                                width: root.gr-image.width * 1px;
+                                height: root.gr-image.height * 1px;
+                                source: root.gr-image;
+                            }
+                            for t in root.gr-texts: Text {
+                                x: t.x * 1px;
+                                y: t.y * 1px;
+                                text: t.text;
+                                font-size: 12px;
+                                font-weight: t.bold ? 600 : 400;
+                                // Fixed colours: the graph canvas is light in
+                                // both themes, like in the HTML report.
+                                color: t.strong ? #1f2937 : #6b7280;
+                            }
+                        }
+                        if !root.gr-has-graph: Rectangle { vertical-stretch: 1; }
                     }
                 }
 
@@ -3141,6 +3205,7 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         ui.set_a_mask_hex("".into());
         ui.set_a_share_line("".into());
         ui.set_a_explanation(slint::ModelRc::new(slint::VecModel::<StepVm>::default()));
+        clear_graph(&ui, "Analysis running — the graph follows its result.");
 
         if let Err(e) = req_tx.send(WorkerRequest::Analyze {
             path,
@@ -3508,6 +3573,69 @@ fn handle_groups_done(ui: &MainWindow, result: Result<GroupsViewData, String>) {
     }
 }
 
+/// ADR 0077: no graph shown, with the reason why.
+fn clear_graph(ui: &MainWindow, caption: &str) {
+    ui.set_gr_has_graph(false);
+    ui.set_gr_image(slint::Image::default());
+    ui.set_gr_texts(slint::ModelRc::new(
+        slint::VecModel::<GraphTextVm>::default(),
+    ));
+    ui.set_gr_caption(caption.into());
+}
+
+/// ADR 0077: the Graph tab shows the permission graph of this result —
+/// the layout from `viz`, the same one the HTML report embeds as SVG. The
+/// shapes come as a text-free SVG and the texts are drawn natively on top,
+/// at the layout's coordinates. No graph is drawn for a result without a
+/// trace; a render failure is said, not hidden.
+fn apply_graph(ui: &MainWindow, perm: &EffectivePermission) {
+    let Some(graph) = viz::permission_graph(perm) else {
+        clear_graph(
+            ui,
+            "No graph for this result: no ACE on this object reaches the account or its groups. The permission path in the Analyze tab explains the result (for example a missing or empty DACL).",
+        );
+        return;
+    };
+    match slint::Image::load_from_svg_data(graph.to_svg_shapes().as_bytes()) {
+        Ok(image) => {
+            ui.set_gr_image(image);
+            let texts: Vec<GraphTextVm> = graph
+                .texts
+                .iter()
+                .map(|t| GraphTextVm {
+                    x: t.x as f32,
+                    // Baseline (SVG) to the top of the text box: one font
+                    // size up is close enough for 12 px Segoe UI.
+                    y: (t.baseline - viz::FONT_SIZE) as f32,
+                    text: t.text.as_str().into(),
+                    strong: t.style == viz::TextStyle::Primary,
+                    bold: t.style.bold(),
+                })
+                .collect();
+            ui.set_gr_texts(slint::ModelRc::new(slint::VecModel::from(texts)));
+            ui.set_gr_has_graph(true);
+            ui.set_gr_caption(
+                format!(
+                    "Permission graph — {} on {}",
+                    perm.identity
+                        .name
+                        .as_deref()
+                        .unwrap_or(&perm.identity.sid.0),
+                    perm.path.0
+                )
+                .into(),
+            );
+        }
+        Err(e) => {
+            tracing::warn!("permission graph could not be rendered: {e}");
+            clear_graph(
+                ui,
+                "The graph could not be rendered; the permission path in the Analyze tab is complete. The HTML report embeds the graph as well.",
+            );
+        }
+    }
+}
+
 fn apply_analyze_result(
     ui: &MainWindow,
     result: Result<EffectivePermission, String>,
@@ -3539,6 +3667,7 @@ fn apply_analyze_result(
                 &all, false,
             ))));
             ANALYZE_STEPS.with(|s| *s.borrow_mut() = all);
+            apply_graph(ui, &perm);
             // GUI-1 (gui review 2026-07-26): surface the structured
             // diagnostics of this very result. Before this, the Analyze tab
             // — the single-path view an admin reaches for first — dropped
@@ -3588,6 +3717,7 @@ fn apply_analyze_result(
             ui.set_a_diagnostics(slint::ModelRc::new(
                 slint::VecModel::<DiagnosticVm>::default(),
             ));
+            clear_graph(ui, "No graph: the last analysis failed.");
             ui.set_a_status(format!("Analysis failed: {e}").into());
             ui.set_a_status_is_error(true);
         }
@@ -4698,6 +4828,7 @@ mod tests {
             unsupported_ace_count: 0,
             matched_aces: vec![],
             diagnostics: vec![],
+            trace: Default::default(),
         }
     }
 

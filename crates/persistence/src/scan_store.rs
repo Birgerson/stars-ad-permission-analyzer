@@ -601,6 +601,7 @@ impl RawPermRow {
             unsupported_ace_count: unsupported_ace_count.max(0) as usize,
             matched_aces,
             diagnostics,
+            trace: Default::default(),
         })
     }
 }
@@ -717,6 +718,7 @@ mod tests {
             unsupported_ace_count: 0,
             matched_aces: vec![],
             diagnostics: vec![],
+            trace: Default::default(),
         }
     }
 

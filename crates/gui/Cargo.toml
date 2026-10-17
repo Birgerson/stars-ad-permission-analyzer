@@ -18,6 +18,7 @@ ad_resolver = { path = "../ad_resolver" }
 persistence = { path = "../persistence" }
 risk_engine = { path = "../risk_engine" }
 exporter = { path = "../exporter" }
+viz = { path = "../viz" }
 update_manager = { path = "../update_manager" }
 
 anyhow.workspace = true

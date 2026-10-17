@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 use crate::error::CoreError;
 use crate::model::{
-    AccessContext, EffectivePermission, FileSystemObject, GroupMembership, Identity,
+    AccessContext, AceOutcome, EffectivePermission, FileSystemObject, GroupMembership, Identity,
     LocalGroupEvalStatus, PathTrustees, RemoteUacFiltering, RiskFinding, ScanError,
     ShareMaskStatus, Sid,
 };
@@ -141,6 +141,10 @@ pub struct PermissionEvaluationInput {
     /// `Some(true)` puts Everyone into an anonymous token, `Some(false)`
     /// leaves it out; `None` (not read) keeps it bounded.
     pub anonymous_everyone: Option<bool>,
+    /// ADR 0077: what each share ACE decided (from the share scanner, same
+    /// DACL read as the share mask) — merged into the result's trace so NTFS
+    /// and share ACEs are linked to the token groups the same way.
+    pub share_trace: Vec<AceOutcome>,
     /// Access context (local interactive / remote SMB / unspecified).
     /// Controls which well-known SIDs are added to the token implicitly
     /// (e.g. `NETWORK` for SMB, `INTERACTIVE` for local). The default
