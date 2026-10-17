@@ -10,6 +10,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+## [1.13.0] — 2026-10-17
+
+**The permission path as a picture — and one false warning less.**
+
+A new Graph tab and the HTML report draw how a right comes about: which
+group brings which ACE, which ACE decided which bits, where the share
+limits the result. Drawn from the engine's own decisions, never computed
+anew. A new lab fixture covering every AD group kind (domain local,
+global, universal; security and distribution) and inheritance breaks
+matched Windows on 104 of 104 rows — and showed that Stars wrongly called
+healthy multi-level inherited DACLs non-canonical; fixed.
+
 ### Added
 
 - **Permission graph** (ADR 0077): a new GUI tab **Graph** shows the last
