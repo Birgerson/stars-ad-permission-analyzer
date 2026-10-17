@@ -101,7 +101,8 @@ A NULL DACL on the share is interpreted as "no restriction over SMB" — not as 
 
 During evaluation Stars collects structured **diagnostic markers**:
 
-* `NonCanonicalDaclOrder` — the order of ACEs does not match Windows' canonical pattern (`explicit deny → explicit allow → inherited deny → inherited allow`). Windows still evaluates the DACL in **stored order**; the tool surfaces this as an audit hint, since a non-canonical DACL usually arose from manual editing.
+* `NonCanonicalDaclOrder` — the order of ACEs cannot be canonical: an explicit ACE after an inherited one, or an explicit Allow before an explicit Deny. Windows still evaluates the DACL in **stored order**; the tool surfaces this as an audit hint, since a non-canonical DACL usually arose from manual editing.
+* `InheritedDenyAfterInheritedAllow` — an inherited Allow precedes an inherited Deny. Windows orders inherited ACEs per ancestor level (parent first, deny before allow within a level), so this is canonical when the two come from different levels; the DACL does not record the level, so the tool reports that it cannot tell (known limitation L9).
 * `UnsupportedShareAces { count }` — the share DACL contained ACE types the parser could not evaluate (object, callback, or vendor-specific ACEs). The effective mask is then a **lower bound**; a hidden Deny could flip the result.
 * `unsupported_ace_count > 0` (NTFS side) — the same thing on the NTFS DACL.
 

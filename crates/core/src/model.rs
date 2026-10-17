@@ -1317,6 +1317,16 @@ pub enum PermissionDiagnostic {
     /// `at_index` is the index of the first ACE that breaks the order.
     NonCanonicalDaclOrder { at_index: usize },
 
+    /// Known limitation L9: an inherited Allow precedes an inherited Deny and
+    /// nothing else breaks the order. Windows sorts inherited ACEs per
+    /// ancestor level (parent first, deny before allow within a level), so
+    /// this is canonical when the two come from different levels — the DACL
+    /// does not record which ancestor an ACE came from, so Stars says it
+    /// cannot tell instead of calling the DACL non-canonical. Evaluation is
+    /// unaffected (stored order, like Windows). `at_index` is the index of
+    /// the first inherited Deny after an inherited Allow.
+    InheritedDenyAfterInheritedAllow { at_index: usize },
+
     /// The share-side DACL parser skipped ACE types (e.g. object,
     /// callback or vendor-specific ACEs). The share mask is therefore
     /// potentially incomplete — risk findings for this permission must
@@ -1746,6 +1756,9 @@ impl PermissionDiagnostic {
     /// carrying `count`/`reason`/`detail` need interpolation.
     pub fn summary(&self) -> String {
         match self {
+            PermissionDiagnostic::InheritedDenyAfterInheritedAllow { at_index } => format!(
+                "An inherited Allow ACE precedes an inherited Deny ACE (first at ACE #{at_index}). This is canonical when they come from different ancestor levels (Windows orders inherited ACEs level by level) and non-canonical when they come from the same one — the DACL alone does not say which. The result is unaffected: it is evaluated in stored order like Windows."
+            ),
             PermissionDiagnostic::NonCanonicalDaclOrder { at_index } => format!(
                 "Non-canonical DACL order (first at ACE #{at_index}); evaluated in \
                  stored order like Windows, may differ from canonical expectations."
@@ -1948,6 +1961,7 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::GroupResolutionIncomplete { .. } => Some(UncertainLayer::Token),
             // Informational — the result itself is exact.
             PermissionDiagnostic::NonCanonicalDaclOrder { .. }
+            | PermissionDiagnostic::InheritedDenyAfterInheritedAllow { .. }
             | PermissionDiagnostic::IdentityDisabled
             | PermissionDiagnostic::IdentityDisabledStatusUnknown
             | PermissionDiagnostic::OwnerRightsAceApplied
@@ -1972,6 +1986,7 @@ impl PermissionDiagnostic {
         match self {
             // Correct or expected context — no action, grey.
             PermissionDiagnostic::NonCanonicalDaclOrder { .. }
+            | PermissionDiagnostic::InheritedDenyAfterInheritedAllow { .. }
             | PermissionDiagnostic::IdentityDisabled
             | PermissionDiagnostic::IdentityDisabledStatusUnknown
             | PermissionDiagnostic::OwnerRightsAceApplied

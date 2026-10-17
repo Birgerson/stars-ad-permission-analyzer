@@ -229,7 +229,8 @@ out; the report font is Arial.
 
 | Marker | Attention | Risk `incomplete`? | Meaning |
 | --- | --- | --- | --- |
-| `NonCanonicalDaclOrder { at_index }` | Neutral | no | DACL not in Windows-canonical order; AccessCheck runs in stored order — the result is exact but may diverge from a canonical expectation. |
+| `NonCanonicalDaclOrder { at_index }` | Neutral | no | DACL not in Windows-canonical order (an explicit ACE after an inherited one, or an explicit Allow before an explicit Deny); AccessCheck runs in stored order — the result is exact but may diverge from a canonical expectation. |
+| `InheritedDenyAfterInheritedAllow { at_index }` | Neutral | no | An inherited Allow precedes an inherited Deny — canonical across ancestor levels, not within one; the DACL does not record the level, so Stars says it cannot tell instead of calling the DACL non-canonical (known limitation L9). The result is exact. |
 | `IdentityDisabled` | Neutral | no | Account disabled in AD (`UF_ACCOUNTDISABLE`). ACL-theoretical rights are correct, but it normally cannot authenticate. |
 | `IdentityDisabledStatusUnknown` | Neutral | no | The `disabled` flag could not be determined (SAM path / no LDAP user object). |
 | `OwnerRightsAceApplied` | Neutral | no | An OWNER RIGHTS (`S-1-3-4`) ACE governs the owner's rights; the implicit owner grant was suppressed. Exact — informational. |

@@ -1101,37 +1101,70 @@ fn collect_matched_aces(
 /// and exports.
 fn collect_diagnostics(dacl: &[AceEntry], path: &str) -> Vec<PermissionDiagnostic> {
     let mut out = Vec::new();
-    if let Some(at) = first_non_canonical_position(dacl) {
-        warn!(
-            path,
-            at,
-            "DACL ordering differs from single-level canonical form — evaluation follows \
-             stored ACE order (matches Windows AccessCheck). Note: with multi-level \
-             inheritance this ordering can be legitimate; see docs/known-limitations.md"
-        );
-        out.push(PermissionDiagnostic::NonCanonicalDaclOrder { at_index: at });
+    match dacl_order_finding(dacl) {
+        Some(DaclOrderFinding::NonCanonical(at)) => {
+            warn!(
+                path,
+                at,
+                "DACL is not in canonical order — evaluation follows stored ACE order \
+                 (matches Windows AccessCheck)"
+            );
+            out.push(PermissionDiagnostic::NonCanonicalDaclOrder { at_index: at });
+        }
+        Some(DaclOrderFinding::InheritedLevelsUnknown(at)) => {
+            debug!(
+                path,
+                at,
+                "inherited Deny after inherited Allow — canonical across ancestor levels, \
+                 not decidable from this DACL (known limitation L9)"
+            );
+            out.push(PermissionDiagnostic::InheritedDenyAfterInheritedAllow { at_index: at });
+        }
+        None => {}
     }
     out
 }
 
-/// Windows-canonical DACL order: each ACE has a monotonically increasing
-/// phase 0 (explicit deny) → 1 (explicit allow) → 2 (inherited deny) →
-/// 3 (inherited allow). Returns the index of the first ACE that violates it.
-fn first_non_canonical_position(dacl: &[AceEntry]) -> Option<usize> {
-    let mut max_phase = 0u8;
+/// What the order of a DACL says about canonical form (known limitation L9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DaclOrderFinding {
+    /// Never canonical: an explicit ACE after an inherited one, or an
+    /// explicit Allow before an explicit Deny. Index of the first such ACE.
+    NonCanonical(usize),
+    /// Only an inherited Deny after an inherited Allow: canonical when they
+    /// come from different ancestor levels, which the DACL does not record.
+    /// Index of the first such Deny.
+    InheritedLevelsUnknown(usize),
+}
+
+fn dacl_order_finding(dacl: &[AceEntry]) -> Option<DaclOrderFinding> {
+    let mut seen_inherited = false;
+    let mut seen_explicit_allow = false;
+    let mut seen_inherited_allow = false;
+    let mut ambiguous = None;
     for (i, ace) in dacl.iter().enumerate() {
-        let phase: u8 = match (ace.inherited, &ace.kind) {
-            (false, AceKind::Deny) => 0,
-            (false, AceKind::Allow) => 1,
-            (true, AceKind::Deny) => 2,
-            (true, AceKind::Allow) => 3,
-        };
-        if phase < max_phase {
-            return Some(i);
+        match (ace.inherited, &ace.kind) {
+            (false, AceKind::Deny) if seen_inherited || seen_explicit_allow => {
+                return Some(DaclOrderFinding::NonCanonical(i))
+            }
+            (false, AceKind::Allow) if seen_inherited => {
+                return Some(DaclOrderFinding::NonCanonical(i))
+            }
+            (false, AceKind::Deny) => {}
+            (false, AceKind::Allow) => seen_explicit_allow = true,
+            (true, AceKind::Deny) => {
+                seen_inherited = true;
+                if seen_inherited_allow && ambiguous.is_none() {
+                    ambiguous = Some(i);
+                }
+            }
+            (true, AceKind::Allow) => {
+                seen_inherited = true;
+                seen_inherited_allow = true;
+            }
         }
-        max_phase = phase;
     }
-    None
+    ambiguous.map(DaclOrderFinding::InheritedLevelsUnknown)
 }
 
 /// Human-readable label for the source kind shown in the explanation.
@@ -3991,10 +4024,71 @@ mod tests {
             deny_ace(USER, MASK_READ, false),
         ];
         assert_eq!(
-            super::first_non_canonical_position(&dacl),
-            Some(1),
+            super::dacl_order_finding(&dacl),
+            Some(super::DaclOrderFinding::NonCanonical(1)),
             "deny at index 1 follows allow at index 0 — non-canonical"
         );
+    }
+
+    /// Known limitation L9, lab case 2026-10-17 (a child folder of the DC-01
+    /// group-kind fixture): an inherited Allow from the parent ahead of an inherited Deny from the
+    /// grandparent is canonical in Windows. The DACL does not record the
+    /// level, so Stars must not call it non-canonical — it reports that it
+    /// cannot tell.
+    #[test]
+    fn inherited_deny_after_inherited_allow_is_not_called_non_canonical() {
+        use adpa_core::model::PermissionDiagnostic;
+        let dacl = vec![
+            allow_ace(USER, MASK_READ, true), // inherited from the parent
+            deny_ace(USER, MASK_WRITE, true), // inherited from the grandparent
+            allow_ace(USER, MASK_MODIFY, true),
+        ];
+        assert_eq!(
+            super::dacl_order_finding(&dacl),
+            Some(super::DaclOrderFinding::InheritedLevelsUnknown(1))
+        );
+        let p = eval(user(USER), vec![], fso(None, dacl), None);
+        assert_eq!(
+            p.diagnostics,
+            vec![PermissionDiagnostic::InheritedDenyAfterInheritedAllow { at_index: 1 }]
+        );
+        assert!(p.effective_determinable(), "informational only");
+        let text = p.diagnostics[0].summary();
+        assert!(text.contains("different ancestor levels") && text.contains("unaffected"));
+        assert!(!text.to_lowercase().starts_with("non-canonical"));
+    }
+
+    /// Every order that is never canonical stays NonCanonical, even when an
+    /// ambiguous inherited pair comes first.
+    #[test]
+    fn definite_order_violations_stay_non_canonical() {
+        use super::DaclOrderFinding::NonCanonical;
+        // explicit Allow after an inherited ACE
+        let a = vec![
+            allow_ace(USER, MASK_READ, true),
+            allow_ace(USER, MASK_READ, false),
+        ];
+        assert_eq!(super::dacl_order_finding(&a), Some(NonCanonical(1)));
+        // explicit Deny after an inherited ACE
+        let b = vec![
+            allow_ace(USER, MASK_READ, true),
+            deny_ace(USER, MASK_READ, false),
+        ];
+        assert_eq!(super::dacl_order_finding(&b), Some(NonCanonical(1)));
+        // explicit Deny after an explicit Allow
+        let c = vec![
+            deny_ace(USER, MASK_WRITE, false),
+            allow_ace(USER, MASK_READ, false),
+            deny_ace(USER, MASK_READ, false),
+        ];
+        assert_eq!(super::dacl_order_finding(&c), Some(NonCanonical(2)));
+        // ambiguous pair first, definite violation later: definite wins
+        let d = vec![
+            allow_ace(USER, MASK_READ, true),
+            deny_ace(USER, MASK_WRITE, true),
+            allow_ace(USER, MASK_READ, false),
+        ];
+        assert_eq!(super::dacl_order_finding(&d), Some(NonCanonical(2)));
     }
 
     /// Follow-up finding 3: a non-canonical DACL must surface as a
@@ -4260,7 +4354,7 @@ mod tests {
             deny_ace(USER, MASK_WRITE, true),  // inherited deny
             allow_ace(USER, MASK_READ, true),  // inherited allow
         ];
-        assert_eq!(super::first_non_canonical_position(&dacl), None);
+        assert_eq!(super::dacl_order_finding(&dacl), None);
     }
 
     // --- Finding 4: AccessContext / kontextspezifische Well-Known-SIDs ---
