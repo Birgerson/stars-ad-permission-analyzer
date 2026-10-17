@@ -26,7 +26,7 @@ use adpa_core::{
         ShareEvalStatus, ShareMaskStatus, Sid, TraceGroup, TraceGroupState, TraceLayer,
         UncertainLayer, Uncertainty,
     },
-    traits::{PermissionEvaluationInput, PermissionEvaluator},
+    traits::{PermissionEvaluationInput, PermissionEvaluator, SelectiveAuthenticationCheck},
 };
 
 use crate::mask::{
@@ -400,9 +400,37 @@ impl PermissionEvaluator for DefaultPermissionEngine {
                 home_only_groups: t.home_only_groups.clone(),
                 sid_filtered: t.sid_filtered.clone(),
             });
-            if t.selective_authentication {
+            // ADR 0079: with the Selective Authentication check done for the
+            // target, the trust's effect is modelled — the caveat stays only
+            // where no check could be made.
+            if t.selective_authentication && input.selective_authentication.is_none() {
                 diagnostics.push(PermissionDiagnostic::TrustBoundaryEffectsNotModeled);
             }
+        }
+        // ADR 0079 (L4): Selective Authentication decides whether the account
+        // may log on to the target at all.
+        let mut logon_refused = false;
+        if let Some(check) = &input.selective_authentication {
+            diagnostics.push(match check {
+                SelectiveAuthenticationCheck::Allowed { server, via } => {
+                    PermissionDiagnostic::SelectiveAuthenticationAllowed {
+                        server: server.clone(),
+                        via: via.clone(),
+                    }
+                }
+                SelectiveAuthenticationCheck::Denied { server } => {
+                    logon_refused = true;
+                    PermissionDiagnostic::SelectiveAuthenticationDenied {
+                        server: server.clone(),
+                    }
+                }
+                SelectiveAuthenticationCheck::Unknown { server, reason } => {
+                    PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                        server: server.clone(),
+                        reason: reason.clone(),
+                    }
+                }
+            });
         }
 
         let mut result = EffectivePermission {
@@ -459,6 +487,33 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         });
         result.path_explanation = path_explanation;
         result.trace = trace;
+        // ADR 0079: the logon decision closes the path. The lines above stay
+        // the permissions' view; a refused logon makes the effective right No
+        // access — exact, because Windows never evaluates the DACL then.
+        if let Some(d) = result.diagnostics.iter().find(|d| {
+            matches!(
+                d,
+                PermissionDiagnostic::SelectiveAuthenticationAllowed { .. }
+                    | PermissionDiagnostic::SelectiveAuthenticationDenied { .. }
+                    | PermissionDiagnostic::SelectiveAuthenticationUnknown { .. }
+            )
+        }) {
+            let step = match d {
+                PermissionDiagnostic::SelectiveAuthenticationDenied { .. } => format!(
+                    "Logon refused — {} Effective: No access (0x00000000); the lines above show \
+                     what the permissions grant once the account may authenticate.",
+                    d.summary()
+                ),
+                PermissionDiagnostic::SelectiveAuthenticationUnknown { .. } => {
+                    format!("{NOT_DETERMINABLE} — logon: {}", d.summary())
+                }
+                _ => format!("Logon allowed — {}", d.summary()),
+            };
+            result.path_explanation.steps.push(step);
+        }
+        if logon_refused {
+            result.effective_mask = AccessMask(0);
+        }
         debug!(
             user = %result.identity.sid.0,
             path = %result.path.0,
@@ -605,7 +660,7 @@ pub fn expand_local_groups_with(
             .iter()
             .filter(|m| {
                 !token.contains(&m.0)
-                    && (is_logon_dependent_sid(&m.0, access_context)
+                    && (is_logon_dependent_for(&m.0, access_context, &token)
                         || uncertain_well_knowns.contains(&m.0.as_str()))
             })
             .cloned()
@@ -930,6 +985,27 @@ fn ace_matches(
         || (ace.kind == AceKind::Deny && deny_only_sids.contains(&ace.sid.0))
 }
 
+/// `This Organization` (S-1-5-15).
+pub const SID_THIS_ORGANIZATION: &str = "S-1-5-15";
+/// `Other Organization` (S-1-5-1000).
+pub const SID_OTHER_ORGANIZATION: &str = "S-1-5-1000";
+
+/// [`is_logon_dependent_sid`] for a known token (ADR 0079): `This
+/// Organization` and `Other Organization` exclude each other — a token holds
+/// exactly one of them. When one is certainly in `token` (an account of a
+/// trusted domain, decided from the trust's Selective Authentication; lab
+/// 2026-10-17), the other is certainly absent rather than logon-dependent.
+/// For any other token neither is in it, and the answer equals
+/// [`is_logon_dependent_sid`].
+pub fn is_logon_dependent_for(sid: &str, context: AccessContext, token: &HashSet<String>) -> bool {
+    let decided_absent = match sid {
+        SID_THIS_ORGANIZATION => token.contains(SID_OTHER_ORGANIZATION),
+        SID_OTHER_ORGANIZATION => token.contains(SID_THIS_ORGANIZATION),
+        _ => false,
+    };
+    !decided_absent && is_logon_dependent_sid(sid, context)
+}
+
 /// Well-known SIDs whose presence in a real access token depends on **how**
 /// the user logs on — authentication package, organization of the
 /// authenticating domain, logon type — which Stars does not model
@@ -1013,7 +1089,7 @@ pub fn logon_dependent_bounds(
         .filter(|ace| ace_applies_to_current_object(ace))
         .filter(|ace| !match_sids.contains(&ace.sid.0))
         .filter(|ace| {
-            is_logon_dependent_sid(&ace.sid.0, context)
+            is_logon_dependent_for(&ace.sid.0, context, match_sids)
                 || logon_dependent_groups.contains(&ace.sid.0)
                 || (ace.kind == AceKind::Allow
                     && deny_only_groups.contains(&ace.sid.0)
@@ -1189,6 +1265,7 @@ fn source_label(source: &MembershipPathSource) -> &'static str {
         MembershipPathSource::LocalGroup => "LocalGroup",
         MembershipPathSource::LdapMatchingRule => "LdapMatchingRule",
         MembershipPathSource::AccountType => "AccountType",
+        MembershipPathSource::TrustedDomainLogon => "TrustedDomainLogon",
     }
 }
 
@@ -1401,7 +1478,7 @@ fn uncertain_ace_reason(
                 .to_owned(),
         );
     }
-    if is_logon_dependent_sid(sid, context) {
+    if is_logon_dependent_for(sid, context, match_sids) {
         return Some(logon_dependent_reason(sid).to_owned());
     }
     if uncertain_owner.is_some() && sid == SID_OWNER_RIGHTS {
@@ -2538,6 +2615,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap()
     }
@@ -2566,6 +2644,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap()
     }
@@ -2594,6 +2673,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap()
     }
@@ -2622,6 +2702,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap()
     }
@@ -3505,6 +3586,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         assert_eq!(
@@ -3537,6 +3619,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         assert!(NormalizedRights::new(p.effective_mask.0).is_read());
@@ -3565,6 +3648,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         assert_eq!(
@@ -4195,6 +4279,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         assert!(
@@ -4226,6 +4311,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         assert!(
@@ -4290,6 +4376,7 @@ mod tests {
                 sid_names,
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         let member_step = p
@@ -4330,6 +4417,7 @@ mod tests {
                 sid_names,
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         let ace_step = p
@@ -4421,6 +4509,74 @@ mod tests {
             } => Some((sids.clone(), *min_mask, *max_mask)),
             _ => None,
         })
+    }
+
+    // --- ADR 0079: This / Other Organization decided for a trusted account ---
+
+    /// Lab 2026-10-17 (real SMB logons across the corp.test ⇄ ext.test
+    /// trust): without Selective Authentication the token holds This
+    /// Organization and not Other Organization — with it the reverse. The
+    /// resolver adds the one present as a membership; ACEs for both are then
+    /// exact, never a range.
+    #[test]
+    fn a_decided_organization_sid_makes_both_organization_aces_exact() {
+        const OTHER_ORGANIZATION: &str = "S-1-5-1000";
+        for (present, absent) in [
+            (THIS_ORGANIZATION, OTHER_ORGANIZATION),
+            (OTHER_ORGANIZATION, THIS_ORGANIZATION),
+        ] {
+            let p = eval_with_context(
+                user(USER),
+                vec![membership(USER, present)],
+                fso(
+                    None,
+                    vec![
+                        allow_ace(present, MASK_READ, false),
+                        allow_ace(absent, MASK_MODIFY, false),
+                    ],
+                ),
+                None,
+                AccessContext::RemoteSmb,
+            );
+            assert!(p.ntfs_determinable(), "{present}: exact");
+            assert!(logon_marker(&p).is_none(), "{present}: no range");
+            assert_eq!(
+                p.ntfs_mask.0, MASK_READ,
+                "{present} grants, {absent} does not"
+            );
+        }
+    }
+
+    /// Without either in the token (every account that is not resolved in a
+    /// trusted domain) both stay logon-dependent, exactly as before.
+    #[test]
+    fn without_a_decided_organization_both_stay_logon_dependent() {
+        let token: HashSet<String> = [USER.to_owned()].into_iter().collect();
+        for sid in [THIS_ORGANIZATION, "S-1-5-1000"] {
+            assert!(super::is_logon_dependent_for(
+                sid,
+                AccessContext::RemoteSmb,
+                &token
+            ));
+            assert_eq!(
+                super::is_logon_dependent_for(sid, AccessContext::RemoteSmb, &token),
+                super::is_logon_dependent_sid(sid, AccessContext::RemoteSmb)
+            );
+        }
+        let with_this: HashSet<String> = [USER.to_owned(), THIS_ORGANIZATION.to_owned()]
+            .into_iter()
+            .collect();
+        assert!(!super::is_logon_dependent_for(
+            "S-1-5-1000",
+            AccessContext::RemoteSmb,
+            &with_this
+        ));
+        // Any other logon-dependent SID is unaffected.
+        assert!(super::is_logon_dependent_for(
+            "S-1-18-1",
+            AccessContext::RemoteSmb,
+            &with_this
+        ));
     }
 
     #[test]
@@ -5004,6 +5160,7 @@ mod tests {
                 sid_names,
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .expect("evaluate");
         let step = result
@@ -5160,6 +5317,7 @@ mod tests {
                     ..Default::default()
                 },
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         assert!(
@@ -5198,6 +5356,7 @@ mod tests {
                     ..Default::default()
                 },
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         assert!(
@@ -5232,6 +5391,7 @@ mod tests {
             sid_names: std::collections::BTreeMap::new(),
             resolution: ResolutionProvenance::default(),
             share_trace: Default::default(),
+            selective_authentication: Default::default(),
         }
     }
 
@@ -5578,6 +5738,103 @@ mod tests {
             .any(|d| matches!(d, PermissionDiagnostic::TrustedDomainAccountResolved { .. })));
     }
 
+    /// ADR 0079 (L4), lab 2026-10-17: a refused logon (error 1935) means no
+    /// access, exact; the permissions' view stays visible in the path.
+    #[test]
+    fn selective_authentication_denied_is_exactly_no_access() {
+        use adpa_core::traits::SelectiveAuthenticationCheck;
+        let mut input = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+        );
+        input.selective_authentication = Some(SelectiveAuthenticationCheck::Denied {
+            server: "DC-01".into(),
+        });
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert_eq!(p.ntfs_mask.0, MASK_MODIFY, "the DACL view is kept");
+        assert_eq!(p.effective_mask.0, 0);
+        assert!(
+            p.effective_determinable(),
+            "exact: Windows refuses the logon"
+        );
+        assert_eq!(p.effective_upper_bound(), 0, "risk rules see no access");
+        assert!(p.diagnostics.iter().any(|d| matches!(
+            d,
+            PermissionDiagnostic::SelectiveAuthenticationDenied { .. }
+        )));
+        let last = p.path_explanation.steps.last().unwrap();
+        assert!(last.starts_with("Logon refused"), "{last}");
+        assert!(last.contains("No access (0x00000000)"));
+    }
+
+    /// Not decidable: NTFS stays exact, the effective right is a range from
+    /// No access to the DACL result.
+    #[test]
+    fn selective_authentication_unknown_opens_only_the_effective_right() {
+        use adpa_core::traits::SelectiveAuthenticationCheck;
+        let mut input = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+        );
+        input.selective_authentication = Some(SelectiveAuthenticationCheck::Unknown {
+            server: "DC-01".into(),
+            reason: "the computer object could not be read".into(),
+        });
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert!(p.ntfs_determinable());
+        assert!(!p.effective_determinable());
+        assert_eq!(p.effective_upper_bound(), MASK_MODIFY);
+        let last = p.path_explanation.steps.last().unwrap();
+        assert!(
+            last.starts_with(NOT_DETERMINABLE) && last.contains("logon"),
+            "{last}"
+        );
+    }
+
+    /// Allowed: the result is the DACL result; with the check done, the
+    /// "not modelled" trust caveat is gone (it stays without a check).
+    #[test]
+    fn selective_authentication_allowed_keeps_the_result_and_drops_the_caveat() {
+        use adpa_core::traits::{SelectiveAuthenticationCheck, TrustedDomainProvenance};
+        let trusted = TrustedDomainProvenance {
+            domain: "ext.test".into(),
+            home_only_groups: Vec::new(),
+            sid_filtered: Vec::new(),
+            selective_authentication: true,
+        };
+        let mut input = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+        );
+        input.resolution.trusted_domain = Some(trusted.clone());
+        input.selective_authentication = Some(SelectiveAuthenticationCheck::Allowed {
+            server: "DC-01".into(),
+            via: "GG_ExtPartners (S-1-5-21-1-2-3-1110)".into(),
+        });
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert_eq!(p.effective_mask.0, MASK_MODIFY);
+        assert!(p.effective_determinable());
+        assert!(!p
+            .diagnostics
+            .contains(&PermissionDiagnostic::TrustBoundaryEffectsNotModeled));
+        assert!(p
+            .path_explanation
+            .steps
+            .last()
+            .unwrap()
+            .starts_with("Logon allowed"));
+
+        let mut unchecked = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+        );
+        unchecked.resolution.trusted_domain = Some(trusted);
+        let q = DefaultPermissionEngine.evaluate(unchecked).unwrap();
+        assert!(q
+            .diagnostics
+            .contains(&PermissionDiagnostic::TrustBoundaryEffectsNotModeled));
+    }
+
     /// The trust-boundary marker also fires when the identity is outside the
     /// configured LDAP base (the other boundary signal).
     #[test]
@@ -5640,6 +5897,7 @@ mod tests {
                     ..Default::default()
                 },
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         let found = result
@@ -5683,6 +5941,7 @@ mod tests {
                     ..Default::default()
                 },
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         let found = result
@@ -5723,6 +5982,7 @@ mod tests {
                     ..Default::default()
                 },
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         let reasons: Vec<&str> = result
@@ -5759,6 +6019,7 @@ mod tests {
                     sid_names: std::collections::BTreeMap::new(),
                     resolution: provenance,
                     share_trace: Default::default(),
+                    selective_authentication: Default::default(),
                 })
                 .unwrap()
         };
@@ -5819,6 +6080,7 @@ mod tests {
                     ..Default::default()
                 },
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         assert!(
@@ -5855,6 +6117,7 @@ mod tests {
                     ..Default::default()
                 },
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         assert!(
@@ -5926,6 +6189,7 @@ mod tests {
                 sid_names,
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
 
@@ -5990,6 +6254,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
 
@@ -6040,6 +6305,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
 
@@ -6093,6 +6359,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
 
@@ -6137,6 +6404,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         assert_eq!(
@@ -6169,6 +6437,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         assert_eq!(
@@ -6349,6 +6618,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         let (sids, min, max) = logon_marker(&p).expect("bounded");
@@ -6382,6 +6652,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap()
     }
@@ -6545,6 +6816,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         assert_eq!(p.ntfs_mask.0, 0);
@@ -7158,6 +7430,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap();
         let steps = &p.path_explanation.steps;
@@ -7528,6 +7801,7 @@ mod tests {
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
+                selective_authentication: Default::default(),
             })
             .unwrap()
     }

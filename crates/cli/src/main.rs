@@ -581,6 +581,9 @@ use validation::sid::looks_like_sid;
 struct ResolvedIdentity {
     resolution: PrincipalResolution,
     ad_connected: bool,
+    /// ADR 0079: the configured domain's directory (LDAP only), for the
+    /// Selective Authentication check of a trusted-domain account.
+    resource: Option<std::sync::Arc<LdapResolver>>,
 }
 
 /// Normalized connection inputs — trimmed and validated, ready for
@@ -895,6 +898,7 @@ async fn resolve_identity(
                 ldap_resolver.clone(),
             )) as std::sync::Arc<dyn ad_resolver::TrustedDomainBackend>
         });
+        let resource = ldap_resolver.clone();
         let backend = LdapIdentityBackend::new(ldap_resolver);
 
         // Review 2026-06-04 round 3 finding 1.
@@ -917,6 +921,7 @@ async fn resolve_identity(
         Ok(ResolvedIdentity {
             resolution,
             ad_connected: true,
+            resource: Some(resource),
         })
     } else {
         let trimmed = user.trim();
@@ -948,6 +953,7 @@ async fn resolve_identity(
                     return Ok(ResolvedIdentity {
                         resolution: local_account_principal(r),
                         ad_connected: false,
+                        resource: None,
                     });
                 }
                 ServerAccountLookup::NotALocalAccount { sid } => sid,
@@ -986,6 +992,7 @@ async fn resolve_identity(
             Ok(ResolvedIdentity {
                 resolution,
                 ad_connected: false,
+                resource: None,
             })
         }
         #[cfg(not(windows))]
@@ -1035,6 +1042,7 @@ async fn resolve_identity(
             Ok(ResolvedIdentity {
                 resolution,
                 ad_connected: false,
+                resource: None,
             })
         }
     }
@@ -1132,6 +1140,22 @@ async fn run_analyze(
         &trust,
     )
     .await?;
+    // ADR 0079 (L4): Selective Authentication on the target — only for an
+    // account of a trusted domain whose trust uses it; otherwise `None`.
+    #[cfg(windows)]
+    let selective_authentication = match &resolved.resource {
+        Some(r) => {
+            ad_resolver::selective_auth::check_for_target(
+                r,
+                account_server.as_deref(),
+                &resolved.resolution,
+            )
+            .await
+        }
+        None => None,
+    };
+    #[cfg(not(windows))]
+    let selective_authentication = None;
 
     // Resolve local server groups first — they belong to the token SID set and
     // are needed by both the share mask computation and the NTFS evaluation.
@@ -1242,6 +1266,7 @@ async fn run_analyze(
         share_trace: share_scanner::share_ace_outcomes(&share_decisions, &sid_names),
         sid_names,
         resolution: engine_flags,
+        selective_authentication: selective_authentication.clone(),
     };
     let mut result = DefaultPermissionEngine
         .evaluate(input)
@@ -1402,6 +1427,22 @@ async fn run_scan(
         &trust,
     )
     .await?;
+    // ADR 0079 (L4): one Selective Authentication check per run — every path
+    // of the scan is on the same target server.
+    #[cfg(windows)]
+    let scan_selective_authentication = match &resolved.resource {
+        Some(r) => {
+            ad_resolver::selective_auth::check_for_target(
+                r,
+                account_server.as_deref(),
+                &resolved.resolution,
+            )
+            .await
+        }
+        None => None,
+    };
+    #[cfg(not(windows))]
+    let scan_selective_authentication = None;
 
     let db = db_path
         .as_deref()
@@ -1650,6 +1691,7 @@ async fn run_scan(
                     ),
                     sid_names,
                     resolution: scan_engine_flags.clone(),
+                    selective_authentication: scan_selective_authentication.clone(),
                 };
                 let mut result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
                     anyhow::anyhow!("Permission evaluation failed for '{path_display}': {e}")

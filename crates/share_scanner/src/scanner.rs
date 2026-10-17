@@ -743,7 +743,11 @@ pub fn evaluate_share_dacl(
     let uncertain_sid = |p: &SharePermission| {
         !enabled(&p.sid.0)
             && (token.uncertain.contains(&p.sid.0)
-                || permission_engine::engine::is_logon_dependent_sid(&p.sid.0, context)
+                || permission_engine::engine::is_logon_dependent_for(
+                    &p.sid.0,
+                    context,
+                    &token.enabled,
+                )
                 || (p.kind == AceKind::Allow && deny_only(&p.sid.0) && !token.deny_only_certain))
     };
     let uncertain: Vec<&SharePermission> = perms.iter().filter(|p| uncertain_sid(p)).collect();
@@ -787,7 +791,11 @@ pub fn share_ace_decisions(
             };
             let uncertain = !enabled(&p.sid.0)
                 && (token.uncertain.contains(&p.sid.0)
-                    || permission_engine::engine::is_logon_dependent_sid(&p.sid.0, context)
+                    || permission_engine::engine::is_logon_dependent_for(
+                        &p.sid.0,
+                        context,
+                        &token.enabled,
+                    )
                     || (p.kind == AceKind::Allow
                         && deny_only(&p.sid.0)
                         && !token.deny_only_certain));

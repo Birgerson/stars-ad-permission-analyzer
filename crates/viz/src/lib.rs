@@ -22,8 +22,8 @@
 //! inherit-only or not applied (deny-only).
 
 use adpa_core::model::{
-    AceEffect, AceKind, AceOutcome, EffectivePermission, ShareEvalStatus, TraceGroup,
-    TraceGroupState, TraceLayer,
+    AceEffect, AceKind, AceOutcome, EffectivePermission, PermissionDiagnostic, ShareEvalStatus,
+    TraceGroup, TraceGroupState, TraceLayer,
 };
 use permission_engine::{rights_label_compact, NormalizedRights};
 
@@ -494,6 +494,23 @@ pub fn permission_graph_with(p: &EffectivePermission, opts: GraphOptions) -> Opt
         (ShareEvalStatus::Unrestricted, _) => "share unrestricted (NULL DACL)".to_owned(),
         _ => "no SMB share".to_owned(),
     };
+    // ADR 0079: the logon on the target decides before any ACE does — a
+    // refused or unknown Selective Authentication check is named on the
+    // result node, so the graph never shows rights without the logon.
+    let logon = p.diagnostics.iter().find_map(|d| match d {
+        PermissionDiagnostic::SelectiveAuthenticationDenied { .. } => {
+            Some(("logon refused", d.summary()))
+        }
+        PermissionDiagnostic::SelectiveAuthenticationUnknown { .. } => {
+            Some(("logon not determinable", d.summary()))
+        }
+        _ => None,
+    });
+    let detail = match logon {
+        Some((label, _)) => label.to_owned(),
+        None => detail,
+    };
+    let logon_note = logon.map_or(String::new(), |(_, summary)| format!(" — {summary}"));
     let result_node = push(
         &mut nodes,
         lanes.len() - 1,
@@ -503,7 +520,7 @@ pub fn permission_graph_with(p: &EffectivePermission, opts: GraphOptions) -> Opt
             shorten(&detail),
         ],
         format!(
-            "Effective: {effective} (0x{:08X}) — {detail}",
+            "Effective: {effective} (0x{:08X}) — {detail}{logon_note}",
             p.effective_mask.0
         ),
         if p.effective_determinable() {
@@ -1122,6 +1139,49 @@ mod tests {
 
     fn lane_count_x(lanes: usize) -> f64 {
         MARGIN + lanes as f64 * (NODE_W + GAP_X)
+    }
+
+    /// ADR 0079: a logon refused by Selective Authentication is named on
+    /// the result node instead of the share detail.
+    #[test]
+    fn a_refused_logon_is_named_on_the_result_node() {
+        let mut p = result(trace(), Some(0x0012_00A9));
+        p.effective_mask = AccessMask(0);
+        p.diagnostics
+            .push(PermissionDiagnostic::SelectiveAuthenticationDenied {
+                server: "FS01".into(),
+            });
+        let g = permission_graph(&p).unwrap();
+        let node = g.nodes.last().unwrap();
+        assert!(
+            node.lines.iter().any(|l| l == "logon refused"),
+            "{:?}",
+            node.lines
+        );
+        assert!(
+            node.title.contains("Selective Authentication"),
+            "{}",
+            node.title
+        );
+
+        let mut q = result(trace(), Some(0x0012_00A9));
+        q.diagnostics
+            .push(PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                server: "FS01".into(),
+                reason: "no read access".into(),
+            });
+        let g = permission_graph(&q).unwrap();
+        let node = g.nodes.last().unwrap();
+        assert!(node.lines.iter().any(|l| l == "logon not determinable"));
+        // Without a logon marker the share detail stays.
+        let g = permission_graph(&result(trace(), Some(0x0012_00A9))).unwrap();
+        assert!(g
+            .nodes
+            .last()
+            .unwrap()
+            .lines
+            .iter()
+            .any(|l| l.starts_with("share ")));
     }
 
     #[test]

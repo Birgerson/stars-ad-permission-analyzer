@@ -753,6 +753,47 @@ async fn search_constructed_sid_list(
     Ok(Some(sids))
 }
 
+/// ADR 0079: the computer object `NAME$` under `base_dn` — its DN and its
+/// security descriptor, **DACL only** (LDAP_SERVER_SD_FLAGS_OID with
+/// DACL_SECURITY_INFORMATION, so no SACL privilege is needed). `Ok(None)`
+/// when no such computer exists; the descriptor is `None` when it is not
+/// returned (no permission to read it). Read-only search.
+pub async fn search_computer_security_descriptor(
+    ldap: &mut Ldap,
+    base_dn: &str,
+    netbios_name: &str,
+) -> Result<Option<(String, Option<Vec<u8>>)>, CoreError> {
+    let filter = format!(
+        "(&(objectCategory=computer)(sAMAccountName={}$))",
+        escape_filter_value(netbios_name)
+    );
+    // BER: SEQUENCE { INTEGER 4 } — DACL_SECURITY_INFORMATION.
+    let sd_flags = ldap3::controls::RawControl {
+        ctype: "1.2.840.113556.1.4.801".to_owned(),
+        crit: true,
+        val: Some(vec![0x30, 0x03, 0x02, 0x01, 0x04]),
+    };
+    let (rs, _res) = ldap
+        .with_controls(sd_flags)
+        .search(
+            base_dn,
+            Scope::Subtree,
+            &filter,
+            vec!["nTSecurityDescriptor"],
+        )
+        .await
+        .map_err(|e| CoreError::LdapQuery(format!("computer search failed: {e}")))?
+        .success()
+        .map_err(|e| CoreError::LdapQuery(format!("computer search result error: {e}")))?;
+    let Some(entry) = rs.into_iter().next().map(RawEntry::from_search_entry) else {
+        return Ok(None);
+    };
+    let sd = entry
+        .first_bin_attr("nTSecurityDescriptor")
+        .map(<[u8]>::to_vec);
+    Ok(Some((entry.dn, sd)))
+}
+
 /// Terminates the LDAP connection properly.
 pub async fn disconnect(mut ldap: Ldap) {
     if let Err(e) = ldap.unbind().await {

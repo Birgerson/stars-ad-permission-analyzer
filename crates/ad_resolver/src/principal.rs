@@ -780,6 +780,17 @@ where
                 // principal — handled by a dedicated path that enriches
                 // the identity via LSA and flags the trust-side gap.
                 if identity.kind == IdentityKind::ForeignSecurityPrincipal {
+                    // ADR 0079 (lab 2026-10-17): an account of a trusted
+                    // domain that was ever added to a group here has an FSP
+                    // object — the normal case, not an exception. When the
+                    // configured trusted-domain connection serves its
+                    // domain, it is resolved there (ADR 0078, incl. the
+                    // Selective Authentication check) instead of through
+                    // the FSP, whose home-domain groups are unknown.
+                    // Without such a connection nothing changes.
+                    if let Some(resolution) = self.resolve_fsp_in_trusted_domain(&sid).await {
+                        return Ok(resolution);
+                    }
                     return self.resolve_fsp_hit(sid, identity).await;
                 }
                 let (memberships, group_status, group_gaps, excluded_groups) =
@@ -838,6 +849,23 @@ where
                 self.unresolvable_resolution(sid.clone(), reason)
             }
         }
+    }
+
+    /// ADR 0079: the FSP hit of a SID whose trusted domain the configured
+    /// trusted-domain connection serves → [`Self::resolve_in_trusted_domain`].
+    /// `None` (keep the FSP path) without a connection, for a SID of no
+    /// trusted domain, or when the connection serves another domain.
+    async fn resolve_fsp_in_trusted_domain(&self, sid: &Sid) -> Option<PrincipalResolution> {
+        let backend = self.trusted_backend.as_ref()?;
+        let relation = self.identity_backend.classify_unresolved_sid(sid).await;
+        let SidDomainRelation::TrustedDomain { domain_sid, .. } = &relation else {
+            return None;
+        };
+        let served = backend.served_domain_sid().await?;
+        if !served.eq_ignore_ascii_case(domain_sid) {
+            return None;
+        }
+        self.resolve_in_trusted_domain(sid, &relation).await
     }
 
     /// ADR 0078: a SID of a trusted domain, and a connection to that domain
@@ -1660,6 +1688,62 @@ mod tests {
         assert!(res
             .membership_diagnostics()
             .contains(&PermissionDiagnostic::TrustBoundaryEffectsNotModeled));
+    }
+
+    /// ADR 0079: an account of the trusted domain with an FSP object here
+    /// (it was added to a group of this domain) is resolved through the
+    /// trusted connection, not through the FSP.
+    #[tokio::test]
+    async fn an_fsp_hit_of_a_served_trusted_domain_uses_the_trusted_connection() {
+        let sid = Sid(format!("{TRUST_DOMAIN_SID}-1108"));
+        let fsp = Identity {
+            sid: sid.clone(),
+            name: Some(sid.0.clone()),
+            domain: None,
+            kind: IdentityKind::ForeignSecurityPrincipal,
+            disabled: false,
+            user_principal_name: None,
+            sid_history_count: 0,
+            sid_history: Vec::new(),
+        };
+        let run = |trusted: Option<Arc<FakeTrusted>>, relation: SidDomainRelation| {
+            let mut ldap = FakeLdapBackend::with_relation(relation);
+            ldap.by_sid.insert(sid.0.clone(), fsp.clone());
+            let mut r = PrincipalResolver::new(ldap, Some(FakeLsaBackend::new()));
+            if let Some(t) = trusted {
+                r = r.with_trusted_domain(t);
+            }
+            let sid = sid.clone();
+            async move { r.resolve(PrincipalInput::Sid(sid)).await.unwrap() }
+        };
+
+        let trusted = fake_trusted(Some(TRUST_DOMAIN_SID), false);
+        let res = run(Some(trusted.clone()), trusted_relation(0x4 | 0x10)).await;
+        assert_eq!(trusted.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(!res.resolved_via_fsp);
+        assert!(res
+            .trusted_domain
+            .as_ref()
+            .is_some_and(|t| t.selective_authentication));
+
+        // Unchanged without a connection, and with one to another domain.
+        let res = run(None, trusted_relation(0x4)).await;
+        assert!(res.resolved_via_fsp);
+        let other = fake_trusted(Some("S-1-5-21-9-9-9"), false);
+        let res = run(Some(other.clone()), trusted_relation(0x4)).await;
+        assert_eq!(other.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(res.resolved_via_fsp);
+        // A SID of no trusted domain keeps the FSP path too.
+        let t = fake_trusted(Some(TRUST_DOMAIN_SID), false);
+        let res = run(
+            Some(t.clone()),
+            SidDomainRelation::OtherDomain {
+                domain_sid: TRUST_DOMAIN_SID.to_owned(),
+            },
+        )
+        .await;
+        assert_eq!(t.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(res.resolved_via_fsp);
     }
 
     /// A connection to the wrong domain is never used for the account.

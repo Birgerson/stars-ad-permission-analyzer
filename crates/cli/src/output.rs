@@ -510,6 +510,21 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                     }
                 }
             }
+            PermissionDiagnostic::SelectiveAuthenticationAllowed { server, via } => {
+                println!("  [i] Selective Authentication: the account may authenticate to");
+                println!("      {server} — \"Allowed to authenticate\" is granted to {via}.");
+            }
+            PermissionDiagnostic::SelectiveAuthenticationDenied { server } => {
+                println!("  [!] Selective Authentication: neither the account nor a group in");
+                println!("      its token has \"Allowed to authenticate\" on {server}. Windows");
+                println!("      refuses the logon (error 1935) — no access there, whatever the");
+                println!("      permissions grant.");
+            }
+            PermissionDiagnostic::SelectiveAuthenticationUnknown { server, reason } => {
+                println!("  [!] Selective Authentication: whether the account may authenticate");
+                println!("      to {server} is not determinable ({reason}). The effective");
+                println!("      right lies between No access and what the permissions grant.");
+            }
             PermissionDiagnostic::IdentityNotResolvable { reason } => {
                 println!("  [!] The identity could not be resolved: {reason}.");
                 println!("      Its group memberships are unknown — the rights computed for");
@@ -1055,6 +1070,38 @@ mod tests {
         ace_line, ace_rights_label, dacl_state_label, inheritance_label, AceEntry, AceKind,
         BTreeMap, INHERIT_ONLY_ACE,
     };
+
+    /// ADR 0079: the organization SID of a trusted-domain account is not
+    /// the `Local account` SID — no "local account, group set complete"
+    /// notice for it.
+    #[test]
+    fn a_trusted_domain_logon_sid_is_not_a_local_account() {
+        use adpa_core::model::{GroupMembership, MembershipPath, MembershipPathSource, Sid};
+        let m = |source| GroupMembership {
+            member_sid: Sid("S-1-5-21-1-2-3-1105".into()),
+            group_sid: Sid("S-1-5-1000".into()),
+            direct: true,
+            group_name: Some(r"NT AUTHORITY\Other Organization".into()),
+            path: Some(MembershipPath {
+                nodes: vec![],
+                names: vec![],
+                source,
+                complete: true,
+                also_via: Vec::new(),
+            }),
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
+        };
+        let trusted = m(MembershipPathSource::TrustedDomainLogon);
+        assert!(!super::is_local_account(std::slice::from_ref(&trusted)));
+        assert_eq!(
+            trusted.origin_label(),
+            "added by Windows for an account of a trusted domain"
+        );
+        assert!(super::is_local_account(&[m(
+            MembershipPathSource::AccountType
+        )]));
+    }
 
     #[test]
     fn null_dacl_is_full_control() {

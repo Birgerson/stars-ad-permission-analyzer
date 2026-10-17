@@ -10,6 +10,41 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+**Selective Authentication is checked, This Organization is exact (ADR 0079).**
+
+For an account of a trusted domain analyzed with the trusted-domain
+connection, Stars now decides whether Windows lets it log on to the target
+at all, and knows `This Organization` / `Other Organization` exactly.
+Without the trusted-domain options nothing changes (checked: 25,841 report
+rows identical to v1.15.0).
+
+### Added
+
+- **Selective Authentication** — on a trust with Selective Authentication
+  Stars reads the DACL of the target server's computer object (read-only)
+  and evaluates "Allowed to authenticate" for the token Windows uses in
+  that check, as measured with real SMB logons. New markers
+  `SelectiveAuthenticationAllowed` (names who grants it),
+  `SelectiveAuthenticationDenied` (effective **No access**, as Windows
+  refuses the logon with error 1935; NTFS and share keep what the
+  permissions grant) and `SelectiveAuthenticationUnknown` (not
+  determinable, with the reason). CLI `analyze` / `scan`, GUI Analyze /
+  Scan Tree, HTML badges, graph result node ("logon refused").
+- **`This Organization` / `Other Organization` exact** for accounts of a
+  trusted domain: the token holds `This Organization`, or `Other
+  Organization` when the trust uses Selective Authentication (measured).
+  An ACE for either no longer gives a range for such an account.
+- User guide: what Windows counts in the Selective Authentication check,
+  and the Microsoft behavior to know when testing it (a removed right can
+  keep working for a client that was connected shortly before).
+
+### Fixed
+
+- An account of a trusted domain that has a Foreign Security Principal
+  object in your domain (it was once added to one of your groups) is
+  resolved on the trusted domain controller when that connection is
+  configured, instead of through the FSP with unknown home groups.
+
 ## [1.15.0] — 2026-10-17
 
 **The graph names every group.**

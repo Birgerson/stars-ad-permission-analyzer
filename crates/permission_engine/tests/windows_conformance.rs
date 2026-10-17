@@ -313,6 +313,7 @@ fn stars_multigroup_mask(fixture: &[MultiAce], user_sid: &str, owner: Principal)
             sid_names: std::collections::BTreeMap::new(),
             resolution: ResolutionProvenance::default(),
             share_trace: Default::default(),
+            selective_authentication: Default::default(),
         })
         .expect("engine evaluation must succeed");
     result.ntfs_mask.0
@@ -488,6 +489,7 @@ fn stars_effective_mask(fixture: &[FixtureAce], sid_str: &str) -> u32 {
             sid_names: std::collections::BTreeMap::new(),
             resolution: ResolutionProvenance::default(),
             share_trace: Default::default(),
+            selective_authentication: Default::default(),
         })
         .expect("engine evaluation must succeed");
     result.ntfs_mask.0

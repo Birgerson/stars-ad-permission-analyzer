@@ -394,6 +394,39 @@ impl LdapResolver {
         .await
     }
 
+    /// ADR 0079: DN and security descriptor (DACL only) of the computer
+    /// object `NAME$` of the configured domain — see
+    /// [`ldap_client::search_computer_security_descriptor`]. The name is
+    /// validated first (a NetBIOS name, see
+    /// [`crate::selective_auth::is_valid_netbios_computer_name`]).
+    pub async fn computer_security_descriptor(
+        &self,
+        netbios_name: &str,
+    ) -> Result<Option<(String, Option<Vec<u8>>)>, CoreError> {
+        let name = netbios_name.trim();
+        if !crate::selective_auth::is_valid_netbios_computer_name(name) {
+            return Err(CoreError::Validation(format!(
+                "invalid computer name {netbios_name:?} (a NetBIOS name of 1–15 characters expected)"
+            )));
+        }
+        ldap_client::with_timeout(
+            "computer_security_descriptor",
+            ldap_client::ldap_timeout(&self.config),
+            async {
+                let mut ldap = ldap_client::connect(&self.config).await?;
+                let found = ldap_client::search_computer_security_descriptor(
+                    &mut ldap,
+                    &self.config.base_dn,
+                    name,
+                )
+                .await;
+                ldap_client::disconnect(ldap).await;
+                found
+            },
+        )
+        .await
+    }
+
     /// `true` when the configuration targets the Global Catalog.
     pub fn is_global_catalog(&self) -> bool {
         self.config.global_catalog
