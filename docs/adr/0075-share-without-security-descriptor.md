@@ -44,8 +44,9 @@ no share-level restriction.
 - No share is ever reported as "unrestricted" without a NULL DACL actually
   being present.
 - The status is carried as `ReadFailed` so persisted data and JSON need no
-  schema change; its CLI warning says "could not be read", the reason text
-  says why. A dedicated status is a later, schema-versioned change.
+  schema change; since 2026-10-14 every surface says "share permissions
+  not determinable" (no longer "could not be read") and the reason text
+  says which case it is. A dedicated status is a later, schema-versioned change.
 - Lab verification (2026-10-13, MS-01, real SMB access): `C$` admits
   `MS-01\Administrator` and the domain account `CORP\rt_uac01` (local
   administrator, not filtered over SMB) and **denies** the UAC-filtered local
