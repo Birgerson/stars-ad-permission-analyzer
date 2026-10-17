@@ -22,6 +22,7 @@ pub mod principal;
 pub mod resolver;
 #[cfg(windows)]
 pub mod sam;
+pub mod selective_auth;
 pub mod sid_util;
 pub mod trusted;
 pub mod trusts;

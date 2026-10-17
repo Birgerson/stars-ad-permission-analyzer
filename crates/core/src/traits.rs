@@ -97,6 +97,22 @@ pub struct ResolutionProvenance {
     pub trusted_domain: Option<TrustedDomainProvenance>,
 }
 
+/// ADR 0079 (L4): the outcome of the Selective Authentication check for an
+/// account of a trusted domain on the target server — "Allowed to
+/// authenticate" on the target computer's object, evaluated for the
+/// account's token. `None` in the evaluation input when the trust does not
+/// use Selective Authentication (or the account is not of a trusted domain).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectiveAuthenticationCheck {
+    /// The right is granted; `via` is `name (SID)` of the deciding trustee.
+    Allowed { server: String, via: String },
+    /// No ACE grants it to the token (or a Deny decides): the logon fails.
+    Denied { server: String },
+    /// Not decidable — the computer object or its permissions could not be
+    /// read, or an ACE for a SID whose presence is uncertain decides.
+    Unknown { server: String, reason: String },
+}
+
 /// How an account of a trusted domain was resolved (ADR 0078).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TrustedDomainProvenance {
@@ -166,6 +182,10 @@ pub struct PermissionEvaluationInput {
     /// DACL read as the share mask) — merged into the result's trace so NTFS
     /// and share ACEs are linked to the token groups the same way.
     pub share_trace: Vec<AceOutcome>,
+    /// ADR 0079 (L4): the Selective Authentication check for an account of a
+    /// trusted domain on the target server. `None` — the default — for every
+    /// other account and trust, so nothing changes there.
+    pub selective_authentication: Option<SelectiveAuthenticationCheck>,
     /// Access context (local interactive / remote SMB / unspecified).
     /// Controls which well-known SIDs are added to the token implicitly
     /// (e.g. `NETWORK` for SMB, `INTERACTIVE` for local). The default

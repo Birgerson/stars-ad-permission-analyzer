@@ -104,6 +104,8 @@ During evaluation Stars collects structured **diagnostic markers**:
 * `NonCanonicalDaclOrder` — the order of ACEs cannot be canonical: an explicit ACE after an inherited one, or an explicit Allow before an explicit Deny. Windows still evaluates the DACL in **stored order**; the tool surfaces this as an audit hint, since a non-canonical DACL usually arose from manual editing.
 * `InheritedDenyAfterInheritedAllow` — an inherited Allow precedes an inherited Deny. Windows orders inherited ACEs per ancestor level (parent first, deny before allow within a level), so this is canonical when the two come from different levels; the DACL does not record the level, so the tool reports that it cannot tell (known limitation L9).
 * `TrustedDomainAccountResolved` — an account of a trusted domain was resolved on a domain controller of that domain (ADR 0078); its token holds what Windows grants it in this domain. Informational — the result is exact.
+* `SelectiveAuthenticationAllowed` / `SelectiveAuthenticationDenied` — the trust uses Selective Authentication and Stars decided from the target's computer object whether the account may log on (ADR 0079). Denied means effective No access (error 1935). Both exact.
+* `SelectiveAuthenticationUnknown` — whether the account may log on is not determinable; the effective right is NOT DETERMINABLE (between No access and what the permissions grant), NTFS and share stay determinable.
 * `UnsupportedShareAces { count }` — the share DACL contained ACE types the parser could not evaluate (object, callback, or vendor-specific ACEs). The effective mask is then a **lower bound**; a hidden Deny could flip the result.
 * `unsupported_ace_count > 0` (NTFS side) — the same thing on the NTFS DACL.
 
@@ -374,6 +376,7 @@ Markers that do **not** contribute to incomplete — informational:
 - `PermissionDiagnostic::NonCanonicalDaclOrder { at_index }` (DACL not in Windows canonical order; AccessCheck still works correctly on the stored order).
 - `PermissionDiagnostic::OwnerRightsAceApplied` (an OWNER RIGHTS ACE governs the owner's rights; result is exact).
 - `PermissionDiagnostic::TrustBoundaryEffectsNotModeled` (hint that SID filtering / trust effects are not simulated; the NTFS/share computation itself is complete — see L4 in the known limitations).
+- `PermissionDiagnostic::SelectiveAuthenticationAllowed` (Selective Authentication allows the logon; names the principal with "Allowed to authenticate", ADR 0079).
 - `PermissionDiagnostic::SidHistoryEvaluated` / `PermissionDiagnostic::GroupSidHistoryEvaluated` (historical SIDs **were** read and included in the token; the marker documents that the result already accounts for them).
 - `PermissionDiagnostic::MembersViaPrimaryGroupIncluded` (members view: members found via `primaryGroupID` were included; transparency, not a gap).
 - `PermissionDiagnostic::IdentityOrphaned` (the SID is provably orphaned — a deleted account of the configured domain; the rights shown are what a logon with this SID would get, a correct statement). See ADR 0064.

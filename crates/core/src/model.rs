@@ -467,6 +467,11 @@ pub enum MembershipPathSource {
     /// `Local account` (S-1-5-113) for every local account of a machine
     /// (lab-confirmed in every logon type, ADR 0070).
     AccountType,
+    /// A SID Windows puts into the token of an account of a **trusted
+    /// domain** because of the trust: `This Organization` (S-1-5-15), or
+    /// `Other Organization` (S-1-5-1000) when the trust uses Selective
+    /// Authentication (lab-measured with real SMB logons, ADR 0079).
+    TrustedDomainLogon,
 }
 
 impl GroupMembership {
@@ -515,6 +520,9 @@ impl GroupMembership {
                 MembershipPathSource::LocalGroup => return "local group".to_owned(),
                 MembershipPathSource::AccountType => {
                     return "added by Windows for every local account".to_owned()
+                }
+                MembershipPathSource::TrustedDomainLogon => {
+                    return "added by Windows for an account of a trusted domain".to_owned()
                 }
                 _ => {}
             }
@@ -1300,6 +1308,11 @@ pub enum UncertainLayer {
     Ntfs,
     /// The share DACL could not be evaluated completely.
     Share,
+    /// ADR 0079: whether the account may log on to the target at all is not
+    /// determinable (Selective Authentication). NTFS and share views stay
+    /// exact; only the effective right is open (between No access and the
+    /// DACL result).
+    Logon,
 }
 
 /// One reason why a result is not determinable, as stated to a reader.
@@ -1617,6 +1630,23 @@ pub enum PermissionDiagnostic {
         sid_filtered: Vec<String>,
     },
 
+    /// ADR 0079 (L4): the account's trust uses Selective Authentication, and
+    /// the target computer's object grants it "Allowed to authenticate"
+    /// (`via` names the ACE's trustee). Informational — the logon succeeds.
+    SelectiveAuthenticationAllowed { server: String, via: String },
+
+    /// ADR 0079 (L4): the trust uses Selective Authentication and neither the
+    /// account nor a group in its token has "Allowed to authenticate" on the
+    /// target computer's object: Windows refuses the logon (error 1935), so
+    /// the effective right is No access, whatever the DACLs grant. Exact.
+    SelectiveAuthenticationDenied { server: String },
+
+    /// ADR 0079 (L4): the trust uses Selective Authentication, and whether the
+    /// account may authenticate to the target could not be decided (`reason`)
+    /// — the effective right lies between No access and the DACL result.
+    /// Incompleteness trigger (layer `Logon`).
+    SelectiveAuthenticationUnknown { server: String, reason: String },
+
     /// The SID belongs to the configured domain, the configured base covers
     /// that whole domain, and the directory has no object for it: the
     /// account no longer exists (orphaned / deleted). Nobody can log on with
@@ -1907,6 +1937,20 @@ impl PermissionDiagnostic {
                 }
                 s
             }
+            PermissionDiagnostic::SelectiveAuthenticationAllowed { server, via } => format!(
+                "The trust uses Selective Authentication; the account may authenticate to \
+                 {server} — \"Allowed to authenticate\" is granted to {via}."
+            ),
+            PermissionDiagnostic::SelectiveAuthenticationDenied { server } => format!(
+                "The trust uses Selective Authentication, and neither the account nor a group in \
+                 its token has \"Allowed to authenticate\" on {server}: Windows refuses the logon \
+                 (error 1935), so the account has no access there, whatever the permissions grant."
+            ),
+            PermissionDiagnostic::SelectiveAuthenticationUnknown { server, reason } => format!(
+                "The trust uses Selective Authentication, and whether the account may authenticate \
+                 to {server} is not determinable ({reason}) — the effective right lies between \
+                 No access and what the permissions grant."
+            ),
             PermissionDiagnostic::IdentityNotResolvable { reason } => format!(
                 "The identity could not be resolved: {reason}. Its group memberships are \
                  unknown, so the rights computed for the bare SID can be too low or too high."
@@ -2008,9 +2052,14 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible
             | PermissionDiagnostic::IdentityNotResolvable { .. }
             | PermissionDiagnostic::GroupResolutionIncomplete { .. } => Some(UncertainLayer::Token),
+            PermissionDiagnostic::SelectiveAuthenticationUnknown { .. } => {
+                Some(UncertainLayer::Logon)
+            }
             // Informational — the result itself is exact.
             PermissionDiagnostic::NonCanonicalDaclOrder { .. }
             | PermissionDiagnostic::TrustedDomainAccountResolved { .. }
+            | PermissionDiagnostic::SelectiveAuthenticationAllowed { .. }
+            | PermissionDiagnostic::SelectiveAuthenticationDenied { .. }
             | PermissionDiagnostic::InheritedDenyAfterInheritedAllow { .. }
             | PermissionDiagnostic::IdentityDisabled
             | PermissionDiagnostic::IdentityDisabledStatusUnknown
@@ -2037,6 +2086,7 @@ impl PermissionDiagnostic {
             // Correct or expected context — no action, grey.
             PermissionDiagnostic::NonCanonicalDaclOrder { .. }
             | PermissionDiagnostic::TrustedDomainAccountResolved { .. }
+            | PermissionDiagnostic::SelectiveAuthenticationAllowed { .. }
             | PermissionDiagnostic::InheritedDenyAfterInheritedAllow { .. }
             | PermissionDiagnostic::IdentityDisabled
             | PermissionDiagnostic::IdentityDisabledStatusUnknown
@@ -2059,7 +2109,10 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::UnsupportedNtfsAces { .. }
             | PermissionDiagnostic::LogonDependentTrustees { .. }
             | PermissionDiagnostic::UacFilteredGroups { .. }
-            | PermissionDiagnostic::GuestOrAnonymousToken { .. } => DiagnosticSeverity::Notice,
+            | PermissionDiagnostic::GuestOrAnonymousToken { .. }
+            | PermissionDiagnostic::SelectiveAuthenticationDenied { .. } => {
+                DiagnosticSeverity::Notice
+            }
             // Likely a real gap — under-report or a hard resolution failure.
             PermissionDiagnostic::SidHistoryPresent { .. }
             | PermissionDiagnostic::GroupSidHistoryPresent { .. }
@@ -2068,6 +2121,7 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
             | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
             | PermissionDiagnostic::IdentityNotResolvable { .. }
+            | PermissionDiagnostic::SelectiveAuthenticationUnknown { .. }
             | PermissionDiagnostic::GroupResolutionIncomplete { .. } => DiagnosticSeverity::Concern,
         }
     }

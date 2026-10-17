@@ -118,9 +118,12 @@ that applies.
   is configured. Those are the settings that decide at runtime whether a
   cross-forest or migrated (`sIDHistory`) SID actually grants access, so
   a finding relying on such a SID can read *higher* than reality.
-- Strictly read-only: Stars never modifies a trust, and it deliberately
-  does **not** model the runtime filter effect — that would require a
-  synthetic logon (ADR 0060, known-limitations L4).
+- Strictly read-only: Stars never modifies a trust. For an account of a
+  trusted domain resolved through the trusted-domain connection, Stars
+  checks **Selective Authentication** ("Allowed to authenticate" on the
+  target's computer object, ADR 0079) and knows `This Organization` /
+  `Other Organization` exactly; the SID filtering of a forest trust for
+  third-domain SIDs stays the DACL view (known-limitations L4).
 - The GUI's **`Trusts` tab** shows the same inventory with the same
   callouts.
 
@@ -237,7 +240,7 @@ out; the report font is Arial.
 | `IdentityDisabled` | Neutral | no | Account disabled in AD (`UF_ACCOUNTDISABLE`). ACL-theoretical rights are correct, but it normally cannot authenticate. |
 | `IdentityDisabledStatusUnknown` | Neutral | no | The `disabled` flag could not be determined (SAM path / no LDAP user object). |
 | `OwnerRightsAceApplied` | Neutral | no | An OWNER RIGHTS (`S-1-3-4`) ACE governs the owner's rights; the implicit owner grant was suppressed. Exact — informational. |
-| `TrustBoundaryEffectsNotModeled` | Neutral | no | The identity crosses a domain/trust boundary (FSP / outside base); SID filtering and Selective Authentication are not modelled. Fires beside the FSP/outside markers — no second flag. |
+| `TrustBoundaryEffectsNotModeled` | Neutral | no | The identity crosses a domain/trust boundary (FSP / outside base); SID filtering and Selective Authentication are not modelled for it. Fires beside the FSP/outside markers — no second flag. For an account resolved through the trusted-domain connection, Selective Authentication is checked instead (ADR 0079). |
 | `DomainGroupRecursionIncomplete` | Neutral | **yes** | Group resolution used the SAM/LSA fallback (no LDAP); nested domain groups are not resolved recursively. Expected when you run without `--server`. |
 | `IdentityNotInConfiguredLdapBase` | Neutral | **yes** | LSA resolved the SID but the configured base DN does not index it (multi-domain forest / trust); cross-domain memberships may be missing. |
 | `IdentityResolvedViaForeignSecurityPrincipal` | Neutral | **yes** | A trust-forest principal resolved via an FSP object; its memberships in its own forest are unknown. |
@@ -253,6 +256,9 @@ out; the report font is Arial.
 | `PersistedEvidenceDecodeFailed { detail }` | Concern | **yes** | A persisted (historical) row could not be fully decoded; the reconstructed result may be less complete than originally stored. |
 | `IdentityNotResolvable { reason }` | Concern | **yes** | The SID could not be resolved and is **not** proven orphaned — it belongs to a trusted domain (named), another domain, lies outside a base that is only an OU, or its domain could not be determined. Its memberships are unknown; the rights computed for the bare SID can be too low or too high (ADR 0064). |
 | `TrustedDomainAccountResolved { domain, home_only_groups, sid_filtered }` | Neutral | no | Account of a trusted domain resolved on a DC of that domain (ADR 0078): global and universal groups there, the trust's SID filtering, and the domain-local groups of the configured domain reached through Foreign Security Principals. Exact. |
+| `SelectiveAuthenticationAllowed { server, via }` | Neutral | no | The trust uses Selective Authentication; "Allowed to authenticate" on the target's computer object is granted to `via` (ADR 0079). Exact. |
+| `SelectiveAuthenticationDenied { server }` | Notice | no | Selective Authentication refuses the logon (error 1935): effective **No access**; NTFS and share keep what the permissions grant. Exact. |
+| `SelectiveAuthenticationUnknown { server, reason }` | Concern | **yes** | Whether the logon is allowed is not determinable (`reason`): the effective right lies between No access and what the permissions grant. |
 | `IdentityOrphaned` | Neutral | no | The SID belongs to the configured domain, the base covers that whole domain, and no object exists: the account no longer exists. Nobody can log on with it; an ACE naming it is a dead entry (ADR 0064). |
 | `GroupResolutionIncomplete { reason }` | Concern | **yes** | A successful group resolution may still lack groups — a primary group that could not be read, a group without a readable SID, memberships in groups outside the resolved set (e.g. outside a base that is only an OU), an unresolvable local group. `reason` names them (ADR 0066). |
 | `GuestOrAnonymousToken { sids }` | Notice | no (an anonymous bound is) | The account is the built-in Guest (RID 501) or ANONYMOUS LOGON. Lab-measured (ADR 0072): Authenticated Users is never in such a token — its ACEs do not apply; Everyone is in an anonymous token only with `EveryoneIncludesAnonymous` = 1, which Stars does not read — its ACEs bound an anonymous result. |
@@ -558,10 +564,12 @@ permanently not part of the product:
     certain SIDs from the token. Stars credits an ACE on such a SID
     even though the trust filters it out. → effective rights
     **overstated**.
-  - **Selective authentication:** a trust may require an explicit
-    "Allowed to authenticate" on the resource computer. Without it the
-    user cannot log on at all, regardless of the DACL. Stars does not
-    model this. → effective rights **overstated**.
+  - **Selective authentication** without the trusted-domain
+    connection: a trust may require an explicit "Allowed to
+    authenticate" on the resource computer. Without it the user cannot
+    log on at all, regardless of the DACL. With the connection Stars
+    checks it (ADR 0079: Allowed / Denied = No access / not
+    determinable); without it → effective rights **overstated**.
 - **Effect:** for migrated accounts the user-history part is now exact;
   the trust-runtime filters remain the **theoretical DACL view**, so in
   multi-forest environments a finding can still be **overstated**.
@@ -578,11 +586,11 @@ permanently not part of the product:
   and the HTML report.
 - **Solution:** SID-history evaluation **shipped for users and groups**
   (ADR 0056 / ADR 0059, on top of the ADR 0052 visibility step) —
-  known-limitations L3 is closed. The remaining work — reading
-  `trustAttributes` to model the actual runtime filter — stays a tracked
-  roadmap item (L4); real detection of the filter effect would require a
-  synthetic logon, which violates the read-only principle and is
-  deliberately not implemented. Until then, cross-check trust accounts
+  known-limitations L3 is closed. Selective Authentication is evaluated
+  for accounts of a trusted domain resolved through the trusted-domain
+  connection (ADR 0079, read from the computer object's DACL — no logon).
+  The SID filtering of a forest trust for third-domain SIDs stays a
+  tracked roadmap item (L4); until then, cross-check such accounts
   against the trust configuration (`trustAttributes`, `trustDirection`).
 
 ---

@@ -327,6 +327,32 @@ impl TrustedDomainBackend for LdapTrustedDomainBackend {
         }
         memberships.extend(resource_memberships);
 
+        // ADR 0079 (lab 2026-10-17, real SMB logons): the token of an account
+        // of a trusted domain holds `This Organization` — or, when the trust
+        // uses Selective Authentication, `Other Organization` instead. Both
+        // decided, so ACEs for either are exact for this account.
+        let (org_sid, org_name) = if trust.attributes.selective_authentication() {
+            ("S-1-5-1000", "NT AUTHORITY\\Other Organization")
+        } else {
+            ("S-1-5-15", "NT AUTHORITY\\This Organization")
+        };
+        let org = Sid(org_sid.to_owned());
+        memberships.push(GroupMembership {
+            member_sid: sid.clone(),
+            group_sid: org.clone(),
+            direct: true,
+            group_name: Some(org_name.to_owned()),
+            path: Some(MembershipPath {
+                nodes: vec![sid.clone(), org],
+                names: vec![identity.name.clone(), Some(org_name.to_owned())],
+                source: MembershipPathSource::TrustedDomainLogon,
+                complete: true,
+                also_via: Vec::new(),
+            }),
+            group_sid_history_count: 0,
+            group_sid_history: Vec::new(),
+        });
+
         let disabled_status = disabled_from_ldap(&identity);
         let scope = IdentityScopeStatus::ResolvedInTrustedDomain {
             domain: trust.partner.clone(),

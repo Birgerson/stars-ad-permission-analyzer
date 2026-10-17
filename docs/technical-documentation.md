@@ -474,8 +474,25 @@ resolver's memberships are joined with `chain_through`, which continues the
 home path. The result carries `TrustedDomainProvenance` in
 `PrincipalResolution::trusted_domain` → `ResolutionProvenance::trusted_domain`;
 the engine and the membership view push `TrustedDomainAccountResolved`
-(informational) and, only with Selective Authentication,
-`TrustBoundaryEffectsNotModeled`. Frontends: CLI `TrustArgs`
+(informational) and, only with Selective Authentication and no check made,
+`TrustBoundaryEffectsNotModeled`.
+
+ADR 0079: the backend adds the organization SID with
+`MembershipPathSource::TrustedDomainLogon` (S-1-5-1000 with Selective
+Authentication, else S-1-5-15); `permission_engine::is_logon_dependent_for`
+treats the other one as absent. `PrincipalResolver::resolve_fsp_in_trusted_domain`
+sends an FSP hit of a served trusted domain to the same path.
+`ad_resolver::selective_auth::check_for_target` (Windows) gets the target's
+NetBIOS name (`local_account::server_netbios_name`, `NetWkstaGetInfo` level
+100, validated by `is_valid_netbios_computer_name`), reads the computer
+object's DACL (`LdapResolver::computer_security_descriptor`, SD-flags
+control `0x4`) and evaluates it with the pure `allowed_to_authenticate`
+(two passes, with and without uncertain SIDs; `certainly_absent_in_check`
+holds the measured and by-definition absent SIDs). The answer goes into
+`PermissionEvaluationInput::selective_authentication`; the engine sets
+`SelectiveAuthentication{Allowed,Denied,Unknown}`, a closing explanation
+step, `effective_mask = 0` for Denied and the uncertainty layer `Logon` for
+Unknown. CLI and GUI make one check per analyze / scan run. Frontends: CLI `TrustArgs`
 (`--trust-*`, `build_trust_ldap_config`), GUI `LdapParams::trust` /
 `TrustParams`, Slint component `TrustDomainFields` shared by three tabs.
 

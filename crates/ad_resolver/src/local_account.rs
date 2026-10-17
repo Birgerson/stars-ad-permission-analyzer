@@ -28,9 +28,9 @@ use tracing::debug;
 use win_safe::netapi::NetApiBuffer;
 use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, FALSE, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
-    NetServerGetInfo, NetUserGetGroups, NetUserGetInfo, NetUserModalsGet, GROUP_USERS_INFO_0,
-    MAX_PREFERRED_LENGTH, SERVER_INFO_101, SV_TYPE_DOMAIN_BAKCTRL, SV_TYPE_DOMAIN_CTRL,
-    UF_ACCOUNTDISABLE, USER_INFO_4, USER_MODALS_INFO_2,
+    NetServerGetInfo, NetUserGetGroups, NetUserGetInfo, NetUserModalsGet, NetWkstaGetInfo,
+    GROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH, SERVER_INFO_101, SV_TYPE_DOMAIN_BAKCTRL,
+    SV_TYPE_DOMAIN_CTRL, UF_ACCOUNTDISABLE, USER_INFO_4, USER_MODALS_INFO_2, WKSTA_INFO_100,
 };
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::{
@@ -74,6 +74,39 @@ pub struct LocalAccountResolution {
     pub disabled_known: bool,
     /// Reader-facing reasons why the group set may be incomplete.
     pub gaps: Vec<String>,
+}
+
+/// ADR 0079: the NetBIOS computer name of `server` (`None` = this machine)
+/// — `NetWkstaGetInfo` level 100 (`wki100_computername`), so a server given
+/// by IP address or DNS name maps to its computer object. Not
+/// `NetServerGetInfo`: called remotely it echoes the name the caller passed
+/// (an IP address stays an IP address; lab 2026-10-17). Read-only; the
+/// answer is validated with [`crate::selective_auth::is_valid_netbios_computer_name`].
+pub fn server_netbios_name(server: Option<&str>) -> Result<String, CoreError> {
+    let server_w = server.map(to_wide_null);
+    let server_ptr = server_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+    let mut wks: NetApiBuffer<WKSTA_INFO_100> = NetApiBuffer::null();
+    // SAFETY: server_ptr is null or a valid null-terminated wide string;
+    // NetApi allocates the buffer, the guard frees it on drop.
+    let status = unsafe { NetWkstaGetInfo(server_ptr, 100, wks.out_ptr().cast()) };
+    if status != NO_ERROR {
+        return Err(net_error("NetWkstaGetInfo", server, status));
+    }
+    if wks.is_null() {
+        return Err(CoreError::SidResolution(format!(
+            "NetWkstaGetInfo on {server:?} returned no data"
+        )));
+    }
+    // SAFETY: the buffer holds one WKSTA_INFO_100; wki100_computername is a
+    // null-terminated wide string (or null).
+    let name = unsafe { wide_ptr_to_string((*wks.as_ptr()).wki100_computername) };
+    let name = name.trim().to_owned();
+    if !crate::selective_auth::is_valid_netbios_computer_name(&name) {
+        return Err(CoreError::SidResolution(format!(
+            "NetWkstaGetInfo on {server:?} returned an invalid computer name {name:?}"
+        )));
+    }
+    Ok(name)
 }
 
 /// Reads the SAM account domain of `server` (`None` = this machine):

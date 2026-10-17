@@ -264,6 +264,19 @@ scope, see below), nor does it yet auto-cross-reference a token's
 foreign-forest history SIDs against a filtering trust (the M.5 per-finding
 edge). Those remain the deeper follow-ups.
 
+**Status (ADR 0079 — Selective Authentication modelled, 2026-10-17):** for
+an account of a trusted domain resolved through the trusted-domain
+connection (ADR 0078), Stars reads the DACL of the target server's computer
+object and evaluates "Allowed to authenticate" for the token Windows uses in
+that check (measured with real SMB logons: the account's groups from its
+domain, the domain-local groups of this domain, Everyone, Authenticated
+Users and `Other Organization` count; the builtin groups of this domain,
+`NETWORK` and `This Organization` do not). Result: allowed (normal result),
+denied (**No access**, error 1935) or not determinable (named reason, range
+from No access). `This Organization` / `Other Organization` are exact for
+such accounts. Still not modelled: the SID filtering of a forest trust for
+SIDs of third domains, and the M.5 edge below.
+
 **Additional L4 edge since ADR 0056 (verification.md Block M.5):** an
 **in-base** identity whose evaluated `sIDHistory` SID is owned by a
 *foreign forest's* domain. Windows honors that SID only while the trust's
@@ -282,8 +295,9 @@ trust-topology work described here.
   and display them as read-only info — the `adpa trusts` command lists every
   trust with its direction and decoded attributes (SID filtering / quarantine,
   selective authentication, forest-transitive).
-- Real detection of the filter effect would require Stars to perform
-  a synthetic logon attempt — that violates the read-only principle →
+- ✅ **Done (ADR 0079):** Selective Authentication for accounts of a
+  trusted domain, from the computer object's DACL — no logon attempt.
+- A synthetic logon attempt would violate the read-only principle →
   deliberately **not** implemented.
 - Follow-up (open): cross-reference a token's foreign-forest history SIDs
   against a filtering trust to flag the M.5 per-finding over-report.
@@ -765,9 +779,16 @@ it reaches through Foreign Security Principals. Lab: identical to the
 Windows Authz oracle on every determinable row. Without the connection the
 result stays "not resolvable", and the reason names the option.
 
-**What stays open:** Selective Authentication and the SID filtering of a
-forest trust for third-domain SIDs are not modelled (reported, never
-assumed); `This Organization` stays logon-dependent for every account.
+**Closed 2026-10-17 (ADR 0079):** Selective Authentication is checked for
+such an account, and `This Organization` / `Other Organization` are exact
+for it (`This Organization` without Selective Authentication, `Other
+Organization` with it — measured with real SMB logons). An account with a
+Foreign Security Principal object in the configured domain is resolved on
+the trusted DC too.
+
+**What stays open:** the SID filtering of a forest trust for third-domain
+SIDs is not modelled (reported, never assumed); for every other account
+`This Organization` stays logon-dependent.
 
 ---
 
@@ -827,7 +848,7 @@ session (Stars assumes it, as for every SMB logon).
 | L1 — FSP | High | **yes** (IdentityResolvedViaForeignSecurityPrincipal) | **closed 2026-06-11** (trust-side groups still need L2) |
 | L2 — GC bind | High | **yes** (GroupResolutionViaGlobalCatalog) | **closed 2026-06-11** (GUI toggle shipped v1.6.4) |
 | L3 — SID History | Medium | **yes** (SidHistoryEvaluated/Present + GroupSidHistoryEvaluated/Present) | **closed 2026-07-04** (user: ADR 0056; groups: ADR 0059) |
-| L4 — Cross-forest filter | Medium | no | partial: read-only trust inventory (`adpa trusts`, ADR 0060); runtime effect not modelled |
+| L4 — Cross-forest filter | Medium | yes (Selective Authentication markers) | partial: trust inventory (ADR 0060); Selective Authentication modelled for trusted-domain accounts (ADR 0079); forest-trust SID filtering of third-domain SIDs open |
 | L5 — Empty memberships | Medium | yes (incomplete) | only via L1/L2 |
 | L6 — Live tests | High | n/a | **partially** — live 3-domain run 2026-06-14 committed (verification.md Block L); automated CI suite still open |
 | L7 — Token privileges | Low | no | deliberately out of scope |

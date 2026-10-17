@@ -462,8 +462,11 @@ finding read *higher* than the access a user really gets:
 - **Selective Authentication** — principals from the trust need an
   explicit "allowed to authenticate" right on the target.
 
-Stars shows the DACL view and does **not** model this runtime effect
-(known-limitations L4).
+For an account of a trusted domain, Stars evaluates Selective
+Authentication when the trusted-domain connection is configured (see
+[Accounts of a trusted domain](#accounts-of-a-trusted-domain),
+ADR 0079). The SID filtering of a forest trust for SIDs of third domains
+stays the DACL view (known-limitations L4).
 
 ### `Shares` tab — which shares does a server publish?
 
@@ -803,10 +806,76 @@ Stars then counts what Windows counts for a resource in **your** domain
 
 The connection is used **only** for an account your domain classifies as
 belonging to that trusted domain; every other account is resolved exactly
-as without it. Not modelled, and therefore reported instead of assumed:
-**Selective Authentication** ("allowed to authenticate" on the target) and,
-on a trust without quarantine, SIDs of a third domain. `This Organization`
-stays a range for every account.
+as without it. This also holds when the account has a Foreign Security
+Principal object in your domain (it was once added to one of your groups):
+it is still resolved on the trusted domain controller. Not modelled, and
+therefore reported instead of assumed: on a trust without quarantine,
+SIDs of a third domain.
+
+#### Selective Authentication — may the account log on at all?
+
+On a trust with **Selective Authentication** (`adpa trusts` / the `Trusts`
+tab shows it), Windows lets an account of the trusted domain log on to one
+of your servers only if that server's **computer object** in AD grants it
+**"Allowed to authenticate"** (computer object → Security → Advanced →
+the extended right "Allowed to authenticate"). Without it the logon fails
+with **error 1935** ("The computer you are signing into is protected by an
+authentication firewall"), so the account has **no access at all**, whatever
+NTFS and share permissions say.
+
+With the trusted-domain connection Stars checks this for the server the
+path is on (ADR 0079). It reads the computer object's permissions (read-only,
+the DACL only) and says one of three things:
+
+| Marker | Result |
+| --- | --- |
+| `SelectiveAuthenticationAllowed` | The logon is allowed; the marker names the principal that grants "Allowed to authenticate". The result is the normal one. |
+| `SelectiveAuthenticationDenied` | Windows refuses the logon. **Effective: No access (0x00000000)**; the last explanation step says "Logon refused". NTFS and share keep their values, so you can see what the account would get once you grant the right. |
+| `SelectiveAuthenticationUnknown` | Not determinable, with the reason (e.g. the computer object is not readable, or an ACE for a SID whose presence Stars cannot know decides it). The effective right lies between No access and what the permissions grant. |
+
+**What Windows counts in this check** (measured in the lab with real SMB
+logons; each row from a client that had just been refused):
+
+| Counts | Does not count |
+| --- | --- |
+| the account and its groups in the trusted domain | the **builtin groups of your domain** (e.g. `BUILTIN\Administrators`, `BUILTIN\Remote Desktop Users`), even if the account is a member |
+| your domain-local groups that contain the account or one of its groups (Foreign Security Principal) | `NETWORK` (S-1-5-2) |
+| `Everyone`, `Authenticated Users` | `This Organization` (S-1-5-15) |
+| `Other Organization` (S-1-5-1000) | |
+
+So the default entries on a computer object (SYSTEM, Administrators, Domain
+Admins) never let an account of the trusted domain authenticate. To allow
+it, grant the right to the account, to one of its groups in the trusted
+domain, or to one of your domain-local groups that contains it.
+
+**Microsoft behavior to know when you test or change it** (measured):
+
+- A right you **grant** takes effect at the next logon.
+- After you **remove** it, a computer that was connected as that account
+  shortly before can keep connecting for several minutes (in the lab more
+  than 20 minutes), even after `net session /delete` on the server,
+  `klist purge` and `nltest /sc_reset`. Another computer is refused at
+  once. Windows decides correctly on the server; the delay belongs to the
+  client that was already connected.
+- To check by hand, connect from a computer that has not used the account
+  recently (the `*` makes Windows ask for the password, so it never
+  appears on the command line):
+
+  ```powershell
+  net use \\SERVER\IPC$ * /user:PARTNER\account
+  ```
+
+  Error 1935 means refused. Afterwards remove the connection with
+  `net use \\SERVER\IPC$ /delete`.
+
+#### `This Organization` and `Other Organization`
+
+For an account resolved through the trusted-domain connection both are
+**exact** (ADR 0079): its token holds `This Organization` (S-1-5-15) when
+the trust has no Selective Authentication, and `Other Organization`
+(S-1-5-1000) instead when it has. The membership list shows the one it
+holds ("added by Windows for an account of a trusted domain"). For every
+other account they stay a range (logon-dependent).
 
 Identity input: the **SID**, or a name the Windows machine Stars runs on
 can resolve (a domain member resolves `PARTNER\user` across the trust).
@@ -960,7 +1029,9 @@ every surface says:
 - **ACEs for logon-dependent SIDs** (`This Organization`, `NTLM
   Authentication`, `Authentication authority asserted identity`, console or
   remote-interactive logon, …): Stars computes the lowest and the highest
-  possible result. If they are equal the ACE cannot matter and the result
+  possible result. For an account of a trusted domain resolved through the
+  trusted-domain connection, `This Organization` / `Other Organization` are
+  exact instead (ADR 0079). If they are equal the ACE cannot matter and the result
   stays exact; otherwise the explanation says "the NTFS right lies between
   … and …" (marker `LogonDependentTrustees`). Each ACE that causes the
   range is listed in the explanation as `[UNCERTAIN — <reason>; …]` — for
@@ -1016,11 +1087,14 @@ exact wording, lives in
 | `SidHistoryPresent { count }` | high | **yes** | `count` of the identity's historical SIDs could **not** be evaluated (unreadable value, or a report stored before evaluation existed). The real token includes them, so the right may be understated. |
 | `GroupSidHistoryEvaluated { groups, count }` | info | no | `count` historical SIDs carried by `groups` of the token **groups** were evaluated into the token — an ACE on a migrated group's old SID matches for every member. The membership steps name each one. |
 | `GroupSidHistoryPresent { count }` | high | **yes** | `count` historical SIDs on token groups could not be evaluated — the right may be understated. |
-| `TrustBoundaryEffectsNotModeled` | info | no | The identity was resolved across a domain / trust boundary. **If** that boundary is a forest trust, SID filtering and Selective Authentication may reduce the actual access — these runtime trust effects are not modelled (see [known-limitations.md L4](known-limitations.md)). |
+| `TrustBoundaryEffectsNotModeled` | info | no | The identity was resolved across a domain / trust boundary. **If** that boundary is a forest trust, SID filtering and Selective Authentication may reduce the actual access — not modelled for this identity (see [known-limitations.md L4](known-limitations.md)). For an account resolved through the trusted-domain connection, Selective Authentication is checked instead (markers below). |
 | `IdentityLookupFailed { reason }` | high | **yes** | LDAP identity lookup failed with a technical error (bind, timeout, DC unreachable). The analysis ran with a placeholder identity and an empty token — ACEs targeting domain groups may be missing. `reason` carries the underlying error. |
 | `GroupResolutionFailed { reason }` | high | **yes** | Recursive group resolution failed or was skipped (e.g. cross-domain path with no GC crawl). ACEs on domain groups may be missing. `reason` carries the underlying error. |
 | `IdentityNotResolvable { reason }` | high | **yes** | The SID could not be resolved and is **not** proven orphaned — e.g. an account of the trusted domain named in `reason`. Its memberships are unknown, so the computed rights can be too low or too high. |
 | `TrustedDomainAccountResolved { domain, home_only_groups, sid_filtered }` | info | no | An account of a trusted domain, resolved on a DC of that domain (ADR 0078): its global and universal groups there count, plus your domain-local groups it reaches through a Foreign Security Principal. Names the memberships that apply only inside the trusted domain and the SIDs the trust's SID filtering removes. The result is exact. |
+| `SelectiveAuthenticationAllowed { server, via }` | info | no | The trust uses Selective Authentication and the account may log on to `server`: "Allowed to authenticate" is granted to `via` (ADR 0079). The result is exact. |
+| `SelectiveAuthenticationDenied { server }` | medium | no | The trust uses Selective Authentication and nobody in the account's token has "Allowed to authenticate" on `server`: Windows refuses the logon (error 1935). Effective: **No access**; NTFS and share show what the permissions would grant. |
+| `SelectiveAuthenticationUnknown { server, reason }` | high | **yes** | Whether the account may log on to `server` is not determinable (`reason`). The effective right lies between No access and what the permissions grant. |
 | `IdentityOrphaned` | info | no | The account no longer exists in the configured domain. Nobody can log on with the SID; an ACE naming it is a dead entry. |
 | `GroupResolutionIncomplete { reason }` | high | **yes** | The group resolution succeeded, but `reason` names groups that are missing from the evaluated token — a primary group outside the base, groups outside a base that is only an OU, a group without a readable SID, an unresolvable local group. |
 | `GuestOrAnonymousToken { sids }` | medium | no (an anonymous bound is) | The analysed account is the Guest account or an anonymous logon. Windows never puts Authenticated Users into such a token (measured), so its ACEs do not apply; for an anonymous logon, Everyone counts only if the server sets `EveryoneIncludesAnonymous` — Stars gives a range there. |
@@ -1434,10 +1508,11 @@ explicitly because they can make a finding *over*-report:
 **`trusts` requires `--server`** (it reads the `trustedDomain` objects over
 LDAP), and `--base-dn` should be the **domain root** (e.g.
 `DC=corp,DC=local`), where those objects live. This is **read-only**: Stars
-never changes a trust, and it deliberately does *not* model the runtime filter
-effect (that would need a synthetic logon). It gives you the facts to apply
-the cross-forest caveat yourself — see
-[known-limitations.md](known-limitations.md) **L4**.
+never changes a trust. For an account of a trusted domain, analyzed with the
+`--trust-*` options, Stars evaluates Selective Authentication itself
+(ADR 0079); the SID filtering of a forest trust for third-domain SIDs stays a
+caveat you apply yourself — see [known-limitations.md](known-limitations.md)
+**L4**.
 
 ### More options
 

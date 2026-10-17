@@ -18,7 +18,9 @@ use std::sync::Arc;
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use adpa_core::model::{EffectivePermission, RiskFinding, RiskSeverity, ShareEvalStatus};
+use adpa_core::model::{
+    EffectivePermission, PermissionDiagnostic, RiskFinding, RiskSeverity, ShareEvalStatus,
+};
 use fs_scanner::CancellationToken;
 use permission_engine::NormalizedRights;
 
@@ -3915,6 +3917,28 @@ fn apply_analyze_result(
 }
 
 fn format_share_line(perm: &EffectivePermission) -> String {
+    let line = format_share_line_layers(perm);
+    if line.is_empty() {
+        return line;
+    }
+    // ADR 0079: the logon decides before NTFS and share — the line must not
+    // read as if their combination were the effective right.
+    let logon = perm.diagnostics.iter().find_map(|d| match d {
+        PermissionDiagnostic::SelectiveAuthenticationDenied { .. } => Some(
+            " Selective Authentication refuses the logon, so the effective right is No access.",
+        ),
+        PermissionDiagnostic::SelectiveAuthenticationUnknown { .. } => Some(
+            " Whether Selective Authentication allows the logon is not determinable, so the effective right is not determinable.",
+        ),
+        _ => None,
+    });
+    match logon {
+        Some(note) => format!("{line}{note}"),
+        None => line,
+    }
+}
+
+fn format_share_line_layers(perm: &EffectivePermission) -> String {
     let ntfs_label =
         permission_engine::rights_label_compact(perm.ntfs_mask.0, perm.ntfs_determinable());
     match &perm.share_status {
@@ -5051,6 +5075,31 @@ mod tests {
             line.contains('∩'),
             "must state the restrictive combination: {line}"
         );
+    }
+
+    /// ADR 0079: a refused or unknown logon is named after the layers, so
+    /// the line never reads as the effective right.
+    #[test]
+    fn share_line_names_a_refused_or_unknown_logon() {
+        use adpa_core::model::PermissionDiagnostic;
+        let mut p = perm(ShareEvalStatus::Applied, Some(0x0012_0089));
+        p.diagnostics
+            .push(PermissionDiagnostic::SelectiveAuthenticationDenied {
+                server: "FS01".into(),
+            });
+        let line = format_share_line(&p);
+        assert!(line.contains('∩') && line.ends_with("No access."), "{line}");
+        let mut q = perm(ShareEvalStatus::Unrestricted, None);
+        q.diagnostics
+            .push(PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                server: "FS01".into(),
+                reason: "x".into(),
+            });
+        assert!(format_share_line(&q).contains("not determinable"));
+        // Without SMB context there is still no line.
+        let mut r = perm(ShareEvalStatus::NotApplicable, None);
+        r.diagnostics = p.diagnostics.clone();
+        assert!(format_share_line(&r).is_empty());
     }
 
     /// NULL DACL means "no SMB restriction" — the opposite of an empty

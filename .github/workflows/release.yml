@@ -162,7 +162,8 @@ jobs:
             - Optional LDAP / Active Directory identity resolution
               (LDAPS, Global Catalog, Kerberos-signed bind)
             - Accounts of a trusted domain resolved on its domain controller
-              (global and universal groups, SID filtering, FSP chains)
+              (global and universal groups, SID filtering, FSP chains,
+              Selective Authentication)
             - Optional SMB share permission overlay and share inventory
               (CLI and GUI Shares tab; hidden `$` data shares are flagged)
             - Read-only AD trust inventory (CLI and GUI Trusts tab)

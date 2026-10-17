@@ -1120,6 +1120,8 @@ async fn handle_analyze(
     // ADR 0070: without LDAP the account is looked up on the target server.
     let account_server = validation::path::effective_smb_target(path, smb_server);
     let res = resolve_identity_sids(identity, ldap, account_server.as_deref()).await?;
+    let selective_authentication =
+        selective_authentication_for(ldap, account_server.as_deref(), &res).await;
 
     let access_context = AccessContext::for_path_with_smb(path, smb_server, share_name);
     let LocalGroupResolution {
@@ -1204,6 +1206,7 @@ async fn handle_analyze(
             share_trace: share_scanner::share_ace_outcomes(&share_decisions, &sid_names),
             sid_names,
             resolution: engine_flags,
+            selective_authentication: selective_authentication.clone(),
         })
         .map(|mut result| {
             // Review CR-7: the share side explained ACE by ACE.
@@ -1684,6 +1687,29 @@ fn collect_local_groups_on(
     }
 }
 
+/// ADR 0079 (L4): the Selective Authentication check of a resolved
+/// identity on the target server — `None` unless it is an account of a
+/// trusted domain whose trust uses Selective Authentication (the same rule
+/// and code as the CLI). Read-only.
+async fn selective_authentication_for(
+    ldap: Option<&LdapParams>,
+    account_server: Option<&str>,
+    res: &PrincipalResolution,
+) -> Option<adpa_core::traits::SelectiveAuthenticationCheck> {
+    let params = ldap?;
+    res.trusted_domain.as_ref()?;
+    #[cfg(windows)]
+    {
+        let resource = LdapResolver::new(params.to_config());
+        ad_resolver::selective_auth::check_for_target(&resource, account_server, res).await
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (params, account_server);
+        None
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Scan
 // ---------------------------------------------------------------------------
@@ -1753,6 +1779,9 @@ async fn handle_scan(
             return make_early_summary(format!("Identity resolution failed: {e}"));
         }
     };
+    // ADR 0079: one check per scan — every path is on the same server.
+    let scan_selective_authentication =
+        selective_authentication_for(ldap, account_server.as_deref(), &res).await;
     let engine_flags = res.engine_flags();
     let local_account = matches!(
         res.group_resolution_status,
@@ -1921,6 +1950,7 @@ async fn handle_scan(
             share_trace: share_scanner::share_ace_outcomes(&scan_share_decisions, &scan_sid_names),
             sid_names: scan_sid_names.clone(),
             resolution: engine_flags.clone(),
+            selective_authentication: scan_selective_authentication.clone(),
         }) {
             Ok(mut perm) => {
                 // Review CR-7: the share side explained ACE by ACE.
