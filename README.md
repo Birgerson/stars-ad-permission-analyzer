@@ -160,7 +160,7 @@ It consists of two programs:
 
 | Program | Description |
 |---------|-------------|
-| `adpa-gui.exe` | Graphical interface (GUI) with Analyze, Groups, Scan Tree, Delta, and Info views |
+| `adpa-gui.exe` | Graphical interface (GUI) with seven tabs: Analyze, Groups, Scan Tree, Delta, Trusts, Shares, Info |
 | `adpa.exe` | Command-line interface (CLI) for scripting and automation |
 
 Both programs analyze the same data and use the same permission logic.
