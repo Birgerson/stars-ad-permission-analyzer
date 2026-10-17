@@ -101,7 +101,8 @@ domain needs credentials of that domain, or a Kerberos signed bind.
   (domain local), `GG_ExtNested` (global ∋ GG_ExtAuditors), `GG_ExtDist`
   (distribution); corp.test `gt_DL_trust` (∋ FSP of GG_ExtNested) ⊂
   `gt_DL_trust_outer`; folder tree `C:\TrustTest` (share `TrustTest`,
-  outside `C:\Daten` so earlier baselines keep their rows) with one rule
+  outside the lab's existing data tree, so earlier baselines keep their
+  rows) with one rule
   per folder.
 - Stars with the trusted connection vs. the Windows Authz oracle (every
   folder, including no-access ones), five ext.test accounts:
@@ -110,7 +111,7 @@ domain needs credentials of that domain, or a Kerberos signed bind.
   identical (incl. the original L15 cases: ext_partner04 → RX on P025,
   ext_partner05 → Modify on P030 — before: NOT DETERMINABLE).
 - Regression, v1.13.0 vs. this change, without the trust flags, every
-  column: DC-01 `Daten$` 32 corp identities × 689 paths = 22,048 rows
+  column: DC-01 data share, 32 corp identities × 689 paths = 22,048 rows
   identical; MS-01 with LDAP 135 and without LDAP 135 rows identical;
   group-kind fixture 78 rows identical. The five ext.test SIDs without the
   connection: identical except the one reworded reason sentence (0
