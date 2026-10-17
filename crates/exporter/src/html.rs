@@ -289,6 +289,12 @@ fn write_permissions_table(
         }
         for d in &p.diagnostics {
             match d {
+                PermissionDiagnostic::InheritedDenyAfterInheritedAllow { .. } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-neutral\" title=\"{}\">ℹ inherited order: levels unknown</span>",
+                        escape_html(&d.summary())
+                    ));
+                }
                 PermissionDiagnostic::NonCanonicalDaclOrder { at_index } => {
                     diag_parts.push(format!(
                         "<span class=\"badge badge-neutral\" \

@@ -345,6 +345,14 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
     section("Diagnostics (structured)");
     for d in diagnostics {
         match d {
+            PermissionDiagnostic::InheritedDenyAfterInheritedAllow { at_index } => {
+                println!(
+                    "  [i] An inherited Allow precedes an inherited Deny (ACE index {at_index})."
+                );
+                println!("      Canonical when they come from different ancestor levels, not");
+                println!("      when from the same one — the DACL alone does not say which.");
+                println!("      The result is exact: Windows also walks the stored order.");
+            }
             PermissionDiagnostic::NonCanonicalDaclOrder { at_index } => {
                 println!("  [i] Non-canonical DACL ordering at ACE index {at_index}.");
                 println!("      Windows AccessCheck walks in stored order — the result is");

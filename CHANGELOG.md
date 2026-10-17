@@ -28,6 +28,17 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **No false "non-canonical DACL" any more** (known limitation L9): an
+  inherited Allow ahead of an inherited Deny is canonical when they come
+  from different parent levels, which the DACL does not record. Stars
+  called such healthy DACLs non-canonical; it now reports the new
+  informational marker `InheritedDenyAfterInheritedAllow` ("canonical
+  across levels — cannot tell from this DACL; result unaffected").
+  `NonCanonicalDaclOrder` remains for orders that are never canonical.
+  Found with a new lab fixture covering every AD group kind and
+  inheritance breaks. The user guide listed `NonCanonicalDaclOrder` as
+  "medium"; it is informational, as in the GUI and reports.
+
 - **CLI help:** `analyze` / `scan --output` said "Optional CSV export
   path" although `.json` and `.html` work too (the extension picks the
   format); `--max-depth` had no help text (0 = only the path, default

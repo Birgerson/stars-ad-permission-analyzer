@@ -268,6 +268,7 @@ way it did.
 ```rust
 enum PermissionDiagnostic {
     NonCanonicalDaclOrder { at_index: usize },
+    InheritedDenyAfterInheritedAllow { at_index: usize },
     UnsupportedShareAces { count: usize },
     DomainGroupRecursionIncomplete,
     IdentityDisabled,
@@ -786,10 +787,18 @@ flags:
 
 ### 6.4 Step 3 — non-canonical DACL detection
 
-`first_non_canonical_position(dacl)` checks whether the ACE order
-matches the Windows canonical form (Deny-explicit, Allow-explicit,
-Deny-inherited, Allow-inherited). On deviation
-`PermissionDiagnostic::NonCanonicalDaclOrder { at_index }` is pushed.
+`dacl_order_finding(dacl)` checks the ACE order against the Windows
+canonical form (Deny-explicit, Allow-explicit, then the inherited ACEs
+level by level, Deny before Allow within a level):
+
+- an explicit ACE after an inherited one, or an explicit Allow before an
+  explicit Deny, is never canonical →
+  `PermissionDiagnostic::NonCanonicalDaclOrder { at_index }`;
+- an inherited Deny after an inherited Allow is canonical across levels
+  and not within one; the DACL does not record the level (known
+  limitation L9) →
+  `PermissionDiagnostic::InheritedDenyAfterInheritedAllow { at_index }`,
+  which says that Stars cannot tell.
 
 This is not `incomplete = true` — the computation agrees with Windows,
 but the auditor should know the ACL is "unusually" sorted (often a
@@ -1141,6 +1150,7 @@ auditable at all. It works in three layers:
 #[serde(tag = "kind")]
 enum PermissionDiagnostic {
     NonCanonicalDaclOrder { at_index: usize },
+    InheritedDenyAfterInheritedAllow { at_index: usize },
     UnsupportedShareAces { count: usize },
     UnsupportedNtfsAces { count: usize },
     DomainGroupRecursionIncomplete,
@@ -1239,8 +1249,9 @@ Deliberately **not** matched:
   statement, not a completeness gap.
 - `IdentityDisabledStatusUnknown` — orthogonal to permission
   computation.
-- `NonCanonicalDaclOrder` — Windows AccessCheck works correctly on
-  the stored order; Stars reproduces that exactly.
+- `NonCanonicalDaclOrder` / `InheritedDenyAfterInheritedAllow` —
+  Windows AccessCheck works correctly on the stored order; Stars
+  reproduces that exactly.
 
 This separation is the productive substance of the marker system —
 an auditor distinguishes what Stars *did not know* (= please

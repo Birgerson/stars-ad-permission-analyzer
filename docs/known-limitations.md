@@ -483,10 +483,10 @@ Out of scope.
 
 ---
 
-## L9 — Canonical-order detector can flag legitimate multi-level inheritance
+## L9 — Canonical order across inheritance levels cannot be decided
 
 **Priority:** Low
-**Tracking:** documentation only — exact detection is impossible with the available data
+**Tracking:** narrowed 2026-10-17 — the ambiguous case has its own marker; exact detection is impossible with the available data
 
 ### Problem
 
@@ -506,18 +506,32 @@ not affected** — the engine always walks the stored order, which is
 exactly what Windows `AccessCheck` does. Only the informational marker
 can be a false positive.
 
-### Why not fixed
+### What Stars does since 2026-10-17
 
 `AceEntry` carries no ancestry information (Windows does not expose
 which ancestor an inherited ACE came from through
-`GetNamedSecurityInfoW`). An exact canonical check per inheritance
-level is therefore impossible. The diagnostic text and the engine log
-message state this limitation explicitly.
+`GetNamedSecurityInfoW`), so an exact canonical check per inheritance
+level is impossible. Stars therefore separates the two cases:
+
+- `NonCanonicalDaclOrder` only for orders that are **never** canonical:
+  an explicit ACE after an inherited one, or an explicit Allow before an
+  explicit Deny.
+- `InheritedDenyAfterInheritedAllow` when the only irregularity is an
+  inherited Deny after an inherited Allow: canonical across levels, not
+  within one — the marker says that Stars cannot tell, instead of calling
+  a healthy DACL non-canonical.
+
+Found in the lab (2026-10-17, DC-01 fixture covering every AD group kind
+and inheritance breaks): two child folders inherit an Allow from their
+parent and a Deny from their grandparent — canonical in Windows,
+previously reported as non-canonical. Results were identical to the
+Windows Authz oracle before and after (104 / 104 rows).
 
 ### Test plan
 
-Not testable beyond the wording — the marker semantics are documented
-here and in the diagnostic tooltip texts.
+`inherited_deny_after_inherited_allow_is_not_called_non_canonical` and
+`definite_order_violations_stay_non_canonical` (permission engine); the
+lab fixture above.
 
 ---
 
@@ -808,7 +822,7 @@ session (Stars assumes it, as for every SMB logon).
 | L6 — Live tests | High | n/a | **partially** — live 3-domain run 2026-06-14 committed (verification.md Block L); automated CI suite still open |
 | L7 — Token privileges | Low | no | deliberately out of scope |
 | L8 — DAC | Low | yes (incomplete) | deliberately out of scope |
-| L9 — Canonical-order false positives | Low | yes (informational) | no (missing ancestry data) |
+| L9 — Canonical order across inheritance levels | Low | yes (informational: `InheritedDenyAfterInheritedAllow`) | narrowed 2026-10-17; exact check impossible (missing ancestry data) |
 | L10 — SD dedup scan-local only | Low | n/a | yes, with a descriptor table + migration |
 | L11 — Engine module size | Low | n/a | optional refactor (readability only, not a defect) |
 | L12 — Manual updates / `update_manager` extension point | Low | n/a | by design; fail-closed seam, implement a real verifier only if in-app updates are required |

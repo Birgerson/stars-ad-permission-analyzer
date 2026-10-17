@@ -885,7 +885,8 @@ exact wording, lives in
 
 | Marker | Severity | Risk `incomplete`? | What it tells you |
 | --- | --- | --- | --- |
-| `NonCanonicalDaclOrder` | medium | no | DACL is not in Windows canonical order. AccessCheck still walks in stored order — result may differ from a canonicalized expectation. |
+| `NonCanonicalDaclOrder` | info | no | DACL is not in Windows canonical order — an explicit ACE after an inherited one, or an explicit Allow before an explicit Deny (usually manual editing). AccessCheck still walks in stored order, and so does Stars: the result is exact. |
+| `InheritedDenyAfterInheritedAllow` | info | no | An inherited Allow precedes an inherited Deny. That is canonical when they come from different parent levels (Windows orders inherited ACEs level by level) and not when they come from the same one — the DACL alone does not say which, so Stars does not call it non-canonical. The result is exact. |
 | `UnsupportedShareAces` / `UnsupportedNtfsAces` | medium | **yes** | The DACL contained ACE types the parser could not interpret (object / callback / conditional / vendor-specific). A hidden Deny among them could change the result — the mask is potentially incomplete. |
 | `DomainGroupRecursionIncomplete` | medium | **yes** | Group resolution ran through SAM/LSA instead of LDAP. `NetUserGetGroups` returns only direct global groups — nested domain groups are not recursively resolved. |
 | `IdentityDisabled` | info | no | Account is flagged disabled in AD via `userAccountControl/UF_ACCOUNTDISABLE`. ACL-theoretical rights are correct, but the account normally cannot authenticate. |
