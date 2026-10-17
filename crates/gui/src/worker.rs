@@ -1103,6 +1103,8 @@ async fn handle_analyze(
             anonymous_everyone,
             access_context,
             unsupported_share_ace_count,
+            // ADR 0077: borrowed before `sid_names` moves (field order).
+            share_trace: share_scanner::share_ace_outcomes(&share_decisions, &sid_names),
             sid_names,
             resolution: engine_flags,
         })
@@ -1819,6 +1821,7 @@ async fn handle_scan(
             anonymous_everyone,
             access_context: scan_access_context,
             unsupported_share_ace_count: scan_unsupported_share_ace_count,
+            share_trace: share_scanner::share_ace_outcomes(&scan_share_decisions, &scan_sid_names),
             sid_names: scan_sid_names.clone(),
             resolution: engine_flags.clone(),
         }) {
@@ -3675,6 +3678,7 @@ mod tests {
             unsupported_ace_count: 0,
             matched_aces: vec![],
             diagnostics: vec![PermissionDiagnostic::OwnerRightsAceApplied],
+            trace: Default::default(),
         };
 
         let db = Database::open_in_memory().expect("in-memory DB");
@@ -4092,6 +4096,7 @@ mod tests {
             unsupported_ace_count: 0,
             matched_aces: vec![],
             diagnostics,
+            trace: Default::default(),
         };
         let gap = || {
             vec![PermissionDiagnostic::GroupResolutionIncomplete {

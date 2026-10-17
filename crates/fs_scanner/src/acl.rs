@@ -578,6 +578,7 @@ mod tests {
             unsupported_ace_count: 1,
             matched_aces: vec![],
             diagnostics: vec![PermissionDiagnostic::UnsupportedNtfsAces { count: 1 }],
+            trace: Default::default(),
         };
         assert!(
             perm.is_incomplete(),

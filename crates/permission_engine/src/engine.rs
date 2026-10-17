@@ -19,10 +19,11 @@ use std::collections::HashSet;
 use adpa_core::{
     error::CoreError,
     model::{
-        format_also_via, AccessContext, AccessMask, AceEntry, AceKind, ContributingAce,
-        EffectivePermission, GroupMembership, Identity, LocalGroupDescriptor, LocalGroupEntry,
-        LocalGroupExpansion, MembershipHop, MembershipPathSource, PermissionDiagnostic,
-        PermissionPath, PolicyDword, RemoteUacFiltering, ShareEvalStatus, ShareMaskStatus, Sid,
+        format_also_via, AccessContext, AccessMask, AceEffect, AceEntry, AceKind, AceOutcome,
+        ContributingAce, EffectivePermission, GroupMembership, Identity, LocalGroupDescriptor,
+        LocalGroupEntry, LocalGroupExpansion, MembershipHop, MembershipPathSource,
+        PermissionDiagnostic, PermissionPath, PermissionTrace, PolicyDword, RemoteUacFiltering,
+        ShareEvalStatus, ShareMaskStatus, Sid, TraceGroup, TraceGroupState, TraceLayer,
         UncertainLayer, Uncertainty,
     },
     traits::{PermissionEvaluationInput, PermissionEvaluator},
@@ -405,12 +406,13 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             unsupported_ace_count: input.file_system_object.unsupported_aces.len(),
             matched_aces,
             diagnostics,
+            trace: Default::default(),
         };
         // Review CR-5: the explanation path states each value with the same
         // determinability as the result lines, derived from the finished
         // result (statuses and every marker) — the two cannot disagree.
         let uncertainty = result.uncertainty();
-        result.path_explanation = build_explanation(ExplanationInput {
+        let (path_explanation, trace) = build_explanation(ExplanationInput {
             identity: &result.identity,
             memberships: &input.group_memberships,
             dacl: &input.file_system_object.dacl,
@@ -439,7 +441,10 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             share_determinable: result.share_determinable(),
             effective_determinable: result.effective_determinable(),
             uncertainty: &uncertainty,
+            share_trace: &input.share_trace,
         });
+        result.path_explanation = path_explanation;
+        result.trace = trace;
         debug!(
             user = %result.identity.sid.0,
             path = %result.path.0,
@@ -1630,6 +1635,8 @@ struct ExplanationInput<'a> {
     uac_certain_reason: Option<&'a str>,
     /// L17: EveryoneIncludesAnonymous as read from the target.
     anonymous_everyone: Option<bool>,
+    /// ADR 0077: the share ACE outcomes, appended to the trace.
+    share_trace: &'a [AceOutcome],
     /// Determinability of the three values, from the finished result
     /// (`EffectivePermission::ntfs_determinable` etc., review CR-5).
     ntfs_determinable: bool,
@@ -1640,7 +1647,7 @@ struct ExplanationInput<'a> {
 }
 
 /// Creates an explainable permission path.
-fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
+fn build_explanation(input: ExplanationInput<'_>) -> (PermissionPath, PermissionTrace) {
     let ExplanationInput {
         identity,
         memberships,
@@ -1666,6 +1673,7 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         uncertain_owner,
         uac_certain_reason,
         anonymous_everyone,
+        share_trace,
         ntfs_determinable,
         share_determinable,
         effective_determinable,
@@ -1782,6 +1790,18 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
     // no longer mistake a merely-matched ACE for one that mattered.
     let mut matched_ace_steps = 0usize;
     let mut uncertain_ace_steps = 0usize;
+    // ADR 0077: the structured twin of the ACE steps, decided by the same
+    // predicates in the same place.
+    let mut outcomes: Vec<AceOutcome> = Vec::new();
+    let outcome = |ace: &AceEntry, effect: AceEffect| AceOutcome {
+        layer: TraceLayer::Ntfs,
+        kind: ace.kind,
+        sid: ace.sid.clone(),
+        trustee: trustee_with_sid(&ace.sid, sid_names),
+        mask: ace.mask,
+        inherited: ace.inherited,
+        effect,
+    };
     for (idx, ace) in dacl.iter().enumerate() {
         if !ace_matches(ace, match_sids, deny_only_sids) {
             // ADR 0076: an Allow for a certainly filtered group is listed
@@ -1802,6 +1822,12 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
                     display_for_sid(&ace.sid, None, sid_names),
                     NormalizedRights::new(expand_generic_rights(ace.mask.0)).display_name(),
                     ace.mask.0,
+                ));
+                outcomes.push(outcome(
+                    ace,
+                    AceEffect::NotApplied {
+                        reason: format!("the group is deny-only in this token: {reason}"),
+                    },
                 ));
                 continue;
             }
@@ -1842,6 +1868,12 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
                     rights.display_name(),
                     ace.mask.0,
                 ));
+                outcomes.push(outcome(
+                    ace,
+                    AceEffect::Uncertain {
+                        reason: format!("{reason}; {effect}"),
+                    },
+                ));
             }
             continue;
         }
@@ -1860,6 +1892,16 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         let expanded = expand_generic_rights(ace.mask.0);
         let rights = NormalizedRights::new(expanded);
         let decided = decided_per_ace.get(idx).copied().unwrap_or(0);
+        outcomes.push(outcome(
+            ace,
+            if !ace_applies_to_current_object(ace) {
+                AceEffect::InheritOnly
+            } else if decided == 0 {
+                AceEffect::NoEffect
+            } else {
+                AceEffect::Decided { bits: decided }
+            },
+        ));
         let contribution_note = if !ace_applies_to_current_object(ace) {
             " [inherit-only — not applied to this object]".to_string()
         } else if decided == 0 {
@@ -2135,7 +2177,146 @@ fn build_explanation(input: ExplanationInput<'_>) -> PermissionPath {
         }
     }
 
-    PermissionPath { steps }
+    // ADR 0077: the groups the trace's ACEs reach the account through.
+    outcomes.extend(share_trace.iter().cloned());
+    let trace = trace_groups(
+        outcomes,
+        &identity.sid.0,
+        &merged,
+        &decisive,
+        match_sids,
+        deny_only_sids,
+        uncertain_sids,
+        access_context,
+        sid_names,
+    );
+    (PermissionPath { steps }, trace)
+}
+
+/// `DOMAIN\name (SID)` when a name is known, else the SID.
+fn trustee_with_sid(sid: &Sid, sid_names: &std::collections::BTreeMap<String, String>) -> String {
+    match sid_names.get(&sid.0) {
+        Some(name) => format!("{name} ({})", sid.0),
+        None => sid.0.clone(),
+    }
+}
+
+/// ADR 0077: the token groups the trace's ACEs name, classified like the
+/// membership steps (deny-only, uncertain, implicit well-known) — only
+/// those, so the trace stays small for an account in thousands of groups.
+#[allow(clippy::too_many_arguments)]
+fn trace_groups(
+    aces: Vec<AceOutcome>,
+    user_sid: &str,
+    merged: &[GroupMembership],
+    decisive: &HashSet<&str>,
+    match_sids: &HashSet<String>,
+    deny_only_sids: &HashSet<String>,
+    uncertain_sids: &HashSet<String>,
+    access_context: AccessContext,
+    sid_names: &std::collections::BTreeMap<String, String>,
+) -> PermissionTrace {
+    let mut groups: Vec<TraceGroup> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut memberships_used = 0usize;
+    for ace in &aces {
+        let sid = ace.sid.0.as_str();
+        if sid == user_sid || !seen.insert(sid.to_owned()) {
+            continue;
+        }
+        let state_of = |sid: &str| {
+            if deny_only_sids.contains(sid) {
+                TraceGroupState::DenyOnly
+            } else if uncertain_sids.contains(sid) {
+                TraceGroupState::Uncertain
+            } else {
+                TraceGroupState::Member
+            }
+        };
+        let group = if let Some(gm) = merged.iter().find(|m| m.group_sid.0 == sid) {
+            memberships_used += 1;
+            TraceGroup {
+                sid: gm.group_sid.clone(),
+                display: match gm.group_name.as_deref().filter(|n| !n.is_empty()) {
+                    Some(name) => format!("{name} ({sid})"),
+                    None => trustee_with_sid(&gm.group_sid, sid_names),
+                },
+                route: membership_route(gm, sid_names),
+                state: state_of(sid),
+                decisive: decisive.contains(sid),
+            }
+        } else if match_sids.contains(sid) {
+            TraceGroup {
+                sid: ace.sid.clone(),
+                display: trustee_with_sid(&ace.sid, sid_names),
+                route: implicit_route(sid, access_context).to_owned(),
+                state: TraceGroupState::Implicit,
+                decisive: decisive.contains(sid),
+            }
+        } else if matches!(ace.effect, AceEffect::Uncertain { .. }) {
+            TraceGroup {
+                sid: ace.sid.clone(),
+                display: trustee_with_sid(&ace.sid, sid_names),
+                route: logon_dependent_reason(sid).to_owned(),
+                state: TraceGroupState::Uncertain,
+                decisive: false,
+            }
+        } else {
+            // A share ACE whose trustee is not in the token at all is never
+            // in the trace (`share_ace_outcomes` leaves those out).
+            continue;
+        };
+        groups.push(group);
+    }
+    PermissionTrace {
+        aces,
+        other_groups: merged.len().saturating_sub(memberships_used),
+        groups,
+    }
+}
+
+/// `direct`, `via A → B` or "chain unknown" for a membership (ADR 0077).
+fn membership_route(
+    gm: &GroupMembership,
+    sid_names: &std::collections::BTreeMap<String, String>,
+) -> String {
+    let Some(path) = gm.path.as_ref() else {
+        return if gm.direct { "direct" } else { "transitive" }.to_owned();
+    };
+    if !path.complete {
+        return "membership confirmed, exact chain unknown".to_owned();
+    }
+    if path.nodes.len() <= 2 {
+        return "direct".to_owned();
+    }
+    let middle: Vec<String> = path.nodes[1..path.nodes.len() - 1]
+        .iter()
+        .enumerate()
+        .map(|(i, sid)| {
+            path.names
+                .get(i + 1)
+                .cloned()
+                .flatten()
+                .or_else(|| sid_names.get(&sid.0).cloned())
+                .unwrap_or_else(|| sid.0.clone())
+        })
+        .collect();
+    format!("via {}", middle.join(" → "))
+}
+
+/// Why an implicit well-known is in the token (ADR 0077).
+fn implicit_route(sid: &str, access_context: AccessContext) -> &'static str {
+    match sid {
+        SID_EVERYONE | SID_AUTHENTICATED_USERS => "implicit — in every token of this logon",
+        "S-1-5-2" => "implicit — network logon over SMB",
+        "S-1-5-4" => "implicit — interactive logon",
+        SID_OWNER_RIGHTS => "implicit — the account owns this object",
+        _ => match access_context {
+            AccessContext::RemoteSmb => "implicit — network logon",
+            AccessContext::LocalInteractive => "implicit — interactive logon",
+            AccessContext::Unspecified => "implicit",
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2284,6 +2465,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap()
     }
@@ -2311,6 +2493,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap()
     }
@@ -2338,6 +2521,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap()
     }
@@ -2365,6 +2549,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap()
     }
@@ -3247,6 +3432,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
         assert_eq!(
@@ -3278,6 +3464,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
         assert!(NormalizedRights::new(p.effective_mask.0).is_read());
@@ -3305,6 +3492,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
         assert_eq!(
@@ -3873,6 +4061,7 @@ mod tests {
                 unsupported_share_ace_count: 4,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
         assert!(
@@ -3903,6 +4092,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
         assert!(
@@ -3966,6 +4156,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names,
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
         let member_step = p
@@ -4005,6 +4196,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names,
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
         let ace_step = p
@@ -4678,6 +4870,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names,
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .expect("evaluate");
         let step = result
@@ -4833,6 +5026,7 @@ mod tests {
                     identity_not_in_configured_ldap_base: true,
                     ..Default::default()
                 },
+                share_trace: Default::default(),
             })
             .unwrap();
         assert!(
@@ -4870,6 +5064,7 @@ mod tests {
                     identity_disabled_status_unknown: true,
                     ..Default::default()
                 },
+                share_trace: Default::default(),
             })
             .unwrap();
         assert!(
@@ -4903,6 +5098,7 @@ mod tests {
             unsupported_share_ace_count: 0,
             sid_names: std::collections::BTreeMap::new(),
             resolution: ResolutionProvenance::default(),
+            share_trace: Default::default(),
         }
     }
 
@@ -5267,6 +5463,7 @@ mod tests {
                     ),
                     ..Default::default()
                 },
+                share_trace: Default::default(),
             })
             .unwrap();
         let found = result
@@ -5309,6 +5506,7 @@ mod tests {
                     ),
                     ..Default::default()
                 },
+                share_trace: Default::default(),
             })
             .unwrap();
         let found = result
@@ -5348,6 +5546,7 @@ mod tests {
                     group_resolution_gaps: vec!["gap one".into(), "gap two".into()],
                     ..Default::default()
                 },
+                share_trace: Default::default(),
             })
             .unwrap();
         let reasons: Vec<&str> = result
@@ -5383,6 +5582,7 @@ mod tests {
                     unsupported_share_ace_count: 0,
                     sid_names: std::collections::BTreeMap::new(),
                     resolution: provenance,
+                    share_trace: Default::default(),
                 })
                 .unwrap()
         };
@@ -5442,6 +5642,7 @@ mod tests {
                     identity_resolved_via_fsp: true,
                     ..Default::default()
                 },
+                share_trace: Default::default(),
             })
             .unwrap();
         assert!(
@@ -5477,6 +5678,7 @@ mod tests {
                     group_resolution_via_global_catalog: true,
                     ..Default::default()
                 },
+                share_trace: Default::default(),
             })
             .unwrap();
         assert!(
@@ -5547,6 +5749,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names,
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
 
@@ -5610,6 +5813,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
 
@@ -5659,6 +5863,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
 
@@ -5711,6 +5916,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
 
@@ -5754,6 +5960,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
         assert_eq!(
@@ -5785,6 +5992,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
         assert_eq!(
@@ -5964,6 +6172,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
         let (sids, min, max) = logon_marker(&p).expect("bounded");
@@ -5996,6 +6205,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap()
     }
@@ -6158,6 +6368,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
         assert_eq!(p.ntfs_mask.0, 0);
@@ -6604,6 +6815,25 @@ mod tests {
                 denied & !owner_bits,
                 "case {case}: deny aggregation; steps {steps:?}"
             );
+            // ADR 0077: the trace is the structured twin of the ACE steps —
+            // one entry per ACE step, and its decided Allow bits are the
+            // granted bits of the path.
+            let ace_steps = steps
+                .iter()
+                .filter(|s| s.starts_with("Allow ACE") || s.starts_with("Deny ACE"))
+                .count();
+            assert_eq!(p.trace.aces.len(), ace_steps, "case {case}: trace vs steps");
+            let traced: u32 = p
+                .trace
+                .aces
+                .iter()
+                .filter(|a| a.kind == AceKind::Allow)
+                .map(|a| match a.effect {
+                    AceEffect::Decided { bits } => bits,
+                    _ => 0,
+                })
+                .fold(0, |acc, b| acc | b);
+            assert_eq!(traced, granted, "case {case}: trace bits");
             // Every SID that moves a bound has its own UNCERTAIN step.
             if let Some((bounding, _, _)) = logon_marker(&p) {
                 for sid in bounding {
@@ -6751,6 +6981,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap();
         let steps = &p.path_explanation.steps;
@@ -7120,6 +7351,7 @@ mod tests {
                 unsupported_share_ace_count: 0,
                 sid_names: std::collections::BTreeMap::new(),
                 resolution: ResolutionProvenance::default(),
+                share_trace: Default::default(),
             })
             .unwrap()
     }
@@ -7285,5 +7517,112 @@ mod tests {
         );
         let last = steps.len() - 1;
         assert!(!c[last] && !c[last - 1] && !c[last - 2] && !c[last - 3] && !c[last - 4]);
+    }
+
+    // --- ADR 0077: the permission trace ---
+
+    #[test]
+    fn trace_classifies_the_groups_an_ace_reaches_the_account_through() {
+        const DECIDES: &str = "S-1-5-21-1000-1000-1000-3101";
+        const IDLE: &str = "S-1-5-21-1000-1000-1000-3102";
+        let mut input = base_input(
+            user(USER),
+            fso(
+                None,
+                vec![
+                    allow_ace(DECIDES, MASK_MODIFY, false),
+                    allow_ace(SID_EVERYONE, MASK_READ, false),
+                    allow_ace(ADMINS, MASK_FULL_CONTROL, false),
+                    allow_ace("S-1-5-15", MASK_FULL_CONTROL, false),
+                    allow_ace_inherit_only(DECIDES, MASK_FULL_CONTROL, false),
+                ],
+            ),
+        );
+        input.group_memberships = vec![
+            membership(USER, DECIDES),
+            membership(USER, IDLE),
+            membership(USER, ADMINS),
+        ];
+        input.local_group_sids = vec![Sid(ADMINS.into())];
+        input.uac_filtered_group_sids = vec![Sid(ADMINS.into())];
+        input.access_context = AccessContext::RemoteSmb;
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        let t = &p.trace;
+        let group = |sid: &str| t.groups.iter().find(|g| g.sid.0 == sid).unwrap();
+        assert_eq!(group(DECIDES).state, TraceGroupState::Member);
+        assert!(group(DECIDES).decisive);
+        assert_eq!(group(DECIDES).route, "direct");
+        assert_eq!(group(SID_EVERYONE).state, TraceGroupState::Implicit);
+        assert_eq!(group(ADMINS).state, TraceGroupState::DenyOnly);
+        assert_eq!(group("S-1-5-15").state, TraceGroupState::Uncertain);
+        assert!(
+            t.groups.iter().all(|g| g.sid.0 != IDLE),
+            "no ACE → not in the graph"
+        );
+        assert_eq!(t.other_groups, 1, "IDLE is counted, not shown");
+        let effect = |sid: &str, kind: AceKind| {
+            t.aces
+                .iter()
+                .filter(|a| a.sid.0 == sid && a.kind == kind)
+                .map(|a| a.effect.clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(matches!(
+            effect(DECIDES, AceKind::Allow)[0],
+            AceEffect::Decided { .. }
+        ));
+        assert_eq!(effect(DECIDES, AceKind::Allow)[1], AceEffect::InheritOnly);
+        assert!(matches!(
+            effect(ADMINS, AceKind::Allow)[0],
+            AceEffect::Uncertain { .. }
+        ));
+        assert!(matches!(
+            effect("S-1-5-15", AceKind::Allow)[0],
+            AceEffect::Uncertain { .. }
+        ));
+        assert!(t.aces.iter().all(|a| a.layer == TraceLayer::Ntfs));
+    }
+
+    /// Share outcomes passed in are part of the trace and link to groups.
+    #[test]
+    fn share_trace_is_merged_into_the_trace() {
+        let mut input = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+        );
+        input.share_status = ShareMaskStatus::Applied(AccessMask(MASK_READ));
+        input.share_trace = vec![AceOutcome {
+            layer: TraceLayer::Share,
+            kind: AceKind::Allow,
+            sid: Sid(SID_EVERYONE.into()),
+            trustee: "Everyone (S-1-1-0)".into(),
+            mask: AccessMask(MASK_READ),
+            inherited: false,
+            effect: AceEffect::Decided { bits: MASK_READ },
+        }];
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert_eq!(p.trace.aces.len(), 2);
+        assert_eq!(p.trace.aces[1].layer, TraceLayer::Share);
+        assert!(p
+            .trace
+            .groups
+            .iter()
+            .any(|g| g.sid.0 == SID_EVERYONE && g.state == TraceGroupState::Implicit));
+    }
+
+    /// An empty DACL gives an empty trace; a matching ACE fills it.
+    #[test]
+    fn trace_is_empty_only_without_aces() {
+        assert!(eval(user(USER), vec![], fso(None, vec![]), None)
+            .trace
+            .is_empty());
+        assert!(!eval(
+            user(USER),
+            vec![],
+            fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+            None
+        )
+        .trace
+        .is_empty());
     }
 }

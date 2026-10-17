@@ -343,6 +343,7 @@ mod tests {
             unsupported_ace_count: 0,
             matched_aces: vec![],
             diagnostics: vec![],
+            trace: Default::default(),
         }
     }
 

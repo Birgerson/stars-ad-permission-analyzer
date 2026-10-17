@@ -1105,6 +1105,8 @@ async fn run_analyze(
         anonymous_everyone,
         access_context,
         unsupported_share_ace_count,
+        // ADR 0077: borrowed before `sid_names` moves (field order).
+        share_trace: share_scanner::share_ace_outcomes(&share_decisions, &sid_names),
         sid_names,
         resolution: engine_flags,
     };
@@ -1506,6 +1508,10 @@ async fn run_scan(
                     anonymous_everyone: scan_anonymous_everyone,
                     access_context: scan_access_context,
                     unsupported_share_ace_count: scan_unsupported_share_ace_count,
+                    share_trace: share_scanner::share_ace_outcomes(
+                        &scan_share_decisions,
+                        &sid_names,
+                    ),
                     sid_names,
                     resolution: scan_engine_flags.clone(),
                 };
