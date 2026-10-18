@@ -595,6 +595,17 @@ pub fn permission_graph_with(p: &EffectivePermission, opts: GraphOptions) -> Opt
     let share_applied = matches!(p.share_status, ShareEvalStatus::Applied);
     let logon = logon_node(p);
     let logon_refused = matches!(logon, Some((Look::Denied, _, _)));
+    // ADR 0079 addendum: an undeterminable logon whose range collapses — the
+    // permissions grant nothing, so No access either way.
+    let logon_without_effect = p.diagnostics.iter().any(|d| {
+        matches!(
+            d,
+            PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                affects_result: false,
+                ..
+            }
+        )
+    });
     let result_col = if logon.is_some() { 5 } else { 4 };
     let ncols = result_col + 1;
     let col_x = |c: usize| MARGIN + c as f64 * (NODE_W + GAP_X);
@@ -936,7 +947,12 @@ pub fn permission_graph_with(p: &EffectivePermission, opts: GraphOptions) -> Opt
         };
         eff_lines.push(secondary(detail.to_owned()));
         if matches!(logon, Some((Look::Uncertain, _, _))) {
-            eff_lines.push(("logon not determinable".to_owned(), TextStyle::Caution));
+            eff_lines.push(if logon_without_effect {
+                // ADR 0079 addendum: nothing granted — exact either way.
+                secondary("whatever the logon decides".to_owned())
+            } else {
+                ("logon not determinable".to_owned(), TextStyle::Caution)
+            });
         }
     }
     let sync = p
@@ -1102,11 +1118,18 @@ pub fn permission_graph_with(p: &EffectivePermission, opts: GraphOptions) -> Opt
         });
     }
     if let (Some(l), Some((look, _, _))) = (logon_idx, &logon) {
+        // An undeterminable logon that cannot change the result has no effect
+        // on it: grey dashed, like every other line without effect.
+        let (look, strong) = if logon_without_effect {
+            (Look::Inactive, false)
+        } else {
+            (*look, true)
+        };
         edges.push(Edge {
             from: l,
             to: result_node,
-            look: *look,
-            strong: true,
+            look,
+            strong,
         });
     }
 
@@ -1804,13 +1827,41 @@ mod tests {
             .push(PermissionDiagnostic::SelectiveAuthenticationUnknown {
                 server: "FS01".into(),
                 reason: "no read access".into(),
+                affects_result: true,
             });
         let g = permission_graph(&q).unwrap();
-        assert_eq!(
-            g.nodes[node_with(&g, "Logon not determinable")].look,
-            Look::Uncertain
-        );
+        let logon = node_with(&g, "Logon not determinable");
+        assert_eq!(g.nodes[logon].look, Look::Uncertain);
         assert!(has_text(&g, "logon not determinable"));
+        let eff = node_with(&g, "Effective");
+        assert!(g
+            .edges
+            .iter()
+            .any(|e| e.from == logon && e.to == eff && e.look == Look::Uncertain && e.strong));
+
+        // ADR 0079 addendum: the permissions grant nothing — the logon box
+        // stays amber, but its line has no effect and the result is exact.
+        let mut n = result(trace(), Some(0x0012_00A9));
+        n.ntfs_mask = AccessMask(0);
+        n.effective_mask = AccessMask(0);
+        n.diagnostics
+            .push(PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                server: "FS01".into(),
+                reason: "no read access".into(),
+                affects_result: false,
+            });
+        let g = permission_graph(&n).unwrap();
+        let logon = node_with(&g, "Logon not determinable");
+        assert_eq!(g.nodes[logon].look, Look::Uncertain);
+        let eff = node_with(&g, "Effective");
+        let lines: Vec<&str> = g.nodes[eff].lines.iter().map(|(l, _)| l.as_str()).collect();
+        assert!(lines.contains(&"No access"), "{lines:?}");
+        assert!(lines.contains(&"whatever the logon decides"), "{lines:?}");
+        assert!(!lines.contains(&"NOT DETERMINABLE") && !lines.contains(&"logon not determinable"));
+        assert!(g
+            .edges
+            .iter()
+            .any(|e| e.from == logon && e.to == eff && e.look == Look::Inactive && !e.strong));
 
         let mut r = result(trace(), Some(0x0012_00A9));
         r.diagnostics
@@ -1906,12 +1957,14 @@ mod tests {
     /// box: it shows in full, over up to four lines.
     #[test]
     fn a_logon_reason_shows_in_full() {
-        let reason = "an ACE for S-1-5-18, S-1-5-32-544 decides it, and whether that SID is in the account's logon token is not known";
+        // The lab case: "Allowed to authenticate" only for INTERACTIVE.
+        let reason = "an ACE for S-1-5-4 decides it, and whether that SID is in the account's logon token is not known";
         let mut p = result(trace(), Some(0x0012_00A9));
         p.diagnostics
             .push(PermissionDiagnostic::SelectiveAuthenticationUnknown {
                 server: "FS01".into(),
                 reason: reason.into(),
+                affects_result: true,
             });
         let g = permission_graph(&p).unwrap();
         let logon = &g.nodes[node_with(&g, "Logon not determinable")];

@@ -157,3 +157,39 @@ never logs on as the account and never changes a right.
 - The check needs the target's computer object to be readable by the bind
   account. Domain defaults allow it; otherwise the result is not
   determinable, with the reason.
+
+## Addendum (2026-10-18): an undeterminable logon with nothing granted
+
+`SelectiveAuthenticationUnknown` made every result of the account NOT
+DETERMINABLE — also where the permissions grant nothing. There the range
+"between No access and what the permissions grant" is No access to No
+access: refused, the account has no access; allowed, the DACLs grant
+nothing. A scan of an account in that state reported "NOT DETERMINABLE
+(known data: No access)" for every path it cannot reach, which buried the
+paths where the logon really decides.
+
+- The marker carries `affects_result`. The engine sets it to false when the
+  DACL result is exactly No access — effective mask 0 and no other
+  uncertainty (token, NTFS, share). Then `uncertain_layer()` is `None`: the
+  result is exact, the marker is informational (severity Neutral), its
+  text ends "the permissions grant nothing here, so the effective right is
+  No access either way", and the closing explanation step reads "Logon not
+  determinable — … Effective: No access (0x00000000)." With anything else
+  uncertain the range stays open, because an unknown group could grant.
+- Records stored before the field existed read as `true` (serde default):
+  they keep the meaning they were written with.
+- CLI `[i]` instead of `[!]`, HTML neutral badge "logon not determinable —
+  no access either way", GUI share line and graph ("whatever the logon
+  decides", the line from the logon box grey dashed) say the same.
+
+Lab (Selective Authentication on, "Allowed to authenticate" only for
+INTERACTIVE, which the check cannot decide): `TrustTest` for
+`ext_partner01` and `ext_partner04`, 26 rows, before and after — 14 rows
+with nothing granted now exact No access, 12 rows with rights still NOT
+DETERMINABLE with the same range; in every row masks, matches and every
+other column identical, the marker only gaining the field, the explanation
+changing only in the three steps that follow from the exact result. Real
+SMB logon of both accounts in that state: refused (1935) — No access, inside
+both statements. Regression without the trust options, every column: DC
+data share 37 identities (25,493 rows), group-type fixture (78), MS-01 with
+and without LDAP (270) — 0 differing rows.

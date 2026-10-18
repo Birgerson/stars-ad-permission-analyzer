@@ -241,6 +241,9 @@ only for interactive logons).
   the server refuses the logon, so no permission is ever evaluated.
 - **"logon not determinable"** — the logon box is amber and names the
   reason; the effective right lies between No access and the value shown.
+  When the permissions grant nothing, the result says **"whatever the
+  logon decides"** instead: No access either way, exact; the line from the
+  logon box is then grey dashed (no effect).
 - **"no SYNCHRONIZE: Explorer and most programs get "access denied""** —
   the rights are exact, but Explorer and most Windows programs cannot open
   the object
@@ -882,7 +885,7 @@ the DACL only) and says one of three things:
 | --- | --- |
 | `SelectiveAuthenticationAllowed` | The logon is allowed; the marker names the principal that grants "Allowed to authenticate". The result is the normal one. |
 | `SelectiveAuthenticationDenied` | Windows refuses the logon. **Effective: No access (0x00000000)**; the last explanation step says "Logon refused". NTFS and share keep their values, so you can see what the account would get once you grant the right. |
-| `SelectiveAuthenticationUnknown` | Not determinable, with the reason (e.g. the computer object is not readable, or an ACE for a SID whose presence Stars cannot know decides it). The effective right lies between No access and what the permissions grant. |
+| `SelectiveAuthenticationUnknown` | Not determinable, with the reason (e.g. the computer object is not readable, or an ACE for a SID whose presence Stars cannot know decides it). The effective right lies between No access and what the permissions grant. **When the permissions grant nothing** (and nothing else is uncertain), both ends meet: refused or allowed, the account has no access — Stars then shows an exact **No access** and the marker only as information ("no access either way"). |
 
 **What Windows counts in this check** (measured in the lab with real SMB
 logons; each row from a client that had just been refused):
@@ -1185,7 +1188,7 @@ exact wording, lives in
 | `TrustedDomainAccountResolved { domain, home_only_groups, sid_filtered }` | info | no | An account of a trusted domain, resolved on a DC of that domain (ADR 0078): its global and universal groups there count, plus your domain-local groups it reaches through a Foreign Security Principal. Names the memberships that apply only inside the trusted domain and the SIDs the trust's SID filtering removes. The result is exact. |
 | `SelectiveAuthenticationAllowed { server, via }` | info | no | The trust uses Selective Authentication and the account may log on to `server`: "Allowed to authenticate" is granted to `via` (ADR 0079). The result is exact. |
 | `SelectiveAuthenticationDenied { server }` | medium | no | The trust uses Selective Authentication and nobody in the account's token has "Allowed to authenticate" on `server`: Windows refuses the logon (error 1935). Effective: **No access**; NTFS and share show what the permissions would grant. |
-| `SelectiveAuthenticationUnknown { server, reason }` | high | **yes** | Whether the account may log on to `server` is not determinable (`reason`). The effective right lies between No access and what the permissions grant. |
+| `SelectiveAuthenticationUnknown { server, reason, affects_result }` | high / info | **yes** / no | Whether the account may log on to `server` is not determinable (`reason`). The effective right lies between No access and what the permissions grant. With nothing granted (`affects_result` false) the result is an exact **No access** either way and the marker is informational. |
 | `SynchronizeNotGranted { cause, certain }` | medium | no | The effective right holds rights but not SYNCHRONIZE (`cause`: a Deny ACE, no NTFS ACE, or the share). Explorer and most programs get "access denied", but the rights are real — see ["Access denied" in Explorer although Stars shows rights](#access-denied-in-explorer-although-stars-shows-rights--synchronize) (ADR 0080). The value is exact. |
 | `IdentityOrphaned` | info | no | The account no longer exists in the configured domain. Nobody can log on with the SID; an ACE naming it is a dead entry. |
 | `GroupResolutionIncomplete { reason }` | high | **yes** | The group resolution succeeded, but `reason` names groups that are missing from the evaluated token — a primary group outside the base, groups outside a base that is only an OU, a group without a readable SID, an unresolvable local group. |

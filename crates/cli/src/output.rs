@@ -524,10 +524,25 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("      refuses the logon (error 1935) — no access there, whatever the");
                 println!("      permissions grant.");
             }
-            PermissionDiagnostic::SelectiveAuthenticationUnknown { server, reason } => {
+            PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                server,
+                reason,
+                affects_result: true,
+            } => {
                 println!("  [!] Selective Authentication: whether the account may authenticate");
                 println!("      to {server} is not determinable ({reason}). The effective");
                 println!("      right lies between No access and what the permissions grant.");
+            }
+            // ADR 0079 addendum: the permissions grant nothing — exact.
+            PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                server,
+                reason,
+                affects_result: false,
+            } => {
+                println!("  [i] Selective Authentication: whether the account may authenticate");
+                println!("      to {server} is not determinable ({reason}). The permissions");
+                println!("      grant nothing here, so the effective right is No access either");
+                println!("      way.");
             }
             PermissionDiagnostic::SynchronizeNotGranted { cause, certain } => {
                 let lead = if *certain {

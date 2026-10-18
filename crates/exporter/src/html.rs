@@ -598,9 +598,19 @@ fn write_permissions_table(
                         escape_html(&d.summary())
                     ));
                 }
-                PermissionDiagnostic::SelectiveAuthenticationUnknown { .. } => {
+                PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                    affects_result: true,
+                    ..
+                } => {
                     diag_parts.push(format!(
                         "<span class=\"badge badge-high\" title=\"{}\">⚠ logon not determinable</span>",
+                        escape_html(&d.summary())
+                    ));
+                }
+                // ADR 0079 addendum: the permissions grant nothing — exact.
+                PermissionDiagnostic::SelectiveAuthenticationUnknown { .. } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-neutral\" title=\"{}\">ℹ logon not determinable — no access either way</span>",
                         escape_html(&d.summary())
                     ));
                 }
@@ -976,6 +986,33 @@ mod tests {
         write_permissions_table(&mut s, &rows).unwrap();
         assert_eq!(s.matches("<svg").count(), super::GRAPH_EMBED_LIMIT);
         assert_eq!(s.matches("Permission graph not embedded").count(), 1);
+    }
+
+    /// ADR 0079 addendum: an undeterminable logon with nothing granted is a
+    /// neutral note on an exact No access; with rights granted it stays the
+    /// warning on a range.
+    #[test]
+    fn logon_unknown_badge_follows_its_effect() {
+        let marker = |affects_result| PermissionDiagnostic::SelectiveAuthenticationUnknown {
+            server: "DC-01".to_owned(),
+            reason: "an ACE for S-1-5-4 decides it".to_owned(),
+            affects_result,
+        };
+        let mut p = perm();
+        p.ntfs_mask = AccessMask(0);
+        p.effective_mask = AccessMask(0);
+        p.diagnostics.push(marker(false));
+        let mut s = String::new();
+        write_permissions_table(&mut s, std::slice::from_ref(&p)).unwrap();
+        assert!(s.contains("badge-neutral\" title=") && s.contains("no access either way"));
+        assert!(!s.contains("NOT DETERMINABLE"), "exact No access");
+
+        let mut q = perm();
+        q.diagnostics.push(marker(true));
+        let mut s = String::new();
+        write_permissions_table(&mut s, std::slice::from_ref(&q)).unwrap();
+        assert!(s.contains("badge-high") && s.contains("⚠ logon not determinable<"));
+        assert!(s.contains("NOT DETERMINABLE"), "the range stays open");
     }
 
     #[test]
