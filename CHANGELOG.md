@@ -10,6 +10,8 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+## [1.17.0] — 2026-10-18
+
 **The permission graph, redrawn: NTFS and share as two bands, the logon in
 view, every route on a click.**
 
@@ -18,9 +20,23 @@ share in the lower one, both flowing into the effective right, which names
 the side that limits it. Lines connect neighbouring columns only, so the
 long detours under the boxes are gone. A box no longer cuts a right off.
 
-No right changes: the graph is presentation only. The same CLI scans with
-v1.16.1 and with this change agree in every column (25,493 rows on DC-01,
-348 rows on MS-01 and the group-types fixture).
+Three fixes come along: an undeterminable Selective Authentication logon no
+longer makes "No access" undeterminable, a duplicate reparse target over SMB
+names only what was checked, and the Guest / anonymous token text no longer
+claims a policy goes unread.
+
+No rights value changes. The regression scans agree with v1.16.1 in every
+column (25,493 rows on DC-01, 348 rows on MS-01 and the group-types
+fixture). Only results with an undeterminable Selective Authentication
+logon change, by design: where the permissions grant nothing, from NOT
+DETERMINABLE to an exact No access (lab: 14 of 26 rows; the other 12 keep
+their range).
+
+Why minor: the Graph tab gains new functions — saving a graph as an SVG
+file (a new output format), a click that shows every route through a box,
+zoom — so this is not a patch by the rule of v1.9.2. The only change to a
+stored format is additive: the logon marker gains `affects_result` (JSON
+schema stays at version 4; older records keep their meaning).
 
 ### Added
 
