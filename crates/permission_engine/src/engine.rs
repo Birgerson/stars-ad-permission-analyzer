@@ -428,6 +428,8 @@ impl PermissionEvaluator for DefaultPermissionEngine {
                     PermissionDiagnostic::SelectiveAuthenticationUnknown {
                         server: server.clone(),
                         reason: reason.clone(),
+                        // Decided below, once the DACL result is known.
+                        affects_result: true,
                     }
                 }
             });
@@ -450,6 +452,26 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             diagnostics,
             trace: Default::default(),
         };
+        // ADR 0079 addendum: an undeterminable logon opens the range between
+        // No access and the DACL result. When the DACL result is exactly No
+        // access — nothing else uncertain, nothing granted — both ends meet:
+        // refused or allowed, the account has no access. The result is exact;
+        // the marker stays as information.
+        if effective_raw == 0
+            && result
+                .uncertainty()
+                .iter()
+                .all(|u| u.layer == UncertainLayer::Logon)
+        {
+            for d in &mut result.diagnostics {
+                if let PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                    affects_result, ..
+                } = d
+                {
+                    *affects_result = false;
+                }
+            }
+        }
         // Review CR-5: the explanation path states each value with the same
         // determinability as the result lines, derived from the finished
         // result (statuses and every marker) — the two cannot disagree.
@@ -522,9 +544,14 @@ impl PermissionEvaluator for DefaultPermissionEngine {
                      what the permissions grant once the account may authenticate.",
                     d.summary()
                 ),
-                PermissionDiagnostic::SelectiveAuthenticationUnknown { .. } => {
-                    format!("{NOT_DETERMINABLE} — logon: {}", d.summary())
-                }
+                PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                    affects_result: true,
+                    ..
+                } => format!("{NOT_DETERMINABLE} — logon: {}", d.summary()),
+                PermissionDiagnostic::SelectiveAuthenticationUnknown { .. } => format!(
+                    "Logon not determinable — {} Effective: No access (0x00000000).",
+                    d.summary()
+                ),
                 _ => format!("Logon allowed — {}", d.summary()),
             };
             result.path_explanation.steps.push(step);
@@ -5989,6 +6016,84 @@ mod tests {
             last.starts_with(NOT_DETERMINABLE) && last.contains("logon"),
             "{last}"
         );
+    }
+
+    /// ADR 0079 addendum: when the permissions grant nothing, "refused" and
+    /// "allowed" meet — No access either way, exact; the marker only informs.
+    /// With anything else uncertain the DACL result itself is open, and the
+    /// logon still matters.
+    #[test]
+    fn selective_authentication_unknown_with_nothing_granted_is_exactly_no_access() {
+        use adpa_core::model::LocalGroupEvalStatus;
+        use adpa_core::traits::SelectiveAuthenticationCheck;
+        let unknown = || SelectiveAuthenticationCheck::Unknown {
+            server: "DC-01".into(),
+            reason: "an ACE for S-1-5-4 decides it".into(),
+        };
+        let other = "S-1-5-21-9-9-9-1500";
+        let marker_affects = |p: &EffectivePermission| {
+            p.diagnostics.iter().find_map(|d| match d {
+                PermissionDiagnostic::SelectiveAuthenticationUnknown { affects_result, .. } => {
+                    Some(*affects_result)
+                }
+                _ => None,
+            })
+        };
+
+        // No ACE reaches the account: the DACL result is exactly No access.
+        let mut input = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(other, MASK_MODIFY, false)]),
+        );
+        input.selective_authentication = Some(unknown());
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert_eq!(p.effective_mask.0, 0);
+        assert!(p.effective_determinable(), "No access either way");
+        assert!(!p.is_incomplete());
+        assert_eq!(p.effective_upper_bound(), 0);
+        assert_eq!(marker_affects(&p), Some(false));
+        let last = p.path_explanation.steps.last().unwrap();
+        assert!(last.starts_with("Logon not determinable — "), "{last}");
+        assert!(last.contains("No access either way"), "{last}");
+        assert!(
+            last.ends_with("Effective: No access (0x00000000)."),
+            "{last}"
+        );
+        assert!(
+            !p.path_explanation
+                .steps
+                .iter()
+                .any(|s| s.contains(NOT_DETERMINABLE)),
+            "{:?}",
+            p.path_explanation.steps
+        );
+
+        // Nothing granted, but the local groups of the server unknown: an ACE
+        // for one of them could grant — the range stays open.
+        let mut input = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(other, MASK_MODIFY, false)]),
+        );
+        input.selective_authentication = Some(unknown());
+        input.local_group_status = LocalGroupEvalStatus::NotAvailable("no access".into());
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert_eq!(p.effective_mask.0, 0);
+        assert!(!p.effective_determinable());
+        assert_eq!(marker_affects(&p), Some(true));
+        assert!(p
+            .uncertainty()
+            .iter()
+            .any(|u| u.layer == UncertainLayer::Logon));
+
+        // Rights granted: the logon decides between them and No access.
+        let mut input = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+        );
+        input.selective_authentication = Some(unknown());
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert!(!p.effective_determinable());
+        assert_eq!(marker_affects(&p), Some(true));
     }
 
     /// Allowed: the result is the DACL result; with the check done, the

@@ -52,7 +52,9 @@ weaknesses:
      line); the result then says **No access — logon refused before any
      ACE**;
    - "Logon not determinable" with the reason (amber); the result adds
-     "logon not determinable".
+     "logon not determinable" — or, when the permissions grant nothing
+     (ADR 0079 addendum), "whatever the logon decides", and the line from
+     the logon box is grey dashed: it has no effect on the exact No access.
 
 4. **SYNCHRONIZE.** With the marker of ADR 0080 the result box adds
    "no SYNCHRONIZE: Explorer and most programs get "access denied"" (amber,

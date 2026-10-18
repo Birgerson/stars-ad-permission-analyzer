@@ -105,7 +105,7 @@ During evaluation Stars collects structured **diagnostic markers**:
 * `InheritedDenyAfterInheritedAllow` — an inherited Allow precedes an inherited Deny. Windows orders inherited ACEs per ancestor level (parent first, deny before allow within a level), so this is canonical when the two come from different levels; the DACL does not record the level, so the tool reports that it cannot tell (known limitation L9).
 * `TrustedDomainAccountResolved` — an account of a trusted domain was resolved on a domain controller of that domain (ADR 0078); its token holds what Windows grants it in this domain. Informational — the result is exact.
 * `SelectiveAuthenticationAllowed` / `SelectiveAuthenticationDenied` — the trust uses Selective Authentication and Stars decided from the target's computer object whether the account may log on (ADR 0079). Denied means effective No access (error 1935). Both exact.
-* `SelectiveAuthenticationUnknown` — whether the account may log on is not determinable; the effective right is NOT DETERMINABLE (between No access and what the permissions grant), NTFS and share stay determinable.
+* `SelectiveAuthenticationUnknown` — whether the account may log on is not determinable; the effective right is NOT DETERMINABLE (between No access and what the permissions grant), NTFS and share stay determinable. When the permissions grant nothing and nothing else is uncertain, both ends meet: the result is an exact No access and the marker (`affects_result: false`) is informational.
 * `UnsupportedShareAces { count }` — the share DACL contained ACE types the parser could not evaluate (object, callback, or vendor-specific ACEs). The effective mask is then a **lower bound**; a hidden Deny could flip the result.
 * `unsupported_ace_count > 0` (NTFS side) — the same thing on the NTFS DACL.
 
@@ -369,8 +369,8 @@ Every `RiskFinding` carries a boolean `incomplete` field. It marks findings whos
 16. **ACEs for a logon-dependent trustee decide bits of the result** (`PermissionDiagnostic::LogonDependentTrustees { sids, min_mask, max_mask }`).
     Well-known SIDs whose presence depends on the logon type/organization, or a local group reached only through one — the NTFS right is bounded between `min_mask` and `max_mask` instead of being guessed. See ADR 0065 / 0068 / 0069.
 
-17. **Whether Selective Authentication allows the logon is not determinable** (`PermissionDiagnostic::SelectiveAuthenticationUnknown { server, reason }`).
-    The trust uses Selective Authentication and the target's computer object could not be read or evaluated, or an ACE for a SID whose presence is unknown decides it — the effective right lies between No access and what the permissions grant. See ADR 0079.
+17. **Whether Selective Authentication allows the logon is not determinable** (`PermissionDiagnostic::SelectiveAuthenticationUnknown { server, reason, affects_result: true }`).
+    The trust uses Selective Authentication and the target's computer object could not be read or evaluated, or an ACE for a SID whose presence is unknown decides it — the effective right lies between No access and what the permissions grant. Only while the permissions grant something: with nothing granted (`affects_result: false`) the result is an exact No access and the marker does not contribute to incomplete. See ADR 0079 and its addendum.
 
 Markers that do **not** contribute to incomplete — informational:
 

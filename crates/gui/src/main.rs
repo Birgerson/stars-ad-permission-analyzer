@@ -4153,8 +4153,15 @@ fn format_share_line(perm: &EffectivePermission) -> String {
         PermissionDiagnostic::SelectiveAuthenticationDenied { .. } => Some(
             " Selective Authentication refuses the logon, so the effective right is No access.",
         ),
-        PermissionDiagnostic::SelectiveAuthenticationUnknown { .. } => Some(
+        PermissionDiagnostic::SelectiveAuthenticationUnknown {
+            affects_result: true,
+            ..
+        } => Some(
             " Whether Selective Authentication allows the logon is not determinable, so the effective right is not determinable.",
+        ),
+        // ADR 0079 addendum: the permissions grant nothing — exact.
+        PermissionDiagnostic::SelectiveAuthenticationUnknown { .. } => Some(
+            " Whether Selective Authentication allows the logon is not determinable; the permissions grant nothing here, so the effective right is No access either way.",
         ),
         _ => None,
     });
@@ -5342,8 +5349,17 @@ mod tests {
             .push(PermissionDiagnostic::SelectiveAuthenticationUnknown {
                 server: "FS01".into(),
                 reason: "x".into(),
+                affects_result: true,
             });
-        assert!(format_share_line(&q).contains("not determinable"));
+        assert!(format_share_line(&q).ends_with("the effective right is not determinable."));
+        // ADR 0079 addendum: nothing granted — No access either way.
+        if let Some(PermissionDiagnostic::SelectiveAuthenticationUnknown {
+            affects_result, ..
+        }) = q.diagnostics.last_mut()
+        {
+            *affects_result = false;
+        }
+        assert!(format_share_line(&q).ends_with("No access either way."));
         // Without SMB context there is still no line.
         let mut r = perm(ShareEvalStatus::NotApplicable, None);
         r.diagnostics = p.diagnostics.clone();

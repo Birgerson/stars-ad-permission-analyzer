@@ -1688,8 +1688,18 @@ pub enum PermissionDiagnostic {
     /// ADR 0079 (L4): the trust uses Selective Authentication, and whether the
     /// account may authenticate to the target could not be decided (`reason`)
     /// — the effective right lies between No access and the DACL result.
-    /// Incompleteness trigger (layer `Logon`).
-    SelectiveAuthenticationUnknown { server: String, reason: String },
+    /// Incompleteness trigger (layer `Logon`) while `affects_result`.
+    ///
+    /// ADR 0079 addendum: `affects_result` is false when the DACL result is
+    /// exactly No access — both ends of the range meet, the result is exact
+    /// and the marker only informs. Records stored before the field existed
+    /// read as `true`, the meaning they were written with.
+    SelectiveAuthenticationUnknown {
+        server: String,
+        reason: String,
+        #[serde(default = "default_true")]
+        affects_result: bool,
+    },
 
     /// ADR 0080 (lab 2026-10-18): the effective right holds rights but not
     /// SYNCHRONIZE (`cause` says why). The rights are the exact AccessCheck
@@ -2003,10 +2013,23 @@ impl PermissionDiagnostic {
                  its token has \"Allowed to authenticate\" on {server}: Windows refuses the logon \
                  (error 1935), so the account has no access there, whatever the permissions grant."
             ),
-            PermissionDiagnostic::SelectiveAuthenticationUnknown { server, reason } => format!(
+            PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                server,
+                reason,
+                affects_result: true,
+            } => format!(
                 "The trust uses Selective Authentication, and whether the account may authenticate \
                  to {server} is not determinable ({reason}) — the effective right lies between \
                  No access and what the permissions grant."
+            ),
+            PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                server,
+                reason,
+                affects_result: false,
+            } => format!(
+                "The trust uses Selective Authentication, and whether the account may authenticate \
+                 to {server} is not determinable ({reason}) — the permissions grant nothing here, \
+                 so the effective right is No access either way."
             ),
             PermissionDiagnostic::SynchronizeNotGranted { cause, certain } => format!(
                 "{} ({}). Explorer and most Windows programs request it with every open \
@@ -2122,8 +2145,10 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::UniversalGroupCrossDomainMembersNotVisible
             | PermissionDiagnostic::IdentityNotResolvable { .. }
             | PermissionDiagnostic::GroupResolutionIncomplete { .. } => Some(UncertainLayer::Token),
-            PermissionDiagnostic::SelectiveAuthenticationUnknown { .. } => {
-                Some(UncertainLayer::Logon)
+            // Only while the DACL result is more than No access (ADR 0079
+            // addendum): otherwise both ends of the range meet.
+            PermissionDiagnostic::SelectiveAuthenticationUnknown { affects_result, .. } => {
+                affects_result.then_some(UncertainLayer::Logon)
             }
             // Informational — the result itself is exact.
             PermissionDiagnostic::NonCanonicalDaclOrder { .. }
@@ -2173,7 +2198,12 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::GroupResolutionViaGlobalCatalog
             | PermissionDiagnostic::IdentityOrphaned
             | PermissionDiagnostic::NonSecurityGroupsExcluded { .. }
-            | PermissionDiagnostic::RemoteUacPolicy { .. } => DiagnosticSeverity::Neutral,
+            | PermissionDiagnostic::RemoteUacPolicy { .. }
+            // ADR 0079 addendum: No access either way — exact, no action.
+            | PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                affects_result: false,
+                ..
+            } => DiagnosticSeverity::Neutral,
             // Worth a look — a hidden Deny among skipped ACEs could change the
             // result.
             PermissionDiagnostic::UnsupportedShareAces { .. }
@@ -2191,7 +2221,10 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::GroupMemberEnumerationIncomplete { .. }
             | PermissionDiagnostic::PersistedEvidenceDecodeFailed { .. }
             | PermissionDiagnostic::IdentityNotResolvable { .. }
-            | PermissionDiagnostic::SelectiveAuthenticationUnknown { .. }
+            | PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                affects_result: true,
+                ..
+            }
             | PermissionDiagnostic::GroupResolutionIncomplete { .. } => DiagnosticSeverity::Concern,
         }
     }
@@ -2500,6 +2533,38 @@ mod tests {
         let json = serde_json::to_string(&t).unwrap();
         let back: DomainTrust = serde_json::from_str(&json).unwrap();
         assert_eq!(back, t);
+    }
+
+    /// ADR 0079 addendum: a logon-unknown marker stored before the field
+    /// existed reads with the meaning it was written with — the range open,
+    /// an incompleteness trigger, a concern. Without effect it is exact.
+    #[test]
+    fn a_stored_logon_unknown_marker_without_the_field_keeps_its_meaning() {
+        let old = r#"{"kind":"SelectiveAuthenticationUnknown","server":"DC-01","reason":"x"}"#;
+        let d: PermissionDiagnostic = serde_json::from_str(old).unwrap();
+        assert!(matches!(
+            d,
+            PermissionDiagnostic::SelectiveAuthenticationUnknown {
+                affects_result: true,
+                ..
+            }
+        ));
+        assert_eq!(d.uncertain_layer(), Some(UncertainLayer::Logon));
+        assert_eq!(d.severity(), DiagnosticSeverity::Concern);
+        assert!(d.summary().contains("lies between No access"));
+
+        let none = PermissionDiagnostic::SelectiveAuthenticationUnknown {
+            server: "DC-01".into(),
+            reason: "x".into(),
+            affects_result: false,
+        };
+        assert_eq!(none.uncertain_layer(), None);
+        assert!(!none.is_incompleteness_trigger());
+        assert_eq!(none.severity(), DiagnosticSeverity::Neutral);
+        assert!(none.summary().contains("No access either way"));
+        let json = serde_json::to_string(&none).unwrap();
+        let back: PermissionDiagnostic = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, none);
     }
 
     /// Test helper: an identity carrying `count` historical SIDs of which

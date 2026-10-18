@@ -53,6 +53,15 @@ v1.16.1 and with this change agree in every column (25,493 rows on DC-01,
 
 ### Fixed
 
+- **An undeterminable Selective Authentication logon no longer makes "No
+  access" undeterminable (ADR 0079 addendum).** Where the permissions grant
+  nothing, refused and allowed lead to the same answer, so Stars now shows
+  an exact **No access** there, with the logon marker as information ("no
+  access either way") instead of "NOT DETERMINABLE (known data: No
+  access)". Paths with rights keep the range. No rights value changes; the
+  marker gains the field `affects_result` (JSON additive, old records keep
+  their meaning). Lab: 14 of 26 rows exact, 12 unchanged; real SMB logon
+  refused (1935) — inside both.
 - **Duplicate reparse target over SMB named a wrong target (ADR 0062
   addendum).** The message ended with "Target: …", which in about two of
   three scans over SMB was the link's own path — the server reports neither
