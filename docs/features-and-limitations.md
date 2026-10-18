@@ -148,19 +148,27 @@ that applies.
 - **Long membership lists** collapse in the GUI Analyze tab and the HTML
   report to the memberships that matter (decisive, deny-only, uncertain);
   CSV, JSON and the CLI keep the full list.
-- **Permission graph** (ADR 0077): the GUI `Graph` tab and the HTML
-  report draw the path as a lane diagram — account → token groups →
-  NTFS ACEs → NTFS → share ACEs → result, coloured by what each ACE did
-  (green Allow decided bits, red Deny decided bits, amber dashed
-  uncertain, grey dashed no effect / inherit-only / deny-only). It is
-  drawn from the engine's own decisions (`trace`, also in JSON), checked
+- **Permission graph** (ADR 0077, layout v2 ADR 0081): the GUI `Graph`
+  tab and the HTML report draw the path as a diagram — account → token
+  groups → ACEs → result per layer → effective result, NTFS in the upper
+  band and the share in the lower one, coloured by what each ACE did
+  (green Allow decided bits, red double line Deny decided bits, amber
+  dashed uncertain, grey dashed no effect / inherit-only / deny-only),
+  the decisive route thick. The result names the limiting side by the
+  engine's own rule (`limiting_side`); a Logon box shows a refused or
+  undeterminable Selective Authentication logon (ADR 0079), the result a
+  missing SYNCHRONIZE (ADR 0080). No box hides a right: rights fall back
+  to the `icacls` short form and wrap instead of being cut. It is drawn
+  from the engine's own decisions (`trace`, also in JSON), checked
   against the explanation steps by the same invariant test. The
   memberships no ACE names are one box "+N further groups", named under
-  the graph and in its tooltip; "Show all groups" draws each of them.
-  Limits: the
-  GUI shows the last Analyze result only; the report embeds graphs for
-  the first 500 rows and says so for the rest; results loaded from the
-  scan history have no graph (the trace is not stored).
+  the graph and in its tooltip; "Show all groups" draws each of them. In
+  the GUI: click a box for its full text and every route through it,
+  zoom and fit to the window width, light and dark, **save the graph as
+  SVG** (validated path, never overwrites a file). Limits: the GUI shows
+  the last Analyze result only; the report embeds graphs for the first
+  500 rows and says so for the rest; results loaded from the scan history
+  have no graph (the trace is not stored); no graph in the Scan Tree tab.
 
 ### Scan, persistence, and export
 

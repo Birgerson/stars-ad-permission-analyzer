@@ -44,6 +44,16 @@ impl ExportPathStatus {
 /// requires an absolute path because the database is a persistent store
 /// reused across sessions (validation review 2026-07-25, VA-5).
 pub fn validate_export_path(input: &str) -> Result<ExportPathStatus, CoreError> {
+    validate_with_extensions(input, ALLOWED_EXTENSIONS)
+}
+
+/// [`validate_export_path`] for a saved permission graph (ADR 0081): the same
+/// checks, extension `.svg` only.
+pub fn validate_svg_export_path(input: &str) -> Result<ExportPathStatus, CoreError> {
+    validate_with_extensions(input, &["svg"])
+}
+
+fn validate_with_extensions(input: &str, allowed: &[&str]) -> Result<ExportPathStatus, CoreError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(CoreError::Validation(
@@ -62,10 +72,12 @@ pub fn validate_export_path(input: &str) -> Result<ExportPathStatus, CoreError> 
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase());
     match ext.as_deref() {
-        Some(e) if ALLOWED_EXTENSIONS.contains(&e) => {}
+        Some(e) if allowed.contains(&e) => {}
         _ => {
+            let names: Vec<String> = allowed.iter().map(|e| format!(".{e}")).collect();
             return Err(CoreError::Validation(format!(
-                "Export path must have a recognized extension (.csv, .html, .json): {trimmed}"
+                "Export path must have a recognized extension ({}): {trimmed}",
+                names.join(", ")
             )));
         }
     }
@@ -98,6 +110,23 @@ mod tests {
     #[test]
     fn empty_path_rejected() {
         assert!(validate_export_path("").is_err());
+    }
+
+    /// The report keeps its wording; the graph file accepts `.svg` only.
+    #[test]
+    fn svg_export_accepts_svg_only() {
+        let err = validate_export_path(r"C:\reports\output.txt").unwrap_err();
+        assert!(err.to_string().contains("(.csv, .html, .json)"), "{err}");
+        assert!(validate_svg_export_path(r"C:\reports\graph.html").is_err());
+        assert!(validate_svg_export_path("").is_err());
+        let dir = std::env::temp_dir();
+        let ok = dir.join("adpa-graph-validation-test.svg");
+        assert!(matches!(
+            validate_svg_export_path(ok.to_str().unwrap()),
+            Ok(ExportPathStatus::New(_))
+        ));
+        let missing = dir.join("no-such-dir-x7").join("g.svg");
+        assert!(validate_svg_export_path(missing.to_str().unwrap()).is_err());
     }
 
     #[test]

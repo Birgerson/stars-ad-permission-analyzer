@@ -63,7 +63,7 @@
   <section>
     <p>Stars is an <b>AGPL-3.0</b> Windows tool for auditing Active Directory, NTFS and SMB permissions. For any user it shows the <b>effective</b> access rights that actually apply to a folder or share &mdash; and, above all, <b>why</b>: through which groups, which ACL entries, which inheritance. For 1 path or 5000 paths alike.</p>
     <img class="shot" src="screenshots/stars-analyze-tab.png" alt="Stars AD Permission Analyzer - Analyze tab: effective right of a domain user on a share and the numbered permission path through groups, ACEs and share">
-    <img class="shot" src="screenshots/stars-graph-tab.png" alt="Stars AD Permission Analyzer - Graph tab: the same result as a lane diagram from the account through groups and ACEs to the effective right">
+    <img class="shot" src="screenshots/stars-graph-tab.png" alt="Stars AD Permission Analyzer - Graph tab: the same result as a diagram from the account through groups and ACEs to the NTFS and share results, which flow into the effective right">
   </section>
 
   <section>
@@ -87,7 +87,7 @@
       <li><b>Active Directory</b> &mdash; nested groups, primary group, FSPs, disabled accounts, <b>sIDHistory</b> (migrated users and groups, evaluated into the token)</li>
       <li><b>Trusted domains</b> &mdash; partner accounts resolved on their own domain controller: global and universal groups, SID filtering, your domain-local groups through Foreign Security Principals, and Selective Authentication (&ldquo;Allowed to authenticate&rdquo;)</li>
       <li><b>Effective rights</b> per user, with risk findings</li>
-      <li><b>Permission graph</b> &mdash; the explanation path as a lane diagram (account &rarr; groups &rarr; ACEs &rarr; NTFS &rarr; share &rarr; result), in the GUI and the HTML report</li>
+      <li><b>Permission graph</b> &mdash; the explanation path as a diagram (account &rarr; groups &rarr; ACEs &rarr; NTFS and share &rarr; result), with the limiting side, a refused logon and every route on a click; in the GUI (saved as SVG) and the HTML report</li>
       <li><b>Reports</b> &mdash; CSV, JSON, HTML; SQLite scan history and delta comparison</li>
       <li><b>Identity resolution</b> &mdash; SAM/LSA, LDAPS, Global Catalog, signed LDAP</li>
     </ul>

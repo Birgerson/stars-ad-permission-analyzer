@@ -7,4 +7,7 @@ pub mod engine;
 pub mod mask;
 
 pub use engine::{build_token_sids, build_token_sids_with_context, DefaultPermissionEngine};
-pub use mask::{rights_label_compact, rights_statement, NormalizedRights, NOT_DETERMINABLE};
+pub use mask::{
+    limiting_side, rights_label_compact, rights_statement, LimitingSide, NormalizedRights,
+    NOT_DETERMINABLE,
+};

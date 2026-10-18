@@ -10,6 +10,47 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+**The permission graph, redrawn: NTFS and share as two bands, the logon in
+view, every route on a click.**
+
+The graph now reads like the formula it shows: NTFS in the upper band, the
+share in the lower one, both flowing into the effective right, which names
+the side that limits it. Lines connect neighbouring columns only, so the
+long detours under the boxes are gone. A box no longer cuts a right off.
+
+No right changes: the graph is presentation only. The same CLI scans with
+v1.16.1 and with this change agree in every column (25,493 rows on DC-01,
+348 rows on MS-01 and the group-types fixture).
+
+### Added
+
+- **Permission graph v2 (ADR 0081).**
+  - Two bands — NTFS ACEs and the NTFS result on top, share ACEs and the
+    share result below; the effective result between them says "limited
+    by the share", "limited by NTFS", "NTFS and share agree" or "no SMB
+    share — NTFS decides", by the engine's own rule
+    (`permission_engine::limiting_side`, checked against the explanation
+    step).
+  - A **Logon** box for an account of a trusted domain with Selective
+    Authentication (ADR 0079): allowed (green), refused (red — the result
+    says "No access — logon refused before any ACE"), not determinable
+    (amber, with the reason).
+  - The result names a missing SYNCHRONIZE (ADR 0080): "no SYNCHRONIZE:
+    Explorer and most programs get "access denied"".
+  - The decisive route is drawn thick; a Deny is a double line, readable
+    without colour; the legend explains six line styles.
+  - No right is cut off in a box: the long form when it fits, else the
+    `icacls` short form, wrapped over several lines; names lose the domain
+    first, a SID keeps its RID; reasons wrap.
+  - Light and dark palette; the HTML report embeds the dark graph, scaled
+    to the row down to 80 %.
+- **GUI Graph tab:** click a box for its full text and every route through
+  it (the rest fades; a second click shows all), zoom (−, +, Actual size,
+  Fit width), follows the light/dark switch, and **Save graph (SVG)** —
+  light, with a caption line naming account and path; the path is checked
+  like a report export (`.svg` only, existing folder) and an existing file
+  is never overwritten.
+
 ## [1.16.1] — 2026-10-18
 
 **A denied "Write" explained: the rights stay exact, Explorer's "access denied" is named.**

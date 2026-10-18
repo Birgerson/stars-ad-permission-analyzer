@@ -127,7 +127,7 @@ tr:hover td{background:#111d2e}
 details summary{cursor:pointer;color:#64b5f6;font-size:11px}
 details[open] summary{margin-bottom:4px}
 .step{padding:2px 0;color:#cfd8dc;font-size:11px}
-.graph-scroll{overflow-x:auto;max-width:900px;margin-top:6px;border-radius:6px}
+.graph-scroll{overflow-x:auto;max-width:100%;margin-top:6px;border-radius:6px}
 .graph-scroll svg{display:block}
 .memberships>summary{cursor:pointer;color:#90caf9;font-size:11px;padding:2px 0}
 </style>
@@ -245,16 +245,25 @@ fn write_permissions_table(
         if details_open {
             steps_html.push_str("</details>");
         }
-        // ADR 0077: the permission graph of this result, the same SVG as in
-        // the GUI's Graph tab. Built from the result only; every text in it
-        // is XML-escaped by `viz`.
+        // ADR 0077: the permission graph of this result, the same layout as
+        // in the GUI's Graph tab. Built from the result only; every text in
+        // it is XML-escaped by `viz`. ADR 0081: the report is dark, so is its
+        // graph; it scales with the row (down to 80 % of its size, then it
+        // scrolls).
         if row >= GRAPH_EMBED_LIMIT {
             if !p.trace.is_empty() {
                 steps_html.push_str(&format!(
                     "<div class=\"step\">• Permission graph not embedded: the report embeds it for the first {GRAPH_EMBED_LIMIT} rows only. Analyze this path on its own to see it.</div>"
                 ));
             }
-        } else if let Some(svg) = viz::permission_graph_svg(p) {
+        } else if let Some(svg) = viz::permission_graph_svg_with(
+            p,
+            &viz::RenderOptions {
+                dark: true,
+                responsive: true,
+                ..Default::default()
+            },
+        ) {
             steps_html.push_str(&format!(
                 "<details class=\"graph\"><summary>permission graph</summary><div class=\"graph-scroll\">{svg}</div></details>"
             ));

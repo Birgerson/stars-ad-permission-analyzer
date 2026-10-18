@@ -441,8 +441,21 @@ slint::slint! {
         x: float,
         y: float,
         text: string,
-        strong: bool,
         bold: bool,
+        // ADR 0081: the text colour in the light and in the dark palette.
+        color-light: color,
+        color-dark: color,
+        // ADR 0081: off every route through the selected box.
+        faded: bool,
+    }
+
+    // ADR 0081: one box of the permission graph as a click target.
+    export struct GraphNodeVm {
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        index: int,
     }
 
     export struct StepVm {
@@ -683,8 +696,22 @@ slint::slint! {
         // ADR 0077: the permission graph of the last Analyze result — the
         // same SVG the HTML report embeds, rendered from the result's trace.
         in property <image>  gr-image;
+        // ADR 0081: the same shapes in the dark palette (Theme.dark picks).
+        in property <image>  gr-image-dark;
         in property <[GraphTextVm]> gr-texts;
+        in property <[GraphNodeVm]> gr-nodes;
         in property <bool>   gr-has-graph;
+        // Zoom factor of the drawing (0.4–2.0), the selected box (-1: none)
+        // and its full text.
+        in-out property <float> gr-zoom: 1.0;
+        in-out property <int> gr-selected: -1;
+        in property <string> gr-detail;
+        callback gr-node-clicked(int);
+        // Save the graph as an SVG file.
+        in-out property <string> gr-save-path;
+        in property <string> gr-save-status;
+        in property <bool> gr-save-error;
+        callback gr-save-svg();
         // "Show all groups": every membership without an ACE as its own box.
         in-out property <bool> gr-all-groups: false;
         callback gr-toggle-all-groups();
@@ -1340,36 +1367,96 @@ slint::slint! {
                             wrap: word-wrap;
                         }
                         Text {
-                            text: "Read left to right: account → token groups → ACEs → NTFS → share → result. Green: an Allow decided bits · red: a Deny decided bits · amber dashed: uncertain (counts only for certain logons) · grey dashed: no effect, inherit-only or deny-only. The numbered permission path in the Analyze tab is the full explanation; hover tooltips are in the HTML report.";
+                            text: "Read left to right: account → token groups → ACEs → result per layer (NTFS on top, the share below) → effective result. Green: an Allow decided bits · red double line: a Deny decided bits · amber dashed: uncertain (counts only for certain logons) · grey dashed: no effect, inherit-only or deny-only · slate: the result of a layer · thick: the decisive route. Click a box for its full text and every route through it; click it again to show all. The numbered permission path in the Analyze tab is the full explanation.";
                             color: Theme.text-muted;
                             font-size: 11px;
                             wrap: word-wrap;
                         }
-                        if root.gr-has-graph: CheckBox {
-                            text: "Show all groups (also those no ACE on this object names)";
-                            checked <=> root.gr-all-groups;
-                            toggled => { root.gr-toggle-all-groups(); }
-                        }
-                        if root.gr-has-graph: ScrollView {
+                        if root.gr-has-graph: VerticalLayout {
                             vertical-stretch: 1;
-                            viewport-width: max(self.visible-width, root.gr-image.width * 1px);
-                            viewport-height: max(self.visible-height, root.gr-image.height * 1px);
-                            Image {
-                                x: 0px;
-                                y: 0px;
-                                width: root.gr-image.width * 1px;
-                                height: root.gr-image.height * 1px;
-                                source: root.gr-image;
+                            spacing: Theme.spacing-sm;
+                            HorizontalLayout {
+                                spacing: Theme.spacing-sm;
+                                alignment: start;
+                                CheckBox {
+                                    text: "Show all groups (also those no ACE on this object names)";
+                                    checked <=> root.gr-all-groups;
+                                    toggled => { root.gr-toggle-all-groups(); }
+                                }
+                                Button {
+                                    text: "−";
+                                    clicked => { root.gr-zoom = max(0.4, root.gr-zoom / 1.25); }
+                                }
+                                Text {
+                                    text: round(root.gr-zoom * 100) + " %";
+                                    vertical-alignment: center;
+                                    color: Theme.text-secondary;
+                                }
+                                Button {
+                                    text: "+";
+                                    clicked => { root.gr-zoom = min(2.0, root.gr-zoom * 1.25); }
+                                }
+                                Button {
+                                    text: "Actual size";
+                                    clicked => { root.gr-zoom = 1.0; }
+                                }
+                                Button {
+                                    text: "Fit width";
+                                    clicked => {
+                                        root.gr-zoom = max(0.4, min(2.0, (gr-scroll.visible-width / 1px) / root.gr-image.width));
+                                    }
+                                }
                             }
-                            for t in root.gr-texts: Text {
-                                x: t.x * 1px;
-                                y: t.y * 1px;
-                                text: t.text;
-                                font-size: 12px;
-                                font-weight: t.bold ? 600 : 400;
-                                // Fixed colours: the graph canvas is light in
-                                // both themes, like in the HTML report.
-                                color: t.strong ? #1f2937 : #6b7280;
+                            gr-scroll := ScrollView {
+                                vertical-stretch: 1;
+                                viewport-width: max(self.visible-width, root.gr-image.width * root.gr-zoom * 1px);
+                                viewport-height: max(self.visible-height, root.gr-image.height * root.gr-zoom * 1px);
+                                Image {
+                                    x: 0px;
+                                    y: 0px;
+                                    width: root.gr-image.width * root.gr-zoom * 1px;
+                                    height: root.gr-image.height * root.gr-zoom * 1px;
+                                    source: Theme.dark ? root.gr-image-dark : root.gr-image;
+                                }
+                                for t in root.gr-texts: Text {
+                                    x: t.x * root.gr-zoom * 1px;
+                                    y: t.y * root.gr-zoom * 1px;
+                                    text: t.text;
+                                    font-size: 12px * root.gr-zoom;
+                                    font-weight: t.bold ? 600 : 400;
+                                    color: Theme.dark ? t.color-dark : t.color-light;
+                                    opacity: t.faded ? 0.25 : 1.0;
+                                }
+                                for n in root.gr-nodes: TouchArea {
+                                    x: n.x * root.gr-zoom * 1px;
+                                    y: n.y * root.gr-zoom * 1px;
+                                    width: n.w * root.gr-zoom * 1px;
+                                    height: n.h * root.gr-zoom * 1px;
+                                    mouse-cursor: pointer;
+                                    clicked => { root.gr-node-clicked(n.index); }
+                                }
+                            }
+                            if root.gr-detail != "": Text {
+                                text: root.gr-detail;
+                                color: Theme.text-primary;
+                                wrap: word-wrap;
+                            }
+                            HorizontalLayout {
+                                spacing: Theme.spacing-sm;
+                                LineEdit {
+                                    placeholder-text: "C:\\Reports\\graph.svg";
+                                    text <=> root.gr-save-path;
+                                    horizontal-stretch: 1;
+                                }
+                                Button {
+                                    text: "💾  Save graph (SVG)";
+                                    clicked => { root.gr-save-svg(); }
+                                }
+                            }
+                            if root.gr-save-status != "": Text {
+                                text: root.gr-save-status;
+                                color: root.gr-save-error ? Theme.error : Theme.text-secondary;
+                                wrap: word-wrap;
                             }
                         }
                         if root.gr-has-graph && root.gr-further-groups != "": Text {
@@ -3185,9 +3272,62 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             let Some(ui) = weak_graph.upgrade() else {
                 return;
             };
+            // Another layout: the selected box no longer exists.
+            ui.set_gr_selected(-1);
             let perm = GRAPH_RESULT.with(|g| g.borrow().clone());
             if let Some(perm) = perm {
                 draw_graph(&ui, &perm);
+            }
+        });
+        // ADR 0081: a click selects a box (its full text, every route through
+        // it bright); a second click on it clears the selection.
+        let weak_node = ui.as_weak();
+        ui.on_gr_node_clicked(move |index| {
+            let Some(ui) = weak_node.upgrade() else {
+                return;
+            };
+            let selected = if ui.get_gr_selected() == index {
+                -1
+            } else {
+                index
+            };
+            ui.set_gr_selected(selected);
+            let perm = GRAPH_RESULT.with(|g| g.borrow().clone());
+            if let Some(perm) = perm {
+                draw_graph(&ui, &perm);
+            }
+        });
+        let weak_save = ui.as_weak();
+        ui.on_gr_save_svg(move || {
+            let Some(ui) = weak_save.upgrade() else {
+                return;
+            };
+            let perm = GRAPH_RESULT.with(|g| g.borrow().clone());
+            let outcome = match perm {
+                None => Err("There is no graph to save — run an analysis first.".to_owned()),
+                Some(perm) => {
+                    let opts = viz::GraphOptions {
+                        all_groups: ui.get_gr_all_groups(),
+                        caption: true,
+                    };
+                    match viz::permission_graph_with(&perm, opts) {
+                        Some(graph) => save_graph_svg(
+                            ui.get_gr_save_path().as_str(),
+                            &graph.to_svg_with(&viz::RenderOptions::default()),
+                        ),
+                        None => Err("This result has no graph to save.".to_owned()),
+                    }
+                }
+            };
+            match outcome {
+                Ok(msg) => {
+                    ui.set_gr_save_error(false);
+                    ui.set_gr_save_status(msg.into());
+                }
+                Err(msg) => {
+                    ui.set_gr_save_error(true);
+                    ui.set_gr_save_status(msg.into());
+                }
             }
         });
         ui.on_a_toggle_members(move || {
@@ -3755,10 +3895,46 @@ fn clear_graph(ui: &MainWindow, caption: &str) {
     ui.set_gr_further_groups("".into());
     ui.set_gr_has_graph(false);
     ui.set_gr_image(slint::Image::default());
+    ui.set_gr_image_dark(slint::Image::default());
     ui.set_gr_texts(slint::ModelRc::new(
         slint::VecModel::<GraphTextVm>::default(),
     ));
+    ui.set_gr_nodes(slint::ModelRc::new(
+        slint::VecModel::<GraphNodeVm>::default(),
+    ));
+    ui.set_gr_selected(-1);
+    ui.set_gr_detail("".into());
     ui.set_gr_caption(caption.into());
+}
+
+/// `#rrggbb` → a Slint colour (the graph palette is fixed hex).
+fn hex_colour(hex: &str) -> slint::Color {
+    let v = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0x00_80_80_80);
+    slint::Color::from_rgb_u8((v >> 16) as u8, (v >> 8) as u8, v as u8)
+}
+
+/// ADR 0081: writes a saved permission graph — the path validated like a
+/// report export (existing directory, `.svg` only), never overwriting a file
+/// (`create_new` also covers a file created between check and write).
+fn save_graph_svg(path: &str, svg: &str) -> Result<String, String> {
+    use std::io::Write as _;
+    use validation::export_path::{validate_svg_export_path, ExportPathStatus};
+    let status = validate_svg_export_path(path).map_err(|e| format!("Invalid file: {e}"))?;
+    if let ExportPathStatus::Exists(p) = &status {
+        return Err(format!(
+            "Target file already exists: {}. Pick a different name or delete the file first.",
+            p.0.display()
+        ));
+    }
+    let target = status.path().0.clone();
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .map_err(|e| format!("Could not create {}: {e}", target.display()))?;
+    file.write_all(svg.as_bytes())
+        .map_err(|e| format!("Could not write {}: {e}", target.display()))?;
+    Ok(format!("Graph saved: {}", target.display()))
 }
 
 /// ADR 0077: the Graph tab shows the permission graph of this result —
@@ -3768,13 +3944,19 @@ fn clear_graph(ui: &MainWindow, caption: &str) {
 /// trace; a render failure is said, not hidden.
 fn apply_graph(ui: &MainWindow, perm: &EffectivePermission) {
     GRAPH_RESULT.with(|g| *g.borrow_mut() = Some(perm.clone()));
+    // A new result: nothing selected, no stale save message.
+    ui.set_gr_selected(-1);
+    ui.set_gr_save_status("".into());
     draw_graph(ui, perm);
 }
 
-/// Draws `perm` with the current "Show all groups" setting.
+/// Draws `perm` with the current "Show all groups" setting and selection —
+/// the shapes in both palettes (Slint picks by `Theme.dark`), the texts with
+/// both colours, and every box as a click target (ADR 0081).
 fn draw_graph(ui: &MainWindow, perm: &EffectivePermission) {
     let opts = viz::GraphOptions {
         all_groups: ui.get_gr_all_groups(),
+        caption: false,
     };
     let Some(graph) = viz::permission_graph_with(perm, opts) else {
         clear_graph(
@@ -3783,9 +3965,23 @@ fn draw_graph(ui: &MainWindow, perm: &EffectivePermission) {
         );
         return;
     };
-    match slint::Image::load_from_svg_data(graph.to_svg_shapes().as_bytes()) {
-        Ok(image) => {
-            ui.set_gr_image(image);
+    let boxes = graph.node_boxes();
+    let selected = usize::try_from(ui.get_gr_selected())
+        .ok()
+        .filter(|i| *i < boxes.len());
+    let render = |dark: bool| viz::RenderOptions {
+        dark,
+        highlight: selected,
+        responsive: false,
+    };
+    let light =
+        slint::Image::load_from_svg_data(graph.to_svg_shapes_with(&render(false)).as_bytes());
+    let dark = slint::Image::load_from_svg_data(graph.to_svg_shapes_with(&render(true)).as_bytes());
+    match (light, dark) {
+        (Ok(light), Ok(dark)) => {
+            ui.set_gr_image(light);
+            ui.set_gr_image_dark(dark);
+            let lit = graph.route_nodes(selected);
             let texts: Vec<GraphTextVm> = graph
                 .texts
                 .iter()
@@ -3795,11 +3991,32 @@ fn draw_graph(ui: &MainWindow, perm: &EffectivePermission) {
                     // size up is close enough for 12 px Segoe UI.
                     y: (t.baseline - viz::FONT_SIZE) as f32,
                     text: t.text.as_str().into(),
-                    strong: t.style == viz::TextStyle::Primary,
                     bold: t.style.bold(),
+                    color_light: hex_colour(t.style.colour_in(false)),
+                    color_dark: hex_colour(t.style.colour_in(true)),
+                    faded: t.node.is_some_and(|i| !lit.get(i).copied().unwrap_or(true)),
                 })
                 .collect();
             ui.set_gr_texts(slint::ModelRc::new(slint::VecModel::from(texts)));
+            let nodes: Vec<GraphNodeVm> = boxes
+                .iter()
+                .enumerate()
+                .map(|(i, b)| GraphNodeVm {
+                    x: b.x as f32,
+                    y: b.y as f32,
+                    w: b.w as f32,
+                    h: b.h as f32,
+                    index: i32::try_from(i).unwrap_or(i32::MAX),
+                })
+                .collect();
+            ui.set_gr_nodes(slint::ModelRc::new(slint::VecModel::from(nodes)));
+            ui.set_gr_selected(selected.map_or(-1, |i| i32::try_from(i).unwrap_or(-1)));
+            ui.set_gr_detail(
+                selected
+                    .map(|i| boxes[i].title.clone())
+                    .unwrap_or_default()
+                    .into(),
+            );
             // The list is for the compact view; with every group drawn it
             // would only repeat the boxes.
             let further = if opts.all_groups {
@@ -3821,7 +4038,7 @@ fn draw_graph(ui: &MainWindow, perm: &EffectivePermission) {
                 .into(),
             );
         }
-        Err(e) => {
+        (Err(e), _) | (_, Err(e)) => {
             tracing::warn!("permission graph could not be rendered: {e}");
             clear_graph(
                 ui,
@@ -5031,7 +5248,7 @@ fn show_fatal_dialog(title: &str, message: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_share_line, severity_visual, step_vms, StepVm};
+    use super::{format_share_line, save_graph_svg, severity_visual, step_vms, StepVm};
     use adpa_core::model::{
         AccessMask, EffectivePermission, Identity, IdentityKind, LocalGroupEvalStatus,
         NormalizedPath, PermissionPath, RiskSeverity, ShareEvalStatus, Sid,
@@ -5062,6 +5279,28 @@ mod tests {
             diagnostics: vec![],
             trace: Default::default(),
         }
+    }
+
+    /// ADR 0081: a saved graph never overwrites a file, and only `.svg`
+    /// is accepted.
+    #[test]
+    fn save_graph_svg_writes_new_files_only() {
+        let dir = std::env::temp_dir();
+        let target = dir.join(format!("adpa-graph-{}.svg", uuid::Uuid::new_v4()));
+        let path = target.to_str().unwrap();
+        let msg = save_graph_svg(path, "<svg/>").unwrap();
+        assert!(msg.starts_with("Graph saved"), "{msg}");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "<svg/>");
+        let again = save_graph_svg(path, "<svg>other</svg>").unwrap_err();
+        assert!(again.contains("already exists"), "{again}");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "<svg/>",
+            "unchanged"
+        );
+        let _ = std::fs::remove_file(&target);
+        let wrong = dir.join("adpa-graph.html");
+        assert!(save_graph_svg(wrong.to_str().unwrap(), "<svg/>").is_err());
     }
 
     /// No SMB context → no share line at all (the GUI hides the row).

@@ -518,6 +518,31 @@ pub fn rights_statement(mask: u32, determinable: bool) -> String {
     }
 }
 
+/// Which side limits an SMB result (review CR-7, ADR 0081).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitingSide {
+    /// The share removes bits NTFS grants.
+    Share,
+    /// NTFS grants less than the share allows; the share removes nothing.
+    Ntfs,
+    /// NTFS and share allow the same bits.
+    Neither,
+}
+
+/// The side that limits `effective = ntfs ∩ share` — the rule of the
+/// engine's explanation step "Limited by the share / Limited by NTFS / NTFS
+/// and share allow the same", so the graph and the path cannot disagree (a
+/// test in the engine checks both against each other).
+pub fn limiting_side(ntfs: u32, share: u32) -> LimitingSide {
+    if ntfs & !share != 0 {
+        LimitingSide::Share
+    } else if share & !ntfs != 0 {
+        LimitingSide::Ntfs
+    } else {
+        LimitingSide::Neither
+    }
+}
+
 /// Compact form of [`rights_statement`] for list rows and the CSV label
 /// columns (the raw mask has its own column there).
 pub fn rights_label_compact(mask: u32, determinable: bool) -> String {
