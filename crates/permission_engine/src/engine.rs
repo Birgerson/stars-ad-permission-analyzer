@@ -800,8 +800,10 @@ pub fn identity_absent_well_knowns(user_sid: &str) -> &'static [&'static str] {
 /// The universal well-knowns whose presence in this identity's token is
 /// **uncertain** (ADR 0072): `Everyone` is in the anonymous token only when
 /// the target sets `EveryoneIncludesAnonymous` = 1 (measured: absent with the
-/// default 0). Stars does not read that policy, so ACEs for `Everyone` bound
-/// an anonymous result. A Guest token always carries `Everyone` (measured).
+/// default 0). Without that policy, ACEs for `Everyone` bound an anonymous
+/// result; once it is read from the target (L17,
+/// [`uncertain_well_knowns_with`]) Everyone is decided. A Guest token always
+/// carries `Everyone` (measured).
 pub fn identity_uncertain_well_knowns(user_sid: &str) -> &'static [&'static str] {
     if user_sid == SID_ANONYMOUS_LOGON {
         &[SID_EVERYONE]
@@ -1537,7 +1539,8 @@ fn uncertain_ace_reason(
     if identity_uncertain_well_knowns(user_sid).contains(&sid) && uncertain_sids.contains(sid) {
         return Some(
             "Everyone is in an anonymous token only if the target sets \
-             EveryoneIncludesAnonymous = 1 — Stars does not read that policy (ADR 0072)"
+             EveryoneIncludesAnonymous = 1 — Stars could not read that policy on the target \
+             (ADR 0072)"
                 .to_owned(),
         );
     }
@@ -8178,6 +8181,26 @@ mod tests {
                 p.path_explanation.steps[1]
             );
         }
+        // Review 2026-10-18: since L17 Stars reads the policy — no text may
+        // claim it does not; the unread case says it could not be read.
+        for p in [&off, &on, &unknown] {
+            let all: Vec<String> = p
+                .path_explanation
+                .steps
+                .iter()
+                .cloned()
+                .chain(p.diagnostics.iter().map(|d| d.summary()))
+                .collect();
+            assert!(!all.iter().any(|s| s.contains("does not read")), "{all:?}");
+        }
+        assert!(unknown
+            .path_explanation
+            .steps
+            .iter()
+            .any(|s| s.contains("could not read that policy on the target")));
+        assert!(off.diagnostics.iter().any(|d| d
+            .summary()
+            .contains("Stars reads that policy on the target")));
     }
 
     #[test]

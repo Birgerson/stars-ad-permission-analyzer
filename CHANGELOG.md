@@ -53,6 +53,13 @@ v1.16.1 and with this change agree in every column (25,493 rows on DC-01,
 
 ### Fixed
 
+- **Guest / anonymous token text no longer claims Stars cannot read
+  `EveryoneIncludesAnonymous`.** Since L17 Stars reads that policy on the
+  target (read: Everyone decided, exact), but the marker text, its HTML
+  tooltip and CLI line, and the reason of an uncertain Everyone ACE still
+  said "Stars does not read that policy". They now say that Stars reads it,
+  and that only an unreadable policy leaves the bound. Wording only — no
+  result changes.
 - **An undeterminable Selective Authentication logon no longer makes "No
   access" undeterminable (ADR 0079 addendum).** Where the permissions grant
   nothing, refused and allowed lead to the same answer, so Stars now shows

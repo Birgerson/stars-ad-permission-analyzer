@@ -2088,8 +2088,9 @@ impl PermissionDiagnostic {
                 "Guest / anonymous logon: {} not in this token the way it is for other \
                  accounts — Authenticated Users is never in a Guest or anonymous token \
                  (lab-measured), so its ACEs do not apply; Everyone is in an anonymous token \
-                 only with EveryoneIncludesAnonymous = 1, which Stars does not read, so its \
-                 ACEs bound an anonymous result.",
+                 only when the target sets EveryoneIncludesAnonymous = 1. Stars reads that \
+                 policy on the target; only where it cannot be read do ACEs for Everyone \
+                 bound an anonymous result.",
                 sids.join(", ")
             ),
             PermissionDiagnostic::UacFilteredGroups { groups } => format!(
