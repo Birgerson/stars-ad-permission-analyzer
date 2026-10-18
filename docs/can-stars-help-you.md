@@ -34,7 +34,7 @@ Stars does **not** solve your problem if you need:
 
 ## Three hard limits Stars will **never** cross
 
-1. **Read-only.** No release will ever ship write functions for NTFS, SMB, AD or any target system. Architectural decision — see `AGENTS.md`.
+1. **Read-only.** No release will ever ship write functions for NTFS, SMB, AD or any target system. Architectural decision — see [what Stars does not do](features-and-limitations.md#what-stars-does-not-do-by-design).
 2. **No agent on target systems.** Stars runs on an audit workstation or audit DC. It installs nothing on file servers or other DCs.
 3. **No backdoor auth.** Stars binds via LDAP (ideally LDAPS) and asks for nothing else. No hidden telemetry, no update beacons without signature checks.
 

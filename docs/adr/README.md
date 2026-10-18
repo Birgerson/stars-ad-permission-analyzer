@@ -6,6 +6,23 @@ This directory contains every architecture decision Stars has made, in chronolog
 
 All ADRs are written in US English, matching the repository-wide language convention. The records were migrated in stages: ADRs 0045–0048 (Round 10) on 2026-06-07, ADRs 0001–0015 on 2026-06-08, and the remaining ADRs 0016–0044 on 2026-06-15. Bilingual section headers were collapsed to the English form throughout, and any bilingual prose was reduced to its English version — the decisions themselves are unchanged. The `language` job in `.github/workflows/ci.yml` now enforces US English across all ADRs, so new and existing records stay consistent.
 
+## References to `AGENTS.md`
+
+Several ADRs, and comments in the code, cite `AGENTS.md` — for example
+"AGENTS.md base rule 1" or "DoD point 11". That is the project's internal
+development rulebook for the AI tools that implement Stars; it is
+deliberately not published, and the records keep their wording. Every
+principle they cite is stated in the public documents:
+
+| Cited principle | Public statement |
+| --- | --- |
+| Read-only: Stars never changes a target system | [features-and-limitations.md — what Stars does not do](../features-and-limitations.md#what-stars-does-not-do-by-design), [SECURITY.md](../../SECURITY.md) |
+| Priorities: security, correctness, traceability, testability, stability, performance, usability, aesthetics | [audit-criteria.md §1](../audit-criteria.md#1-core-principles) |
+| Validate every input before it is processed | [technical-documentation.md §13](../technical-documentation.md#13-validation-at-system-boundaries) |
+| Large environments are the default case; no silent omission | [features-and-limitations.md](../features-and-limitations.md), [SECURITY.md](../../SECURITY.md) |
+| Updates: signed, checksummed, channel-aware, rollback-capable, offline source | [known-limitations.md L12](../known-limitations.md#l12--application-updates-are-manual-update_manager-is-a-deliberate-extension-point) |
+| No credentials in the repository or in logs | [SECURITY.md — secrets in the repository](../../SECURITY.md#secrets-in-the-repository) |
+
 ## Index
 
 | ADR | Title |

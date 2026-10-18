@@ -42,10 +42,18 @@ Four rules that shaped every design decision in Stars:
 Stars reads from AD, NTFS, SMB. Stars writes **nothing** back to those
 systems. There is **no code path** that modifies an ACL, sets an AD
 group membership, moves a file, or changes an owner — not as a
-"repair suggestion", not in a GUI convenience mode. This rule is
-encoded as the [`AGENTS.md`](../AGENTS.md) project boundary and
-guaranteed by the *absence* of corresponding API calls in every
+"repair suggestion", not in a GUI convenience mode. This rule is a
+fixed project boundary — the full list of what Stars never does is in
+[features-and-limitations.md](features-and-limitations.md#what-stars-does-not-do-by-design), and a way
+around it is the highest-severity class in [SECURITY.md](../SECURITY.md) —
+and it is guaranteed by the *absence* of corresponding API calls in every
 crate.
+
+**Internal rulebook.** Code comments and ADRs cite `AGENTS.md` (for
+example "AGENTS.md DoD 11"). That is the project's internal development
+rulebook for the AI tools that implement Stars; it is not published. The
+[ADR index](adr/README.md#references-to-agentsmd) lists where each cited
+principle is stated publicly.
 
 Writes only to Stars-owned data:
 - The SQLite scan history (`%APPDATA%\Stars\stars_data.db`).
@@ -1656,8 +1664,8 @@ APIs — **never the raw strings**.
 `gui::worker::normalize_smb_pair(smb_server, share_name)` and its
 CLI counterpart enforce that the two SMB fields are set **as a pair**.
 Single values produce a validation error — not a silent "use only
-one" ([ADR background: ChatGPT review round 2 finding 2 and round 4
-finding 3](../review.md)).
+one" (background: ChatGPT review round 2, finding 2, and round 4,
+finding 3; the review record is internal and not published).
 
 ### 13.2 Path normalisation
 
@@ -1778,5 +1786,3 @@ Planned for future versions:
   severities, optimal rights per role.
 - **[ADRs](adr/)** — Architecture Decision Records with rationale
   and consequences.
-- **[review.md](../review.md)** (gitignored) — record of ChatGPT
-  review rounds 1–5 with status tables.

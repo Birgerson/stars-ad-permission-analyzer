@@ -305,9 +305,10 @@ permanently not part of the product:
 - Agent rollout to foreign systems.
 - Active SIEM response.
 
-> This list follows directly from the CLAUDE.md/AGENTS.md project
-> boundary. Any contribution that introduces a writing operation
-> into the code is considered a breach of this boundary.
+> This list is a fixed project boundary, not a gap to be closed later.
+> Any contribution that introduces a writing operation into the code
+> breaches it, and a way around it is the highest-severity class in
+> [SECURITY.md](../SECURITY.md).
 
 ---
 
