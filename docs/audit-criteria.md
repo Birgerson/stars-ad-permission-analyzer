@@ -381,6 +381,7 @@ Markers that do **not** contribute to incomplete — informational:
 - `PermissionDiagnostic::TrustBoundaryEffectsNotModeled` (hint that SID filtering / trust effects are not simulated; the NTFS/share computation itself is complete — see L4 in the known limitations).
 - `PermissionDiagnostic::SelectiveAuthenticationAllowed` (Selective Authentication allows the logon; names the principal with "Allowed to authenticate", ADR 0079).
 - `PermissionDiagnostic::SelectiveAuthenticationDenied` (Selective Authentication refuses the logon — effective No access, an exact statement; NTFS and share keep what the permissions grant). See ADR 0079.
+- `PermissionDiagnostic::SynchronizeNotGranted` (the effective right lacks SYNCHRONIZE: Explorer and most programs get "access denied", but the rights shown are real and exercisable without it — the value is exact). See ADR 0080.
 - `PermissionDiagnostic::SidHistoryEvaluated` / `PermissionDiagnostic::GroupSidHistoryEvaluated` (historical SIDs **were** read and included in the token; the marker documents that the result already accounts for them).
 - `PermissionDiagnostic::MembersViaPrimaryGroupIncluded` (members view: members found via `primaryGroupID` were included; transparency, not a gap).
 - `PermissionDiagnostic::IdentityOrphaned` (the SID is provably orphaned — a deleted account of the configured domain; the rights shown are what a logon with this SID would get, a correct statement). See ADR 0064.

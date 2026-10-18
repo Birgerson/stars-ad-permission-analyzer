@@ -1265,6 +1265,20 @@ impl EffectivePermission {
         self.uncertainty().is_empty()
     }
 
+    /// ADR 0080: the short addition to the effective-rights line when
+    /// SYNCHRONIZE is not granted (marker `SynchronizeNotGranted`) — one
+    /// wording for the CLI result line and the GUI headline. The rights
+    /// themselves stay as they are: they are the exact AccessCheck result.
+    pub fn synchronize_suffix(&self) -> Option<&'static str> {
+        self.diagnostics
+            .iter()
+            .any(|d| matches!(d, PermissionDiagnostic::SynchronizeNotGranted { .. }))
+            .then_some(
+                "Explorer and most Windows programs get \"access denied\" here (SYNCHRONIZE not \
+                 granted)",
+            )
+    }
+
     /// The highest effective right the known data leaves open — the safe
     /// direction for an audit (review CR-2). Equals `effective_mask` for an
     /// exact result. Otherwise:
@@ -1297,6 +1311,36 @@ impl EffectivePermission {
         // Never below the shown value, whatever a damaged record holds.
         upper | self.effective_mask.0
     }
+}
+
+/// ADR 0080: why an effective right lacks SYNCHRONIZE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SynchronizeGap {
+    /// An applicable NTFS Deny ACE takes it away — e.g. the basic permission
+    /// "Write" denied, which includes SYNCHRONIZE.
+    DeniedByNtfsAce,
+    /// No applicable NTFS ACE grants it.
+    NotGrantedByNtfs,
+    /// NTFS grants it, the share permission does not.
+    NotGrantedByShare,
+}
+
+impl SynchronizeGap {
+    /// The reader-facing cause, shared by every surface.
+    pub fn label(self) -> &'static str {
+        match self {
+            SynchronizeGap::DeniedByNtfsAce => {
+                "a Deny ACE takes it away — e.g. the basic permission \"Write\" denied, which \
+                 includes Synchronize"
+            }
+            SynchronizeGap::NotGrantedByNtfs => "no NTFS ACE grants it",
+            SynchronizeGap::NotGrantedByShare => "the share permission does not grant it",
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Which part of a result an uncertainty affects (ADR 0065).
@@ -1647,6 +1691,19 @@ pub enum PermissionDiagnostic {
     /// Incompleteness trigger (layer `Logon`).
     SelectiveAuthenticationUnknown { server: String, reason: String },
 
+    /// ADR 0080 (lab 2026-10-18): the effective right holds rights but not
+    /// SYNCHRONIZE (`cause` says why). The rights are the exact AccessCheck
+    /// result and each was measured exercisable without SYNCHRONIZE (locally
+    /// and over SMB), but every open that requests SYNCHRONIZE fails — and
+    /// CreateFile, which Explorer and most programs use, always requests it.
+    /// `certain` is false when the result itself is not determinable (then
+    /// "from the known data"). Informational — the result is unchanged.
+    SynchronizeNotGranted {
+        cause: SynchronizeGap,
+        #[serde(default = "default_true")]
+        certain: bool,
+    },
+
     /// The SID belongs to the configured domain, the configured base covers
     /// that whole domain, and the directory has no object for it: the
     /// account no longer exists (orphaned / deleted). Nobody can log on with
@@ -1951,6 +2008,19 @@ impl PermissionDiagnostic {
                  to {server} is not determinable ({reason}) — the effective right lies between \
                  No access and what the permissions grant."
             ),
+            PermissionDiagnostic::SynchronizeNotGranted { cause, certain } => format!(
+                "{} ({}). Explorer and most Windows programs request it with every open \
+                 (CreateFile), locally and over SMB, so they get \"access denied\" for this \
+                 object. The rights shown are nevertheless real: a program that opens without \
+                 SYNCHRONIZE can use them (lab-measured: reading and listing through the native \
+                 API, deleting, reading the permissions).",
+                if *certain {
+                    "SYNCHRONIZE is not granted"
+                } else {
+                    "From the known data, SYNCHRONIZE is not granted"
+                },
+                cause.label()
+            ),
             PermissionDiagnostic::IdentityNotResolvable { reason } => format!(
                 "The identity could not be resolved: {reason}. Its group memberships are \
                  unknown, so the rights computed for the bare SID can be too low or too high."
@@ -2060,6 +2130,7 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::TrustedDomainAccountResolved { .. }
             | PermissionDiagnostic::SelectiveAuthenticationAllowed { .. }
             | PermissionDiagnostic::SelectiveAuthenticationDenied { .. }
+            | PermissionDiagnostic::SynchronizeNotGranted { .. }
             | PermissionDiagnostic::InheritedDenyAfterInheritedAllow { .. }
             | PermissionDiagnostic::IdentityDisabled
             | PermissionDiagnostic::IdentityDisabledStatusUnknown
@@ -2110,9 +2181,8 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::LogonDependentTrustees { .. }
             | PermissionDiagnostic::UacFilteredGroups { .. }
             | PermissionDiagnostic::GuestOrAnonymousToken { .. }
-            | PermissionDiagnostic::SelectiveAuthenticationDenied { .. } => {
-                DiagnosticSeverity::Notice
-            }
+            | PermissionDiagnostic::SelectiveAuthenticationDenied { .. }
+            | PermissionDiagnostic::SynchronizeNotGranted { .. } => DiagnosticSeverity::Notice,
             // Likely a real gap — under-report or a hard resolution failure.
             PermissionDiagnostic::SidHistoryPresent { .. }
             | PermissionDiagnostic::GroupSidHistoryPresent { .. }

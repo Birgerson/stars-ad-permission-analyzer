@@ -492,7 +492,15 @@ holds the measured and by-definition absent SIDs). The answer goes into
 `PermissionEvaluationInput::selective_authentication`; the engine sets
 `SelectiveAuthentication{Allowed,Denied,Unknown}`, a closing explanation
 step, `effective_mask = 0` for Denied and the uncertainty layer `Logon` for
-Unknown. CLI and GUI make one check per analyze / scan run. Frontends: CLI `TrustArgs`
+Unknown. CLI and GUI make one check per analyze / scan run.
+
+ADR 0080: after the explanation path, `synchronize_gap` (engine) tests the
+finished result — rights besides SYNCHRONIZE, no SYNCHRONIZE, and none in
+`effective_upper_bound()` either — and names the cause from `ntfs_raw`,
+`denied_raw` and the share. The engine pushes
+`SynchronizeNotGranted { cause: SynchronizeGap, certain }` and a step
+"Note — …"; the mask is never changed. `EffectivePermission::synchronize_suffix`
+is the one wording for the CLI result line and the GUI headline. Frontends: CLI `TrustArgs`
 (`--trust-*`, `build_trust_ldap_config`), GUI `LdapParams::trust` /
 `TrustParams`, Slint component `TrustDomainFields` shared by three tabs.
 

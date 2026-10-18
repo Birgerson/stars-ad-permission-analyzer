@@ -1061,6 +1061,46 @@ groups; analyze accounts of a trusted domain against that domain; make
 sure the analyzing account may query the target server's local groups and
 read the share permissions.
 
+## "Access denied" in Explorer although Stars shows rights — SYNCHRONIZE
+
+Every time a Windows program opens a file or folder through the normal
+Windows API (`CreateFile`, used by Explorer and almost every application),
+Windows adds the right **SYNCHRONIZE** to the request. If the account does
+not hold SYNCHRONIZE on that object, **every** such open fails with "access
+denied", even for rights the account does hold.
+
+The common cause is **denying the basic permission "Write"** (Explorer's
+Security tab or `icacls … /deny …:(W)`): "Write" includes Synchronize. Other
+causes are special permissions granted without Synchronize, or an account
+that is only the owner.
+
+Stars shows the **rights** the account holds: the exact Windows access check.
+In this case it adds the marker `SynchronizeNotGranted` and the line "Explorer
+and most Windows programs get "access denied" here (SYNCHRONIZE not granted)".
+The rights are real. Measured in the lab, locally and over SMB, for an
+account with Allow Modify and Deny Write:
+
+| What the account tries | Result |
+| --- | --- |
+| open or read the file in Explorer or a normal program | access denied |
+| read the file content with a program that opens without SYNCHRONIZE | **works** |
+| list the folder the same way | **works** |
+| write | denied (Write is denied) |
+| delete a file (Windows API `DeleteFile`) | **works** |
+| read the permissions | **works** |
+| as owner: change the permissions | **works** |
+
+So, for a security review: a denied "Write" does **not** make the data
+unreadable or undeletable. It only breaks the programs that request
+SYNCHRONIZE. If the goal is "read-only", grant Read & execute instead of
+Modify; do not rely on a Deny that blocks Explorer.
+
+To check by hand, run `icacls <path>`: a denied Write appears as
+`(DENY)(W)`, a special Deny lists `S` among its rights. Basic permissions
+such as `(RX)`, `(M)` or `(F)` include Synchronize even though icacls does
+not print an `S` for them; an Allow that lists special rights in
+parentheses without `S` (e.g. `(RD,X,RA)`) does not grant it.
+
 ## Reading findings — diagnostic markers
 
 Every `EffectivePermission` entry in CLI, HTML, or JSON carries a
@@ -1095,6 +1135,7 @@ exact wording, lives in
 | `SelectiveAuthenticationAllowed { server, via }` | info | no | The trust uses Selective Authentication and the account may log on to `server`: "Allowed to authenticate" is granted to `via` (ADR 0079). The result is exact. |
 | `SelectiveAuthenticationDenied { server }` | medium | no | The trust uses Selective Authentication and nobody in the account's token has "Allowed to authenticate" on `server`: Windows refuses the logon (error 1935). Effective: **No access**; NTFS and share show what the permissions would grant. |
 | `SelectiveAuthenticationUnknown { server, reason }` | high | **yes** | Whether the account may log on to `server` is not determinable (`reason`). The effective right lies between No access and what the permissions grant. |
+| `SynchronizeNotGranted { cause, certain }` | medium | no | The effective right holds rights but not SYNCHRONIZE (`cause`: a Deny ACE, no NTFS ACE, or the share). Explorer and most programs get "access denied", but the rights are real — see ["Access denied" in Explorer although Stars shows rights](#access-denied-in-explorer-although-stars-shows-rights--synchronize) (ADR 0080). The value is exact. |
 | `IdentityOrphaned` | info | no | The account no longer exists in the configured domain. Nobody can log on with the SID; an ACE naming it is a dead entry. |
 | `GroupResolutionIncomplete { reason }` | high | **yes** | The group resolution succeeded, but `reason` names groups that are missing from the evaluated token — a primary group outside the base, groups outside a base that is only an OU, a group without a readable SID, an unresolvable local group. |
 | `GuestOrAnonymousToken { sids }` | medium | no (an anonymous bound is) | The analysed account is the Guest account or an anonymous logon. Windows never puts Authenticated Users into such a token (measured), so its ACEs do not apply; for an anonymous logon, Everyone counts only if the server sets `EveryoneIncludesAnonymous` — Stars gives a range there. |

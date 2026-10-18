@@ -595,6 +595,13 @@ fn write_permissions_table(
                         escape_html(&d.summary())
                     ));
                 }
+                // ADR 0080: wording from `summary()`, like the CLI and GUI.
+                PermissionDiagnostic::SynchronizeNotGranted { .. } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-medium\" title=\"{}\">⚠ no SYNCHRONIZE — Windows programs get access denied</span>",
+                        escape_html(&d.summary())
+                    ));
+                }
                 PermissionDiagnostic::GuestOrAnonymousToken { sids } => {
                     // ADR 0072: the model's summary is the single wording.
                     let summary =

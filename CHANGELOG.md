@@ -10,6 +10,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Added
+
+- **SYNCHRONIZE note (ADR 0080)** — when the effective right holds rights
+  but not SYNCHRONIZE (typically a denied basic permission "Write", which
+  includes it), Stars keeps the rights, which are the exact Windows access
+  check and were measured exercisable, and says why Explorer and most
+  programs still get "access denied": marker `SynchronizeNotGranted`, an
+  explanation step, an addition to the CLI result line and the GUI
+  headline, an HTML badge. User guide: what a denied "Write" really blocks
+  (it does not make data unreadable or undeletable). No right changes
+  (checked: 25,841 report rows against v1.16.0; 8 rows gain only the note).
+
 ## [1.16.0] — 2026-10-18
 
 **Selective Authentication is checked, This Organization is exact (ADR 0079).**

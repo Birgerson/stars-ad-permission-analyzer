@@ -510,7 +510,16 @@ pub fn permission_graph_with(p: &EffectivePermission, opts: GraphOptions) -> Opt
         Some((label, _)) => label.to_owned(),
         None => detail,
     };
-    let logon_note = logon.map_or(String::new(), |(_, summary)| format!(" — {summary}"));
+    let mut logon_note = logon.map_or(String::new(), |(_, summary)| format!(" — {summary}"));
+    // ADR 0080: the rights stay; the tooltip says why Windows programs fail.
+    if let Some(d) = p
+        .diagnostics
+        .iter()
+        .find(|d| matches!(d, PermissionDiagnostic::SynchronizeNotGranted { .. }))
+    {
+        logon_note.push_str(" — ");
+        logon_note.push_str(&d.summary());
+    }
     let result_node = push(
         &mut nodes,
         lanes.len() - 1,
