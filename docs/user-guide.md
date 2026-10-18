@@ -62,6 +62,10 @@ To answer them, Stars reads:
   (a junction back into its own parent chain) and a duplicate target
   (two junctions to the same directory) are told apart and each surfaced
   as its own typed diagnostic, never a silent skip or a double count.
+  Over SMB the duplicate message reads "Directory already enumerated in
+  this scan under '…' — this path leads to the same directory (same volume
+  serial and file ID)": the server does not reliably say which of the two
+  routes is the junction, so Stars names only what it checked.
 - **Long paths** (`\\?\…`, UNC long-path form `\\?\UNC\…`).
 
 For each finding Stars builds **structured diagnostic markers** when

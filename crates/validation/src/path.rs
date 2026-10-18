@@ -307,9 +307,15 @@ impl SmbAuditContext {
 /// human-readable form as an owned string. Inverse of
 /// [`to_windows_api_path`]; used to keep `FileSystemObject.path`
 /// prefix-free even when the walker passes prefixed paths internally.
+/// `UNC` matches in any case, as Windows treats it — a lowercased canonical
+/// path (`\\?\unc\server\share`) becomes `\\server\share`, not
+/// `unc\server\share`.
 pub fn strip_long_path_prefix(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
-        return format!(r"\\{rest}");
+    if path
+        .get(..8)
+        .is_some_and(|p| p.eq_ignore_ascii_case(r"\\?\UNC\"))
+    {
+        return format!(r"\\{}", &path[8..]);
     }
     if let Some(rest) = path.strip_prefix(r"\\?\") {
         // "\\?\C:\..." → "C:\..."
@@ -546,6 +552,24 @@ mod tests {
             strip_long_path_prefix(r"\\?\UNC\server\share\folder"),
             r"\\server\share\folder"
         );
+    }
+
+    /// A lowercased canonical path (`\\?\unc\…`) keeps its UNC form: the
+    /// prefix matches in any case, as Windows treats it.
+    #[test]
+    fn strip_long_path_prefix_unc_in_any_case() {
+        assert_eq!(
+            strip_long_path_prefix(r"\\?\unc\192.0.2.10\data$\finance"),
+            r"\\192.0.2.10\data$\finance"
+        );
+        assert_eq!(
+            strip_long_path_prefix(r"\\?\Unc\server\share"),
+            r"\\server\share"
+        );
+        // Not a prefix in the first eight bytes: the local rule applies —
+        // also when byte 8 lies inside a multi-byte character (no panic).
+        assert_eq!(strip_long_path_prefix(r"\\?\c:\data"), r"c:\data");
+        assert_eq!(strip_long_path_prefix(r"\\?\UN€x"), "UN€x");
     }
 
     #[test]

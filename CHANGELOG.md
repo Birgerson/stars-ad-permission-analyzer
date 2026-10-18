@@ -51,6 +51,19 @@ v1.16.1 and with this change agree in every column (25,493 rows on DC-01,
   like a report export (`.svg` only, existing folder) and an existing file
   is never overwritten.
 
+### Fixed
+
+- **Duplicate reparse target over SMB named a wrong target (ADR 0062
+  addendum).** The message ended with "Target: …", which in about two of
+  three scans over SMB was the link's own path — the server reports neither
+  a junction's resolved path nor even its reparse attribute reliably. The
+  detection itself was always right (volume serial + file ID). Over SMB the
+  message now names the route scanned first and the identity that matched,
+  and claims no target; locally a link keeps its target, and a plain
+  directory a link led to first is no longer called a link. Routes are
+  shown without the `\\?\` prefix. Lab: 37 of 37 scans with one and the
+  same message, CSV identical (25,493 rows).
+
 ## [1.16.1] — 2026-10-18
 
 **A denied "Write" explained: the rights stay exact, Explorer's "access denied" is named.**
