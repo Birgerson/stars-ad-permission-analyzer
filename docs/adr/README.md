@@ -89,3 +89,4 @@ All ADRs are written in US English, matching the repository-wide language conven
 | 0077 | Permission graph: the explanation path as a lane diagram |
 | 0078 | Accounts of a trusted domain, resolved on its domain controller |
 | 0079 | Selective Authentication and the organization SIDs of trusted-domain accounts |
+| 0080 | SYNCHRONIZE missing from the effective right |

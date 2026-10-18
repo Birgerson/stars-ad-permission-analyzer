@@ -23,15 +23,15 @@ use adpa_core::{
         ContributingAce, EffectivePermission, GroupMembership, Identity, LocalGroupDescriptor,
         LocalGroupEntry, LocalGroupExpansion, MembershipHop, MembershipPathSource,
         PermissionDiagnostic, PermissionPath, PermissionTrace, PolicyDword, RemoteUacFiltering,
-        ShareEvalStatus, ShareMaskStatus, Sid, TraceGroup, TraceGroupState, TraceLayer,
-        UncertainLayer, Uncertainty,
+        ShareEvalStatus, ShareMaskStatus, Sid, SynchronizeGap, TraceGroup, TraceGroupState,
+        TraceLayer, UncertainLayer, Uncertainty,
     },
     traits::{PermissionEvaluationInput, PermissionEvaluator, SelectiveAuthenticationCheck},
 };
 
 use crate::mask::{
     expand_generic_rights, rights_statement, NormalizedRights, FILE_DELETE, FILE_READ_CONTROL,
-    FILE_WRITE_DAC, INHERIT_ONLY_ACE, MASK_FULL_CONTROL, NOT_DETERMINABLE,
+    FILE_SYNCHRONIZE, FILE_WRITE_DAC, INHERIT_ONLY_ACE, MASK_FULL_CONTROL, NOT_DETERMINABLE,
 };
 use tracing::{debug, warn};
 
@@ -487,6 +487,24 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         });
         result.path_explanation = path_explanation;
         result.trace = trace;
+        // ADR 0080 (lab 2026-10-18): SYNCHRONIZE missing from the effective
+        // right. The rights stay the exact AccessCheck result — each was
+        // measured exercisable without SYNCHRONIZE, locally and over SMB — but
+        // every open that requests SYNCHRONIZE fails, and CreateFile (Explorer,
+        // most programs) always requests it. Named, never hidden.
+        if !logon_refused {
+            if let Some(cause) = synchronize_gap(&result, ntfs_raw, denied_raw) {
+                let marker = PermissionDiagnostic::SynchronizeNotGranted {
+                    cause,
+                    certain: result.effective_determinable(),
+                };
+                result
+                    .path_explanation
+                    .steps
+                    .push(format!("Note — {}", marker.summary()));
+                result.diagnostics.push(marker);
+            }
+        }
         // ADR 0079: the logon decision closes the path. The lines above stay
         // the permissions' view; a refused logon makes the effective right No
         // access — exact, because Windows never evaluates the DACL then.
@@ -523,6 +541,30 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         );
         Ok(result)
     }
+}
+
+/// ADR 0080: why the effective right holds rights but not SYNCHRONIZE —
+/// `None` when it holds SYNCHRONIZE (or its upper bound may), or nothing
+/// besides it.
+fn synchronize_gap(
+    result: &EffectivePermission,
+    ntfs_raw: u32,
+    denied_raw: u32,
+) -> Option<SynchronizeGap> {
+    if result.effective_mask.0 & !FILE_SYNCHRONIZE == 0
+        || result.effective_upper_bound() & FILE_SYNCHRONIZE != 0
+    {
+        return None;
+    }
+    Some(if ntfs_raw & FILE_SYNCHRONIZE == 0 {
+        if denied_raw & FILE_SYNCHRONIZE != 0 {
+            SynchronizeGap::DeniedByNtfsAce
+        } else {
+            SynchronizeGap::NotGrantedByNtfs
+        }
+    } else {
+        SynchronizeGap::NotGrantedByShare
+    })
 }
 
 /// Builds the token SID set for a user.
@@ -5765,6 +5807,124 @@ mod tests {
         let last = p.path_explanation.steps.last().unwrap();
         assert!(last.starts_with("Logon refused"), "{last}");
         assert!(last.contains("No access (0x00000000)"));
+    }
+
+    /// ADR 0080, lab 2026-10-18 (C:\SyncTest, real token, locally and over
+    /// SMB): Allow Modify + Deny "Write" (0x00100116) gives AccessCheck
+    /// 0x000300A9 — the value stays, and the marker names the Deny.
+    #[test]
+    fn a_denied_synchronize_keeps_the_rights_and_names_the_deny() {
+        let input = base_input(
+            user(USER),
+            fso(
+                None,
+                vec![
+                    deny_ace(USER, 0x0010_0116, false),
+                    allow_ace(USER, MASK_MODIFY, false),
+                ],
+            ),
+        );
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert_eq!(p.ntfs_mask.0, 0x0003_00A9);
+        assert_eq!(p.effective_mask.0, 0x0003_00A9, "the measured rights stay");
+        assert!(p.effective_determinable());
+        assert!(p
+            .diagnostics
+            .contains(&PermissionDiagnostic::SynchronizeNotGranted {
+                cause: SynchronizeGap::DeniedByNtfsAce,
+                certain: true,
+            }));
+        let last = p.path_explanation.steps.last().unwrap();
+        assert!(
+            last.starts_with("Note — SYNCHRONIZE is not granted"),
+            "{last}"
+        );
+        assert!(!p.is_incomplete(), "informational only");
+        assert!(p
+            .synchronize_suffix()
+            .is_some_and(|s| s.contains("access denied")));
+        // Without the marker no suffix.
+        let plain = DefaultPermissionEngine
+            .evaluate(base_input(
+                user(USER),
+                fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+            ))
+            .unwrap();
+        assert!(plain.synchronize_suffix().is_none());
+    }
+
+    /// No ACE grants SYNCHRONIZE (special permissions without it, lab S3),
+    /// and only the share lacks it; with it granted nothing is added.
+    #[test]
+    fn synchronize_not_granted_by_ntfs_or_share_and_not_when_granted() {
+        let p = DefaultPermissionEngine
+            .evaluate(base_input(
+                user(USER),
+                fso(None, vec![allow_ace(USER, 0x0003_00A9, false)]),
+            ))
+            .unwrap();
+        assert_eq!(p.effective_mask.0, 0x0003_00A9);
+        assert!(p
+            .diagnostics
+            .contains(&PermissionDiagnostic::SynchronizeNotGranted {
+                cause: SynchronizeGap::NotGrantedByNtfs,
+                certain: true,
+            }));
+
+        let mut share = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+        );
+        share.share_status = ShareMaskStatus::Applied(AccessMask(0x0002_00A9));
+        let p = DefaultPermissionEngine.evaluate(share).unwrap();
+        assert_eq!(p.effective_mask.0, 0x0002_00A9);
+        assert!(p
+            .diagnostics
+            .contains(&PermissionDiagnostic::SynchronizeNotGranted {
+                cause: SynchronizeGap::NotGrantedByShare,
+                certain: true,
+            }));
+
+        for dacl in [
+            vec![allow_ace(USER, MASK_MODIFY, false)],
+            vec![allow_ace(USER, MASK_READ, false)],
+            // Only SYNCHRONIZE left: nothing to use, no marker.
+            vec![allow_ace(USER, 0x0010_0000, false)],
+            vec![],
+        ] {
+            let p = DefaultPermissionEngine
+                .evaluate(base_input(user(USER), fso(None, dacl)))
+                .unwrap();
+            assert!(!p
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d, PermissionDiagnostic::SynchronizeNotGranted { .. })));
+        }
+    }
+
+    /// A refused logon (ADR 0079) is No access — no SYNCHRONIZE note then.
+    #[test]
+    fn no_synchronize_note_when_the_logon_is_refused() {
+        use adpa_core::traits::SelectiveAuthenticationCheck;
+        let mut input = base_input(
+            user(USER),
+            fso(
+                None,
+                vec![
+                    deny_ace(USER, 0x0010_0116, false),
+                    allow_ace(USER, MASK_MODIFY, false),
+                ],
+            ),
+        );
+        input.selective_authentication = Some(SelectiveAuthenticationCheck::Denied {
+            server: "DC-01".into(),
+        });
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert_eq!(p.effective_mask.0, 0);
+        assert!(!p
+            .diagnostics
+            .iter()
+            .any(|d| matches!(d, PermissionDiagnostic::SynchronizeNotGranted { .. })));
     }
 
     /// Not decidable: NTFS stays exact, the effective right is a range from

@@ -145,8 +145,9 @@ never logs on as the account and never changes a right.
   named.
 - Selective Authentication off: This Organization and Other Organization
   are exact; both accounts match real SMB access on all 26 folder rows.
-  The one exception is the separate SYNCHRONIZE-in-Deny case
-  (`TG_deny_ext`), which is not part of this decision.
+  The one exception is `TG_deny_ext`: the probe opens through `CreateFileW`,
+  which requests SYNCHRONIZE, and a Deny "Write" takes it away. Stars' value
+  is the account's real rights (ADR 0080).
 - Regression without the trust options: v1.15.0 vs. new, every column
   identical: DC data share 37 identities × 689 rows, MS-01 with and without
   LDAP 270 rows, group-type fixture 78 rows.

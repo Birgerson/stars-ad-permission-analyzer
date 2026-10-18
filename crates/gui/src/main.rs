@@ -1199,6 +1199,9 @@ slint::slint! {
                                     Text {
                                         text: "Effective rights: " + root.a-rights-label;
                                         font-size: 16px;
+                                        // ADR 0080: a long rights list or the
+                                        // SYNCHRONIZE addition must not be cut off.
+                                        wrap: word-wrap;
                                     }
                                     Text {
                                         text: "Access-Mask: " + root.a-mask-hex;
@@ -3840,7 +3843,7 @@ fn apply_analyze_result(
             let effective_raw = perm.effective_mask.0;
             let rights = NormalizedRights::new(effective_raw);
             // ADR 0065: never present an undeterminable value as the answer.
-            let rights_label = if perm.effective_determinable() {
+            let mut rights_label = if perm.effective_determinable() {
                 format!("{} ({})", rights.display_name(), rights.label())
             } else {
                 format!(
@@ -3850,6 +3853,12 @@ fn apply_analyze_result(
                     rights.label()
                 )
             };
+            // ADR 0080: the rights stay; the headline says why Windows
+            // programs fail.
+            if let Some(suffix) = perm.synchronize_suffix() {
+                rights_label.push_str(" — ");
+                rights_label.push_str(suffix);
+            }
             ui.set_a_rights_label(rights_label.into());
             ui.set_a_mask_hex(format!("0x{effective_raw:08X}").into());
             ui.set_a_share_line(format_share_line(&perm).into());

@@ -280,6 +280,10 @@ pub fn print_report(
         "  Result  : {}",
         rights_statement(result.effective_mask.0, result.effective_determinable())
     );
+    // ADR 0080: the rights stay; the line says why Windows programs fail.
+    if let Some(suffix) = result.synchronize_suffix() {
+        println!("            {suffix}");
+    }
     print_uncertainty(&result.uncertainty());
 
     section("Explanation Path");
@@ -524,6 +528,20 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 println!("  [!] Selective Authentication: whether the account may authenticate");
                 println!("      to {server} is not determinable ({reason}). The effective");
                 println!("      right lies between No access and what the permissions grant.");
+            }
+            PermissionDiagnostic::SynchronizeNotGranted { cause, certain } => {
+                let lead = if *certain {
+                    "SYNCHRONIZE is not granted"
+                } else {
+                    "From the known data, SYNCHRONIZE is not granted"
+                };
+                println!("  [!] {lead}:");
+                println!("      {}.", cause.label());
+                println!("      Explorer and most Windows programs request it with every open");
+                println!("      (CreateFile), locally and over SMB — they get \"access denied\"");
+                println!("      here. The rights shown are still real: a program that opens");
+                println!("      without SYNCHRONIZE can use them (lab: reading and listing");
+                println!("      through the native API, deleting, reading the permissions).");
             }
             PermissionDiagnostic::IdentityNotResolvable { reason } => {
                 println!("  [!] The identity could not be resolved: {reason}.");
