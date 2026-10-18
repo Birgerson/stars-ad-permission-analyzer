@@ -194,39 +194,80 @@ user can effectively do there.
 
 ### `Graph` tab — the result as a diagram
 
-![Stars Graph tab (v1.13.0) — the same result as a lane diagram: account, the four token groups an ACE names plus "+69 further groups", a red Deny ACE and a green Allow ACE leading to the NTFS result, two green share ACEs routed below the boxes, and the effective right with the share value](screenshots/stars-graph-tab.png)
+![Stars Graph tab — u00030 on F06 of an SMB share: four token groups an ACE names plus "+69 further groups"; in the NTFS band a red Deny ACE (double line) and a green Allow Modify lead to the NTFS result Read & Execute + Delete; in the share band below, two green share ACEs lead to the share result Full Control; both results flow into the effective right, "Read & Execute + Delete, limited by NTFS"](screenshots/stars-graph-tab.png)
 
 **Purpose:** See at a glance how the last `Analyze` result comes about:
-which group brings which ACE, which ACE decided which bits, and where the
-share limits the result.
+which group brings which ACE, which ACE decided which bits, which layer
+limits the result — and whether the logon itself is refused.
 
 The graph is drawn from the result itself — the same decisions as the
 numbered permission path, nothing computed anew. Read it left to right:
 
-| Lane | What it shows |
+| Column | What it shows |
 | --- | --- |
-| Account | the analyzed user or group |
+| Account | the analyzed user or group, its kind and SID |
 | Token groups | only the groups an ACE on this object names, with their route (`direct`, `via A → B`, `implicit`) and state (`deny-only`, `uncertain`, `decisive`); "the account itself" when an ACE names the account directly; "+N further groups" for all the others |
-| NTFS ACEs | each ACE that reaches the account, with its effect |
-| NTFS | the NTFS result |
-| Share ACEs | only when a share was evaluated |
-| Result | the effective right and the share value |
+| ACEs | two bands: **NTFS ACEs** on top, **Share ACEs** below (only when a share was evaluated) — each ACE that reaches the account, with what it did: "grants …", "denies …", "inherit-only", "not applied (deny-only)" |
+| NTFS / Share | the result of each layer, in its band |
+| Logon | only for an account of a trusted domain whose trust uses Selective Authentication: whether the account may log on to the server at all ([Selective Authentication](#selective-authentication--may-the-account-log-on-at-all)) |
+| Result | the effective right and which side decides it: "limited by the share", "limited by NTFS", "NTFS and share agree", "no SMB share — NTFS decides" |
 
-**Colours:**
+**Lines and colours** (the legend under the graph repeats them):
 
 - **green** — an Allow decided bits (on its layer: a green share ACE
   decided share bits even when NTFS grants nothing),
-- **red** — a Deny decided bits,
+- **red double line** — a Deny decided bits,
 - **amber dashed** — uncertain: the group is in the token only for certain
   logons or session states (for example an elevated session),
 - **grey dashed** — no effect, inherit-only (not on this object), or not
-  applied because the group is deny-only.
+  applied because the group is deny-only,
+- **slate** — the result of a layer flowing into the effective right,
+- **thick** — the decisive route: the groups and ACEs that decided bits,
+  and the layer that limits the result.
 
-A lane with "no ACE reaches the account" means that no ACE of that layer
-names the account or one of its groups — the permission path in the
-`Analyze` tab says why (for example an ACE only for interactive logons).
-Lines that skip a lane run below the boxes, so a line never passes
-through a box it does not connect.
+Every line connects neighbouring columns, so a line never passes through
+a box it does not connect. An ACE band with "no ACE reaches the account"
+means that no ACE of that layer names the account or one of its groups —
+the permission path in the `Analyze` tab says why (for example an ACE
+only for interactive logons).
+
+**What the result box can add:**
+
+- **"No access — logon refused before any ACE"** — the logon box is red:
+  the server refuses the logon, so no permission is ever evaluated.
+- **"logon not determinable"** — the logon box is amber and names the
+  reason; the effective right lies between No access and the value shown.
+- **"no SYNCHRONIZE: Explorer and most programs get "access denied""** —
+  the rights are exact, but Explorer and most Windows programs cannot open
+  the object
+  ([SYNCHRONIZE](#access-denied-in-explorer-although-stars-shows-rights--synchronize)).
+
+**Texts.** A box never hides a right: when the long form ("Read & Execute
++ Delete") does not fit, the box shows the `icacls` short form (`RX+DE`,
+`(WD,AD,WA,WEA,S)`), over two or more lines if needed. A long name loses
+its domain first (`…\name`), then its middle; a SID keeps its RID
+(`S-1-5-21-…-1132`). The full text of every box is in its tooltip (HTML
+report) and in the click detail (GUI).
+
+**Working with the graph:**
+
+- **Click a box** — its full text appears below the graph, and every route
+  through it stays bright: the box, everything it is reached from and
+  everything it leads to; the rest fades. Click it again to show
+  everything. Clicking the *Share* box, for example, shows which groups
+  and share ACEs make the share result:
+
+  ![Stars Graph tab after a click on the Share box: the account, the groups Everyone and msg_direct, their two share ACEs, the share result and the effective right stay bright; the NTFS band is faded](screenshots/stars-graph-route.png)
+
+- **Zoom** — `−` and `+`, **Actual size**, and **Fit width**, which fits
+  the whole graph into the window width.
+- **Save graph (SVG)** — type a file name ending in `.svg` in an existing
+  folder and click the button. Stars writes the graph as shown ("Show all
+  groups" included), in the light palette, with a caption line that names
+  account and path, without the click selection. An existing file is never
+  overwritten: pick a new name or delete the old file first. Every current
+  web browser opens the file.
+- The graph follows the **light/dark** switch.
 
 **Further groups.** Only groups an ACE on this object names get a box of
 their own; the account's other memberships do not change this result and
@@ -240,10 +281,16 @@ are one box, "+N further groups". They are not hidden:
   ACE here". The columns are then aligned at the top, so the account, the
   ACEs and the result stay in view next to the long group column.
 
-**Limits:** long names are shortened (the HTML report shows the full text
-as a tooltip); the graph shows the last `Analyze` result only — not scan
+**In the HTML report** every row has a collapsed "permission graph" — the
+same diagram in the dark palette of the report. It scales with the window
+down to 80 % of its size and scrolls below that; its tooltips carry the
+full texts.
+
+**Limits:** the graph shows the last `Analyze` result only — not scan
 rows and not results loaded from the scan history. The numbered
-permission path stays the complete explanation.
+permission path stays the complete explanation. Text widths are estimated
+for the Windows standard font; with a much wider font a line can touch
+the edge of its box.
 
 ### `Groups` tab — which groups is a user in?
 

@@ -1,7 +1,10 @@
 # ADR 0077 — Permission graph: the explanation path as a lane diagram
 
 ## Status
-Accepted (2026-10-17).
+Accepted (2026-10-17). The layout of decision 2 (lanes, routing tracks),
+the light-only canvas of decision 4 and the v1 limits are superseded by
+ADR 0081 (2026-10-18); the trace (decision 1) and the colours of
+decision 3 stand.
 
 ## Context
 

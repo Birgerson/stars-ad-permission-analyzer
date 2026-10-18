@@ -5853,6 +5853,46 @@ mod tests {
         assert!(plain.synchronize_suffix().is_none());
     }
 
+    /// ADR 0081: the graph's limiting side and the explanation step
+    /// "Limited by …" follow one rule — checked over many mask pairs.
+    #[test]
+    fn limiting_side_agrees_with_the_explanation_step() {
+        use crate::mask::{limiting_side, LimitingSide};
+        let masks = [
+            0x0012_0089u32,
+            0x0012_00A9,
+            0x0013_01BF,
+            0x001F_01FF,
+            0x0012_0116,
+            0x0003_00A9,
+            0x0010_0000,
+            0x0001_0000,
+        ];
+        for ntfs in masks {
+            for share in masks {
+                let mut input =
+                    base_input(user(USER), fso(None, vec![allow_ace(USER, ntfs, false)]));
+                input.share_status = ShareMaskStatus::Applied(AccessMask(share));
+                let p = DefaultPermissionEngine.evaluate(input).unwrap();
+                let step = p
+                    .path_explanation
+                    .steps
+                    .iter()
+                    .find(|s| s.starts_with("Limited by") || s.starts_with("NTFS and share"))
+                    .unwrap_or_else(|| panic!("no limit step for {ntfs:#x}/{share:#x}"));
+                let expected = match limiting_side(p.ntfs_mask.0, share) {
+                    LimitingSide::Share => "Limited by the share",
+                    LimitingSide::Ntfs => "Limited by NTFS",
+                    LimitingSide::Neither => "NTFS and share allow the same",
+                };
+                assert!(
+                    step.starts_with(expected),
+                    "{ntfs:#x}/{share:#x}: {step} vs {expected}"
+                );
+            }
+        }
+    }
+
     /// No ACE grants SYNCHRONIZE (special permissions without it, lab S3),
     /// and only the share lacks it; with it granted nothing is added.
     #[test]

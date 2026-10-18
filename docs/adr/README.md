@@ -107,3 +107,4 @@ principle they cite is stated in the public documents:
 | 0078 | Accounts of a trusted domain, resolved on its domain controller |
 | 0079 | Selective Authentication and the organization SIDs of trusted-domain accounts |
 | 0080 | SYNCHRONIZE missing from the effective right |
+| 0081 | Permission graph v2: two bands, layer results, routes on click |

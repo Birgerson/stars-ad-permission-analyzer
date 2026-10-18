@@ -274,9 +274,9 @@ not apply — User Account Control, a logon-dependent SID — is listed as
 `UNCERTAIN` with its own reason, and the result then reads NOT
 DETERMINABLE with the range. In a long membership list the GUI and the
 HTML report collapse the memberships that did not matter. The `Graph`
-tab and the HTML report draw the same path as a lane diagram — which
-group brings which ACE, which ACE decided which bits, where the share
-limits the result.
+tab and the HTML report draw the same path as a diagram — which group
+brings which ACE, which ACE decided which bits, which layer (NTFS or
+share) limits the result, and whether the logon itself is refused.
 
 ## Using Stars
 
@@ -404,9 +404,9 @@ Actions:
 
 #### `Graph` tab
 
-![Stars Graph tab (v1.13.0) — the same result as a lane diagram: account, the four token groups an ACE names plus "+69 further groups", a red Deny ACE and a green Allow ACE leading to the NTFS result, two green share ACEs routed below the boxes, and the effective right with the share value](docs/screenshots/stars-graph-tab.png)
+![Stars Graph tab — u00030 on F06 of an SMB share: four token groups an ACE names plus "+69 further groups"; in the NTFS band a red Deny ACE (double line) and a green Allow Modify lead to the NTFS result Read & Execute + Delete; in the share band below, two green share ACEs lead to the share result Full Control; both results flow into the effective right, "Read & Execute + Delete, limited by NTFS"](docs/screenshots/stars-graph-tab.png)
 
-Shows the last `Analyze` result as a lane diagram, read left to right: account → token groups → NTFS ACEs → NTFS → share ACEs → result. Green: an Allow decided bits · red: a Deny decided bits · amber dashed: uncertain (logon / session) · grey dashed: no effect, inherit-only or deny-only. Only groups an ACE names get a box; the rest is "+N further groups". The graph is drawn from the result's own decisions — the same as the numbered permission path, nothing computed anew — and the HTML report embeds the same diagram per row (ADR 0077).
+Shows the last `Analyze` result as a diagram, read left to right: account → token groups → ACEs → result per layer → effective result. NTFS runs in the upper band, the share in the lower one, so `effective = NTFS ∩ share` shows as two inputs of one result, which names the limiting side. Green: an Allow decided bits · red double line: a Deny decided bits · amber dashed: uncertain (logon / session) · grey dashed: no effect, inherit-only or deny-only · thick: the decisive route. For an account of a trusted domain with Selective Authentication a **Logon** box shows whether the server lets the account log on at all; a missing SYNCHRONIZE is named on the result. Click a box for its full text and every route through it; zoom, fit to the window width, or **save the graph as SVG**. The graph is drawn from the result's own decisions — the same as the numbered permission path, nothing computed anew — and the HTML report embeds the same diagram per row (ADR 0077, ADR 0081).
 
 #### `Groups` tab
 

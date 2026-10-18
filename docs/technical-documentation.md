@@ -166,7 +166,7 @@ directed — higher layers depend on lower ones, never the reverse:
 | `risk_engine` | Six risk rules + `is_incomplete()` delegation | `rules.rs` |
 | `persistence` | SQLite schema + migrations (v1–v8) + `ScanStore`, delta comparison | `scan_store.rs`, `migrations.rs`, `delta.rs`, `db.rs` |
 | `exporter` | CSV / JSON / HTML renderers + the shared path-centric trustee view | `csv.rs`, `json.rs`, `html.rs`, `trustees.rs` |
-| `viz` | Permission graph (ADR 0077): lane layout of one `EffectivePermission` from its `trace`, rendered as SVG (HTML report) or as text-free shapes plus native texts (GUI); presentation only, no permission logic | `lib.rs` |
+| `viz` | Permission graph (ADR 0077, layout v2 ADR 0081): column layout of one `EffectivePermission` from its `trace` — NTFS and share bands, layer results, logon node — rendered as SVG (HTML report, saved graph) or as text-free shapes plus native texts (GUI), light or dark; presentation only, no permission logic | `lib.rs` |
 | `update_manager` | Fail-closed seam for signature-checked updates (L12) + the manual read-only update check (ADR 0061) | `checker.rs`, `manager.rs`, `manifest.rs`, `verifier.rs`, `version.rs` |
 | `cli` | Command-line front-end (`adpa.exe`): `analyze`, `scan`, `groups`, `members`, `shares`, `runs`, `errors`, `check-update`, `trusts` | `main.rs`, `output.rs` |
 | `gui` | Slint-based GUI (`adpa-gui.exe`) with eight tabs (Analyze, Graph, Groups, Scan Tree, Delta, Trusts, Shares, Info); the UI is currently declared inline via `slint!{}` in `main.rs` (extraction to external `.slint` files is planned) | `main.rs`, `worker.rs` |
@@ -975,15 +975,28 @@ path, `PermissionTrace` — its structured twin, stored in
 
 The invariant test above also checks that the trace has one entry per ACE
 step and that its decided Allow bits equal the granted bits. The `viz`
-crate lays the trace out (`permission_graph` → `GraphLayout`): lanes at
-fixed x, each column centred vertically, an edge that skips a lane on its
-own routing track below all nodes, an explicit node for an ACE on the
-account itself and for an empty ACE lane. `GraphLayout::to_svg` (report,
-with `<title>` tooltips, XML-escaped) and `to_svg_shapes` + `texts` (GUI —
-Slint's SVG renderer has no fonts, so the texts are native `Text`
-elements at the layout's coordinates) render the same layout. The HTML
-report embeds graphs for the first `GRAPH_EMBED_LIMIT` = 500 rows. The
-trace is not written to SQLite.
+crate lays the trace out (`permission_graph` → `GraphLayout`, layout v2
+ADR 0081): columns Account → Token groups → ACEs → layer result →
+(Logon) → Result at fixed x; the ACE and layer columns carry an NTFS band
+on top and a share band below; every edge connects neighbouring columns
+(tested), so no routing tracks exist. An explicit node stands for an ACE
+on the account itself and for an empty ACE band. The effective node names
+the limiting side through `permission_engine::limiting_side`, which an
+engine test checks against the explanation step; the logon node comes
+from the Selective Authentication markers, the SYNCHRONIZE line from
+`SynchronizeNotGranted`. Box texts: rights through `rights_lines` (long
+form, else the `icacls` short form, wrapped, never cut), names through
+`fit_name`, SIDs through `fit_sid` / `shorten_sids` (`S-1-5-21-…-RID`),
+routes and reasons through `wrap_lines`. `GraphLayout::to_svg_with`
+(report, with `<title>` tooltips, XML-escaped) and `to_svg_shapes_with` +
+`texts` (GUI — Slint's SVG renderer has no fonts, so the texts are native
+`Text` elements at the layout's coordinates) render the same layout,
+each in a light or dark palette (`RenderOptions`); the report uses dark
+and responsive (scales down to 80 %). `GraphLayout::route_nodes` gives
+the boxes on every route through a selected box (GUI highlight); the GUI
+saves a graph through `validation::export_path::validate_svg_export_path`
+and `create_new`. The HTML report embeds graphs for the first
+`GRAPH_EMBED_LIMIT` = 500 rows. The trace is not written to SQLite.
 
 The chain of each membership step is reproducible (ADR 0063): one shortest
 route chosen by a fixed rule, with every further entry into the group named
