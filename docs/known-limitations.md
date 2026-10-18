@@ -732,7 +732,11 @@ identically for a directory no matter which route led to it. (The older
 stopped after 3 paths in 3 of 3 runs, the share scans 90 paths instead of
 216, and a junction into another subtree of the same scan is now reported
 as a duplicate target. Directories for which a server returns no usable
-identity fall back to the previous path comparison.
+identity fall back to the previous path comparison. Over SMB the reparse
+attribute of a junction is not reliable either (lab 2026-10-18: missing in
+25 of 37 runs); the loop identity does not depend on it, and since the
+ADR 0062 addendum the duplicate-target message claims only the identity
+that matched.
 
 ---
 

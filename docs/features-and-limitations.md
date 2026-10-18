@@ -432,7 +432,10 @@ permanently not part of the product:
   path; for scans over SMB it compares each directory's volume serial +
   file ID, because the SMB client does not reliably resolve a junction's
   path (ADR 0062). A second route to an already scanned directory is
-  reported as a duplicate target and not enumerated twice.
+  reported as a duplicate target and not enumerated twice. Over SMB the
+  server does not reliably report whether a directory is a reparse point
+  either, so that message names the route scanned first and the identity
+  that matched ("same volume serial and file ID"), not a link target.
 - **How visible:** Reparse-point hits and detected loops are
   visibly marked in the GUI hit list; the HTML report has its own
   note.

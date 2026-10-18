@@ -75,3 +75,41 @@ Windows Server 2022 DC) established the cause precisely:
   tests for the key selection and for a cycle that only the file identity
   reveals. The SMB failure itself needs a remote server and is covered by
   the lab acceptance run recorded above.
+
+## Addendum (2026-10-18): the duplicate-target diagnostic over SMB
+
+Decision 4 fixed the cycle diagnostic, not the duplicate-target one. That
+message still ended with "Target: <canonical path>". Regression runs (37
+identities, each a scan of the same share on DC-01, which holds a junction
+to a folder scanned before it) showed it naming the link itself in 24 to 26
+of 37 runs and the real target in the others — in every version since
+v1.15.0. The cause goes one step further than the resolved path: over SMB
+**the reparse attribute of the junction itself is not reliable**. A first
+version of this fix worded the message by that attribute and showed it
+missing (`GetFileAttributesW` without `FILE_ATTRIBUTE_REPARSE_POINT`) in 25
+of 37 runs; which runs varies from one series to the next. Without the
+attribute the walker derives the junction's canonical path from its
+parent — the link's own path; with it, the resolved path can still be the
+link's own (the cache effect above).
+
+The detection was right every time: the file identity matched, the subtree
+was enumerated once, the CSV of all 37 runs identical. Only the message
+claimed a target it did not know. Now:
+
+- **Over SMB** the message claims only what the match proves: "Directory
+  already enumerated in this scan under '<first route>' — this path leads to
+  the same directory (same volume serial and file ID) …" (or "same resolved
+  path" for a server without file IDs). It names no target and does not say
+  which route is the reparse point.
+- **Locally**, where the attribute and the resolved path are reliable, a
+  link keeps "Target: <resolved path>"; a plain directory that a link led to
+  first is no longer called a link object.
+- Every route is shown in its display form (no `\\?\` prefix).
+  `validation::path::strip_long_path_prefix` now matches `\\?\UNC\` in any
+  case, as Windows does — hardening only: no caller passes the lowercase
+  canonical form (`\\?\unc\…`, which it would have cut to `unc\…`).
+
+The reparse attribute is used nowhere else in a result: `FileSystemObject`
+is neither exported nor stored, and the loop identity over SMB does not
+depend on it. Lab after the fix: 37 of 37 runs with one and the same
+message, CSV identical to v1.16.1 (25,493 rows).

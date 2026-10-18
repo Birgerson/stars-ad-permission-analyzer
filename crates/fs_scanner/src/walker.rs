@@ -185,6 +185,60 @@ fn select_loop_key(remote: bool, file_identity: Option<String>, canonical: &str)
     }
 }
 
+/// How a second route to an already enumerated directory was recognized —
+/// which decides what its diagnostic may claim (ADR 0058, ADR 0062).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DuplicateRoute<'a> {
+    /// Local scan: this path is a reparse point resolving to `target`.
+    LocalLink { target: &'a str },
+    /// Local scan: a plain directory that a reparse point led to first.
+    LocalDirectory,
+    /// Scan over SMB. The server reports neither reliably whether a
+    /// directory is a reparse point nor the resolved path of a junction —
+    /// the lab saw the flag of one junction missing in 25 of 37 runs and
+    /// the resolved path then being the link's own (ADR 0062). So the
+    /// diagnostic claims neither, only the identity that matched: volume
+    /// serial + file ID, or — when the server gives none — the path.
+    Remote { by_file_id: bool },
+}
+
+impl<'a> DuplicateRoute<'a> {
+    /// The route kind of a directory the detector found again.
+    fn classify(remote: bool, by_file_id: bool, is_reparse: bool, canonical: &'a str) -> Self {
+        match (remote, is_reparse) {
+            (true, _) => DuplicateRoute::Remote { by_file_id },
+            (false, true) => DuplicateRoute::LocalLink { target: canonical },
+            (false, false) => DuplicateRoute::LocalDirectory,
+        }
+    }
+}
+
+/// The diagnostic for a second route to a directory already enumerated in
+/// this scan under `first_path` (ADR 0058). Pure, so every wording is
+/// unit-testable.
+fn duplicate_route_message(first_path: &str, route: DuplicateRoute<'_>) -> String {
+    let first = validation::path::strip_long_path_prefix(first_path);
+    match route {
+        DuplicateRoute::LocalLink { target } => format!(
+            "Reparse point target already enumerated in this scan under '{first}' — subtree not enumerated again under this namespace path (duplicate target, not a cycle). Target: {}. The link object itself is in the result with its DACL.",
+            validation::path::strip_long_path_prefix(target)
+        ),
+        DuplicateRoute::LocalDirectory => format!(
+            "Directory already enumerated in this scan under '{first}', reached there through a reparse point — subtree not enumerated again under this path (duplicate route, not a cycle). The directory itself is in the result with its DACL."
+        ),
+        DuplicateRoute::Remote { by_file_id } => {
+            let identity = if by_file_id {
+                "same volume serial and file ID"
+            } else {
+                "same resolved path"
+            };
+            format!(
+                "Directory already enumerated in this scan under '{first}' — this path leads to the same directory ({identity}); its subtree is not enumerated again (duplicate route, not a cycle). The object at this path is in the result with its DACL."
+            )
+        }
+    }
+}
+
 /// The walk's decision for a directory about to be descended into —
 /// produced by [`LoopDetector::enter`].
 #[derive(Debug, PartialEq, Eq)]
@@ -422,6 +476,7 @@ fn walk_dir(
                 } else {
                     None
                 };
+                let keyed_by_file_id = remote && file_identity.is_some();
                 let loop_key = select_loop_key(remote, file_identity, &canonical);
                 debug!(path, canonical = %canonical, key = %loop_key, "Directory loop identity");
 
@@ -444,14 +499,24 @@ fn walk_dir(
                     DescendDecision::DuplicateTarget { first_path } => {
                         info!(
                             path,
-                            target = %canonical,
                             first_path = %first_path,
-                            "Reparse point target already enumerated under another namespace path — duplicate route, not enumerated again"
+                            key = %loop_key,
+                            "Directory already enumerated under another namespace path — duplicate route, not enumerated again"
+                        );
+                        // Over SMB neither the reparse flag nor the resolved
+                        // path is reliable (ADR 0062): the message claims only
+                        // what the match proves.
+                        let route = DuplicateRoute::classify(
+                            remote,
+                            keyed_by_file_id,
+                            is_reparse,
+                            &canonical,
                         );
                         on_item(WalkItem::Error(WalkError {
                             path: path.clone(),
-                            error: CoreError::ReparseDuplicateTarget(format!(
-                                "Reparse point target already enumerated in this scan under '{first_path}' — subtree not enumerated again under this namespace path (duplicate target, not a cycle). Target: {canonical}. The link object itself is in the result with its DACL."
+                            error: CoreError::ReparseDuplicateTarget(duplicate_route_message(
+                                &first_path,
+                                route,
                             )),
                         }));
                         continue;
@@ -908,6 +973,11 @@ mod tests {
             msg.contains("not a cycle"),
             "duplicate diagnostic must distinguish itself from a cycle: {msg}"
         );
+        // `target` is a plain directory, not a link (review 2026-10-18).
+        assert!(
+            msg.contains("directory already enumerated") && !msg.contains("link object"),
+            "a plain directory must not be called a link: {msg}"
+        );
     }
 
     /// Creates an NTFS junction `link → target` and fails LOUDLY when that
@@ -1047,6 +1117,76 @@ mod tests {
             }
             other => panic!("expected DuplicateTarget, got {other:?}"),
         }
+    }
+
+    /// Locally a second link to an enumerated target names the first route
+    /// and the resolved target; a plain directory a link led to first is not
+    /// called a link.
+    #[test]
+    fn duplicate_route_message_on_a_local_scan() {
+        use super::{duplicate_route_message, DuplicateRoute};
+        let link = DuplicateRoute::classify(false, false, true, r"\\?\c:\shared");
+        assert_eq!(
+            link,
+            DuplicateRoute::LocalLink {
+                target: r"\\?\c:\shared"
+            }
+        );
+        let msg = duplicate_route_message(r"\\?\C:\root\link_a", link);
+        assert!(msg.contains(r"under 'C:\root\link_a'"), "{msg}");
+        assert!(msg.contains(r"Target: c:\shared."), "{msg}");
+        assert!(
+            msg.contains("not a cycle") && msg.contains("link object"),
+            "{msg}"
+        );
+
+        let dir = DuplicateRoute::classify(false, false, false, r"c:\root\target");
+        assert_eq!(dir, DuplicateRoute::LocalDirectory);
+        let msg = duplicate_route_message(r"\\?\C:\root\link", dir);
+        assert!(msg.starts_with(r"Directory already enumerated in this scan under 'C:\root\link'"));
+        assert!(
+            msg.contains("reached there through a reparse point"),
+            "{msg}"
+        );
+        assert!(msg.contains("not a cycle") && msg.contains("The directory itself"));
+        assert!(
+            !msg.contains("link object") && !msg.contains("Target:"),
+            "{msg}"
+        );
+    }
+
+    /// ADR 0062: over SMB neither the reparse flag nor a junction's resolved
+    /// path is reliable — the lab saw "Target: …\spezial\link_zu_finance"
+    /// (the link's own path) in 25 of 37 runs. The message claims only the
+    /// identity that matched, whatever the flag says.
+    #[test]
+    fn duplicate_route_message_over_smb_claims_only_the_matched_identity() {
+        use super::{duplicate_route_message, DuplicateRoute};
+        let unreliable = r"\\?\unc\srv\data$\special\link_to_finance";
+        for flag in [true, false] {
+            let route = DuplicateRoute::classify(true, true, flag, unreliable);
+            assert_eq!(route, DuplicateRoute::Remote { by_file_id: true });
+            let msg = duplicate_route_message(r"\\?\UNC\srv\data$\Departments\Finance", route);
+            assert!(
+                msg.contains(r"under '\\srv\data$\Departments\Finance'"),
+                "{msg}"
+            );
+            assert!(msg.contains("same volume serial and file ID"), "{msg}");
+            assert!(
+                !msg.contains("Target:") && !msg.contains("link_to_finance"),
+                "{msg}"
+            );
+            assert!(
+                !msg.contains("reached there through"),
+                "no claim about the route: {msg}"
+            );
+        }
+        // A server without file IDs: the path matched.
+        let route = DuplicateRoute::classify(true, false, true, unreliable);
+        assert_eq!(route, DuplicateRoute::Remote { by_file_id: false });
+        assert!(
+            duplicate_route_message(r"\\?\UNC\srv\data$\a", route).contains("same resolved path")
+        );
     }
 
     // --- ADR 0062 / FS3-1: loop identity for scans over SMB ---
