@@ -10,17 +10,35 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
-### Added
+## [1.16.1] — 2026-10-18
 
-- **SYNCHRONIZE note (ADR 0080)** — when the effective right holds rights
-  but not SYNCHRONIZE (typically a denied basic permission "Write", which
-  includes it), Stars keeps the rights, which are the exact Windows access
-  check and were measured exercisable, and says why Explorer and most
-  programs still get "access denied": marker `SynchronizeNotGranted`, an
-  explanation step, an addition to the CLI result line and the GUI
-  headline, an HTML badge. User guide: what a denied "Write" really blocks
-  (it does not make data unreadable or undeletable). No right changes
-  (checked: 25,841 report rows against v1.16.0; 8 rows gain only the note).
+**A denied "Write" explained: the rights stay exact, Explorer's "access denied" is named.**
+
+Denying the basic permission "Write" also denies SYNCHRONIZE, and Explorer
+and most Windows programs request SYNCHRONIZE with every open. They report
+"access denied" for an object where Stars shows rights such as Read and
+Delete. Lab measurements, locally and over SMB, show those rights are real:
+the account reads and lists the data with a program that opens without
+SYNCHRONIZE, deletes, and reads the permissions. Stars therefore keeps the
+exact value and now says why ordinary programs still fail.
+
+Why patch: no right changes (checked: 25,841 report rows against v1.16.0;
+8 rows gain only the note), no new CLI command, GUI surface or on-disk
+format; the only addition is a marker, additive (JSON schema stays at
+version 4).
+
+### Fixed
+
+- **Missing SYNCHRONIZE named (ADR 0080).** When the effective right holds
+  rights but not SYNCHRONIZE (a Deny ACE takes it away, no NTFS ACE grants
+  it, or the share does not), the new marker `SynchronizeNotGranted`, an
+  explanation step, a line under the CLI result, an addition to the GUI
+  headline, an HTML badge and the graph tooltip say that Explorer and most
+  programs get "access denied" while the rights shown are real. User
+  guide: what a denied "Write" really blocks (it does not make data
+  unreadable or undeletable) and how to check it with icacls.
+- **GUI: the "Effective rights" headline wraps** instead of being cut off at
+  the window edge.
 
 ## [1.16.0] — 2026-10-18
 
