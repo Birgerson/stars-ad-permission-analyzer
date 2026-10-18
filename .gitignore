@@ -44,6 +44,7 @@ aktuell.md
 TestStructure.md
 LabTopology.md
 testfile.md
+check.md
 __pycache__/
 
 # Local list of real secrets for the pre-commit secret gate — never commit.
