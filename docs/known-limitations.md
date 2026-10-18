@@ -628,8 +628,8 @@ phone-home), downloads nothing, and installs nothing. Installation stays
 manual as described below.
 
 The `update_manager` crate is an **intentional architectural seam**, not a
-half-finished feature. `AGENTS.md` requires that update/patch installation be
-*architecturally provided for* — so the crate establishes the shape of that
+half-finished feature. The project's architecture requires that update/patch
+installation be *architecturally provided for* — so the crate establishes the shape of that
 capability (the `SignatureVerifier` trait, a validated manifest schema, update
 channels, and the rollback/migration surface) **without** committing to a
 specific implementation now. The default `SignatureVerifier` is the
@@ -651,8 +651,8 @@ the base product the seam staying dormant is the expected state, not a gap.
 Nothing is required for the base product. If in-app updates are ever needed,
 implement a real `SignatureVerifier` (e.g. Ed25519 with a pinned public key)
 and the install/rollback flow behind the existing trait and manifest schema,
-against the `AGENTS.md` requirements (signed, checksummed, channel-aware,
-rollback-capable, offline source supported). Until then the crate stays a
+against the project's update requirements (signed, checksummed,
+channel-aware, rollback-capable, offline source supported). Until then the crate stays a
 documented, fail-closed extension point and updates remain a manual
 download-and-verify step.
 
