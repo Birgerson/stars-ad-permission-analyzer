@@ -10,6 +10,8 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+## [1.16.0] — 2026-10-18
+
 **Selective Authentication is checked, This Organization is exact (ADR 0079).**
 
 For an account of a trusted domain analyzed with the trusted-domain

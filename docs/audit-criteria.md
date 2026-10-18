@@ -315,7 +315,7 @@ Stars classifies every finding into one of five levels (`adpa_core::model::RiskS
 
 Every `RiskFinding` carries a boolean `incomplete` field. It marks findings whose underlying **permission evaluation** had gaps and which should therefore be read **cautiously**.
 
-`incomplete = true` is set when the underlying evaluation has at least one of the gaps listed below. **Authoritative source:** `EffectivePermission::is_incomplete()` together with `PermissionDiagnostic::is_incompleteness_trigger()` in `crates/core/src/model.rs` — `rules.rs::is_incomplete()` is a thin delegate to it. The list here must stay in sync with the code (last verified 2026-10-17 for v1.15.0).
+`incomplete = true` is set when the underlying evaluation has at least one of the gaps listed below. **Authoritative source:** `EffectivePermission::is_incomplete()` together with `PermissionDiagnostic::is_incompleteness_trigger()` in `crates/core/src/model.rs` — `rules.rs::is_incomplete()` is a thin delegate to it. The list here must stay in sync with the code (last verified 2026-10-18 for v1.16.0).
 
 **Direct evaluation gaps:**
 
@@ -369,6 +369,9 @@ Every `RiskFinding` carries a boolean `incomplete` field. It marks findings whos
 16. **ACEs for a logon-dependent trustee decide bits of the result** (`PermissionDiagnostic::LogonDependentTrustees { sids, min_mask, max_mask }`).
     Well-known SIDs whose presence depends on the logon type/organization, or a local group reached only through one — the NTFS right is bounded between `min_mask` and `max_mask` instead of being guessed. See ADR 0065 / 0068 / 0069.
 
+17. **Whether Selective Authentication allows the logon is not determinable** (`PermissionDiagnostic::SelectiveAuthenticationUnknown { server, reason }`).
+    The trust uses Selective Authentication and the target's computer object could not be read or evaluated, or an ACE for a SID whose presence is unknown decides it — the effective right lies between No access and what the permissions grant. See ADR 0079.
+
 Markers that do **not** contribute to incomplete — informational:
 
 - `PermissionDiagnostic::IdentityDisabled` (account flagged disabled in AD via `userAccountControl`; ACL-theoretical rights are correct).
@@ -377,6 +380,7 @@ Markers that do **not** contribute to incomplete — informational:
 - `PermissionDiagnostic::OwnerRightsAceApplied` (an OWNER RIGHTS ACE governs the owner's rights; result is exact).
 - `PermissionDiagnostic::TrustBoundaryEffectsNotModeled` (hint that SID filtering / trust effects are not simulated; the NTFS/share computation itself is complete — see L4 in the known limitations).
 - `PermissionDiagnostic::SelectiveAuthenticationAllowed` (Selective Authentication allows the logon; names the principal with "Allowed to authenticate", ADR 0079).
+- `PermissionDiagnostic::SelectiveAuthenticationDenied` (Selective Authentication refuses the logon — effective No access, an exact statement; NTFS and share keep what the permissions grant). See ADR 0079.
 - `PermissionDiagnostic::SidHistoryEvaluated` / `PermissionDiagnostic::GroupSidHistoryEvaluated` (historical SIDs **were** read and included in the token; the marker documents that the result already accounts for them).
 - `PermissionDiagnostic::MembersViaPrimaryGroupIncluded` (members view: members found via `primaryGroupID` were included; transparency, not a gap).
 - `PermissionDiagnostic::IdentityOrphaned` (the SID is provably orphaned — a deleted account of the configured domain; the rights shown are what a logon with this SID would get, a correct statement). See ADR 0064.
