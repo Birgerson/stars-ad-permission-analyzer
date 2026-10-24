@@ -64,6 +64,13 @@ should be changeable in one place.
 | Step | Content | State |
 | --- | --- | --- |
 | 1 | UI moved unchanged from the macro into `ui/app.slint`; gate covers `.slint` | done — 18 of 18 screenshots identical |
+| 2 | `theme/theme.slint` (tokens), `components/` (buttons, header, help tip, trusted-domain fields), `models.slint` (view models) split out of `app.slint`; `app.slint` re-exports what Rust uses | done — 18 of 18 identical |
+
+Screenshot comparison notes: the Windows title bar (top 31 rows) is drawn
+by Windows, not Stars — its text colour follows whether the window is in
+the foreground — and is left out of the comparison. A widget under the
+physical mouse pointer shows its hover state; such a difference moves
+between runs and is repeated, a real change is the same in every run.
 
 ## Consequences
 

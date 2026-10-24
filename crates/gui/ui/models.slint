@@ -1,0 +1,191 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
+// View models: the structs Rust fills and the tabs display.
+
+// One row in the trustee view — declared ahead of ScanRowVm because
+// ScanRowVm carries the model as a field and Slint's parser requires
+// forward declarations.
+export struct TrusteeRowVm {
+    display_name: string,
+    sid: string,
+    kind: string,
+    kind_color: color,
+    rights_label: string,
+    mask_hex: string,
+    source: string,
+    applies_to: string,
+    category: string,
+}
+
+// One diagnostic marker — its reason plus whether it is a warning
+// (evaluation may be incomplete) or only informational. Declared ahead of
+// ScanRowVm because that struct carries the model as a field.
+export struct DiagnosticVm {
+    text: string,
+    // 0 = info, 1 = warning, 2 = high (PermissionDiagnostic::severity).
+    level: int,
+}
+
+// One group-membership row for the Groups tab — a group the identity is in,
+// how that membership arose, and whether the group is privileged.
+export struct GroupMemberVm {
+    name: string,
+    sid: string,
+    // "direct", "via A → B", "primary group", "local group", …
+    origin: string,
+    privileged: bool,
+    // Privileged role name (e.g. "Domain Admins") when `privileged`.
+    role: string,
+}
+
+// One ACE of a share's DACL for the Shares tab.
+export struct ShareAceVm {
+    // "Allow" or "Deny".
+    kind: string,
+    // Resolved account name, or the SID when unresolved.
+    trustee: string,
+    sid: string,
+    rights: string,
+    mask: string,
+}
+
+// One share for the Shares tab.
+export struct ShareVm {
+    name: string,
+    unc: string,
+    local: string,
+    is-admin: bool,
+    // `$` name; when not also is-admin it is a hidden DATA share.
+    is-hidden: bool,
+    // Empty for a normal ACE list; otherwise NULL DACL / empty DACL /
+    // not read (kept distinct — ADR 0017).
+    dacl-status: string,
+    // 0 = neutral, 1 = notice, 2 = concern.
+    dacl-level: int,
+    aces: [ShareAceVm],
+    // > 0 = the share mask is incomplete.
+    unsupported: int,
+}
+
+// One domain trust for the Trusts tab.
+export struct TrustVm {
+    partner: string,
+    flat-name: string,
+    direction: string,
+    attributes: string,
+    raw-hex: string,
+    sid: string,
+    sid-filtering: bool,
+    selective-auth: bool,
+}
+
+// One step of the Analyze permission path (review CR-12): `number` is
+// the step's number in the full path (CSV / CLI numbering), `collapsible`
+// marks a membership that did not matter for the result, `toggle` is the
+// single line that shows / hides those (`hidden_count` of them).
+// ADR 0077: one text of the permission graph, drawn natively on top of
+// the shape-only SVG (Slint's SVG renderer has no fonts). `y` is the top
+// of the text box in graph pixels.
+export struct GraphTextVm {
+    x: float,
+    y: float,
+    text: string,
+    bold: bool,
+    // ADR 0081: the text colour in the light and in the dark palette.
+    color-light: color,
+    color-dark: color,
+    // ADR 0081: off every route through the selected box.
+    faded: bool,
+}
+
+// ADR 0081: one box of the permission graph as a click target.
+export struct GraphNodeVm {
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    index: int,
+}
+
+export struct StepVm {
+    number: int,
+    text: string,
+    collapsible: bool,
+    toggle: bool,
+    hidden_count: int,
+}
+
+// A row in the scan result.
+export struct ScanRowVm {
+    path: string,
+    rights_label: string,
+    mask_hex: string,
+    steps: [string],
+    // Path-centric trustee list (every ACE resolved). Shown in the
+    // expanded state alongside the identity-based explanation path.
+    trustees: [TrusteeRowVm],
+    expanded: bool,
+    has_diagnostic: bool,
+    // Row presentation level: 0 = neutral, 1 = notice (amber),
+    // 2 = concern (orange-red) — see worker::row_severity.
+    row_severity: int,
+    // Per-diagnostic reasons for this row (engine review 2026-06-13
+    // finding 2), each with its severity. Shown in the expanded detail so
+    // the GUI surfaces *why* a row is flagged, warnings apart from info.
+    diagnostics: [DiagnosticVm],
+}
+
+// A scan error (a path could not be evaluated).
+export struct ScanErrorVm {
+    path: string,
+    message: string,
+}
+
+// A risk finding.
+// A risk finding.
+export struct RiskItemVm {
+    severity_label: string,
+    severity_color: color,
+    rule_id: string,
+    description: string,
+    affected_path: string,
+    incomplete: bool,
+}
+
+// A persisted scan run in the Delta tab's list.
+export struct ScanRunVm {
+    id: string,
+    label: string,
+    selected_as_old: bool,
+    selected_as_new: bool,
+    // Stored scan errors of this run — drives the per-run error view
+    // (persistence review 2026-07-26, PS-1).
+    error_count: int,
+}
+
+// One stored scan error of a historical run (Delta tab error view).
+export struct RunErrorVm {
+    path: string,
+    message: string,
+}
+
+// A delta row (Added / Removed / Changed).
+export struct DeltaRowVm {
+    path: string,
+    kind_label: string,
+    kind_color: color,
+    old_rights: string,
+    new_rights: string,
+}
+
+// A suggestion in the live search below the name field.
+export struct IdentitySuggestionVm {
+    name: string,
+    qualified: string,
+    kind_icon: string,
+    description: string,
+    // Resolved SID for a live directory hit (empty for a local
+    // autocomplete entry, which is resolved on pick via LSA instead).
+    sid: string,
+}

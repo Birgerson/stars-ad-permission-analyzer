@@ -1,0 +1,88 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
+// Action buttons.
+
+import { Theme } from "../theme/theme.slint";
+
+// PrimaryButton — accent background, white text. For main actions
+// like Analyze, Start Scan, Compare.
+//
+// Important: pinning stretch + max-height keeps the parent layout
+// from inflating the button to fill the available space.
+export component PrimaryButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    background: !enabled
+        ? Theme.border
+        : (ta.has-hover ? Theme.accent-hover : Theme.accent);
+    border-radius: Theme.radius-sm;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    preferred-height: 30px;
+    max-height: 30px;
+    preferred-width: label.preferred-width + 2 * Theme.spacing-lg;
+    min-width: 96px;
+
+    animate background { duration: 80ms; }
+
+    label := Text {
+        x: Theme.spacing-md;
+        y: 0;
+        height: parent.height;
+        width: parent.width - 2 * Theme.spacing-md;
+        text: root.text;
+        color: Theme.text-inverse;
+        font-size: Theme.font-md;
+        font-weight: 600;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+}
+
+// DangerButton — destructive actions like Cancel/Delete.
+export component DangerButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    background: !enabled
+        ? Theme.border
+        : (ta.has-hover ? #b91c1c : Theme.error);
+    border-radius: Theme.radius-sm;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    preferred-height: 30px;
+    max-height: 30px;
+    preferred-width: dlabel.preferred-width + 2 * Theme.spacing-lg;
+    min-width: 96px;
+
+    animate background { duration: 80ms; }
+
+    dlabel := Text {
+        x: Theme.spacing-md;
+        y: 0;
+        height: parent.height;
+        width: parent.width - 2 * Theme.spacing-md;
+        text: root.text;
+        color: Theme.text-inverse;
+        font-size: Theme.font-md;
+        font-weight: 600;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+}

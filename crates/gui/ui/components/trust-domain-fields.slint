@@ -1,0 +1,74 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
+// Connection fields for a domain controller of a trusted domain.
+
+import {
+    VerticalBox,
+    HorizontalBox,
+    GridBox,
+    LineEdit,
+    CheckBox,
+} from "std-widgets.slint";
+import { HelpTip } from "help-tip.slint";
+import { Theme } from "../theme/theme.slint";
+
+// ADR 0078 (L15): optional connection to a domain controller of a
+// trusted domain — one component for Analyze, Scan Tree and Groups so the
+// three tabs cannot drift apart. Mirrors the CLI `--trust-*` flags.
+export component TrustDomainFields inherits VerticalBox {
+    in-out property <bool>   enabled;
+    in-out property <string> server;
+    in-out property <string> base-dn;
+    in-out property <string> bind-dn;
+    in-out property <string> secret;
+    in property <bool>       signing;
+    padding: 0px;
+    spacing: Theme.spacing-sm;
+    HorizontalBox {
+        padding: 0px;
+        spacing: Theme.spacing-sm;
+        CheckBox {
+            text: "Also resolve accounts of a trusted domain";
+            checked <=> root.enabled;
+        }
+        HelpTip {
+            tip: "Optional. For an account of a TRUSTED domain (e.g. a partner domain), the configured domain does not know its groups. With a connection to a domain controller of that trusted domain, Stars resolves the account there, the way Windows builds its token for a resource here:\n\n• its global and universal groups there (as that DC hands them to other domains) — its builtin and domain-local groups there do not count and are named as left out;\n• the trust's SID filtering (quarantine);\n• the domain-local groups of this domain it reaches through a Foreign Security Principal.\n\nUsed only for accounts that belong to that trusted domain; every other account is resolved exactly as without it. Same encryption mode and timeout as above.";
+        }
+    }
+    if root.enabled: GridBox {
+        spacing: Theme.spacing-sm;
+        Row {
+            Text { text: "Trusted DC:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+            LineEdit {
+                placeholder-text: "dc01.partner.local";
+                text <=> root.server;
+            }
+            HelpTip { tip: "Domain controller of the trusted domain (FQDN; with Signed LDAP it must be the FQDN)."; }
+        }
+        Row {
+            Text { text: "Trusted base DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+            LineEdit {
+                placeholder-text: "DC=partner,DC=local";
+                text <=> root.base-dn;
+            }
+            HelpTip { tip: "Domain root of the trusted domain, e.g. DC=partner,DC=local."; }
+        }
+        if !root.signing: Row {
+            Text { text: "Trusted bind DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+            LineEdit {
+                placeholder-text: "PARTNER\\user  ·  user@partner.local";
+                text <=> root.bind-dn;
+            }
+            HelpTip { tip: "An account OF THE TRUSTED DOMAIN. A simple bind with an account of this domain is refused across the trust (measured: error 52e). With Signed LDAP the current Windows logon is used instead."; }
+        }
+        if !root.signing: Row {
+            Text { text: "Trusted password:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+            LineEdit {
+                input-type: password;
+                text <=> root.secret;
+            }
+            HelpTip { tip: "Password of the trusted bind account. Not persisted, only held in memory for the running session."; }
+        }
+    }
+}

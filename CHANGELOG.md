@@ -14,8 +14,10 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 - **GUI made modular (ADR 0082), in steps; nothing visible changes.**
   - The UI left `main.rs`: it lives in `crates/gui/ui/*.slint`, compiled by
-    the `slint!` macro (no new dependency). Checked: all eight tabs, light
-    and dark, empty and with a result, pixel-identical to v1.17.0.
+    the `slint!` macro (no new dependency), with the design tokens in
+    `theme/`, the reusable building blocks in `components/` and the view
+    models in `models.slint`. Checked: all eight tabs, light and dark, empty
+    and with a result, pixel-identical to v1.17.0.
   - The language gate now also checks `.slint` and `.html` files, so the UI
     texts stay covered.
 

@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
+// The header bar with the light/dark toggle.
+
+import { Theme } from "../theme/theme.slint";
+
+// ThemeToggle — sun/moon switcher for light/dark, rendered as a
+// clearly clickable button. Deliberately uses a text label instead of a sole
+// Unicode glyph, because Slint's software backend on Windows Server
+// (default font) does not reliably render U+263E (☾) / U+2600 (☀).
+// With border + background + text the toggle is clearly visible.
+export component ThemeToggle inherits Rectangle {
+    height: 32px;
+    width: 110px;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: ta.has-hover ? Theme.accent : Theme.border;
+    background: ta.has-hover ? Theme.bg-hover : Theme.bg-card;
+
+    animate background, border-color { duration: 80ms; }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 6px;
+        alignment: center;
+        Text {
+            text: Theme.dark ? "☀" : "☾";
+            font-size: 14px;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+        }
+        Text {
+            text: Theme.dark ? "Light" : "Dark";
+            font-size: Theme.font-sm;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { Theme.dark = !Theme.dark; }
+    }
+}
+
+// HeaderBar — Brand-Block links, Status-/Theme-Controls rechts.
+// HeaderBar — brand block left, status/theme controls right.
+export component HeaderBar inherits Rectangle {
+    in property <string> app-title: "Stars";
+    in property <string> app-subtitle: "AD Permission Analyzer";
+    in property <string> version-text;
+    height: 48px;
+    background: Theme.bg-header;
+    // Dezente untere Trennlinie
+    // Subtle bottom separator
+    Rectangle {
+        x: 0;
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: Theme.border;
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.spacing-lg;
+        padding-right: Theme.spacing-md;
+        padding-top: Theme.spacing-sm;
+        padding-bottom: Theme.spacing-sm;
+        spacing: Theme.spacing-md;
+
+        // Brand block: star + title (incl. version) + subtitle
+        HorizontalLayout {
+            spacing: Theme.spacing-sm;
+            Text {
+                text: "★";
+                font-size: Theme.font-xxl;
+                color: Theme.accent;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                HorizontalLayout {
+                    spacing: Theme.spacing-sm;
+                    alignment: start;
+                    Text {
+                        text: root.app-title;
+                        font-size: Theme.font-xl;
+                        font-weight: 700;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                    }
+                    if root.version-text != "": Text {
+                        text: root.version-text;
+                        font-size: Theme.font-sm;
+                        font-weight: 500;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                }
+                Text {
+                    text: root.app-subtitle;
+                    font-size: Theme.font-xs;
+                    color: Theme.text-muted;
+                }
+            }
+        }
+
+        // Spacer
+        Rectangle { horizontal-stretch: 1; }
+
+        ThemeToggle {}
+    }
+}
