@@ -169,7 +169,7 @@ directed — higher layers depend on lower ones, never the reverse:
 | `viz` | Permission graph (ADR 0077, layout v2 ADR 0081): column layout of one `EffectivePermission` from its `trace` — NTFS and share bands, layer results, logon node — rendered as SVG (HTML report, saved graph) or as text-free shapes plus native texts (GUI), light or dark; presentation only, no permission logic | `lib.rs` |
 | `update_manager` | Fail-closed seam for signature-checked updates (L12) + the manual read-only update check (ADR 0061) | `checker.rs`, `manager.rs`, `manifest.rs`, `verifier.rs`, `version.rs` |
 | `cli` | Command-line front-end (`adpa.exe`): `analyze`, `scan`, `groups`, `members`, `shares`, `runs`, `errors`, `check-update`, `trusts` | `main.rs`, `output.rs` |
-| `gui` | Slint-based GUI (`adpa-gui.exe`) with eight tabs (Analyze, Graph, Groups, Scan Tree, Delta, Trusts, Shares, Info); the UI lives in `ui/*.slint` (design tokens, components, one file per tab — ADR 0082, carried out in steps) and is compiled by the `slint!` macro in `main.rs` | `ui/app.slint`, `main.rs`, `worker.rs` |
+| `gui` | Slint-based GUI (`adpa-gui.exe`) with eight tabs (Analyze, Graph, Groups, Scan Tree, Delta, Trusts, Shares, Info); the UI lives in `ui/*.slint` (design tokens, components, one file per tab — ADR 0082, carried out in steps) and is compiled by the `slint!` macro in `main.rs`; the Rust side of each tab is its own module in `src/tabs/`, `main.rs` only starts the GUI and routes the worker's events | `ui/app.slint`, `main.rs`, `src/tabs/`, `identity_input.rs`, `worker.rs` |
 
 ### Workspace configuration
 
