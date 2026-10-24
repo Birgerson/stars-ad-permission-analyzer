@@ -819,6 +819,12 @@ Organization` with it — measured with real SMB logons). An account with a
 Foreign Security Principal object in the configured domain is resolved on
 the trusted DC too.
 
+**Fixed 2026-10-24 (ADR 0078 addendum):** on a domain-joined machine,
+Windows LSA names an account of a trusted domain, and until then Stars
+never used the configured connection for it (except through an FSP
+object). It now does. Lab, MS-01: 65 of 65 rows went from NOT
+DETERMINABLE to exact.
+
 **Extended 2026-10-24 (ADR 0084):** an account of any domain of a trusted
 forest (for example a child domain of the forest the trust names) is
 recognised as an account of a trusted domain and resolved through a

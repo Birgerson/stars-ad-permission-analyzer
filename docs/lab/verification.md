@@ -1651,7 +1651,7 @@ Key results:
 | `--global-catalog`, SID of `child.partner.test` | **"neither … nor one of its trusts"** | trusted, named with its forest | trusted |
 | `adpa trusts` | partner.test without domains; note "does not model the runtime filter effect" | "Forest domains (2): child.partner.test (CHILD) …, partner.test (PARTNER) …"; corrected note | — |
 
-**Domain-joined runner (found during this block, fixed in the next change).** Stars ran on MS-01 as `CORP\Administrator` (a scheduled task), with Signed LDAP to DC-01 and DC-04. There, Windows LSA resolves the child account by name. Stars then took the LSA path ("outside the configured LDAP base") and never consulted the trusted-domain connection. This affects every account of a trusted domain without an FSP on a domain-joined machine, ext.test included. It has been so since ADR 0078.
+**Domain-joined runner (found during this block, fixed in R.2).** Stars ran on MS-01 as `CORP\Administrator` (a scheduled task), with Signed LDAP to DC-01 and DC-04. There, Windows LSA resolves the child account by name. Stars then took the LSA path ("outside the configured LDAP base") and never consulted the trusted-domain connection. This affects every account of a trusted domain without an FSP on a domain-joined machine, ext.test included. It has been so since ADR 0078.
 
 **Regression.** The step 5a binary against this branch's binary, column by column, found **0 differing rows**:
 
@@ -1669,3 +1669,18 @@ Key results:
 - the status line "2 trust(s) — 1 with SID filtering, Selective Authentication or unknown forest domains"
 
 The documentation screenshot `stars-trusts-tab.png` was retaken from this run.
+
+### R.2 — The trusted-domain connection on a domain-joined machine (ADR 0078 addendum)
+
+The fix for the finding above was run on MS-01 (member of corp.test).
+
+| Run on MS-01 | Binary | Result |
+| --- | --- | --- |
+| five ext.test accounts on `TrustTest`, as SYSTEM, Plain LDAP to DC-01 + trusted connection to DC-02 | step 5a (≙ v1.18.0) | **65 of 65 rows NOT DETERMINABLE** (LSA path, groups not attempted) |
+| the same | this change | **65 of 65 determinable**; rights and masks identical to the workstation run |
+| `PARTNER\pt_user01`, `pt_user02` on `ForestTest`, as `CORP\Administrator` (scheduled task), Signed LDAP to DC-01 + DC-03 | this change | 28 of 28 determinable; identical to the real SMB logons |
+| `CHILD\ch_user01`, `ch_user02` on `ForestTest`, Signed LDAP to DC-01 + DC-04 (Server 2025) | this change | 28 of 28 determinable; identical to the real SMB logons. `ch_user02` gets Modify on `FC_pt_universal` through `PARTNER\UG_PT_Forest`, confirmed by a fresh real logon after the membership was added. |
+
+Kerberos crossed the forest trust for the Signed LDAP connection to DC-04: the bind account `CORP\Administrator` read the child domain.
+
+**Observation for a later measurement, unrelated to this change.** The real SMB probe grants Read / Write attributes (`0x180` / `0x1A0`) on the share root `ForestTest`. Its DACL holds only Administrators and SYSTEM, and Stars reports No access there. A plausible explanation is the implicit `FILE_READ_ATTRIBUTES` through the parent's List folder, but that is not established. To be measured on its own.

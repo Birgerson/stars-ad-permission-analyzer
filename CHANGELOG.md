@@ -12,6 +12,14 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **The trusted-domain connection works on a domain-joined machine (ADR
+  0078 addendum).** There, Windows names every account of a trusted
+  domain. Stars then took the "outside the configured LDAP base" path and
+  never asked the configured connection, so the result was not
+  determinable. The exception was an account with a Foreign Security
+  Principal object. Lab, MS-01 (domain member): five ext.test accounts
+  went from 65 of 65 rows NOT DETERMINABLE to 65 of 65 exact, identical to
+  the run from a non-joined workstation.
 - **Accounts of a trusted forest's other domains (ADR 0084).** Behind a
   forest trust, an account of a child domain of the partner forest (which
   has no trust object of its own in your domain) was reported as *"neither
