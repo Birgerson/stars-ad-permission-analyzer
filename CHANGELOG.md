@@ -10,6 +10,17 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Changed
+
+- **One analysis pipeline for CLI and GUI, first part (ADR 0082 step 5a).**
+  The account's local groups on the target server (with the UAC and
+  anonymous-Everyone handling) and the share-mask adapter existed once in
+  the CLI and once in the GUI; both now call the one implementation in the
+  new library crate `analysis`. A fix there reaches both frontends. No
+  result changes: the release regression scans agree with v1.18.0 in every
+  column (25,841 rows), and the GUI's functional check per tab is
+  identical.
+
 ## [1.18.0] — 2026-10-24
 
 **A calmer GUI: one font, words instead of icons, fields that keep their

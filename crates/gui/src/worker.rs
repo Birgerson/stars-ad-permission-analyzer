@@ -9,6 +9,9 @@
 //! `ComputeDelta`, `ListIdentities`, and `SearchIdentity` (the Analyze
 //! tab's live directory picker — see `handle_search`).
 
+use analysis::local_groups::{
+    add_local_groups_for_membership_view, collect_local_group_sids_for_path, LocalGroupResolution,
+};
 use std::sync::mpsc::{Receiver, Sender};
 
 use ad_resolver::sid_util::bytes_to_sid_str;
@@ -1145,7 +1148,11 @@ async fn handle_analyze(
         ),
     );
 
-    let (share_status, unsupported_share_ace_count, share_decisions) = resolve_share_status(
+    let analysis::share::ShareResolution {
+        status: share_status,
+        unevaluated: unsupported_share_ace_count,
+        decisions: share_decisions,
+    } = analysis::share::resolve_share_status(
         path,
         smb_server,
         share_name,
@@ -1247,33 +1254,6 @@ async fn handle_resolve_groups(
     // the lookup (otherwise the SAM/LSA flat fallback was used).
     let report = res.into_membership_report(ldap.is_some());
     Ok(membership_report_to_view(&report))
-}
-
-/// ADR 0070: the membership view of a local account of this machine lists
-/// its local groups too — read by SID and expanded like a logon (no specific
-/// logon). Groups reachable only through a logon-dependent SID and an
-/// incomplete local-group table are named as gaps, never dropped.
-fn add_local_groups_for_membership_view(res: &mut PrincipalResolution) {
-    let lg = collect_local_groups_on(
-        None,
-        &res.identity,
-        &res.memberships,
-        AccessContext::Unspecified,
-        false,
-    );
-    res.memberships.extend(lg.memberships);
-    if let adpa_core::model::LocalGroupEvalStatus::NotAvailable(msg) = lg.status {
-        res.group_resolution_gaps.push(format!(
-            "the local groups could not be read completely ({msg})"
-        ));
-    }
-    if !lg.logon_dependent_names.is_empty() {
-        res.group_resolution_gaps.push(format!(
-            "membership in {} depends on how the account logs on (the group is entered \
-             only through a logon-dependent SID such as INTERACTIVE)",
-            lg.logon_dependent_names.join(", ")
-        ));
-    }
 }
 
 /// Maps a [`MembershipReport`] into the GUI-ready [`GroupsViewData`].
@@ -1466,227 +1446,6 @@ fn group_members_report_to_view(report: &adpa_core::model::GroupMembersReport) -
     }
 }
 
-/// The local groups of the analysis target server the account is in
-/// (ADR 0068), split into token memberships and groups reachable only
-/// through a logon-dependent SID.
-struct LocalGroupResolution {
-    sids: Vec<adpa_core::model::Sid>,
-    memberships: Vec<GroupMembership>,
-    logon_dependent: Vec<adpa_core::model::Sid>,
-    /// Display names of the logon-dependent groups, for reader-facing notes.
-    logon_dependent_names: Vec<String>,
-    /// Token groups User Account Control may filter for this access
-    /// (ADR 0070/0071) — deny-only for the engine.
-    uac_filtered: Vec<adpa_core::model::Sid>,
-    /// ADR 0076: remote UAC decided from the target's policies.
-    remote_uac: adpa_core::model::RemoteUacFiltering,
-    /// L17: EveryoneIncludesAnonymous read from the target.
-    anonymous_everyone: Option<bool>,
-    status: adpa_core::model::LocalGroupEvalStatus,
-}
-
-/// Resolves the account's local groups on the analysis target server — the
-/// GUI counterpart of the CLI function of the same name (ADR 0068). For
-/// UNC paths the server is derived from the path; for local paths the local
-/// machine is used. The server's local groups are read by SID and expanded
-/// against the account's token like a logon does (ADR 0068) — no account
-/// name lookup, so a machine outside the domain gets the same answer. A
-/// failure does not abort the analysis; it marks the result incomplete.
-fn collect_local_group_sids_for_path(
-    path: &str,
-    explicit_smb_server: Option<&str>,
-    identity: &Identity,
-    domain_memberships: &[GroupMembership],
-    access_context: AccessContext,
-    local_account: bool,
-) -> LocalGroupResolution {
-    use validation::path::effective_smb_target;
-
-    let server_owned = effective_smb_target(path, explicit_smb_server);
-    collect_local_groups_on(
-        server_owned.as_deref(),
-        identity,
-        domain_memberships,
-        access_context,
-        local_account,
-    )
-}
-
-/// The token groups User Account Control may filter for this access
-/// (ADR 0070/0071): over all groups of the token — domain groups with their
-/// SID history, and the local groups.
-fn uac_filtered_token_groups(
-    domain_memberships: &[GroupMembership],
-    local_group_sids: &[adpa_core::model::Sid],
-    local_account: bool,
-    access_context: AccessContext,
-) -> Vec<adpa_core::model::Sid> {
-    let token_groups: Vec<adpa_core::model::Sid> = domain_memberships
-        .iter()
-        .flat_map(|m| {
-            std::iter::once(m.group_sid.clone()).chain(m.group_sid_history.iter().cloned())
-        })
-        .chain(local_group_sids.iter().cloned())
-        .collect();
-    permission_engine::engine::uac_filtered_groups(&token_groups, local_account, access_context)
-}
-
-/// [`collect_local_group_sids_for_path`] for a known server (`None` = this
-/// machine) — also used by the membership view of a local account.
-fn collect_local_groups_on(
-    server: Option<&str>,
-    identity: &Identity,
-    domain_memberships: &[GroupMembership],
-    access_context: AccessContext,
-    local_account: bool,
-) -> LocalGroupResolution {
-    // L17: EveryoneIncludesAnonymous of the target decides Everyone for an
-    // anonymous logon; an unreadable value keeps it bounded.
-    #[cfg(windows)]
-    let anonymous_everyone = if identity.sid.0 == permission_engine::engine::SID_ANONYMOUS_LOGON {
-        permission_engine::engine::anonymous_everyone(
-            &ad_resolver::read_everyone_includes_anonymous(server),
-        )
-    } else {
-        None
-    };
-    #[cfg(not(windows))]
-    let anonymous_everyone: Option<bool> = None;
-    use adpa_core::model::LocalGroupEvalStatus;
-
-    let table = match ad_resolver::read_local_group_table(server) {
-        Ok(t) => t,
-        Err(e) => {
-            let msg = e.to_string();
-            warn!(
-                ?server,
-                sid = %identity.sid.0,
-                error = %msg,
-                "Local group table unreadable; result will be marked incomplete"
-            );
-            return LocalGroupResolution {
-                sids: Vec::new(),
-                memberships: Vec::new(),
-                logon_dependent: Vec::new(),
-                logon_dependent_names: Vec::new(),
-                uac_filtered: uac_filtered_token_groups(
-                    domain_memberships,
-                    &[],
-                    local_account,
-                    access_context,
-                ),
-                remote_uac: adpa_core::model::RemoteUacFiltering::Unknown,
-                anonymous_everyone,
-                status: LocalGroupEvalStatus::NotAvailable(msg),
-            };
-        }
-    };
-    let expansion = permission_engine::engine::expand_local_groups_with(
-        &identity.sid.0,
-        &identity.sid_history,
-        domain_memberships,
-        &table.groups,
-        access_context,
-        anonymous_everyone,
-    );
-    // Labels for the mediator step of each chain (account, domain groups);
-    // well-known SIDs are looked up by the builder.
-    let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    if let Some(ref n) = identity.name {
-        names.insert(identity.sid.0.clone(), n.clone());
-    }
-    for gm in domain_memberships {
-        if let Some(ref n) = gm.group_name {
-            names.insert(gm.group_sid.0.clone(), n.clone());
-        }
-    }
-    let memberships = ad_resolver::local_group_memberships(identity, &expansion.certain, &names);
-    let all_sids: Vec<adpa_core::model::Sid> =
-        memberships.iter().map(|m| m.group_sid.clone()).collect();
-    // ADR 0070/0071: groups User Account Control may filter for this access;
-    // they stay in the token lists and the explanation, the engine treats
-    // them as deny-only.
-    let uac_filtered =
-        uac_filtered_token_groups(domain_memberships, &all_sids, local_account, access_context);
-    // ADR 0076: over SMB the target's policies decide remote UAC for a
-    // local account — filtered groups become certainly deny-only, or are
-    // enabled; unreadable policies keep them bounded.
-    // On a local path only the built-in Administrator with
-    // FilterAdministratorToken = 0 is decided (full token, measured).
-    #[cfg(windows)]
-    let remote_uac = if local_account && !uac_filtered.is_empty() {
-        let builtin_administrator = identity.sid.0.ends_with("-500");
-        match access_context {
-            AccessContext::RemoteSmb => {
-                let policy = ad_resolver::read_target_uac_policy(server);
-                permission_engine::engine::remote_uac_filtering(
-                    builtin_administrator,
-                    &policy.enable_lua,
-                    &policy.local_account_token_filter_policy,
-                    &policy.filter_administrator_token,
-                )
-            }
-            AccessContext::LocalInteractive if builtin_administrator => {
-                let policy = ad_resolver::read_target_uac_policy(server);
-                permission_engine::engine::local_uac_filtering(
-                    true,
-                    &policy.enable_lua,
-                    &policy.filter_administrator_token,
-                )
-            }
-            _ => adpa_core::model::RemoteUacFiltering::Unknown,
-        }
-    } else {
-        adpa_core::model::RemoteUacFiltering::Unknown
-    };
-    #[cfg(not(windows))]
-    let remote_uac = adpa_core::model::RemoteUacFiltering::Unknown;
-    let uac_filtered = if matches!(
-        remote_uac,
-        adpa_core::model::RemoteUacFiltering::NotFiltered { .. }
-    ) {
-        Vec::new()
-    } else {
-        uac_filtered
-    };
-    let sids = all_sids;
-    let logon_dependent = expansion
-        .logon_dependent
-        .iter()
-        .map(|e| e.group.clone())
-        .collect();
-    let logon_dependent_names = expansion
-        .logon_dependent
-        .iter()
-        .map(|e| e.name.clone())
-        .collect();
-    tracing::debug!(
-        ?server,
-        sid = %identity.sid.0,
-        groups = table.groups.len(),
-        member_of = memberships.len(),
-        logon_dependent = expansion.logon_dependent.len(),
-        "Local groups expanded for target server"
-    );
-    // ADR 0066: groups that could not be read keep the evaluation
-    // incomplete; the resolved ones stay in the token.
-    let status = if table.gaps.is_empty() {
-        LocalGroupEvalStatus::Applied
-    } else {
-        LocalGroupEvalStatus::NotAvailable(table.gaps.join("; "))
-    };
-    LocalGroupResolution {
-        sids,
-        memberships,
-        logon_dependent,
-        logon_dependent_names,
-        uac_filtered,
-        remote_uac,
-        anonymous_everyone,
-        status,
-    }
-}
-
 /// ADR 0079 (L4): the Selective Authentication check of a resolved
 /// identity on the target server — `None` unless it is an account of a
 /// trusted domain whose trust uses Selective Authentication (the same rule
@@ -1833,20 +1592,23 @@ async fn handle_scan(
         });
     }
 
-    let (share_status, scan_unsupported_share_ace_count, scan_share_decisions) =
-        resolve_share_status(
-            root,
-            smb_server,
-            share_name,
-            &identity,
-            &memberships,
-            &local_group_sids,
-            &logon_dependent_group_sids,
-            &uac_filtered_group_sids,
-            root_access_context,
-            &remote_uac,
-            anonymous_everyone,
-        );
+    let analysis::share::ShareResolution {
+        status: share_status,
+        unevaluated: scan_unsupported_share_ace_count,
+        decisions: scan_share_decisions,
+    } = analysis::share::resolve_share_status(
+        root,
+        smb_server,
+        share_name,
+        &identity,
+        &memberships,
+        &local_group_sids,
+        &logon_dependent_group_sids,
+        &uac_filtered_group_sids,
+        root_access_context,
+        &remote_uac,
+        anonymous_everyone,
+    );
     if scan_unsupported_share_ace_count > 0 {
         let msg = format!(
             "{scan_unsupported_share_ace_count} share ACE(s) could not be evaluated (unsupported type, unreadable trustee or logon-dependent trustee) — share mask may be incomplete (diagnostic propagated to each result)."
@@ -3133,56 +2895,6 @@ fn bare_sid_identity(sid: &str) -> (Identity, Vec<GroupMembership>) {
     (identity, vec![])
 }
 
-/// Computes the share mask and its evaluation status.
-///
-/// Returns `NotApplicable` when no SMB context exists, `Applied(mask)` on
-/// success, or `ReadFailed(reason)` when the share DACL could not be read.
-#[allow(clippy::too_many_arguments)]
-fn resolve_share_status(
-    path: &str,
-    smb_server: Option<&str>,
-    share_name: Option<&str>,
-    // The RESOLVED identity — its SID and its historical SIDs (sIDHistory,
-    // ADR 0056) both go into the share token so it matches the NTFS token.
-    identity: &Identity,
-    memberships: &[GroupMembership],
-    local_group_sids: &[adpa_core::model::Sid],
-    logon_dependent_group_sids: &[adpa_core::model::Sid],
-    uac_filtered_group_sids: &[adpa_core::model::Sid],
-    access_context: AccessContext,
-    remote_uac: &adpa_core::model::RemoteUacFiltering,
-    anonymous_everyone: Option<bool>,
-) -> (
-    adpa_core::model::ShareMaskStatus,
-    usize,
-    Vec<share_scanner::ShareAceDecision>,
-) {
-    // G1: the share-mask orchestration is shared with the CLI in
-    // `share_scanner::resolve_share_mask_status` so the two frontends can
-    // never diverge (this function and the CLI's used to be edited in
-    // lockstep, e.g. the ADR 0056 sIDHistory change). This wrapper only
-    // adapts the GUI's `&Identity` + memberships to the shared primitives.
-    // Review CR-7: the per-ACE decisions come from the same DACL read.
-    let r = share_scanner::resolve_share_mask_status_explained(
-        path,
-        smb_server,
-        share_name,
-        &identity.sid.0,
-        &identity.sid_history,
-        memberships,
-        local_group_sids,
-        logon_dependent_group_sids,
-        uac_filtered_group_sids,
-        access_context,
-        matches!(
-            remote_uac,
-            adpa_core::model::RemoteUacFiltering::Filtered { .. }
-        ),
-        anonymous_everyone,
-    );
-    (r.status, r.unevaluated, r.decisions)
-}
-
 // UNC parsing now lives centrally in validation::path::parse_unc_components.
 // Long-path UNC (\\?\UNC\…) is handled correctly there — review finding 4
 // applied to the GUI-local variant that used to live here. The original
@@ -3431,44 +3143,6 @@ mod tests {
         assert!(svc.origin.contains("via primaryGroupID"));
         assert!(svc.origin.contains("User"));
         assert!(svc.origin.contains("DISABLED"));
-    }
-
-    // (sentinel bug from review finding 1).
-    // The UNC parsing tests moved to validation::path where the shared
-    // helper `parse_unc_components` lives. Here only a smoke test that the
-    // GUI worker actually delegates to it (sentinel bug from review
-    // finding 1).
-    #[test]
-    fn share_status_does_not_treat_local_path_as_unc() {
-        // Local path without an SMB override → no share lookup, NotApplicable.
-        // Before the fix this would have called `NetShareGetInfo("C:", "Windows")`.
-        let dummy_id = Identity {
-            sid: adpa_core::model::Sid("S-1-5-21-1-2-3-1000".to_owned()),
-            name: Some("test".into()),
-            domain: None,
-            kind: adpa_core::model::IdentityKind::User,
-            disabled: false,
-            user_principal_name: None,
-            sid_history_count: 0,
-            sid_history: Vec::new(),
-        };
-        let (status, _unsupported, _decisions) = resolve_share_status(
-            r"C:\Windows\SYSVOL",
-            None,
-            None,
-            &dummy_id,
-            &[],
-            &[],
-            &[],
-            &[],
-            AccessContext::LocalInteractive,
-            &adpa_core::model::RemoteUacFiltering::Unknown,
-            None,
-        );
-        assert!(matches!(
-            status,
-            adpa_core::model::ShareMaskStatus::NotApplicable
-        ));
     }
 
     /// `cancelled = true`.

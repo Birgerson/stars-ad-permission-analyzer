@@ -1,0 +1,14 @@
+[package]
+name = "analysis"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "The analysis pipeline shared by the CLI and the GUI (ADR 0082 step 5) - one implementation of the steps both frontends run"
+
+[dependencies]
+adpa_core = { path = "../core" }
+ad_resolver = { path = "../ad_resolver" }
+permission_engine = { path = "../permission_engine" }
+share_scanner = { path = "../share_scanner" }
+validation = { path = "../validation" }
+tracing.workspace = true

@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 adpa_core = { path = "../core" }
+analysis = { path = "../analysis" }
 validation = { path = "../validation" }
 permission_engine = { path = "../permission_engine" }
 fs_scanner = { path = "../fs_scanner" }

@@ -110,7 +110,7 @@ That makes findings auditable and falsifiable.
 
 ## 2. Workspace and crate layering
 
-Stars is a Rust workspace with 13 crates. Layering is strictly
+Stars is a Rust workspace with 15 crates. Layering is strictly
 directed — higher layers depend on lower ones, never the reverse:
 
 ```text
@@ -121,6 +121,11 @@ directed — higher layers depend on lower ones, never the reverse:
 └──────────────┬───────────────────────┬───────────────────┘
                │                       │
                ▼                       ▼
+┌──────────────────────────────────────────────────────────┐
+│  analysis (pipeline steps shared by cli and gui)         │
+└──────────────────────────────────────────────────────────┘
+               │
+               ▼
 ┌──────────────────────────────────────────────────────────┐
 │  exporter (CSV/JSON/HTML)   persistence (SQLite)         │
 │  update_manager                                          │
@@ -167,6 +172,7 @@ directed — higher layers depend on lower ones, never the reverse:
 | `persistence` | SQLite schema + migrations (v1–v8) + `ScanStore`, delta comparison | `scan_store.rs`, `migrations.rs`, `delta.rs`, `db.rs` |
 | `exporter` | CSV / JSON / HTML renderers + the shared path-centric trustee view | `csv.rs`, `json.rs`, `html.rs`, `trustees.rs` |
 | `viz` | Permission graph (ADR 0077, layout v2 ADR 0081): column layout of one `EffectivePermission` from its `trace` — NTFS and share bands, layer results, logon node — rendered as SVG (HTML report, saved graph) or as text-free shapes plus native texts (GUI), light or dark; presentation only, no permission logic | `lib.rs` |
+| `analysis` | The analysis steps the CLI and the GUI both run, implemented once (ADR 0082 step 5): the account's local groups on the target server with UAC and anonymous-Everyone handling, the share mask of an SMB path for the account's token; orchestration only, the permission logic stays in `permission_engine` | `local_groups.rs`, `share.rs` |
 | `update_manager` | Fail-closed seam for signature-checked updates (L12) + the manual read-only update check (ADR 0061) | `checker.rs`, `manager.rs`, `manifest.rs`, `verifier.rs`, `version.rs` |
 | `cli` | Command-line front-end (`adpa.exe`): `analyze`, `scan`, `groups`, `members`, `shares`, `runs`, `errors`, `check-update`, `trusts` | `main.rs`, `output.rs` |
 | `gui` | Slint-based GUI (`adpa-gui.exe`) with eight tabs (Analyze, Graph, Groups, Scan Tree, Delta, Trusts, Shares, Info); the UI lives in `ui/*.slint` (design tokens, components, one file per tab — ADR 0082, carried out in steps) and is compiled by the `slint!` macro in `main.rs`; the Rust side of each tab is its own module in `src/tabs/`, `main.rs` only starts the GUI and routes the worker's events | `ui/app.slint`, `main.rs`, `src/tabs/`, `identity_input.rs`, `worker.rs` |

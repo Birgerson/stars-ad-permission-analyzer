@@ -81,6 +81,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "analysis"
+version = "1.18.0"
+dependencies = [
+ "ad_resolver",
+ "adpa_core",
+ "permission_engine",
+ "share_scanner",
+ "tracing",
+ "validation",
+]
+
+[[package]]
 name = "android-activity"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -683,6 +695,7 @@ version = "1.18.0"
 dependencies = [
  "ad_resolver",
  "adpa_core",
+ "analysis",
  "anyhow",
  "chrono",
  "clap",
@@ -1686,6 +1699,7 @@ version = "1.18.0"
 dependencies = [
  "ad_resolver",
  "adpa_core",
+ "analysis",
  "anyhow",
  "chrono",
  "exporter",
