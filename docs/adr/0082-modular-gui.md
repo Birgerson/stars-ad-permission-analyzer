@@ -67,7 +67,8 @@ should be changeable in one place.
 | 2 | `theme/theme.slint` (tokens), `components/` (buttons, header, help tip, trusted-domain fields), `models.slint` (view models) split out of `app.slint`; `app.slint` re-exports what Rust uses | done — 18 of 18 identical |
 | 3 | Each tab in `tabs/<tab>.slint`: its state as a global (`AnalyzeState`, `GraphState`, `GroupsState`, `ScanState`, `DeltaState`, `TrustsState`, `SharesState`, `InfoState`; prefixes dropped, `a-status` → `AnalyzeState.status`) and its layout as a component; `AppState` holds the version that header and Info tab show. `MainWindow` keeps no property; `app.slint` shrinks from 3,011 to 212 lines | done — 18 of 18 identical; one real action per tab identical as well |
 | 4 | Rust side per tab: `src/tabs/<tab>.rs` wires its tab's callbacks (`wire`) and applies the worker's answers (`handle_*`), with the tab's own bookkeeping (scan rows, delta selection, the Analyze path, the graph's result); `identity_input.rs` holds what Analyze, Groups and Scan Tree share (identity cache, suggestion models, LSA lookup); `view_models.rs` the one trustee-row builder that Analyze and Scan Tree had twice. `main.rs` (2,517 → 246 lines) creates the window, starts the worker, lets each tab wire itself and routes each worker event to its tab | done — see below |
-| 5 | One analysis pipeline for CLI and GUI (decision 3) | open |
+| 5a | New library crate `analysis`: the account's local groups on the target (`LocalGroupResolution`, `collect_local_group_sids_for_path`, `collect_local_groups_on`, `uac_filtered_token_groups`, `add_local_groups_for_membership_view`) and the share-mask adapter (`resolve_share_status`) — CLI and GUI each had a copy, now both call the one: CLI and GUI lose 601 lines, the one copy with its tests has 423 | done — see below |
+| 5b | The rest of decision 3: connection-input validation (`validate_connection_inputs` — the GUI's covers Global Catalog, signed LDAP and the trusted-domain connection, the CLI's does not, so the two are not interchangeable yet) and identity resolution (`resolve_identity` / `resolve_identity_sids`) | open |
 | 6 | `worker.rs` split by task | open |
 
 Step 3 also introduced a functional check: with a fresh, empty scan history
@@ -96,6 +97,8 @@ differed: the dark Analyze tab drew the "Include share mask" checkbox in its
 hover shade. v1.17.0 itself, run again at the same time, drew it the same
 way, and step 4 is identical to that run — the shade comes from the desktop
 session, not from the code.
+
+Step 5a was checked by comparison: before the move, a script compared the four local-group functions of CLI and GUI with comments and whitespace ignored — three identical apart from type paths and one `use`, the fourth identical; the moved code is the CLI's copy. After the move, the same CLI scans as for the v1.18.0 release (DC-01's data share for 37 identities, the group-types fixture, MS-01 with LDAP and with local accounts — 25,841 rows) agree with v1.18.0 in every column, and the GUI's functional check per tab gives the same results as the v1.18.0 build (Analyze, Groups for a local account, Scan Tree pixel-identical; saved SVG byte-identical).
 
 Screenshot comparison notes: the Windows title bar (top 31 rows) is drawn
 by Windows, not Stars — its text colour follows whether the window is in

@@ -13,6 +13,7 @@ members = [
     "crates/viz",
     "crates/update_manager",
     "crates/validation",
+    "crates/analysis",
     "crates/cli",
     "crates/gui",
 ]
