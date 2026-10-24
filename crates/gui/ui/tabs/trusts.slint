@@ -1,0 +1,189 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
+// The Trusts tab (ADR 0082): its state (`TrustsState`, read and written by
+// src/main.rs) and its layout (`TrustsTab`).
+
+import {
+    VerticalBox,
+    HorizontalBox,
+    GridBox,
+    GroupBox,
+    LineEdit,
+    Button,
+    ScrollView,
+    SpinBox,
+    ComboBox,
+} from "std-widgets.slint";
+import { HelpTip } from "../components/help-tip.slint";
+import { TrustVm } from "../models.slint";
+import { Theme } from "../theme/theme.slint";
+
+export global TrustsState {
+    // ============================================================
+    // Trusts tab properties
+    // ============================================================
+    // Reading trustedDomain objects always needs LDAP, so this selector
+    // has no "Off" entry: 0 = LDAPS, 1 = plain LDAP, 2 = Global Catalog,
+    // 3 = Signed LDAP. The Rust side maps it to `LdapParams::from_mode`
+    // modes 1–4.
+    in-out property <int>    ldap-mode: 0;
+    in-out property <string> ldap-server;
+    in-out property <string> ldap-base-dn;
+    in-out property <string> ldap-bind-dn;
+    in-out property <string> ldap-password;
+    in-out property <int>    ldap-timeout: 10;
+    in property <bool>       is-running;
+    in property <string>     status;
+    in property <bool>       status-is-error;
+    in property <bool>       has-result;
+    in property <[TrustVm]>  trusts;
+    callback list-clicked();
+}
+
+export component TrustsTab inherits ScrollView {
+    VerticalBox {
+        alignment: start;
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-sm;
+
+        Text {
+            text: "Which domains does this domain trust, in which direction, and are SID filtering or Selective Authentication configured? Read-only — Stars never changes a trust.";
+            color: Theme.text-muted;
+            font-size: 11px;
+            wrap: word-wrap;
+        }
+
+        GroupBox {
+            title: "Domain controller";
+            VerticalBox {
+                spacing: Theme.spacing-sm;
+                HorizontalBox {
+                    spacing: Theme.spacing-sm;
+                    padding: 0px;
+                    Text { text: "Mode:"; vertical-alignment: center; width: 110px; }
+                    ComboBox {
+                        model: [
+                            "LDAPS — encrypted, port 636",
+                            "Plain LDAP — port 389 (test only)",
+                            "Global Catalog — forest-wide, port 3269 (LDAPS)",
+                            "Signed LDAP — Kerberos sign & seal, port 389",
+                        ];
+                        current-index <=> TrustsState.ldap-mode;
+                        horizontal-stretch: 1;
+                    }
+                    HelpTip {
+                        tip: "Trusts are stored as trustedDomain objects in Active Directory, so this tab always needs an LDAP connection — there is no SAM/LSA fallback.\n\n• LDAPS: encrypted, port 636. Requires a DC certificate this machine trusts; connect by FQDN.\n\n• Plain LDAP: port 389, no TLS — test environments only (password in cleartext).\n\n• Global Catalog: forest-wide bind over LDAPS (port 3269).\n\n• Signed LDAP: port 389 with Kerberos sign & seal, no certificate needed. Uses the current Windows logon (no bind DN / password).";
+                    }
+                }
+                GridBox {
+                    spacing: Theme.spacing-sm;
+                    Row {
+                        Text { text: "Server:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                        LineEdit { placeholder-text: "dc01.domain.local"; text <=> TrustsState.ldap-server; }
+                        HelpTip {
+                            tip: "Fully qualified hostname (FQDN) of the domain controller.\n\nExample: dc01.company.local\n\nNo scheme prefix (no ldap:// or ldaps://) — the mode determines it.";
+                        }
+                    }
+                    Row {
+                        Text { text: "Base DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                        LineEdit { placeholder-text: "DC=domain,DC=local"; text <=> TrustsState.ldap-base-dn; }
+                        HelpTip {
+                            tip: "Distinguished Name of the domain ROOT — the trust objects live under CN=System of the domain.\n\nExample: DC=company,DC=local\n\nAn OU here finds no trusts.";
+                        }
+                    }
+                    Row {
+                        Text { text: "Bind DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                        LineEdit { placeholder-text: "DOMAIN\\user  ·  user@domain  ·  CN=…,DC=…"; text <=> TrustsState.ldap-bind-dn; }
+                        HelpTip {
+                            tip: "The account Stars binds with: DOMAIN\\user, user@domain (UPN), or a full DN. Not needed for Signed LDAP. A read-only service account is recommended.";
+                        }
+                    }
+                    Row {
+                        Text { text: "Password:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                        LineEdit { input-type: password; text <=> TrustsState.ldap-password; }
+                        HelpTip {
+                            tip: "Password for the bind account. Not persisted, only held in memory for the running session.";
+                        }
+                    }
+                    Row {
+                        Text { text: "Timeout (s):"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                        SpinBox { minimum: 1; maximum: 600; value <=> TrustsState.ldap-timeout; }
+                        HelpTip {
+                            tip: "LDAP operation timeout in seconds (1–600, default 10).";
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalBox {
+            alignment: start;
+            spacing: Theme.spacing-sm;
+            padding: 0px;
+            Button {
+                text: "🔗 Read trusts";
+                enabled: !TrustsState.is-running;
+                clicked => { TrustsState.list-clicked(); }
+            }
+            Text {
+                text: TrustsState.status;
+                color: TrustsState.status-is-error ? Theme.error : Theme.text-secondary;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+
+        if TrustsState.has-result: GroupBox {
+            title: "Trusts (" + TrustsState.trusts.length + ")";
+            VerticalBox {
+                spacing: Theme.spacing-sm;
+                if TrustsState.trusts.length == 0: Text {
+                    text: "No trustedDomain objects found under the configured base DN. Make sure the base DN is the domain root (e.g. DC=corp,DC=local).";
+                    color: Theme.text-muted;
+                    wrap: word-wrap;
+                }
+                for t in TrustsState.trusts: VerticalLayout {
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+                    spacing: 2px;
+                    Text {
+                        text: t.flat-name != "" ? t.partner + "  (" + t.flat-name + ")" : t.partner;
+                        font-weight: 700;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: "Direction: " + t.direction;
+                        color: Theme.text-secondary;
+                    }
+                    Text {
+                        text: "Attributes: " + t.attributes + "  [raw " + t.raw-hex + "]";
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                    if t.sid != "": Text {
+                        text: "Domain SID: " + t.sid;
+                        color: Theme.text-muted;
+                        font-size: 11px;
+                    }
+                    if t.sid-filtering: Text {
+                        text: "⚠ SID filtering (quarantine) is ON — historical / foreign SIDs across this trust are dropped at runtime, so a finding that relies on such a SID may over-report. Stars shows the DACL view, not the filtered one.";
+                        color: Theme.warning;
+                        wrap: word-wrap;
+                    }
+                    if t.selective-auth: Text {
+                        text: "⚠ Selective Authentication is ON — principals from this trust need an explicit 'allowed to authenticate' right on the target, so a DACL grant alone does not imply real access.";
+                        color: Theme.warning;
+                        wrap: word-wrap;
+                    }
+                }
+                Text {
+                    text: "Note: Stars reads these attributes read-only and does not model the runtime filter effect (that would need a synthetic logon). See the L4 section of known-limitations.md.";
+                    color: Theme.text-muted;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}

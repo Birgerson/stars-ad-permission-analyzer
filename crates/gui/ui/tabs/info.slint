@@ -1,0 +1,188 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
+// The Info tab (ADR 0082): its state (`InfoState`, read and written by
+// src/main.rs) and its layout (`InfoTab`).
+
+import {
+    VerticalBox,
+    HorizontalBox,
+    GroupBox,
+    LineEdit,
+    ScrollView,
+} from "std-widgets.slint";
+import { AppState } from "../app-state.slint";
+import { PrimaryButton } from "../components/buttons.slint";
+import { Theme } from "../theme/theme.slint";
+
+export global InfoState {
+    // Manual update check (ADR 0061) — Info tab. The source is
+    // user-editable (validated in the worker); status carries the
+    // outcome text.
+    in-out property <string> update-source: "";
+    in property <string> update-status: "";
+    in property <bool> update-status-is-error: false;
+    callback check-update(string);
+}
+
+export component InfoTab inherits ScrollView {
+    VerticalBox {
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-md;
+
+        Text {
+            text: "Stars — AD Permission Analyzer";
+            font-size: Theme.font-xl;
+            font-weight: 700;
+            color: Theme.text-primary;
+        }
+        Text {
+            text: AppState.version;
+            font-size: Theme.font-md;
+            color: Theme.text-secondary;
+        }
+
+        GroupBox {
+            title: "Author and license";
+            VerticalLayout {
+                spacing: Theme.spacing-sm;
+                padding: Theme.spacing-sm;
+                Text {
+                    text: "Copyright (c) 2026 Birger Labinsch";
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: "License: GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)";
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "License text: https://www.gnu.org/licenses/agpl-3.0.html";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-sm;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "Source code (required by AGPL): https://github.com/Birgerson/stars-ad-permission-analyzer";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-sm;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "This software was largely implemented with AI assistance: Code with Anthropic Claude Opus. Birger Labinsch is the prompt engineer, not the code author.";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-sm;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        GroupBox {
+            title: "Read-only principle — three hard limits";
+            VerticalLayout {
+                spacing: Theme.spacing-sm;
+                padding: Theme.spacing-sm;
+                Text {
+                    text: "1. Read-only. Stars never writes to NTFS, SMB shares, or Active Directory. No future release will ship write functions either.";
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "2. No agent on target systems. Stars runs on an audit workstation or an audit DC. It installs nothing on file servers or other DCs.";
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "3. No backdoor authentication. Stars binds via LDAP (LDAPS preferred), nothing else. No hidden telemetry, no automatic update beacons — the update check below contacts its source only when you click it.";
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // Manual update check (ADR 0061): read-only —
+        // fetches release info, compares versions,
+        // shows the result. Downloads and installs
+        // nothing, and runs ONLY on click.
+        GroupBox {
+            title: "Updates (manual check)";
+            VerticalBox {
+                spacing: Theme.spacing-sm;
+                Text {
+                    text: "Checks whether a newer Stars version is published at the source below. Read-only: nothing is downloaded or installed, and the check runs only when you click the button.";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-sm;
+                    wrap: word-wrap;
+                }
+                HorizontalBox {
+                    spacing: Theme.spacing-sm;
+                    LineEdit {
+                        text <=> InfoState.update-source;
+                        placeholder-text: "https:// update source";
+                        horizontal-stretch: 1;
+                    }
+                    PrimaryButton {
+                        text: "Check for updates";
+                        clicked => {
+                            InfoState.check-update(InfoState.update-source);
+                        }
+                    }
+                }
+                if InfoState.update-status != "": Text {
+                    text: InfoState.update-status;
+                    color: InfoState.update-status-is-error ? Theme.error : Theme.text-primary;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        GroupBox {
+            title: "Backup duty and disclaimer";
+            VerticalLayout {
+                spacing: Theme.spacing-sm;
+                padding: Theme.spacing-sm;
+                Text {
+                    text: "Before any production use, a full and tested backup of the affected systems is mandatory — even though Stars is architecturally read-only. Driver bugs, antivirus interventions, or load spikes can cause incidents even with a pure read-only tool.";
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "Use at your own risk. Birger Labinsch assumes no liability for damages, data loss, incorrect audit results, or consequences arising from the use of this software. Full disclaimer in README.md (section 'Disclaimer').";
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        GroupBox {
+            title: "Contact and further documentation";
+            VerticalLayout {
+                spacing: Theme.spacing-sm;
+                padding: Theme.spacing-sm;
+                Text {
+                    text: "E-mail: birger@labinsch.de";
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: "Issues / bugs: https://github.com/Birgerson/stars-ad-permission-analyzer/issues";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-sm;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "Decision guide before use: docs/can-stars-help-you.md in the repo.";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-sm;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "Build verified against Windows Server 2022 Standard and Windows Server 2025 Standard (3-forest lab smoke test, 2026-06-07).";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-sm;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+    }
+}

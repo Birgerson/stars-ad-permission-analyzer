@@ -65,6 +65,19 @@ should be changeable in one place.
 | --- | --- | --- |
 | 1 | UI moved unchanged from the macro into `ui/app.slint`; gate covers `.slint` | done — 18 of 18 screenshots identical |
 | 2 | `theme/theme.slint` (tokens), `components/` (buttons, header, help tip, trusted-domain fields), `models.slint` (view models) split out of `app.slint`; `app.slint` re-exports what Rust uses | done — 18 of 18 identical |
+| 3 | Each tab in `tabs/<tab>.slint`: its state as a global (`AnalyzeState`, `GraphState`, `GroupsState`, `ScanState`, `DeltaState`, `TrustsState`, `SharesState`, `InfoState`; prefixes dropped, `a-status` → `AnalyzeState.status`) and its layout as a component; `AppState` holds the version that header and Info tab show. `MainWindow` keeps no property; `app.slint` shrinks from 3,011 to 212 lines | done — 18 of 18 identical; one real action per tab identical as well |
+
+Step 3 also introduced a functional check: with a fresh, empty scan history
+(APPDATA redirected), one action per tab — analysis, a click into the graph,
+saving it, zoom, "Show all groups", group resolution, a tree scan, loading
+the history, reading trusts without LDAP (explicit error), listing the
+shares of this machine, the update check — run with v1.17.0 and with the
+new build. Results identical apart from what differs by nature (the time of
+a scan run, the blinking text cursor, the scratch folder's name in a
+status line); the saved SVG is byte-identical. One mapping error was caught
+on the way: the Analyze tab's old name `resolve-name-clicked` equalled the
+Scan Tree tab's new one, and the Scan handler was routed twice — the build
+failed on it, the rename now skips accessors already routed to a global.
 
 Screenshot comparison notes: the Windows title bar (top 31 rows) is drawn
 by Windows, not Stars — its text colour follows whether the window is in

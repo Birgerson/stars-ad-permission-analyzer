@@ -178,10 +178,12 @@ fn run_ui(_log_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>>
 
     // App version from Cargo metadata into the GUI. Without this the
     // HeaderBar version badge stays hidden behind its `if != ""` guard.
-    ui.set_app_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
+    ui.global::<AppState>()
+        .set_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
     // Default update source for the Info tab's manual check (ADR 0061) —
     // user-editable, validated in the worker on every check.
-    ui.set_i_update_source(update_manager::DEFAULT_UPDATE_SOURCE.into());
+    ui.global::<InfoState>()
+        .set_update_source(update_manager::DEFAULT_UPDATE_SOURCE.into());
 
     // notify callback: wakes the GUI thread once the worker has sent an
     // event. Slint's `invoke_from_event_loop` is callable from any thread
@@ -225,15 +227,16 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
     // is sub-millisecond, no worker round-trip needed).
     {
         let weak = ui.as_weak();
-        ui.on_resolve_name_clicked(move || {
-            let Some(ui) = weak.upgrade() else { return };
-            let name = ui.get_a_name().to_string();
-            resolve_name_to_sid(
-                &name,
-                |sid| ui.set_a_sid(sid.into()),
-                |err| ui.set_a_name_error(err.into()),
-            );
-        });
+        ui.global::<AnalyzeState>()
+            .on_resolve_name_clicked(move || {
+                let Some(ui) = weak.upgrade() else { return };
+                let name = ui.global::<AnalyzeState>().get_name().to_string();
+                resolve_name_to_sid(
+                    &name,
+                    |sid| ui.global::<AnalyzeState>().set_sid(sid.into()),
+                    |err| ui.global::<AnalyzeState>().set_name_error(err.into()),
+                );
+            });
     }
 
     // Live search: filter the cache on every keystroke and push the result
@@ -241,12 +244,13 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
     // list (length == 0).
     {
         let weak = ui.as_weak();
-        ui.on_analyze_name_edited(move |query| {
+        ui.global::<AnalyzeState>().on_name_edited(move |query| {
             let Some(ui) = weak.upgrade() else { return };
-            ui.set_a_suggestions(filter_suggestions_model(query.as_str()));
+            ui.global::<AnalyzeState>()
+                .set_suggestions(filter_suggestions_model(query.as_str()));
             // Typing switches back to the local autocomplete; drop any
             // lingering directory-search feedback.
-            ui.set_a_search_status("".into());
+            ui.global::<AnalyzeState>().set_search_status("".into());
         });
     }
 
@@ -256,12 +260,12 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
     {
         let weak = ui.as_weak();
         let weak_graph = ui.as_weak();
-        ui.on_gr_toggle_all_groups(move || {
+        ui.global::<GraphState>().on_toggle_all_groups(move || {
             let Some(ui) = weak_graph.upgrade() else {
                 return;
             };
             // Another layout: the selected box no longer exists.
-            ui.set_gr_selected(-1);
+            ui.global::<GraphState>().set_selected(-1);
             let perm = GRAPH_RESULT.with(|g| g.borrow().clone());
             if let Some(perm) = perm {
                 draw_graph(&ui, &perm);
@@ -270,23 +274,23 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         // ADR 0081: a click selects a box (its full text, every route through
         // it bright); a second click on it clears the selection.
         let weak_node = ui.as_weak();
-        ui.on_gr_node_clicked(move |index| {
+        ui.global::<GraphState>().on_node_clicked(move |index| {
             let Some(ui) = weak_node.upgrade() else {
                 return;
             };
-            let selected = if ui.get_gr_selected() == index {
+            let selected = if ui.global::<GraphState>().get_selected() == index {
                 -1
             } else {
                 index
             };
-            ui.set_gr_selected(selected);
+            ui.global::<GraphState>().set_selected(selected);
             let perm = GRAPH_RESULT.with(|g| g.borrow().clone());
             if let Some(perm) = perm {
                 draw_graph(&ui, &perm);
             }
         });
         let weak_save = ui.as_weak();
-        ui.on_gr_save_svg(move || {
+        ui.global::<GraphState>().on_save_svg(move || {
             let Some(ui) = weak_save.upgrade() else {
                 return;
             };
@@ -295,12 +299,12 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
                 None => Err("There is no graph to save — run an analysis first.".to_owned()),
                 Some(perm) => {
                     let opts = viz::GraphOptions {
-                        all_groups: ui.get_gr_all_groups(),
+                        all_groups: ui.global::<GraphState>().get_all_groups(),
                         caption: true,
                     };
                     match viz::permission_graph_with(&perm, opts) {
                         Some(graph) => save_graph_svg(
-                            ui.get_gr_save_path().as_str(),
+                            ui.global::<GraphState>().get_save_path().as_str(),
                             &graph.to_svg_with(&viz::RenderOptions::default()),
                         ),
                         None => Err("This result has no graph to save.".to_owned()),
@@ -309,46 +313,49 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             };
             match outcome {
                 Ok(msg) => {
-                    ui.set_gr_save_error(false);
-                    ui.set_gr_save_status(msg.into());
+                    ui.global::<GraphState>().set_save_error(false);
+                    ui.global::<GraphState>().set_save_status(msg.into());
                 }
                 Err(msg) => {
-                    ui.set_gr_save_error(true);
-                    ui.set_gr_save_status(msg.into());
+                    ui.global::<GraphState>().set_save_error(true);
+                    ui.global::<GraphState>().set_save_status(msg.into());
                 }
             }
         });
-        ui.on_a_toggle_members(move || {
+        ui.global::<AnalyzeState>().on_toggle_members(move || {
             let Some(ui) = weak.upgrade() else { return };
-            let show_all = !ui.get_a_show_all_members();
-            ui.set_a_show_all_members(show_all);
+            let show_all = !ui.global::<AnalyzeState>().get_show_all_members();
+            ui.global::<AnalyzeState>().set_show_all_members(show_all);
             let rows = ANALYZE_STEPS.with(|s| visible_steps(&s.borrow(), show_all));
-            ui.set_a_explanation(slint::ModelRc::new(slint::VecModel::from(rows)));
+            ui.global::<AnalyzeState>()
+                .set_explanation(slint::ModelRc::new(slint::VecModel::from(rows)));
         });
     }
     {
         let weak = ui.as_weak();
-        ui.on_pick_analyze_suggestion(move |name, sid| {
-            let Some(ui) = weak.upgrade() else { return };
-            ui.set_a_name(name.clone());
-            ui.set_a_suggestions(empty_suggestion_model());
-            ui.set_a_search_status("".into());
-            // A live directory hit already carries its SID — fill it directly
-            // and skip the LSA lookup, which cannot resolve a remote-domain
-            // sAMAccountName from the local host. A local entry has an empty
-            // sid and falls back to the LSA resolve below.
-            if !sid.is_empty() {
-                ui.set_a_sid(sid);
-                ui.set_a_name_error("".into());
-                return;
-            }
-            let name_str = name.to_string();
-            resolve_name_to_sid(
-                &name_str,
-                |sid| ui.set_a_sid(sid.into()),
-                |err| ui.set_a_name_error(err.into()),
-            );
-        });
+        ui.global::<AnalyzeState>()
+            .on_pick_suggestion(move |name, sid| {
+                let Some(ui) = weak.upgrade() else { return };
+                ui.global::<AnalyzeState>().set_name(name.clone());
+                ui.global::<AnalyzeState>()
+                    .set_suggestions(empty_suggestion_model());
+                ui.global::<AnalyzeState>().set_search_status("".into());
+                // A live directory hit already carries its SID — fill it directly
+                // and skip the LSA lookup, which cannot resolve a remote-domain
+                // sAMAccountName from the local host. A local entry has an empty
+                // sid and falls back to the LSA resolve below.
+                if !sid.is_empty() {
+                    ui.global::<AnalyzeState>().set_sid(sid);
+                    ui.global::<AnalyzeState>().set_name_error("".into());
+                    return;
+                }
+                let name_str = name.to_string();
+                resolve_name_to_sid(
+                    &name_str,
+                    |sid| ui.global::<AnalyzeState>().set_sid(sid.into()),
+                    |err| ui.global::<AnalyzeState>().set_name_error(err.into()),
+                );
+            });
     }
 
     // "Search AD": run a live LDAP directory search for the current identity
@@ -358,33 +365,33 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
     {
         let search_tx = req_tx.clone();
         let weak = ui.as_weak();
-        ui.on_search_directory_clicked(move || {
+        ui.global::<AnalyzeState>().on_search_directory_clicked(move || {
             let Some(ui) = weak.upgrade() else { return };
-            let query = ui.get_a_name().to_string();
+            let query = ui.global::<AnalyzeState>().get_name().to_string();
             if query.trim().is_empty() {
-                ui.set_a_search_status(
+                ui.global::<AnalyzeState>().set_search_status(
                     "Enter a name (or part of one) to search the directory.".into(),
                 );
                 return;
             }
             let Some(ldap) = LdapParams::from_mode(
-                ui.get_a_ldap_mode(),
-                ui.get_a_ldap_server().to_string(),
-                ui.get_a_ldap_base_dn().to_string(),
-                ui.get_a_ldap_bind_dn().to_string(),
-                ui.get_a_ldap_password().to_string(),
-                ui.get_a_ldap_timeout(),
+                ui.global::<AnalyzeState>().get_ldap_mode(),
+                ui.global::<AnalyzeState>().get_ldap_server().to_string(),
+                ui.global::<AnalyzeState>().get_ldap_base_dn().to_string(),
+                ui.global::<AnalyzeState>().get_ldap_bind_dn().to_string(),
+                ui.global::<AnalyzeState>().get_ldap_password().to_string(),
+                ui.global::<AnalyzeState>().get_ldap_timeout(),
             ) else {
-                ui.set_a_search_status(
+                ui.global::<AnalyzeState>().set_search_status(
                     "Directory search needs an LDAP mode (LDAPS / LDAP / Global Catalog / Signed). Select one above."
                         .into(),
                 );
                 return;
             };
-            ui.set_a_name_error("".into());
-            ui.set_a_search_status("Searching the directory…".into());
+            ui.global::<AnalyzeState>().set_name_error("".into());
+            ui.global::<AnalyzeState>().set_search_status("Searching the directory…".into());
             if let Err(e) = search_tx.send(WorkerRequest::SearchIdentity { query, ldap }) {
-                ui.set_a_search_status(format!("Worker not reachable: {e}").into());
+                ui.global::<AnalyzeState>().set_search_status(format!("Worker not reachable: {e}").into());
             }
         });
     }
@@ -392,33 +399,36 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
     // Groups tab: same live suggestion list as Analyze, from the same cache.
     {
         let weak = ui.as_weak();
-        ui.on_groups_name_edited(move |query| {
+        ui.global::<GroupsState>().on_name_edited(move |query| {
             let Some(ui) = weak.upgrade() else { return };
             // Members direction expects a group — suggest only groups then.
-            let groups_only = ui.get_g_direction() == 1;
-            ui.set_g_suggestions(filter_suggestions_model_kinds(query.as_str(), groups_only));
+            let groups_only = ui.global::<GroupsState>().get_direction() == 1;
+            ui.global::<GroupsState>()
+                .set_suggestions(filter_suggestions_model_kinds(query.as_str(), groups_only));
         });
     }
     {
         let weak = ui.as_weak();
-        ui.on_pick_groups_suggestion(move |name| {
+        ui.global::<GroupsState>().on_pick_suggestion(move |name| {
             let Some(ui) = weak.upgrade() else { return };
             // The Groups view resolves on "Show groups", so picking only fills
             // the field and closes the list — no eager SID lookup needed.
-            ui.set_g_identity(name);
-            ui.set_g_suggestions(empty_suggestion_model());
+            ui.global::<GroupsState>().set_identity(name);
+            ui.global::<GroupsState>()
+                .set_suggestions(empty_suggestion_model());
         });
     }
 
     let analyze_tx = req_tx.clone();
     let weak = ui.as_weak();
-    ui.on_analyze_clicked(move || {
+    ui.global::<AnalyzeState>().on_clicked(move || {
         let req_tx = &analyze_tx;
         let Some(ui) = weak.upgrade() else { return };
-        let path = ui.get_a_path().to_string();
+        let path = ui.global::<AnalyzeState>().get_path().to_string();
         if path.trim().is_empty() {
-            ui.set_a_status("Path is required.".into());
-            ui.set_a_status_is_error(true);
+            ui.global::<AnalyzeState>()
+                .set_status("Path is required.".into());
+            ui.global::<AnalyzeState>().set_status_is_error(true);
             return;
         }
 
@@ -430,54 +440,57 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
         // LDAP can resolve, even with a sufficient LDAP mode configured
         // (review 2026-07-01 deep pass, finding 1). The "🔍 Resolve SID"
         // button remains the explicit LSA preview.
-        let mut identity = ui.get_a_sid().to_string();
+        let mut identity = ui.global::<AnalyzeState>().get_sid().to_string();
         if identity.trim().is_empty() {
-            identity = ui.get_a_name().to_string();
+            identity = ui.global::<AnalyzeState>().get_name().to_string();
             if identity.trim().is_empty() {
-                ui.set_a_status("Path and identity are required.".into());
-                ui.set_a_status_is_error(true);
+                ui.global::<AnalyzeState>()
+                    .set_status("Path and identity are required.".into());
+                ui.global::<AnalyzeState>().set_status_is_error(true);
                 return;
             }
-            ui.set_a_name_error("".into());
+            ui.global::<AnalyzeState>().set_name_error("".into());
         }
 
         // LDAP mode: 0 = off (SAM/LSA), 1 = LDAPS, 2 = plain LDAP,
         // 3 = Global Catalog (LDAPS 3269). Mapping lives in
         // LdapParams::from_mode so it is unit-tested without the UI.
         let ldap = LdapParams::from_mode(
-            ui.get_a_ldap_mode(),
-            ui.get_a_ldap_server().to_string(),
-            ui.get_a_ldap_base_dn().to_string(),
-            ui.get_a_ldap_bind_dn().to_string(),
-            ui.get_a_ldap_password().to_string(),
-            ui.get_a_ldap_timeout(),
+            ui.global::<AnalyzeState>().get_ldap_mode(),
+            ui.global::<AnalyzeState>().get_ldap_server().to_string(),
+            ui.global::<AnalyzeState>().get_ldap_base_dn().to_string(),
+            ui.global::<AnalyzeState>().get_ldap_bind_dn().to_string(),
+            ui.global::<AnalyzeState>().get_ldap_password().to_string(),
+            ui.global::<AnalyzeState>().get_ldap_timeout(),
         )
         .map(|l| {
             l.with_trust(
-                ui.get_a_trust_enabled(),
-                ui.get_a_trust_server().to_string(),
-                ui.get_a_trust_base_dn().to_string(),
-                ui.get_a_trust_bind_dn().to_string(),
-                ui.get_a_trust_password().to_string(),
+                ui.global::<AnalyzeState>().get_trust_enabled(),
+                ui.global::<AnalyzeState>().get_trust_server().to_string(),
+                ui.global::<AnalyzeState>().get_trust_base_dn().to_string(),
+                ui.global::<AnalyzeState>().get_trust_bind_dn().to_string(),
+                ui.global::<AnalyzeState>().get_trust_password().to_string(),
             )
         });
 
-        let (smb_server, share_name) = if ui.get_a_smb_enabled() {
+        let (smb_server, share_name) = if ui.global::<AnalyzeState>().get_smb_enabled() {
             (
-                Some(ui.get_a_smb_server().to_string()),
-                Some(ui.get_a_smb_share().to_string()),
+                Some(ui.global::<AnalyzeState>().get_smb_server().to_string()),
+                Some(ui.global::<AnalyzeState>().get_smb_share().to_string()),
             )
         } else {
             (None, None)
         };
 
-        ui.set_a_is_running(true);
-        ui.set_a_status("Analysis running...".into());
-        ui.set_a_status_is_error(false);
-        ui.set_a_rights_label("".into());
-        ui.set_a_mask_hex("".into());
-        ui.set_a_share_line("".into());
-        ui.set_a_explanation(slint::ModelRc::new(slint::VecModel::<StepVm>::default()));
+        ui.global::<AnalyzeState>().set_is_running(true);
+        ui.global::<AnalyzeState>()
+            .set_status("Analysis running...".into());
+        ui.global::<AnalyzeState>().set_status_is_error(false);
+        ui.global::<AnalyzeState>().set_rights_label("".into());
+        ui.global::<AnalyzeState>().set_mask_hex("".into());
+        ui.global::<AnalyzeState>().set_share_line("".into());
+        ui.global::<AnalyzeState>()
+            .set_explanation(slint::ModelRc::new(slint::VecModel::<StepVm>::default()));
         clear_graph(&ui, "Analysis running — the graph follows its result.");
 
         if let Err(e) = req_tx.send(WorkerRequest::Analyze {
@@ -487,9 +500,10 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
             smb_server,
             share_name,
         }) {
-            ui.set_a_is_running(false);
-            ui.set_a_status(format!("Worker not reachable: {e}").into());
-            ui.set_a_status_is_error(true);
+            ui.global::<AnalyzeState>().set_is_running(false);
+            ui.global::<AnalyzeState>()
+                .set_status(format!("Worker not reachable: {e}").into());
+            ui.global::<AnalyzeState>().set_status_is_error(true);
         }
     });
 
@@ -497,34 +511,37 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
     {
         let weak = ui.as_weak();
         let req_tx = req_tx.clone();
-        ui.on_analyze_trustees_clicked(move || {
+        ui.global::<AnalyzeState>().on_trustees_clicked(move || {
             let Some(ui) = weak.upgrade() else { return };
-            let path = ui.get_a_path().to_string();
+            let path = ui.global::<AnalyzeState>().get_path().to_string();
             if path.trim().is_empty() {
-                ui.set_a_status("Path is required.".into());
-                ui.set_a_status_is_error(true);
+                ui.global::<AnalyzeState>()
+                    .set_status("Path is required.".into());
+                ui.global::<AnalyzeState>().set_status_is_error(true);
                 return;
             }
-            let (smb_server, share_name) = if ui.get_a_smb_enabled() {
+            let (smb_server, share_name) = if ui.global::<AnalyzeState>().get_smb_enabled() {
                 (
-                    Some(ui.get_a_smb_server().to_string()),
-                    Some(ui.get_a_smb_share().to_string()),
+                    Some(ui.global::<AnalyzeState>().get_smb_server().to_string()),
+                    Some(ui.global::<AnalyzeState>().get_smb_share().to_string()),
                 )
             } else {
                 (None, None)
             };
-            ui.set_a_trustees_running(true);
-            ui.set_a_has_trustees(false);
-            ui.set_a_status("Reading DACL...".into());
-            ui.set_a_status_is_error(false);
+            ui.global::<AnalyzeState>().set_trustees_running(true);
+            ui.global::<AnalyzeState>().set_has_trustees(false);
+            ui.global::<AnalyzeState>()
+                .set_status("Reading DACL...".into());
+            ui.global::<AnalyzeState>().set_status_is_error(false);
             if let Err(e) = req_tx.send(WorkerRequest::AnalyzeTrustees {
                 path,
                 smb_server,
                 share_name,
             }) {
-                ui.set_a_trustees_running(false);
-                ui.set_a_status(format!("Worker not reachable: {e}").into());
-                ui.set_a_status_is_error(true);
+                ui.global::<AnalyzeState>().set_trustees_running(false);
+                ui.global::<AnalyzeState>()
+                    .set_status(format!("Worker not reachable: {e}").into());
+                ui.global::<AnalyzeState>().set_status_is_error(true);
             }
         });
     }
@@ -533,35 +550,36 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
     {
         let weak = ui.as_weak();
         let req_tx = req_tx.clone();
-        ui.on_groups_resolve_clicked(move || {
+        ui.global::<GroupsState>().on_resolve_clicked(move || {
             let Some(ui) = weak.upgrade() else { return };
-            let identity = ui.get_g_identity().to_string();
+            let identity = ui.global::<GroupsState>().get_identity().to_string();
             if identity.trim().is_empty() {
-                ui.set_g_status("Identity is required.".into());
-                ui.set_g_status_is_error(true);
+                ui.global::<GroupsState>()
+                    .set_status("Identity is required.".into());
+                ui.global::<GroupsState>().set_status_is_error(true);
                 return;
             }
             let ldap = LdapParams::from_mode(
-                ui.get_g_ldap_mode(),
-                ui.get_g_ldap_server().to_string(),
-                ui.get_g_ldap_base_dn().to_string(),
-                ui.get_g_ldap_bind_dn().to_string(),
-                ui.get_g_ldap_password().to_string(),
-                ui.get_g_ldap_timeout(),
+                ui.global::<GroupsState>().get_ldap_mode(),
+                ui.global::<GroupsState>().get_ldap_server().to_string(),
+                ui.global::<GroupsState>().get_ldap_base_dn().to_string(),
+                ui.global::<GroupsState>().get_ldap_bind_dn().to_string(),
+                ui.global::<GroupsState>().get_ldap_password().to_string(),
+                ui.global::<GroupsState>().get_ldap_timeout(),
             )
             .map(|l| {
                 l.with_trust(
-                    ui.get_g_trust_enabled(),
-                    ui.get_g_trust_server().to_string(),
-                    ui.get_g_trust_base_dn().to_string(),
-                    ui.get_g_trust_bind_dn().to_string(),
-                    ui.get_g_trust_password().to_string(),
+                    ui.global::<GroupsState>().get_trust_enabled(),
+                    ui.global::<GroupsState>().get_trust_server().to_string(),
+                    ui.global::<GroupsState>().get_trust_base_dn().to_string(),
+                    ui.global::<GroupsState>().get_trust_bind_dn().to_string(),
+                    ui.global::<GroupsState>().get_trust_password().to_string(),
                 )
             });
-            let members_direction = ui.get_g_direction() == 1;
-            ui.set_g_is_running(true);
-            ui.set_g_has_result(false);
-            ui.set_g_status(
+            let members_direction = ui.global::<GroupsState>().get_direction() == 1;
+            ui.global::<GroupsState>().set_is_running(true);
+            ui.global::<GroupsState>().set_has_result(false);
+            ui.global::<GroupsState>().set_status(
                 if members_direction {
                     "Enumerating group members..."
                 } else {
@@ -569,7 +587,7 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
                 }
                 .into(),
             );
-            ui.set_g_status_is_error(false);
+            ui.global::<GroupsState>().set_status_is_error(false);
             // Pass the raw identity (name / DOMAIN\user / UPN / SID) instead of
             // pre-resolving it via the local LSA. With LDAP configured the
             // worker's principal pipeline resolves a name itself, so the Groups
@@ -582,9 +600,10 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
                 WorkerRequest::ResolveGroups { identity, ldap }
             };
             if let Err(e) = req_tx.send(request) {
-                ui.set_g_is_running(false);
-                ui.set_g_status(format!("Worker not reachable: {e}").into());
-                ui.set_g_status_is_error(true);
+                ui.global::<GroupsState>().set_is_running(false);
+                ui.global::<GroupsState>()
+                    .set_status(format!("Worker not reachable: {e}").into());
+                ui.global::<GroupsState>().set_status_is_error(true);
             }
         });
     }
@@ -593,26 +612,28 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
     {
         let weak = ui.as_weak();
         let req_tx = req_tx.clone();
-        ui.on_trusts_list_clicked(move || {
+        ui.global::<TrustsState>().on_list_clicked(move || {
             let Some(ui) = weak.upgrade() else { return };
             // The Trusts selector has no "Off" entry (LDAP is mandatory), so
             // its index 0–3 maps onto `from_mode`'s LDAP modes 1–4.
             let ldap = LdapParams::from_mode(
-                ui.get_t_ldap_mode() + 1,
-                ui.get_t_ldap_server().to_string(),
-                ui.get_t_ldap_base_dn().to_string(),
-                ui.get_t_ldap_bind_dn().to_string(),
-                ui.get_t_ldap_password().to_string(),
-                ui.get_t_ldap_timeout(),
+                ui.global::<TrustsState>().get_ldap_mode() + 1,
+                ui.global::<TrustsState>().get_ldap_server().to_string(),
+                ui.global::<TrustsState>().get_ldap_base_dn().to_string(),
+                ui.global::<TrustsState>().get_ldap_bind_dn().to_string(),
+                ui.global::<TrustsState>().get_ldap_password().to_string(),
+                ui.global::<TrustsState>().get_ldap_timeout(),
             );
-            ui.set_t_is_running(true);
-            ui.set_t_has_result(false);
-            ui.set_t_status("Reading trusts...".into());
-            ui.set_t_status_is_error(false);
+            ui.global::<TrustsState>().set_is_running(true);
+            ui.global::<TrustsState>().set_has_result(false);
+            ui.global::<TrustsState>()
+                .set_status("Reading trusts...".into());
+            ui.global::<TrustsState>().set_status_is_error(false);
             if let Err(e) = req_tx.send(WorkerRequest::ListTrusts { ldap }) {
-                ui.set_t_is_running(false);
-                ui.set_t_status(format!("Worker not reachable: {e}").into());
-                ui.set_t_status_is_error(true);
+                ui.global::<TrustsState>().set_is_running(false);
+                ui.global::<TrustsState>()
+                    .set_status(format!("Worker not reachable: {e}").into());
+                ui.global::<TrustsState>().set_status_is_error(true);
             }
         });
     }
@@ -621,29 +642,32 @@ fn wire_analyze_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerReque
     {
         let weak = ui.as_weak();
         let req_tx = req_tx.clone();
-        ui.on_shares_list_clicked(move || {
+        ui.global::<SharesState>().on_list_clicked(move || {
             let Some(ui) = weak.upgrade() else { return };
-            let server = ui.get_sh_server().to_string();
+            let server = ui.global::<SharesState>().get_server().to_string();
             if server.trim().is_empty() {
-                ui.set_sh_status("Server is required.".into());
-                ui.set_sh_status_is_error(true);
+                ui.global::<SharesState>()
+                    .set_status("Server is required.".into());
+                ui.global::<SharesState>().set_status_is_error(true);
                 return;
             }
-            ui.set_sh_is_running(true);
-            ui.set_sh_has_result(false);
-            ui.set_sh_status("Listing shares...".into());
-            ui.set_sh_status_is_error(false);
+            ui.global::<SharesState>().set_is_running(true);
+            ui.global::<SharesState>().set_has_result(false);
+            ui.global::<SharesState>()
+                .set_status("Listing shares...".into());
+            ui.global::<SharesState>().set_status_is_error(false);
             if let Err(e) = req_tx.send(WorkerRequest::ListShares { server }) {
-                ui.set_sh_is_running(false);
-                ui.set_sh_status(format!("Worker not reachable: {e}").into());
-                ui.set_sh_status_is_error(true);
+                ui.global::<SharesState>().set_is_running(false);
+                ui.global::<SharesState>()
+                    .set_status(format!("Worker not reachable: {e}").into());
+                ui.global::<SharesState>().set_status_is_error(true);
             }
         });
     }
 }
 
 fn handle_trusts_done(ui: &MainWindow, result: Result<Vec<TrustRow>, String>) {
-    ui.set_t_is_running(false);
+    ui.global::<TrustsState>().set_is_running(false);
     match result {
         Ok(rows) => {
             let flagged = rows
@@ -658,8 +682,8 @@ fn handle_trusts_done(ui: &MainWindow, result: Result<Vec<TrustRow>, String>) {
             } else {
                 format!("{} trust(s)", rows.len())
             };
-            ui.set_t_status(status.into());
-            ui.set_t_status_is_error(false);
+            ui.global::<TrustsState>().set_status(status.into());
+            ui.global::<TrustsState>().set_status_is_error(false);
             let vms: Vec<TrustVm> = rows
                 .into_iter()
                 .map(|t| TrustVm {
@@ -673,19 +697,20 @@ fn handle_trusts_done(ui: &MainWindow, result: Result<Vec<TrustRow>, String>) {
                     selective_auth: t.selective_auth,
                 })
                 .collect();
-            ui.set_t_trusts(slint::ModelRc::new(slint::VecModel::from(vms)));
-            ui.set_t_has_result(true);
+            ui.global::<TrustsState>()
+                .set_trusts(slint::ModelRc::new(slint::VecModel::from(vms)));
+            ui.global::<TrustsState>().set_has_result(true);
         }
         Err(e) => {
-            ui.set_t_has_result(false);
-            ui.set_t_status(e.into());
-            ui.set_t_status_is_error(true);
+            ui.global::<TrustsState>().set_has_result(false);
+            ui.global::<TrustsState>().set_status(e.into());
+            ui.global::<TrustsState>().set_status_is_error(true);
         }
     }
 }
 
 fn handle_shares_done(ui: &MainWindow, result: Result<SharesViewData, String>) {
-    ui.set_sh_is_running(false);
+    ui.global::<SharesState>().set_is_running(false);
     match result {
         Ok(data) => {
             let status = if data.errors.is_empty() {
@@ -697,12 +722,14 @@ fn handle_shares_done(ui: &MainWindow, result: Result<SharesViewData, String>) {
                     data.errors.len()
                 )
             };
-            ui.set_sh_status(status.into());
+            ui.global::<SharesState>().set_status(status.into());
             // Read failures are part of the result, not a hard error — but
             // they must not look like a clean run.
-            ui.set_sh_status_is_error(!data.errors.is_empty());
-            ui.set_sh_result_server(data.server.into());
-            ui.set_sh_admin_count(data.admin_count);
+            ui.global::<SharesState>()
+                .set_status_is_error(!data.errors.is_empty());
+            ui.global::<SharesState>()
+                .set_result_server(data.server.into());
+            ui.global::<SharesState>().set_admin_count(data.admin_count);
             let vms: Vec<ShareVm> = data
                 .shares
                 .into_iter()
@@ -731,22 +758,24 @@ fn handle_shares_done(ui: &MainWindow, result: Result<SharesViewData, String>) {
                     }
                 })
                 .collect();
-            ui.set_sh_shares(slint::ModelRc::new(slint::VecModel::from(vms)));
+            ui.global::<SharesState>()
+                .set_shares(slint::ModelRc::new(slint::VecModel::from(vms)));
             let errors: Vec<slint::SharedString> =
                 data.errors.into_iter().map(|e| e.into()).collect();
-            ui.set_sh_errors(slint::ModelRc::new(slint::VecModel::from(errors)));
-            ui.set_sh_has_result(true);
+            ui.global::<SharesState>()
+                .set_errors(slint::ModelRc::new(slint::VecModel::from(errors)));
+            ui.global::<SharesState>().set_has_result(true);
         }
         Err(e) => {
-            ui.set_sh_has_result(false);
-            ui.set_sh_status(e.into());
-            ui.set_sh_status_is_error(true);
+            ui.global::<SharesState>().set_has_result(false);
+            ui.global::<SharesState>().set_status(e.into());
+            ui.global::<SharesState>().set_status_is_error(true);
         }
     }
 }
 
 fn handle_trustees_done(ui: &MainWindow, result: Result<Vec<TrusteeRow>, String>) {
-    ui.set_a_trustees_running(false);
+    ui.global::<AnalyzeState>().set_trustees_running(false);
     match result {
         Ok(rows) => {
             let vms: Vec<TrusteeRowVm> = rows
@@ -771,29 +800,33 @@ fn handle_trustees_done(ui: &MainWindow, result: Result<Vec<TrusteeRow>, String>
                 })
                 .collect();
             let len = vms.len();
-            ui.set_a_trustees(slint::ModelRc::new(slint::VecModel::from(vms)));
-            ui.set_a_has_trustees(true);
-            ui.set_a_status(format!("{} ACE entries found on this path.", len).into());
-            ui.set_a_status_is_error(false);
+            ui.global::<AnalyzeState>()
+                .set_trustees(slint::ModelRc::new(slint::VecModel::from(vms)));
+            ui.global::<AnalyzeState>().set_has_trustees(true);
+            ui.global::<AnalyzeState>()
+                .set_status(format!("{} ACE entries found on this path.", len).into());
+            ui.global::<AnalyzeState>().set_status_is_error(false);
         }
         Err(e) => {
-            ui.set_a_has_trustees(false);
-            ui.set_a_status(format!("Trustee evaluation failed: {e}").into());
-            ui.set_a_status_is_error(true);
+            ui.global::<AnalyzeState>().set_has_trustees(false);
+            ui.global::<AnalyzeState>()
+                .set_status(format!("Trustee evaluation failed: {e}").into());
+            ui.global::<AnalyzeState>().set_status_is_error(true);
         }
     }
 }
 
 /// Populates the Groups tab from a finished membership resolution.
 fn handle_groups_done(ui: &MainWindow, result: Result<GroupsViewData, String>) {
-    ui.set_g_is_running(false);
+    ui.global::<GroupsState>().set_is_running(false);
     match result {
         Ok(data) => {
-            ui.set_g_has_result(true);
-            ui.set_g_status_is_error(false);
+            ui.global::<GroupsState>().set_has_result(true);
+            ui.global::<GroupsState>().set_status_is_error(false);
             // Tie the labels to what was actually computed, not the current
             // toggle (the user may flip the toggle before re-running).
-            ui.set_g_result_is_members(data.is_members);
+            ui.global::<GroupsState>()
+                .set_result_is_members(data.is_members);
             let status = if data.is_members {
                 let via_primary = data.total - data.direct;
                 format!(
@@ -803,9 +836,11 @@ fn handle_groups_done(ui: &MainWindow, result: Result<GroupsViewData, String>) {
             } else {
                 format!("{} group(s) — {} direct", data.total, data.direct)
             };
-            ui.set_g_status(status.into());
-            ui.set_g_identity_label(data.identity_label.into());
-            ui.set_g_identity_sid(data.identity_sid.into());
+            ui.global::<GroupsState>().set_status(status.into());
+            ui.global::<GroupsState>()
+                .set_identity_label(data.identity_label.into());
+            ui.global::<GroupsState>()
+                .set_identity_sid(data.identity_sid.into());
             // No enabled/disabled status for non-account kinds (groups): show
             // just the kind rather than a meaningless "Active".
             let meta = if data.status.is_empty() {
@@ -813,16 +848,20 @@ fn handle_groups_done(ui: &MainWindow, result: Result<GroupsViewData, String>) {
             } else {
                 format!("{} \u{00B7} {}", data.status, data.kind)
             };
-            ui.set_g_identity_meta(meta.into());
-            ui.set_g_ad_connected(data.ad_connected);
-            ui.set_g_sid_history(data.sid_history_count);
-            ui.set_g_total(data.total);
-            ui.set_g_direct(data.direct);
+            ui.global::<GroupsState>().set_identity_meta(meta.into());
+            ui.global::<GroupsState>()
+                .set_ad_connected(data.ad_connected);
+            ui.global::<GroupsState>()
+                .set_sid_history(data.sid_history_count);
+            ui.global::<GroupsState>().set_total(data.total);
+            ui.global::<GroupsState>().set_direct(data.direct);
 
-            ui.set_g_has_privileged(!data.privileged.is_empty());
+            ui.global::<GroupsState>()
+                .set_has_privileged(!data.privileged.is_empty());
             let priv_model: Vec<slint::SharedString> =
                 data.privileged.into_iter().map(|p| p.into()).collect();
-            ui.set_g_privileged(slint::ModelRc::new(slint::VecModel::from(priv_model)));
+            ui.global::<GroupsState>()
+                .set_privileged(slint::ModelRc::new(slint::VecModel::from(priv_model)));
 
             let group_vms: Vec<GroupMemberVm> = data
                 .groups
@@ -835,7 +874,8 @@ fn handle_groups_done(ui: &MainWindow, result: Result<GroupsViewData, String>) {
                     role: g.role.into(),
                 })
                 .collect();
-            ui.set_g_groups(slint::ModelRc::new(slint::VecModel::from(group_vms)));
+            ui.global::<GroupsState>()
+                .set_groups(slint::ModelRc::new(slint::VecModel::from(group_vms)));
 
             let diag_vms: Vec<DiagnosticVm> = data
                 .diagnostics
@@ -845,12 +885,13 @@ fn handle_groups_done(ui: &MainWindow, result: Result<GroupsViewData, String>) {
                     level: d.level,
                 })
                 .collect();
-            ui.set_g_diagnostics(slint::ModelRc::new(slint::VecModel::from(diag_vms)));
+            ui.global::<GroupsState>()
+                .set_diagnostics(slint::ModelRc::new(slint::VecModel::from(diag_vms)));
         }
         Err(e) => {
-            ui.set_g_has_result(false);
-            ui.set_g_status(e.into());
-            ui.set_g_status_is_error(true);
+            ui.global::<GroupsState>().set_has_result(false);
+            ui.global::<GroupsState>().set_status(e.into());
+            ui.global::<GroupsState>().set_status_is_error(true);
         }
     }
 }
@@ -880,19 +921,20 @@ fn further_groups_text(groups: &[String]) -> String {
 /// ADR 0077: no graph shown, with the reason why.
 fn clear_graph(ui: &MainWindow, caption: &str) {
     GRAPH_RESULT.with(|g| *g.borrow_mut() = None);
-    ui.set_gr_further_groups("".into());
-    ui.set_gr_has_graph(false);
-    ui.set_gr_image(slint::Image::default());
-    ui.set_gr_image_dark(slint::Image::default());
-    ui.set_gr_texts(slint::ModelRc::new(
+    ui.global::<GraphState>().set_further_groups("".into());
+    ui.global::<GraphState>().set_has_graph(false);
+    ui.global::<GraphState>().set_image(slint::Image::default());
+    ui.global::<GraphState>()
+        .set_image_dark(slint::Image::default());
+    ui.global::<GraphState>().set_texts(slint::ModelRc::new(
         slint::VecModel::<GraphTextVm>::default(),
     ));
-    ui.set_gr_nodes(slint::ModelRc::new(
+    ui.global::<GraphState>().set_nodes(slint::ModelRc::new(
         slint::VecModel::<GraphNodeVm>::default(),
     ));
-    ui.set_gr_selected(-1);
-    ui.set_gr_detail("".into());
-    ui.set_gr_caption(caption.into());
+    ui.global::<GraphState>().set_selected(-1);
+    ui.global::<GraphState>().set_detail("".into());
+    ui.global::<GraphState>().set_caption(caption.into());
 }
 
 /// `#rrggbb` → a Slint colour (the graph palette is fixed hex).
@@ -933,8 +975,8 @@ fn save_graph_svg(path: &str, svg: &str) -> Result<String, String> {
 fn apply_graph(ui: &MainWindow, perm: &EffectivePermission) {
     GRAPH_RESULT.with(|g| *g.borrow_mut() = Some(perm.clone()));
     // A new result: nothing selected, no stale save message.
-    ui.set_gr_selected(-1);
-    ui.set_gr_save_status("".into());
+    ui.global::<GraphState>().set_selected(-1);
+    ui.global::<GraphState>().set_save_status("".into());
     draw_graph(ui, perm);
 }
 
@@ -943,7 +985,7 @@ fn apply_graph(ui: &MainWindow, perm: &EffectivePermission) {
 /// both colours, and every box as a click target (ADR 0081).
 fn draw_graph(ui: &MainWindow, perm: &EffectivePermission) {
     let opts = viz::GraphOptions {
-        all_groups: ui.get_gr_all_groups(),
+        all_groups: ui.global::<GraphState>().get_all_groups(),
         caption: false,
     };
     let Some(graph) = viz::permission_graph_with(perm, opts) else {
@@ -954,7 +996,7 @@ fn draw_graph(ui: &MainWindow, perm: &EffectivePermission) {
         return;
     };
     let boxes = graph.node_boxes();
-    let selected = usize::try_from(ui.get_gr_selected())
+    let selected = usize::try_from(ui.global::<GraphState>().get_selected())
         .ok()
         .filter(|i| *i < boxes.len());
     let render = |dark: bool| viz::RenderOptions {
@@ -967,8 +1009,8 @@ fn draw_graph(ui: &MainWindow, perm: &EffectivePermission) {
     let dark = slint::Image::load_from_svg_data(graph.to_svg_shapes_with(&render(true)).as_bytes());
     match (light, dark) {
         (Ok(light), Ok(dark)) => {
-            ui.set_gr_image(light);
-            ui.set_gr_image_dark(dark);
+            ui.global::<GraphState>().set_image(light);
+            ui.global::<GraphState>().set_image_dark(dark);
             let lit = graph.route_nodes(selected);
             let texts: Vec<GraphTextVm> = graph
                 .texts
@@ -985,7 +1027,8 @@ fn draw_graph(ui: &MainWindow, perm: &EffectivePermission) {
                     faded: t.node.is_some_and(|i| !lit.get(i).copied().unwrap_or(true)),
                 })
                 .collect();
-            ui.set_gr_texts(slint::ModelRc::new(slint::VecModel::from(texts)));
+            ui.global::<GraphState>()
+                .set_texts(slint::ModelRc::new(slint::VecModel::from(texts)));
             let nodes: Vec<GraphNodeVm> = boxes
                 .iter()
                 .enumerate()
@@ -997,9 +1040,11 @@ fn draw_graph(ui: &MainWindow, perm: &EffectivePermission) {
                     index: i32::try_from(i).unwrap_or(i32::MAX),
                 })
                 .collect();
-            ui.set_gr_nodes(slint::ModelRc::new(slint::VecModel::from(nodes)));
-            ui.set_gr_selected(selected.map_or(-1, |i| i32::try_from(i).unwrap_or(-1)));
-            ui.set_gr_detail(
+            ui.global::<GraphState>()
+                .set_nodes(slint::ModelRc::new(slint::VecModel::from(nodes)));
+            ui.global::<GraphState>()
+                .set_selected(selected.map_or(-1, |i| i32::try_from(i).unwrap_or(-1)));
+            ui.global::<GraphState>().set_detail(
                 selected
                     .map(|i| boxes[i].title.clone())
                     .unwrap_or_default()
@@ -1012,9 +1057,9 @@ fn draw_graph(ui: &MainWindow, perm: &EffectivePermission) {
             } else {
                 further_groups_text(&graph.further_groups)
             };
-            ui.set_gr_further_groups(further.into());
-            ui.set_gr_has_graph(true);
-            ui.set_gr_caption(
+            ui.global::<GraphState>().set_further_groups(further.into());
+            ui.global::<GraphState>().set_has_graph(true);
+            ui.global::<GraphState>().set_caption(
                 format!(
                     "Permission graph — {} on {}",
                     perm.identity
@@ -1042,7 +1087,7 @@ fn apply_analyze_result(
     scan_run_id: Option<String>,
     persistence_error: Option<String>,
 ) {
-    ui.set_a_is_running(false);
+    ui.global::<AnalyzeState>().set_is_running(false);
     match result {
         Ok(perm) => {
             let effective_raw = perm.effective_mask.0;
@@ -1064,14 +1109,18 @@ fn apply_analyze_result(
                 rights_label.push_str(" — ");
                 rights_label.push_str(suffix);
             }
-            ui.set_a_rights_label(rights_label.into());
-            ui.set_a_mask_hex(format!("0x{effective_raw:08X}").into());
-            ui.set_a_share_line(format_share_line(&perm).into());
-            ui.set_a_show_all_members(false);
+            ui.global::<AnalyzeState>()
+                .set_rights_label(rights_label.into());
+            ui.global::<AnalyzeState>()
+                .set_mask_hex(format!("0x{effective_raw:08X}").into());
+            ui.global::<AnalyzeState>()
+                .set_share_line(format_share_line(&perm).into());
+            ui.global::<AnalyzeState>().set_show_all_members(false);
             let all = step_vms(&perm.path_explanation.steps);
-            ui.set_a_explanation(slint::ModelRc::new(slint::VecModel::from(visible_steps(
-                &all, false,
-            ))));
+            ui.global::<AnalyzeState>()
+                .set_explanation(slint::ModelRc::new(slint::VecModel::from(visible_steps(
+                    &all, false,
+                ))));
             ANALYZE_STEPS.with(|s| *s.borrow_mut() = all);
             apply_graph(ui, &perm);
             // GUI-1 (gui review 2026-07-26): surface the structured
@@ -1100,7 +1149,8 @@ fn apply_analyze_result(
                 text: d.summary().into(),
                 level: crate::worker::diag_level_for_ui(d.severity()),
             }));
-            ui.set_a_diagnostics(slint::ModelRc::new(slint::VecModel::from(diagnostics)));
+            ui.global::<AnalyzeState>()
+                .set_diagnostics(slint::ModelRc::new(slint::VecModel::from(diagnostics)));
             // Analyze results are written to the scan history — required for
             // them to be comparable in the Delta tab.
             let (status, is_error) = match (scan_run_id, persistence_error) {
@@ -1114,18 +1164,20 @@ fn apply_analyze_result(
                 ),
                 (None, None) => ("Analysis complete.".to_string(), false),
             };
-            ui.set_a_status(status.into());
-            ui.set_a_status_is_error(is_error);
+            ui.global::<AnalyzeState>().set_status(status.into());
+            ui.global::<AnalyzeState>().set_status_is_error(is_error);
         }
         Err(e) => {
             // Clear stale markers from a previous run — a failed analysis
             // must not leave the last result's diagnostics on screen.
-            ui.set_a_diagnostics(slint::ModelRc::new(
-                slint::VecModel::<DiagnosticVm>::default(),
-            ));
+            ui.global::<AnalyzeState>()
+                .set_diagnostics(slint::ModelRc::new(
+                    slint::VecModel::<DiagnosticVm>::default(),
+                ));
             clear_graph(ui, "No graph: the last analysis failed.");
-            ui.set_a_status(format!("Analysis failed: {e}").into());
-            ui.set_a_status_is_error(true);
+            ui.global::<AnalyzeState>()
+                .set_status(format!("Analysis failed: {e}").into());
+            ui.global::<AnalyzeState>().set_status_is_error(true);
         }
     }
 }
@@ -1197,13 +1249,13 @@ fn wire_scan_tab(
     // Name → SID helper (analogous to the Analyze tab).
     {
         let weak = ui.as_weak();
-        ui.on_resolve_scan_name_clicked(move || {
+        ui.global::<ScanState>().on_resolve_name_clicked(move || {
             let Some(ui) = weak.upgrade() else { return };
-            let name = ui.get_s_name().to_string();
+            let name = ui.global::<ScanState>().get_name().to_string();
             resolve_name_to_sid(
                 &name,
-                |sid| ui.set_s_sid(sid.into()),
-                |err| ui.set_s_name_error(err.into()),
+                |sid| ui.global::<ScanState>().set_sid(sid.into()),
+                |err| ui.global::<ScanState>().set_name_error(err.into()),
             );
         });
     }
@@ -1211,23 +1263,25 @@ fn wire_scan_tab(
     // Live search analogous to the Analyze tab.
     {
         let weak = ui.as_weak();
-        ui.on_scan_name_edited(move |query| {
+        ui.global::<ScanState>().on_name_edited(move |query| {
             let Some(ui) = weak.upgrade() else { return };
-            ui.set_s_suggestions(filter_suggestions_model(query.as_str()));
+            ui.global::<ScanState>()
+                .set_suggestions(filter_suggestions_model(query.as_str()));
         });
     }
 
     {
         let weak = ui.as_weak();
-        ui.on_pick_scan_suggestion(move |name| {
+        ui.global::<ScanState>().on_pick_suggestion(move |name| {
             let Some(ui) = weak.upgrade() else { return };
-            ui.set_s_name(name.clone());
-            ui.set_s_suggestions(empty_suggestion_model());
+            ui.global::<ScanState>().set_name(name.clone());
+            ui.global::<ScanState>()
+                .set_suggestions(empty_suggestion_model());
             let name_str = name.to_string();
             resolve_name_to_sid(
                 &name_str,
-                |sid| ui.set_s_sid(sid.into()),
-                |err| ui.set_s_name_error(err.into()),
+                |sid| ui.global::<ScanState>().set_sid(sid.into()),
+                |err| ui.global::<ScanState>().set_name_error(err.into()),
             );
         });
     }
@@ -1237,12 +1291,13 @@ fn wire_scan_tab(
         let weak = ui.as_weak();
         let req_tx = req_tx.clone();
         let cancel = cancel.clone();
-        ui.on_scan_clicked(move || {
+        ui.global::<ScanState>().on_clicked(move || {
             let Some(ui) = weak.upgrade() else { return };
-            let root = ui.get_s_root().to_string();
+            let root = ui.global::<ScanState>().get_root().to_string();
             if root.trim().is_empty() {
-                ui.set_s_status("Root path is required.".into());
-                ui.set_s_status_is_error(true);
+                ui.global::<ScanState>()
+                    .set_status("Root path is required.".into());
+                ui.global::<ScanState>().set_status_is_error(true);
                 return;
             }
 
@@ -1250,19 +1305,20 @@ fn wire_scan_tab(
             // otherwise the RAW identity goes to the worker, which dispatches
             // it (LDAP principal pipeline or local LSA/SAM) — same as the
             // Analyze and Groups tabs (review 2026-07-01 deep pass, finding 1).
-            let mut identity = ui.get_s_sid().to_string();
+            let mut identity = ui.global::<ScanState>().get_sid().to_string();
             if identity.trim().is_empty() {
-                identity = ui.get_s_name().to_string();
+                identity = ui.global::<ScanState>().get_name().to_string();
                 if identity.trim().is_empty() {
-                    ui.set_s_status("Root path and identity are required.".into());
-                    ui.set_s_status_is_error(true);
+                    ui.global::<ScanState>()
+                        .set_status("Root path and identity are required.".into());
+                    ui.global::<ScanState>().set_status_is_error(true);
                     return;
                 }
-                ui.set_s_name_error("".into());
+                ui.global::<ScanState>().set_name_error("".into());
             }
 
-            let max_depth = if ui.get_s_limit_depth() {
-                let d = ui.get_s_max_depth();
+            let max_depth = if ui.global::<ScanState>().get_limit_depth() {
+                let d = ui.global::<ScanState>().get_max_depth();
                 if d > 0 {
                     Some(d as u32)
                 } else {
@@ -1275,27 +1331,27 @@ fn wire_scan_tab(
             // LDAP mode analogous to the Analyze tab (0=off, 1=LDAPS,
             // 2=plain, 3=Global Catalog). Mapping in LdapParams::from_mode.
             let ldap = LdapParams::from_mode(
-                ui.get_s_ldap_mode(),
-                ui.get_s_ldap_server().to_string(),
-                ui.get_s_ldap_base_dn().to_string(),
-                ui.get_s_ldap_bind_dn().to_string(),
-                ui.get_s_ldap_password().to_string(),
-                ui.get_s_ldap_timeout(),
+                ui.global::<ScanState>().get_ldap_mode(),
+                ui.global::<ScanState>().get_ldap_server().to_string(),
+                ui.global::<ScanState>().get_ldap_base_dn().to_string(),
+                ui.global::<ScanState>().get_ldap_bind_dn().to_string(),
+                ui.global::<ScanState>().get_ldap_password().to_string(),
+                ui.global::<ScanState>().get_ldap_timeout(),
             )
             .map(|l| {
                 l.with_trust(
-                    ui.get_s_trust_enabled(),
-                    ui.get_s_trust_server().to_string(),
-                    ui.get_s_trust_base_dn().to_string(),
-                    ui.get_s_trust_bind_dn().to_string(),
-                    ui.get_s_trust_password().to_string(),
+                    ui.global::<ScanState>().get_trust_enabled(),
+                    ui.global::<ScanState>().get_trust_server().to_string(),
+                    ui.global::<ScanState>().get_trust_base_dn().to_string(),
+                    ui.global::<ScanState>().get_trust_bind_dn().to_string(),
+                    ui.global::<ScanState>().get_trust_password().to_string(),
                 )
             });
 
-            let (smb_server, share_name) = if ui.get_s_smb_enabled() {
+            let (smb_server, share_name) = if ui.global::<ScanState>().get_smb_enabled() {
                 (
-                    Some(ui.get_s_smb_server().to_string()),
-                    Some(ui.get_s_smb_share().to_string()),
+                    Some(ui.global::<ScanState>().get_smb_server().to_string()),
+                    Some(ui.global::<ScanState>().get_smb_share().to_string()),
                 )
             } else {
                 (None, None)
@@ -1310,18 +1366,19 @@ fn wire_scan_tab(
             });
             cancel.reset();
 
-            ui.set_s_is_running(true);
-            ui.set_s_done(false);
-            ui.set_s_status("Scan running...".into());
-            ui.set_s_status_is_error(false);
-            ui.set_s_total(0);
-            ui.set_s_error_count(0);
-            ui.set_s_scan_run_id("".into());
-            ui.set_s_export_message("".into());
-            ui.set_s_export_is_error(false);
-            ui.set_s_rows(empty_row_model());
-            ui.set_s_errors(empty_error_model());
-            ui.set_s_risks(empty_risk_model());
+            ui.global::<ScanState>().set_is_running(true);
+            ui.global::<ScanState>().set_done(false);
+            ui.global::<ScanState>()
+                .set_status("Scan running...".into());
+            ui.global::<ScanState>().set_status_is_error(false);
+            ui.global::<ScanState>().set_total(0);
+            ui.global::<ScanState>().set_error_count(0);
+            ui.global::<ScanState>().set_scan_run_id("".into());
+            ui.global::<ScanState>().set_export_message("".into());
+            ui.global::<ScanState>().set_export_is_error(false);
+            ui.global::<ScanState>().set_rows(empty_row_model());
+            ui.global::<ScanState>().set_errors(empty_error_model());
+            ui.global::<ScanState>().set_risks(empty_risk_model());
 
             if let Err(e) = req_tx.send(WorkerRequest::Scan {
                 root,
@@ -1331,9 +1388,10 @@ fn wire_scan_tab(
                 share_name,
                 ldap,
             }) {
-                ui.set_s_is_running(false);
-                ui.set_s_status(format!("Worker not reachable: {e}").into());
-                ui.set_s_status_is_error(true);
+                ui.global::<ScanState>().set_is_running(false);
+                ui.global::<ScanState>()
+                    .set_status(format!("Worker not reachable: {e}").into());
+                ui.global::<ScanState>().set_status_is_error(true);
             }
         });
     }
@@ -1341,7 +1399,7 @@ fn wire_scan_tab(
     // scan-cancel-clicked
     {
         let cancel = cancel.clone();
-        ui.on_scan_cancel_clicked(move || {
+        ui.global::<ScanState>().on_cancel_clicked(move || {
             cancel.cancel();
         });
     }
@@ -1352,9 +1410,9 @@ fn wire_scan_tab(
     // afterwards.
     {
         let weak = ui.as_weak();
-        ui.on_scan_row_toggle(move |index| {
+        ui.global::<ScanState>().on_row_toggle(move |index| {
             let Some(ui) = weak.upgrade() else { return };
-            let filter = ui.get_s_filter().to_string();
+            let filter = ui.global::<ScanState>().get_filter().to_string();
             SCAN_STATE.with(|s| {
                 let mut s = s.borrow_mut();
                 if let Some(real_index) = nth_matching_index(&s.all_rows, &filter, index as usize) {
@@ -1368,7 +1426,7 @@ fn wire_scan_tab(
     // scan-filter-changed
     {
         let weak = ui.as_weak();
-        ui.on_scan_filter_changed(move || {
+        ui.global::<ScanState>().on_filter_changed(move || {
             let Some(ui) = weak.upgrade() else { return };
             refresh_rows(&ui);
         });
@@ -1378,12 +1436,13 @@ fn wire_scan_tab(
     {
         let weak = ui.as_weak();
         let req_tx = req_tx.clone();
-        ui.on_export_clicked(move || {
+        ui.global::<ScanState>().on_export_clicked(move || {
             let Some(ui) = weak.upgrade() else { return };
-            let output_path = ui.get_s_export_path().to_string();
+            let output_path = ui.global::<ScanState>().get_export_path().to_string();
             if output_path.trim().is_empty() {
-                ui.set_s_export_message("Please specify a target file.".into());
-                ui.set_s_export_is_error(true);
+                ui.global::<ScanState>()
+                    .set_export_message("Please specify a target file.".into());
+                ui.global::<ScanState>().set_export_is_error(true);
                 return;
             }
             // GUI-2: tell the user which format the extension selects
@@ -1391,20 +1450,21 @@ fn wire_scan_tab(
             // .csv target must not silently look like the HTML report.
             match ReportFormat::from_path(std::path::Path::new(output_path.trim())) {
                 Ok(fmt) => {
-                    ui.set_s_export_message(
+                    ui.global::<ScanState>().set_export_message(
                         format!("Export running... ({})", fmt.description()).into(),
                     );
-                    ui.set_s_export_is_error(false);
+                    ui.global::<ScanState>().set_export_is_error(false);
                 }
                 Err(e) => {
-                    ui.set_s_export_message(e.into());
-                    ui.set_s_export_is_error(true);
+                    ui.global::<ScanState>().set_export_message(e.into());
+                    ui.global::<ScanState>().set_export_is_error(true);
                     return;
                 }
             }
             if let Err(e) = req_tx.send(WorkerRequest::ExportReport { output_path }) {
-                ui.set_s_export_message(format!("Worker not reachable: {e}").into());
-                ui.set_s_export_is_error(true);
+                ui.global::<ScanState>()
+                    .set_export_message(format!("Worker not reachable: {e}").into());
+                ui.global::<ScanState>().set_export_is_error(true);
             }
         });
     }
@@ -1426,7 +1486,12 @@ fn nth_matching_index(all: &[ScanRowVm], filter: &str, n: usize) -> Option<usize
 
 /// Re-renders the rows property from the master state + current filter.
 fn refresh_rows(ui: &MainWindow) {
-    let filter = ui.get_s_filter().to_string().trim().to_lowercase();
+    let filter = ui
+        .global::<ScanState>()
+        .get_filter()
+        .to_string()
+        .trim()
+        .to_lowercase();
     let filtered: Vec<ScanRowVm> = SCAN_STATE.with(|s| {
         let s = s.borrow();
         if filter.is_empty() {
@@ -1439,7 +1504,8 @@ fn refresh_rows(ui: &MainWindow) {
                 .collect()
         }
     });
-    ui.set_s_rows(slint::ModelRc::new(slint::VecModel::from(filtered)));
+    ui.global::<ScanState>()
+        .set_rows(slint::ModelRc::new(slint::VecModel::from(filtered)));
 }
 
 fn handle_scan_item(ui: &MainWindow, row: ScanRow) {
@@ -1494,7 +1560,7 @@ fn handle_scan_item(ui: &MainWindow, row: ScanRow) {
     };
     SCAN_STATE.with(|s| s.borrow_mut().all_rows.push(vm));
     let total = SCAN_STATE.with(|s| s.borrow().all_rows.len()) as i32;
-    ui.set_s_total(total);
+    ui.global::<ScanState>().set_total(total);
     refresh_rows(ui);
 }
 
@@ -1509,8 +1575,9 @@ fn handle_scan_error(ui: &MainWindow, path: String, message: String) {
         s.all_errors.clone()
     });
     let count = errors.len() as i32;
-    ui.set_s_error_count(count);
-    ui.set_s_errors(slint::ModelRc::new(slint::VecModel::from(errors)));
+    ui.global::<ScanState>().set_error_count(count);
+    ui.global::<ScanState>()
+        .set_errors(slint::ModelRc::new(slint::VecModel::from(errors)));
 }
 
 fn handle_scan_done(
@@ -1521,11 +1588,12 @@ fn handle_scan_done(
     persistence_error: Option<String>,
     cancelled: bool,
 ) {
-    ui.set_s_is_running(false);
-    ui.set_s_done(true);
-    ui.set_s_total(total as i32);
-    ui.set_s_error_count(errors as i32);
-    ui.set_s_scan_run_id(scan_run_id.unwrap_or_default().into());
+    ui.global::<ScanState>().set_is_running(false);
+    ui.global::<ScanState>().set_done(true);
+    ui.global::<ScanState>().set_total(total as i32);
+    ui.global::<ScanState>().set_error_count(errors as i32);
+    ui.global::<ScanState>()
+        .set_scan_run_id(scan_run_id.unwrap_or_default().into());
 
     let mut parts: Vec<String> = Vec::new();
     if cancelled {
@@ -1538,8 +1606,8 @@ fn handle_scan_done(
         parts.push(format!("Persistence failed: {err}"));
     }
     let is_error = cancelled || had_persistence_error;
-    ui.set_s_status(parts.join(" ").into());
-    ui.set_s_status_is_error(is_error);
+    ui.global::<ScanState>().set_status(parts.join(" ").into());
+    ui.global::<ScanState>().set_status_is_error(is_error);
 }
 
 fn handle_risk_findings(ui: &MainWindow, findings: Vec<RiskFinding>) {
@@ -1558,18 +1626,21 @@ fn handle_risk_findings(ui: &MainWindow, findings: Vec<RiskFinding>) {
         })
         .collect();
     SCAN_STATE.with(|s| s.borrow_mut().all_risks = vms.clone());
-    ui.set_s_risks(slint::ModelRc::new(slint::VecModel::from(vms)));
+    ui.global::<ScanState>()
+        .set_risks(slint::ModelRc::new(slint::VecModel::from(vms)));
 }
 
 fn handle_export_done(ui: &MainWindow, result: Result<(), String>) {
     match result {
         Ok(()) => {
-            ui.set_s_export_message("✓ Export successful.".into());
-            ui.set_s_export_is_error(false);
+            ui.global::<ScanState>()
+                .set_export_message("✓ Export successful.".into());
+            ui.global::<ScanState>().set_export_is_error(false);
         }
         Err(e) => {
-            ui.set_s_export_message(format!("✗ Export failed: {e}").into());
-            ui.set_s_export_is_error(true);
+            ui.global::<ScanState>()
+                .set_export_message(format!("✗ Export failed: {e}").into());
+            ui.global::<ScanState>().set_export_is_error(true);
         }
     }
 }
@@ -1595,15 +1666,17 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
     {
         let weak = ui.as_weak();
         let req_tx = req_tx.clone();
-        ui.on_delta_load_runs_clicked(move || {
+        ui.global::<DeltaState>().on_load_runs_clicked(move || {
             let Some(ui) = weak.upgrade() else { return };
-            ui.set_d_is_loading(true);
-            ui.set_d_status("Loading scan history...".into());
-            ui.set_d_status_is_error(false);
+            ui.global::<DeltaState>().set_is_loading(true);
+            ui.global::<DeltaState>()
+                .set_status("Loading scan history...".into());
+            ui.global::<DeltaState>().set_status_is_error(false);
             if let Err(e) = req_tx.send(WorkerRequest::ListScanRuns) {
-                ui.set_d_is_loading(false);
-                ui.set_d_status(format!("Worker not reachable: {e}").into());
-                ui.set_d_status_is_error(true);
+                ui.global::<DeltaState>().set_is_loading(false);
+                ui.global::<DeltaState>()
+                    .set_status(format!("Worker not reachable: {e}").into());
+                ui.global::<DeltaState>().set_status_is_error(true);
             }
         });
     }
@@ -1614,7 +1687,7 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
     // selection.
     {
         let weak = ui.as_weak();
-        ui.on_delta_pick_old(move |id| {
+        ui.global::<DeltaState>().on_pick_old(move |id| {
             let Some(ui) = weak.upgrade() else { return };
             DELTA_STATE.with(|s| {
                 let mut s = s.borrow_mut();
@@ -1630,7 +1703,7 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
     }
     {
         let weak = ui.as_weak();
-        ui.on_delta_pick_new(move |id| {
+        ui.global::<DeltaState>().on_pick_new(move |id| {
             let Some(ui) = weak.upgrade() else { return };
             DELTA_STATE.with(|s| {
                 let mut s = s.borrow_mut();
@@ -1649,33 +1722,37 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
     {
         let weak = ui.as_weak();
         let req_tx = req_tx.clone();
-        ui.on_delta_compare_clicked(move || {
+        ui.global::<DeltaState>().on_compare_clicked(move || {
             let Some(ui) = weak.upgrade() else { return };
             let (old_id, new_id) = DELTA_STATE.with(|s| {
                 let s = s.borrow();
                 (s.selected_old.clone(), s.selected_new.clone())
             });
             let (Some(old_id), Some(new_id)) = (old_id, new_id) else {
-                ui.set_d_status("Please select one scan run for 'Old' and one for 'New'.".into());
-                ui.set_d_status_is_error(true);
+                ui.global::<DeltaState>()
+                    .set_status("Please select one scan run for 'Old' and one for 'New'.".into());
+                ui.global::<DeltaState>().set_status_is_error(true);
                 return;
             };
             if old_id == new_id {
-                ui.set_d_status("'Old' and 'New' must be different runs.".into());
-                ui.set_d_status_is_error(true);
+                ui.global::<DeltaState>()
+                    .set_status("'Old' and 'New' must be different runs.".into());
+                ui.global::<DeltaState>().set_status_is_error(true);
                 return;
             }
-            ui.set_d_is_loading(true);
-            ui.set_d_status("Comparing runs...".into());
-            ui.set_d_status_is_error(false);
-            ui.set_d_has_result(false);
+            ui.global::<DeltaState>().set_is_loading(true);
+            ui.global::<DeltaState>()
+                .set_status("Comparing runs...".into());
+            ui.global::<DeltaState>().set_status_is_error(false);
+            ui.global::<DeltaState>().set_has_result(false);
             if let Err(e) = req_tx.send(WorkerRequest::ComputeDelta {
                 old_run_id: old_id,
                 new_run_id: new_id,
             }) {
-                ui.set_d_is_loading(false);
-                ui.set_d_status(format!("Worker not reachable: {e}").into());
-                ui.set_d_status_is_error(true);
+                ui.global::<DeltaState>().set_is_loading(false);
+                ui.global::<DeltaState>()
+                    .set_status(format!("Worker not reachable: {e}").into());
+                ui.global::<DeltaState>().set_status_is_error(true);
             }
         });
     }
@@ -1686,17 +1763,19 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
     {
         let weak = ui.as_weak();
         let req_tx = req_tx.clone();
-        ui.on_delta_delete_confirmed(move |id| {
+        ui.global::<DeltaState>().on_delete_confirmed(move |id| {
             let Some(ui) = weak.upgrade() else { return };
             let id_str = id.to_string();
             if id_str.is_empty() {
                 return;
             }
-            ui.set_d_status("Deleting scan run...".into());
-            ui.set_d_status_is_error(false);
+            ui.global::<DeltaState>()
+                .set_status("Deleting scan run...".into());
+            ui.global::<DeltaState>().set_status_is_error(false);
             if let Err(e) = req_tx.send(WorkerRequest::DeleteScanRun { run_id: id_str }) {
-                ui.set_d_status(format!("Worker not reachable: {e}").into());
-                ui.set_d_status_is_error(true);
+                ui.global::<DeltaState>()
+                    .set_status(format!("Worker not reachable: {e}").into());
+                ui.global::<DeltaState>().set_status_is_error(true);
             }
         });
     }
@@ -1708,20 +1787,23 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
     {
         let weak = ui.as_weak();
         let req_tx = req_tx.clone();
-        ui.on_delta_show_errors(move |run_id, label| {
-            let Some(ui) = weak.upgrade() else { return };
-            let id_str = run_id.to_string();
-            if id_str.is_empty() {
-                return;
-            }
-            ui.set_d_run_errors(slint::ModelRc::new(slint::VecModel::<RunErrorVm>::default()));
-            ui.set_d_errors_title(label);
-            if let Err(e) = req_tx.send(WorkerRequest::ListRunErrors { run_id: id_str }) {
-                ui.set_d_errors_title("".into());
-                ui.set_d_status(format!("Worker not reachable: {e}").into());
-                ui.set_d_status_is_error(true);
-            }
-        });
+        ui.global::<DeltaState>()
+            .on_show_errors(move |run_id, label| {
+                let Some(ui) = weak.upgrade() else { return };
+                let id_str = run_id.to_string();
+                if id_str.is_empty() {
+                    return;
+                }
+                ui.global::<DeltaState>()
+                    .set_run_errors(slint::ModelRc::new(slint::VecModel::<RunErrorVm>::default()));
+                ui.global::<DeltaState>().set_errors_title(label);
+                if let Err(e) = req_tx.send(WorkerRequest::ListRunErrors { run_id: id_str }) {
+                    ui.global::<DeltaState>().set_errors_title("".into());
+                    ui.global::<DeltaState>()
+                        .set_status(format!("Worker not reachable: {e}").into());
+                    ui.global::<DeltaState>().set_status_is_error(true);
+                }
+            });
     }
 
     // Manual update check (ADR 0061): send the user-edited source to the
@@ -1730,15 +1812,17 @@ fn wire_delta_tab(ui: &MainWindow, req_tx: std::sync::mpsc::Sender<WorkerRequest
     {
         let weak = ui.as_weak();
         let req_tx = req_tx.clone();
-        ui.on_info_check_update(move |source| {
+        ui.global::<InfoState>().on_check_update(move |source| {
             let Some(ui) = weak.upgrade() else { return };
-            ui.set_i_update_status("Checking…".into());
-            ui.set_i_update_status_is_error(false);
+            ui.global::<InfoState>()
+                .set_update_status("Checking…".into());
+            ui.global::<InfoState>().set_update_status_is_error(false);
             if let Err(e) = req_tx.send(WorkerRequest::CheckUpdate {
                 source: source.to_string(),
             }) {
-                ui.set_i_update_status(format!("Worker not reachable: {e}").into());
-                ui.set_i_update_status_is_error(true);
+                ui.global::<InfoState>()
+                    .set_update_status(format!("Worker not reachable: {e}").into());
+                ui.global::<InfoState>().set_update_status_is_error(true);
             }
         });
     }
@@ -1758,11 +1842,12 @@ fn refresh_delta_runs(ui: &MainWindow) {
             })
             .collect()
     });
-    ui.set_d_scan_runs(slint::ModelRc::new(slint::VecModel::from(vms)));
+    ui.global::<DeltaState>()
+        .set_scan_runs(slint::ModelRc::new(slint::VecModel::from(vms)));
 }
 
 fn handle_scan_runs_loaded(ui: &MainWindow, result: Result<Vec<ScanRunSummary>, String>) {
-    ui.set_d_is_loading(false);
+    ui.global::<DeltaState>().set_is_loading(false);
     match result {
         Ok(runs) if runs.is_empty() => {
             DELTA_STATE.with(|s| {
@@ -1772,8 +1857,9 @@ fn handle_scan_runs_loaded(ui: &MainWindow, result: Result<Vec<ScanRunSummary>, 
                 s.selected_new = None;
             });
             refresh_delta_runs(ui);
-            ui.set_d_status("No scan runs stored — run a scan first.".into());
-            ui.set_d_status_is_error(false);
+            ui.global::<DeltaState>()
+                .set_status("No scan runs stored — run a scan first.".into());
+            ui.global::<DeltaState>().set_status_is_error(false);
         }
         Ok(runs) => {
             DELTA_STATE.with(|s| {
@@ -1800,14 +1886,15 @@ fn handle_scan_runs_loaded(ui: &MainWindow, result: Result<Vec<ScanRunSummary>, 
                 }
             });
             refresh_delta_runs(ui);
-            ui.set_d_status(
+            ui.global::<DeltaState>().set_status(
                 "Scan runs loaded. Check one for 'Old' and one for 'New', then compare.".into(),
             );
-            ui.set_d_status_is_error(false);
+            ui.global::<DeltaState>().set_status_is_error(false);
         }
         Err(e) => {
-            ui.set_d_status(format!("Loading failed: {e}").into());
-            ui.set_d_status_is_error(true);
+            ui.global::<DeltaState>()
+                .set_status(format!("Loading failed: {e}").into());
+            ui.global::<DeltaState>().set_status_is_error(true);
         }
     }
 }
@@ -1829,13 +1916,14 @@ fn handle_scan_run_deleted(ui: &MainWindow, run_id: &str, result: Result<(), Str
                 }
             });
             refresh_delta_runs(ui);
-            ui.set_d_status("Scan run removed.".into());
-            ui.set_d_status_is_error(false);
+            ui.global::<DeltaState>()
+                .set_status("Scan run removed.".into());
+            ui.global::<DeltaState>().set_status_is_error(false);
             // If a delta result was still visible in the frame, it might
             // refer to the just-deleted run — hide it to be safe. Same for
             // the per-run error panel.
-            ui.set_d_has_result(false);
-            ui.set_d_errors_title("".into());
+            ui.global::<DeltaState>().set_has_result(false);
+            ui.global::<DeltaState>().set_errors_title("".into());
             // Reload the list in background so the GUI state is guaranteed
             // to match the DB.
             REQ_TX.with(|cell| {
@@ -1845,8 +1933,9 @@ fn handle_scan_run_deleted(ui: &MainWindow, run_id: &str, result: Result<(), Str
             });
         }
         Err(e) => {
-            ui.set_d_status(format!("Delete failed: {e}").into());
-            ui.set_d_status_is_error(true);
+            ui.global::<DeltaState>()
+                .set_status(format!("Delete failed: {e}").into());
+            ui.global::<DeltaState>().set_status_is_error(true);
         }
     }
 }
@@ -1865,12 +1954,14 @@ fn handle_run_errors_loaded(ui: &MainWindow, result: Result<Vec<RunErrorRow>, St
                     message: r.message.into(),
                 })
                 .collect();
-            ui.set_d_run_errors(slint::ModelRc::new(slint::VecModel::from(vms)));
+            ui.global::<DeltaState>()
+                .set_run_errors(slint::ModelRc::new(slint::VecModel::from(vms)));
         }
         Err(e) => {
-            ui.set_d_errors_title("".into());
-            ui.set_d_status(format!("Scan errors could not be loaded: {e}").into());
-            ui.set_d_status_is_error(true);
+            ui.global::<DeltaState>().set_errors_title("".into());
+            ui.global::<DeltaState>()
+                .set_status(format!("Scan errors could not be loaded: {e}").into());
+            ui.global::<DeltaState>().set_status_is_error(true);
         }
     }
 }
@@ -1886,24 +1977,25 @@ fn handle_update_check_done(ui: &MainWindow, result: Result<UpdateCheckRow, Stri
                 text.push_str(&format!(" Release page: {url}"));
             }
             text.push_str(" Stars downloads and installs nothing — get it from the release page.");
-            ui.set_i_update_status(text.into());
-            ui.set_i_update_status_is_error(false);
+            ui.global::<InfoState>().set_update_status(text.into());
+            ui.global::<InfoState>().set_update_status_is_error(false);
         }
         Ok(r) => {
-            ui.set_i_update_status(
+            ui.global::<InfoState>().set_update_status(
                 format!("Stars is up to date (installed: {}).", r.current).into(),
             );
-            ui.set_i_update_status_is_error(false);
+            ui.global::<InfoState>().set_update_status_is_error(false);
         }
         Err(e) => {
-            ui.set_i_update_status(format!("Update check failed: {e}").into());
-            ui.set_i_update_status_is_error(true);
+            ui.global::<InfoState>()
+                .set_update_status(format!("Update check failed: {e}").into());
+            ui.global::<InfoState>().set_update_status_is_error(true);
         }
     }
 }
 
 fn handle_delta_computed(ui: &MainWindow, result: Result<Vec<DeltaRow>, String>) {
-    ui.set_d_is_loading(false);
+    ui.global::<DeltaState>().set_is_loading(false);
     match result {
         Ok(rows) => {
             let mut added = 0;
@@ -1935,18 +2027,21 @@ fn handle_delta_computed(ui: &MainWindow, result: Result<Vec<DeltaRow>, String>)
                     }
                 })
                 .collect();
-            ui.set_d_added_count(added);
-            ui.set_d_removed_count(removed);
-            ui.set_d_changed_count(changed);
-            ui.set_d_rows(slint::ModelRc::new(slint::VecModel::from(vms)));
-            ui.set_d_has_result(true);
-            ui.set_d_status("Comparison complete.".into());
-            ui.set_d_status_is_error(false);
+            ui.global::<DeltaState>().set_added_count(added);
+            ui.global::<DeltaState>().set_removed_count(removed);
+            ui.global::<DeltaState>().set_changed_count(changed);
+            ui.global::<DeltaState>()
+                .set_rows(slint::ModelRc::new(slint::VecModel::from(vms)));
+            ui.global::<DeltaState>().set_has_result(true);
+            ui.global::<DeltaState>()
+                .set_status("Comparison complete.".into());
+            ui.global::<DeltaState>().set_status_is_error(false);
         }
         Err(e) => {
-            ui.set_d_has_result(false);
-            ui.set_d_status(format!("Comparison failed: {e}").into());
-            ui.set_d_status_is_error(true);
+            ui.global::<DeltaState>().set_has_result(false);
+            ui.global::<DeltaState>()
+                .set_status(format!("Comparison failed: {e}").into());
+            ui.global::<DeltaState>().set_status_is_error(true);
         }
     }
 }
@@ -2121,7 +2216,8 @@ fn handle_search_results(ui: &MainWindow, result: Result<Vec<IdentitySearchResul
     match result {
         Ok(list) => {
             let total = list.len();
-            ui.set_a_suggestions(suggestions_model_from_search(&list));
+            ui.global::<AnalyzeState>()
+                .set_suggestions(suggestions_model_from_search(&list));
             let msg = if total == 0 {
                 "No directory matches. Try a different name or check the LDAP settings.".to_string()
             } else if total > MAX_SUGGESTIONS {
@@ -2133,11 +2229,13 @@ fn handle_search_results(ui: &MainWindow, result: Result<Vec<IdentitySearchResul
             } else {
                 format!("{total} directory matches.")
             };
-            ui.set_a_search_status(msg.into());
+            ui.global::<AnalyzeState>().set_search_status(msg.into());
         }
         Err(e) => {
-            ui.set_a_suggestions(empty_suggestion_model());
-            ui.set_a_search_status(format!("Directory search failed: {e}").into());
+            ui.global::<AnalyzeState>()
+                .set_suggestions(empty_suggestion_model());
+            ui.global::<AnalyzeState>()
+                .set_search_status(format!("Directory search failed: {e}").into());
         }
     }
 }
