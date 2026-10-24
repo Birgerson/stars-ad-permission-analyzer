@@ -1245,19 +1245,23 @@ impl EffectivePermission {
     /// The NTFS mask is exactly what Windows would compute: nothing makes
     /// the token or the NTFS walk uncertain.
     pub fn ntfs_determinable(&self) -> bool {
-        !self
-            .uncertainty()
-            .iter()
-            .any(|u| matches!(u.layer, UncertainLayer::Token | UncertainLayer::Ntfs))
+        !self.uncertainty().iter().any(|u| {
+            matches!(
+                u.layer,
+                UncertainLayer::Token | UncertainLayer::Ntfs | UncertainLayer::Target
+            )
+        })
     }
 
     /// The share mask is exactly what Windows would compute: nothing makes
     /// the token or the share evaluation uncertain.
     pub fn share_determinable(&self) -> bool {
-        !self
-            .uncertainty()
-            .iter()
-            .any(|u| matches!(u.layer, UncertainLayer::Token | UncertainLayer::Share))
+        !self.uncertainty().iter().any(|u| {
+            matches!(
+                u.layer,
+                UncertainLayer::Token | UncertainLayer::Share | UncertainLayer::Target
+            )
+        })
     }
 
     /// The effective right is exactly what Windows would compute.
@@ -1303,13 +1307,60 @@ impl EffectivePermission {
                 PermissionDiagnostic::LogonDependentTrustees { max_mask, .. } => acc | max_mask,
                 _ => acc,
             });
-        let share_uncertain = uncertainty.iter().any(|u| u.layer == UncertainLayer::Share);
+        // ADR 0085: another DFS target has its own share permission.
+        let share_uncertain = uncertainty
+            .iter()
+            .any(|u| matches!(u.layer, UncertainLayer::Share | UncertainLayer::Target));
         let upper = match (&self.share_status, self.share_mask) {
             (ShareEvalStatus::Applied, Some(share)) if !share_uncertain => ntfs_upper & share.0,
             _ => ntfs_upper,
         };
         // Never below the shown value, whatever a damaged record holds.
         upper | self.effective_mask.0
+    }
+}
+
+/// ADR 0085: a path of a DFS namespace, evaluated on the folder target this
+/// machine's DFS client is referred to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DfsEvaluation {
+    /// The path as given (through the namespace).
+    pub requested: String,
+    /// The UNC path evaluated — on the target's server and share.
+    pub target: String,
+    /// The DFS folder (or root) the path lies in, when the client named it.
+    pub folder: Option<String>,
+    /// Further targets of that folder, `\\server\share`.
+    pub other_targets: Vec<String>,
+    /// `false` when the folder's targets could not be read.
+    pub other_targets_known: bool,
+}
+
+impl DfsEvaluation {
+    /// "DFS namespace root `\\domain\ns`" for a namespace root (two path
+    /// components), otherwise "DFS folder `…`".
+    pub fn entry_label(entry: &str) -> String {
+        let parts = entry
+            .trim_start_matches('\\')
+            .split('\\')
+            .filter(|p| !p.is_empty())
+            .count();
+        if parts <= 2 {
+            format!("DFS namespace root {entry}")
+        } else {
+            format!("DFS folder {entry}")
+        }
+    }
+
+    /// The marker the result carries.
+    pub fn marker(&self) -> PermissionDiagnostic {
+        PermissionDiagnostic::DfsTargetEvaluated {
+            requested: self.requested.clone(),
+            target: self.target.clone(),
+            folder: self.folder.clone(),
+            other_targets: self.other_targets.clone(),
+            other_targets_known: self.other_targets_known,
+        }
     }
 }
 
@@ -1357,6 +1408,10 @@ pub enum UncertainLayer {
     /// exact; only the effective right is open (between No access and the
     /// DACL result).
     Logon,
+    /// ADR 0085: the path is a DFS folder with more than one target (or its
+    /// targets are unknown). The result is that of one target; another
+    /// target has its own NTFS and share permissions — affects both.
+    Target,
 }
 
 /// One reason why a result is not determinable, as stated to a reader.
@@ -1714,6 +1769,25 @@ pub enum PermissionDiagnostic {
         certain: bool,
     },
 
+    /// ADR 0085 (lab 2026-10-24): the path lies in a DFS namespace. It was
+    /// evaluated on `target`, the folder target this machine's DFS client is
+    /// referred to — that server's share permissions, local groups and
+    /// policies apply, not those of the namespace server. `folder` is the
+    /// DFS folder the path lies in. When the folder has further targets
+    /// (`other_targets`), or whether it has could not be read
+    /// (`other_targets_known` false), a client referred elsewhere can get
+    /// other rights: the result is not determinable. Otherwise informational.
+    DfsTargetEvaluated {
+        requested: String,
+        target: String,
+        #[serde(default)]
+        folder: Option<String>,
+        #[serde(default)]
+        other_targets: Vec<String>,
+        #[serde(default = "default_true")]
+        other_targets_known: bool,
+    },
+
     /// The SID belongs to the configured domain, the configured base covers
     /// that whole domain, and the directory has no object for it: the
     /// account no longer exists (orphaned / deleted). Nobody can log on with
@@ -2031,6 +2105,37 @@ impl PermissionDiagnostic {
                  to {server} is not determinable ({reason}) — the permissions grant nothing here, \
                  so the effective right is No access either way."
             ),
+            PermissionDiagnostic::DfsTargetEvaluated {
+                requested,
+                target,
+                folder,
+                other_targets,
+                other_targets_known,
+            } => {
+                let folder = folder
+                    .as_deref()
+                    .map(|f| format!(" ({})", DfsEvaluation::entry_label(f)))
+                    .unwrap_or_default();
+                let mut s = format!(
+                    "DFS path {requested}{folder}: evaluated on {target}, the target this machine \
+                     is referred to — the share permissions, local groups and policies of that \
+                     server apply, not those of the namespace server."
+                );
+                if !other_targets.is_empty() {
+                    s.push_str(&format!(
+                        " The folder has further targets ({}); a client referred to one of them \
+                         can get other rights, so the result is not determinable for every \
+                         client — scan each target's share on its own.",
+                        other_targets.join(", ")
+                    ));
+                } else if !other_targets_known {
+                    s.push_str(
+                        " Whether the folder has further targets could not be read, so a client \
+                         referred elsewhere may get other rights.",
+                    );
+                }
+                s
+            }
             PermissionDiagnostic::SynchronizeNotGranted { cause, certain } => format!(
                 "{} ({}). Explorer and most Windows programs request it with every open \
                  (CreateFile), locally and over SMB, so they get \"access denied\" for this \
@@ -2151,6 +2256,12 @@ impl PermissionDiagnostic {
             PermissionDiagnostic::SelectiveAuthenticationUnknown { affects_result, .. } => {
                 affects_result.then_some(UncertainLayer::Logon)
             }
+            // ADR 0085: open only when another target may answer differently.
+            PermissionDiagnostic::DfsTargetEvaluated {
+                other_targets,
+                other_targets_known,
+                ..
+            } => (!other_targets.is_empty() || !other_targets_known).then_some(UncertainLayer::Target),
             // Informational — the result itself is exact.
             PermissionDiagnostic::NonCanonicalDaclOrder { .. }
             | PermissionDiagnostic::TrustedDomainAccountResolved { .. }
@@ -2205,6 +2316,14 @@ impl PermissionDiagnostic {
                 affects_result: false,
                 ..
             } => DiagnosticSeverity::Neutral,
+            // ADR 0085: one target — exact; more (or unknown) — a real gap.
+            PermissionDiagnostic::DfsTargetEvaluated { .. } => {
+                if self.uncertain_layer().is_some() {
+                    DiagnosticSeverity::Concern
+                } else {
+                    DiagnosticSeverity::Neutral
+                }
+            }
             // Worth a look — a hidden Deny among skipped ACEs could change the
             // result.
             PermissionDiagnostic::UnsupportedShareAces { .. }
@@ -3071,6 +3190,47 @@ mod tests {
             token.effective_upper_bound() & token.effective_mask.0,
             token.effective_mask.0
         );
+    }
+
+    /// ADR 0085: a DFS folder with further (or unknown) targets opens NTFS
+    /// and share alike — and the share no longer bounds the result; a
+    /// single target is informational. Stored rows without the optional
+    /// fields read as "targets known, none further".
+    #[test]
+    fn a_dfs_marker_is_open_only_with_further_or_unknown_targets() {
+        const MODIFY: u32 = 0x0013_01BF;
+        let marker = |others: Vec<String>, known: bool| PermissionDiagnostic::DfsTargetEvaluated {
+            requested: r"\\corp.test\dfs\Projects".into(),
+            target: r"\\FS-01.corp.test\DfsProj".into(),
+            folder: None,
+            other_targets: others,
+            other_targets_known: known,
+        };
+        let single = marker(Vec::new(), true);
+        assert_eq!(single.uncertain_layer(), None);
+        assert_eq!(single.severity(), DiagnosticSeverity::Neutral);
+        for open in [
+            marker(vec![r"\\FS-02\DfsProj".into()], true),
+            marker(Vec::new(), false),
+        ] {
+            assert_eq!(open.uncertain_layer(), Some(UncertainLayer::Target));
+            assert_eq!(open.severity(), DiagnosticSeverity::Concern);
+            let mut p = permission();
+            p.ntfs_mask = AccessMask(MODIFY);
+            p.diagnostics = vec![open.clone()];
+            assert!(!p.ntfs_determinable() && !p.share_determinable());
+            assert_eq!(
+                p.effective_upper_bound(),
+                MODIFY,
+                "another target's share may allow more"
+            );
+        }
+        assert!(marker(vec![r"\\FS-02\DfsProj".into()], true)
+            .summary()
+            .contains(r"further targets (\\FS-02\DfsProj)"));
+        let old = r#"{"kind":"DfsTargetEvaluated","requested":"\\\\a\\b","target":"\\\\c\\d"}"#;
+        let back: PermissionDiagnostic = serde_json::from_str(old).unwrap();
+        assert_eq!(back.uncertain_layer(), None);
     }
 
     /// ADR 0065: each uncertainty is attributed to the part it affects.

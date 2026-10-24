@@ -10,6 +10,7 @@ pub mod scanner;
 pub mod walker;
 
 pub use cancel::CancellationToken;
+pub use file_id::final_unc_path;
 // `read_fso` is production API (CLI analyze + GUI worker); `NtfsScanner` is
 // the architectural `Scanner` seam and has no callers — see the `scanner`
 // module docs (fs_scanner review 2026-07-25, FS-4).

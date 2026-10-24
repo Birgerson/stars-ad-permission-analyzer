@@ -8,6 +8,7 @@ description = "The analysis pipeline shared by the CLI and the GUI (ADR 0082 ste
 [dependencies]
 adpa_core = { path = "../core" }
 ad_resolver = { path = "../ad_resolver" }
+fs_scanner = { path = "../fs_scanner" }
 permission_engine = { path = "../permission_engine" }
 share_scanner = { path = "../share_scanner" }
 validation = { path = "../validation" }

@@ -16,5 +16,6 @@
 //!   (ADR 0068, UAC ADR 0070/0071/0076, Everyone for anonymous L17).
 //! - [`share`] — the share mask of an SMB path for the account's token.
 
+pub mod dfs;
 pub mod local_groups;
 pub mod share;

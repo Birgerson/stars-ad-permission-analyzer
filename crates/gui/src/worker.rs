@@ -1109,12 +1109,22 @@ async fn handle_analyze(
     let normalized_path = validate_path(path)
         .map_err(|e| format!("Invalid path: {e}"))?
         .0;
-    let path = normalized_path.as_str();
+    // ADR 0085: a path of a DFS namespace is evaluated where Windows serves
+    // it — on the folder target this machine is referred to.
+    let analysis::dfs::EvaluationTarget {
+        evaluated_path,
+        dfs,
+    } = analysis::dfs::resolve_evaluation_target(&normalized_path);
+    let path = evaluated_path.as_str();
     let normalized = validate_connection_inputs(smb_server, share_name, ldap)?;
     let smb_server = normalized.smb_server.as_deref();
     let share_name = normalized.share_name.as_deref();
     let ldap = normalized.ldap.as_ref();
-    let fso = read_fso(path).map_err(|e| format!("Failed to read path: {e}"))?;
+    let mut fso = read_fso(path).map_err(|e| format!("Failed to read path: {e}"))?;
+    // The result names the path as given; the DFS marker names the target.
+    if dfs.is_some() {
+        fso.path = NormalizedPath(normalized_path.clone());
+    }
     // Raw identity in (name / DOMAIN\user / UPN / SID) — validated and
     // dispatched inside `resolve_identity_sids`. Everything downstream uses
     // the RESOLVED SID, never the raw input: a name passed into the share
@@ -1214,6 +1224,7 @@ async fn handle_analyze(
             sid_names,
             resolution: engine_flags,
             selective_authentication: selective_authentication.clone(),
+            dfs: dfs.clone(),
         })
         .map(|mut result| {
             // Review CR-7: the share side explained ACE by ACE.
@@ -1221,6 +1232,9 @@ async fn handle_analyze(
                 &mut result.path_explanation,
                 share_scanner::share_decision_steps(&share_decisions, &share_names),
             );
+            if let Some(d) = &dfs {
+                analysis::dfs::attach_step(&mut result.path_explanation, d);
+            }
             result
         })
         .map_err(|e| format!("Permission engine error: {e}"))
@@ -1510,7 +1524,13 @@ async fn handle_scan(
         Ok(p) => p.0,
         Err(e) => return make_early_summary(format!("Invalid path: {e}")),
     };
-    let root = normalized_root.as_str();
+    // ADR 0085: a scan root of a DFS namespace is scanned on the folder
+    // target this machine is referred to; rows keep the requested form.
+    let analysis::dfs::EvaluationTarget {
+        evaluated_path: evaluated_root,
+        dfs: scan_dfs,
+    } = analysis::dfs::resolve_evaluation_target(&normalized_root);
+    let root = evaluated_root.as_str();
     // AGENTS.md DoD 11: validate max_depth centrally before it flows into
     // WalkConfig — the GUI widget caps the value visually but does not
     // protect against programmatic callers or future UI refactorings.
@@ -1627,13 +1647,25 @@ async fn handle_scan(
     let total = walk.objects.len();
     let cancelled = walk.cancelled;
 
-    for err in &walk.errors {
+    if let Some(d) = &scan_dfs {
+        // The scan-wide DFS note, once — every row carries its own marker.
         let _ = evt_tx.send(WorkerEvent::ScanError {
-            path: err.path.clone(),
+            path: normalized_root.clone(),
+            message: d.marker().summary(),
+        });
+    }
+    for err in &walk.errors {
+        let shown = scan_dfs
+            .as_ref()
+            .and_then(|d| analysis::dfs::for_scanned_object(&err.path, d))
+            .map(|(requested, _)| requested)
+            .unwrap_or_else(|| err.path.clone());
+        let _ = evt_tx.send(WorkerEvent::ScanError {
+            path: shown.clone(),
             message: err.error.to_string(),
         });
         summary_errors.push(ScanError {
-            path: Some(NormalizedPath(err.path.clone())),
+            path: Some(NormalizedPath(shown)),
             message: err.error.to_string(),
         });
     }
@@ -1683,7 +1715,14 @@ async fn handle_scan(
     // Collects the raw path-centric trustee lists for the HTML exporter.
     let mut path_trustees: Vec<adpa_core::model::PathTrustees> = Vec::new();
 
-    for fso in walk.objects {
+    for mut fso in walk.objects {
+        // ADR 0085: the row keeps the requested form, its marker names the
+        // target path.
+        let row_dfs = scan_dfs.as_ref().and_then(|d| {
+            let (requested, own) = analysis::dfs::for_scanned_object(&fso.path.0, d)?;
+            fso.path = NormalizedPath(requested);
+            Some(own)
+        });
         let path = fso.path.0.clone();
         // Per-path trustees — NTFS from FSO, share from the pre-read
         // overlay (single read per share). Round-10 finding 2: the
@@ -1713,6 +1752,7 @@ async fn handle_scan(
             sid_names: scan_sid_names.clone(),
             resolution: engine_flags.clone(),
             selective_authentication: scan_selective_authentication.clone(),
+            dfs: row_dfs.clone(),
         }) {
             Ok(mut perm) => {
                 // Review CR-7: the share side explained ACE by ACE.
@@ -1720,6 +1760,9 @@ async fn handle_scan(
                     &mut perm.path_explanation,
                     share_scanner::share_decision_steps(&scan_share_decisions, &scan_sid_names),
                 );
+                if let Some(d) = &row_dfs {
+                    analysis::dfs::attach_step(&mut perm.path_explanation, d);
+                }
                 // ADR 0065: an undeterminable row says so instead of
                 // showing the computed value as a fact.
                 let label = permission_engine::rights_label_compact(

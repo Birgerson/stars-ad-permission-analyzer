@@ -54,4 +54,12 @@ pub enum CoreError {
     /// of being enumerated again (deep review 2026-07-04, F2).
     #[error("Duplicate reparse target: {0}")]
     ReparseDuplicateTarget(String),
+
+    /// ADR 0085: a directory below the scan root is served from another
+    /// share than the root — a folder of a DFS namespace, or a link to
+    /// another share. Its share permissions, local groups and policies are
+    /// those of that share's server, so it is not evaluated in the root's
+    /// context and its content is not enumerated.
+    #[error("Served from another share: {0}")]
+    OtherShare(String),
 }

@@ -614,6 +614,18 @@ fn write_permissions_table(
                         escape_html(&d.summary())
                     ));
                 }
+                // ADR 0085: wording from `summary()`, like the CLI and GUI.
+                PermissionDiagnostic::DfsTargetEvaluated { .. } => {
+                    let (class, label) = if d.is_incompleteness_trigger() {
+                        ("badge-high", "[!] DFS folder with further targets")
+                    } else {
+                        ("badge-neutral", "[i] DFS target evaluated")
+                    };
+                    diag_parts.push(format!(
+                        "<span class=\"badge {class}\" title=\"{}\">{label}</span>",
+                        escape_html(&d.summary())
+                    ));
+                }
                 // ADR 0080: wording from `summary()`, like the CLI and GUI.
                 PermissionDiagnostic::SynchronizeNotGranted { .. } => {
                     diag_parts.push(format!(

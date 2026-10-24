@@ -1040,6 +1040,31 @@ tabs once a mode other than Off is selected (range 1–600, default 10).
   same administrative access to the server that reading its shares and
   local groups already requires.
 
+**DFS paths** (`\\corp.local\dfs\Projects\…`, a domain-based or
+standalone DFS namespace):
+
+- Windows does not serve such a path from the namespace server but from a
+  **folder target**, for example `\\fs01\Projects`. Stars evaluates it
+  there: the NTFS permissions, the **target's share permissions**, and the
+  target server's local groups and policies (ADR 0085). The report keeps
+  the DFS path; the marker `DfsTargetEvaluated` and the step "DFS: … evaluated on
+  …" name the target.
+- Stars uses the target **this machine** is referred to, the one Explorer
+  on this machine would use. Run Stars where the users' DFS referrals
+  resolve as yours do (same site).
+- **One target:** the result is exact.
+- **Several targets** (for example two servers kept in sync by DFS-R): the
+  result is shown for the referred target and marked **NOT
+  DETERMINABLE**, because DFS-R copies the NTFS permissions but not the
+  share permissions or local groups. A client referred to the other target
+  can get other rights. The marker lists the other targets. Scan each
+  target's share directly (`\\fs01\Projects`, `\\fs02\Projects`) for exact
+  values.
+- **Scanning a namespace root** (`\\corp.local\dfs`): the folders below it
+  live on other servers. Each one is listed as an error "Served from
+  another share … scan this path on its own" and is not enumerated. Scan
+  the folder path (`\\corp.local\dfs\Projects`) instead.
+
 **Reading the CLI `analyze` report:** see [Reading the `analyze` report](#reading-the-analyze-report) in the CLI section.
 
 **Manual SMB context** (CLI flags `--smb-server` / `--share-name` or
@@ -1263,6 +1288,7 @@ exact wording, lives in
 | `GuestOrAnonymousToken { sids }` | medium | no (an anonymous bound is) | The analysed account is the Guest account or an anonymous logon. Windows never puts Authenticated Users into such a token (measured), so its ACEs do not apply; for an anonymous logon, Everyone counts only if the server sets `EveryoneIncludesAnonymous` — Stars gives a range there. |
 | `UacFilteredGroups { groups }` | medium | no (the bounds it causes are) | The token holds groups User Account Control filters (Administrators, Domain Admins, Backup Operators, …): on a local path for every account while the session is not elevated; for a local account also over the network unless `LocalAccountTokenFilterPolicy` = 1 on the server (built-in Administrator: only with `FilterAdministratorToken` = 1). Stars cannot see elevation or these settings — Deny ACEs for the groups apply, Allow ACEs give a range from the non-elevated to the elevated session. |
 | `RemoteUacPolicy { filtered, reason }` | info | no | Stars read the target's UAC policies (remote registry, read-only) and so knows whether User Account Control filters this local account's network token — the result is exact, the reason names the values read (ADR 0076). |
+| `DfsTargetEvaluated { requested, target, folder, other_targets, other_targets_known }` | info / high | no / **yes** | The path lies in a DFS namespace and was evaluated on `target`, the folder target this machine is referred to (its share permissions, local groups and policies). With **further targets** (or unknown targets) the result is not determinable, because another target may grant differently. Scan each target's share directly (ADR 0085). |
 | `NonSecurityGroupsExcluded { groups }` | info | no | Distribution groups, and groups reached only through one, are not in a Windows token; Stars left them out and lists them here. |
 | `LogonDependentTrustees { sids, min_mask, max_mask }` | medium | **yes** | ACEs for SIDs whose presence depends on how the user logs on (This Organization, NTLM authentication, console logon, …) decide bits of this result. The NTFS right lies between `min_mask` and `max_mask`. |
 

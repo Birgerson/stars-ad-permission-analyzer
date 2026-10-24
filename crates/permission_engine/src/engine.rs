@@ -407,6 +407,10 @@ impl PermissionEvaluator for DefaultPermissionEngine {
                 diagnostics.push(PermissionDiagnostic::TrustBoundaryEffectsNotModeled);
             }
         }
+        // ADR 0085: a DFS path names the target it was evaluated on.
+        if let Some(dfs) = &input.dfs {
+            diagnostics.push(dfs.marker());
+        }
         // ADR 0079 (L4): Selective Authentication decides whether the account
         // may log on to the target at all.
         let mut logon_refused = false;
@@ -1971,6 +1975,14 @@ fn build_explanation(input: ExplanationInput<'_>) -> (PermissionPath, Permission
             u.reason
         ));
     }
+    // 2c. ADR 0085: another DFS target may answer differently — every value
+    // below is that of one target.
+    for u in uncertainty
+        .iter()
+        .filter(|u| u.layer == UncertainLayer::Target)
+    {
+        steps.push(format!("{NOT_DETERMINABLE} — {}", u.reason));
+    }
 
     // 3. Matching ACEs.
     //
@@ -2688,6 +2700,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap()
     }
@@ -2717,6 +2730,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap()
     }
@@ -2746,6 +2760,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap()
     }
@@ -2775,6 +2790,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap()
     }
@@ -3659,6 +3675,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         assert_eq!(
@@ -3692,6 +3709,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         assert!(NormalizedRights::new(p.effective_mask.0).is_read());
@@ -3721,6 +3739,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         assert_eq!(
@@ -4352,6 +4371,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         assert!(
@@ -4384,6 +4404,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         assert!(
@@ -4449,6 +4470,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         let member_step = p
@@ -4490,6 +4512,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         let ace_step = p
@@ -5233,6 +5256,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .expect("evaluate");
         let step = result
@@ -5390,6 +5414,7 @@ mod tests {
                 },
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         assert!(
@@ -5429,6 +5454,7 @@ mod tests {
                 },
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         assert!(
@@ -5464,6 +5490,7 @@ mod tests {
             resolution: ResolutionProvenance::default(),
             share_trace: Default::default(),
             selective_authentication: Default::default(),
+            dfs: None,
         }
     }
 
@@ -6021,6 +6048,57 @@ mod tests {
         );
     }
 
+    /// ADR 0085 (lab 2026-10-24): a DFS folder with one target is exact and
+    /// names the target; with further targets the result is open — NTFS,
+    /// share and effective alike — and the explanation says so.
+    #[test]
+    fn a_dfs_folder_with_further_targets_is_not_determinable() {
+        let dfs = |others: Vec<String>, known: bool| adpa_core::model::DfsEvaluation {
+            requested: r"\\corp.test\dfs\Projects\Sub".into(),
+            target: r"\\FS-01.corp.test\DfsProj\Sub".into(),
+            folder: Some(r"\\corp.test\dfs\Projects".into()),
+            other_targets: others,
+            other_targets_known: known,
+        };
+        let run = |d: adpa_core::model::DfsEvaluation| {
+            let mut input = base_input(
+                user(USER),
+                fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+            );
+            input.dfs = Some(d);
+            DefaultPermissionEngine.evaluate(input).unwrap()
+        };
+
+        let single = run(dfs(Vec::new(), true));
+        assert!(single.effective_determinable(), "one target: exact");
+        assert_eq!(single.effective_mask.0, MASK_MODIFY);
+        assert!(single.diagnostics.iter().any(|d| matches!(
+            d,
+            PermissionDiagnostic::DfsTargetEvaluated { target, .. } if target.ends_with(r"DfsProj\Sub")
+        )));
+
+        for open in [
+            run(dfs(vec![r"\\FS-02.corp.test\DfsProj".into()], true)),
+            run(dfs(Vec::new(), false)),
+        ] {
+            assert!(!open.effective_determinable());
+            assert!(!open.ntfs_determinable() && !open.share_determinable());
+            let steps = &open.path_explanation.steps;
+            assert!(
+                steps
+                    .iter()
+                    .any(|s| s.starts_with(NOT_DETERMINABLE) && s.contains("DFS path")),
+                "{steps:#?}"
+            );
+            assert!(
+                steps
+                    .iter()
+                    .any(|s| s.starts_with("NTFS effective: ") && s.contains(NOT_DETERMINABLE)),
+                "{steps:#?}"
+            );
+        }
+    }
+
     /// ADR 0079 addendum: when the permissions grant nothing, "refused" and
     /// "allowed" meet — No access either way, exact; the marker only informs.
     /// With anything else uncertain the DACL result itself is open, and the
@@ -6206,6 +6284,7 @@ mod tests {
                 },
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         let found = result
@@ -6250,6 +6329,7 @@ mod tests {
                 },
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         let found = result
@@ -6291,6 +6371,7 @@ mod tests {
                 },
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         let reasons: Vec<&str> = result
@@ -6328,6 +6409,7 @@ mod tests {
                     resolution: provenance,
                     share_trace: Default::default(),
                     selective_authentication: Default::default(),
+                    dfs: None,
                 })
                 .unwrap()
         };
@@ -6389,6 +6471,7 @@ mod tests {
                 },
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         assert!(
@@ -6426,6 +6509,7 @@ mod tests {
                 },
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         assert!(
@@ -6498,6 +6582,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
 
@@ -6563,6 +6648,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
 
@@ -6614,6 +6700,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
 
@@ -6668,6 +6755,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
 
@@ -6713,6 +6801,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         assert_eq!(
@@ -6746,6 +6835,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         assert_eq!(
@@ -6927,6 +7017,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         let (sids, min, max) = logon_marker(&p).expect("bounded");
@@ -6961,6 +7052,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap()
     }
@@ -7125,6 +7217,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         assert_eq!(p.ntfs_mask.0, 0);
@@ -7739,6 +7832,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap();
         let steps = &p.path_explanation.steps;
@@ -8110,6 +8204,7 @@ mod tests {
                 resolution: ResolutionProvenance::default(),
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
+                dfs: None,
             })
             .unwrap()
     }

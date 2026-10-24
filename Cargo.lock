@@ -86,6 +86,7 @@ version = "1.18.0"
 dependencies = [
  "ad_resolver",
  "adpa_core",
+ "fs_scanner",
  "permission_engine",
  "share_scanner",
  "tracing",

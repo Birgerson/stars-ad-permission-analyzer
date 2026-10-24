@@ -889,6 +889,31 @@ session (Stars assumes it, as for every SMB logon).
 
 ---
 
+## L18 — DFS folders with more than one target
+
+**Priority:** Medium — found by the lab run 2026-10-24 (ADR 0085).
+
+A path through a DFS namespace (`\\domain\namespace\folder\…`) is evaluated
+on the folder target this machine's DFS client is referred to: its NTFS
+DACL, its share permission, its server's local groups and policies. Until
+v1.18.0 the share permission and the server context came from the
+namespace server, which under-reported rights (lab: Modify shown as Read &
+Execute).
+
+What stays open: a folder with **more than one target** (for example two
+file servers kept in sync by DFS-R) can grant different rights on each
+target. DFS-R replicates the NTFS permissions, but share permissions and
+local groups are per server. A client may be referred to any of them. Stars
+evaluates one target, names the others in the marker
+`DfsTargetEvaluated`, and marks the result **not determinable**. To get
+exact values, scan each target's share directly (`\\FS-01\DfsProj`,
+`\\FS-02\DfsProj`).
+
+A scan of a namespace root reports each folder below it as "served from
+another share" and does not enumerate it. Scan the folder path itself.
+
+---
+
 ## Status overview
 
 | Limit | Priority | Marker present? | Resolvable? |
@@ -910,6 +935,7 @@ session (Stars assumes it, as for every SMB logon).
 | L15 — Accounts of a trusted domain | Medium | **yes** (IdentityNotResolvable without, TrustedDomainAccountResolved with the trusted-domain connection) | **closed 2026-10-17** (classification ADR 0064, resolution on the trusted DC ADR 0078) |
 | L16 — UAC policies / session elevation not visible | Low | **yes** (UacFilteredGroups, RemoteUacPolicy) | **network case closed 2026-10-13** (ADR 0076); local session elevation stays bounded |
 | L17 — Guest / anonymous tokens | Low | **yes** (GuestOrAnonymousToken) | **closed 2026-10-14** — Guest, Authenticated Users and anonymous Everyone exact (policy read); bounded only when the policy is unreadable |
+| L18 — DFS folders with several targets | Medium | **yes** (DfsTargetEvaluated; OtherShare scan error) | partial (ADR 0085): evaluated on the referred target, exact with one target; several targets → not determinable, scan each target |
 
 ## Contribution policy
 
