@@ -108,3 +108,4 @@ principle they cite is stated in the public documents:
 | 0079 | Selective Authentication and the organization SIDs of trusted-domain accounts |
 | 0080 | SYNCHRONIZE missing from the effective right |
 | 0081 | Permission graph v2: two bands, layer results, routes on click |
+| 0082 | Modular GUI: design tokens, components, one module per tab |

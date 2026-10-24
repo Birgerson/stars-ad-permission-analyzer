@@ -343,9 +343,13 @@ def is_allowlisted(path: str, line_text: str) -> bool:
 
 def tracked_files():
     """Return tracked text files we care about (skip binaries)."""
+    # `.slint` since the GUI modularization (2026-10-24): the UI texts moved
+    # out of main.rs into ui/*.slint and must stay covered; `.html` is the
+    # project website.
     extensions = (
         ".rs", ".md", ".toml", ".yml", ".yaml",
         ".sh", ".ps1", ".nsi", ".sql", ".manifest",
+        ".slint", ".html",
     )
     out = subprocess.check_output(
         ["git", "ls-files"], encoding="utf-8", errors="replace"
