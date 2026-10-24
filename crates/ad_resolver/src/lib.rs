@@ -13,6 +13,7 @@
 pub mod config;
 #[cfg(windows)]
 pub mod enumerate;
+pub mod forest_trust_info;
 pub mod ldap_client;
 #[cfg(windows)]
 pub mod local_account;

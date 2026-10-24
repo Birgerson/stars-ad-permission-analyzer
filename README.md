@@ -462,7 +462,7 @@ Output:
 
 #### `Trusts` tab
 
-![Stars Trusts tab — Plain LDAP to the lab DC of corp.test, one trust found: ext.test (NetBIOS EXT), direction bidirectional, attributes "SID-filtering (quarantined)" with the raw mask 0x00000004 and the partner's domain SID, plus the orange callout that historical / foreign SIDs across this trust are dropped at runtime, so a finding relying on one may over-report](docs/screenshots/stars-trusts-tab.png)
+![Stars Trusts tab — Plain LDAP to the lab DC of corp.test, two trusts found: ext.test (NetBIOS EXT), bidirectional, "SID-filtering (quarantined)" with the raw mask 0x00000004 and the orange callout about dropped historical / foreign SIDs; and the forest trust partner.test (PARTNER), "forest-transitive" 0x00000008, with the two domains of the trusted forest, child.partner.test and partner.test, and their domain SIDs](docs/screenshots/stars-trusts-tab.png)
 
 The GUI counterpart to `adpa trusts`: the domain's Active Directory trusts with direction and decoded `trustAttributes`, read over LDAP (base DN = domain root). **SID filtering** and **Selective Authentication** get an explicit `[!]` callout — both can make a finding read higher than the real runtime access. For accounts of a trusted domain analyzed with the trusted-domain connection, Stars checks Selective Authentication itself ("Allowed to authenticate" on the target's computer object, ADR 0079); the SID filtering of a forest trust for third-domain SIDs stays a caveat (known-limitations L4). Read-only.
 

@@ -277,6 +277,32 @@ from No access). `This Organization` / `Other Organization` are exact for
 such accounts. Still not modelled: the SID filtering of a forest trust for
 SIDs of third domains, and the M.5 edge below.
 
+**Status (ADR 0084 — domains of a trusted forest, 2026-10-24):** for a forest
+trust Stars reads the trust object's forest trust information
+(`msDS-TrustForestTrustInfo`). Its effects:
+
+- A SID of **any** domain of the trusted forest counts as a SID of a trusted
+  domain. Until v1.18.0 an account of a child domain of the trusted forest
+  was reported as "neither the configured domain nor one of its trusts".
+- For an account of a trusted domain resolved through the trusted-domain
+  connection, SIDs of every enabled domain of the trusted forest pass the
+  forest trust. This was measured with real SMB logons: `PARTNER\pt_user02`
+  reached a corp.test folder through the universal group
+  `CHILD\UG_CH_Forest`.
+- With a Global Catalog bind the trust objects of the whole forest are read.
+  Until v1.18.0 that mode reported even a directly trusted domain as "not
+  one of its trusts".
+- `adpa trusts` and the GUI Trusts tab list the domains of each forest trust.
+
+Still not modelled, and reported as such:
+
+- SIDs of third domains and of the trusting forest on a forest trust
+  (sIDHistory from a migration)
+- `TREAT_AS_EXTERNAL` (0x40)
+- domain records whose SID is disabled
+- quarantine on a forest trust
+- the M.5 edge below
+
 **Additional L4 edge since ADR 0056 (verification.md Block M.5):** an
 **in-base** identity whose evaluated `sIDHistory` SID is owned by a
 *foreign forest's* domain. Windows honors that SID only while the trust's
@@ -297,6 +323,9 @@ trust-topology work described here.
   selective authentication, forest-transitive).
 - ✅ **Done (ADR 0079):** Selective Authentication for accounts of a
   trusted domain, from the computer object's DACL — no logon attempt.
+- ✅ **Done (ADR 0084):** the domains of a trusted forest — classification,
+  forest-trust SID filtering for their SIDs, the Global Catalog view of the
+  forest's trusts.
 - A synthetic logon attempt would violate the read-only principle →
   deliberately **not** implemented.
 - Follow-up (open): cross-reference a token's foreign-forest history SIDs
@@ -790,8 +819,17 @@ Organization` with it — measured with real SMB logons). An account with a
 Foreign Security Principal object in the configured domain is resolved on
 the trusted DC too.
 
-**What stays open:** the SID filtering of a forest trust for third-domain
-SIDs is not modelled (reported, never assumed); for every other account
+**Extended 2026-10-24 (ADR 0084):** an account of any domain of a trusted
+forest (for example a child domain of the forest the trust names) is
+recognised as an account of a trusted domain and resolved through a
+connection to a DC of its own domain. SIDs of the trusted forest's other
+domains in its token pass the forest trust (measured). When that connection
+cannot read its domain SID, the reason is shown — a Server 2025 DC, for
+example, refuses a simple bind without signing (use `--ldap-signing` or
+LDAPS there).
+
+**What stays open:** the SID filtering of a forest trust for SIDs of third
+domains is not modelled (reported, never assumed); for every other account
 `This Organization` stays logon-dependent.
 
 ---
@@ -852,7 +890,7 @@ session (Stars assumes it, as for every SMB logon).
 | L1 — FSP | High | **yes** (IdentityResolvedViaForeignSecurityPrincipal) | **closed 2026-06-11** (trust-side groups still need L2) |
 | L2 — GC bind | High | **yes** (GroupResolutionViaGlobalCatalog) | **closed 2026-06-11** (GUI toggle shipped v1.6.4) |
 | L3 — SID History | Medium | **yes** (SidHistoryEvaluated/Present + GroupSidHistoryEvaluated/Present) | **closed 2026-07-04** (user: ADR 0056; groups: ADR 0059) |
-| L4 — Cross-forest filter | Medium | yes (Selective Authentication markers) | partial: trust inventory (ADR 0060); Selective Authentication modelled for trusted-domain accounts (ADR 0079); forest-trust SID filtering of third-domain SIDs open |
+| L4 — Cross-forest filter | Medium | yes (Selective Authentication markers) | partial: trust inventory (ADR 0060); Selective Authentication modelled for trusted-domain accounts (ADR 0079); domains of a trusted forest and their SIDs on a forest trust (ADR 0084); forest-trust SID filtering of third-domain SIDs open |
 | L5 — Empty memberships | Medium | yes (incomplete) | only via L1/L2 |
 | L6 — Live tests | High | n/a | **partially** — live 3-domain run 2026-06-14 committed (verification.md Block L); automated CI suite still open |
 | L7 — Token privileges | Low | no | deliberately out of scope |

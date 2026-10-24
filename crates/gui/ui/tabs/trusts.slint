@@ -166,8 +166,27 @@ export component TrustsTab inherits ScrollView {
                         color: Theme.text-muted;
                         font-size: 11px;
                     }
+                    if t.forest && t.forest-info-error == "": Text {
+                        text: "Forest domains (" + t.forest-domains.length + "):";
+                        color: Theme.text-secondary;
+                    }
+                    if t.forest && t.forest-info-error == "": VerticalLayout {
+                        padding-left: 12px;
+                        spacing: 0px;
+                        for d in t.forest-domains: Text {
+                            text: d;
+                            color: Theme.text-muted;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                    }
+                    if t.forest-info-error != "": Text {
+                        text: "[!] Forest domains not known: " + t.forest-info-error + ". A SID of a domain of this forest cannot be told apart from a SID of an unrelated domain; Stars reports such SIDs as unknown.";
+                        color: Theme.warning;
+                        wrap: word-wrap;
+                    }
                     if t.sid-filtering: Text {
-                        text: "[!] SID filtering (quarantine) is ON — historical / foreign SIDs across this trust are dropped at runtime, so a finding that relies on such a SID may over-report. Stars shows the DACL view, not the filtered one.";
+                        text: "[!] SID filtering (quarantine) is ON — historical / foreign SIDs across this trust are dropped at runtime. Stars applies this to accounts of this domain resolved with a trusted-domain connection; any other finding that relies on such a SID shows the DACL view and may over-report.";
                         color: Theme.warning;
                         wrap: word-wrap;
                     }
@@ -178,7 +197,7 @@ export component TrustsTab inherits ScrollView {
                     }
                 }
                 Text {
-                    text: "Note: Stars reads these attributes read-only and does not model the runtime filter effect (that would need a synthetic logon). See the L4 section of known-limitations.md.";
+                    text: "Note: Stars reads trusts read-only. For an account of a trusted domain that is resolved with a trusted-domain connection, the measured effects are evaluated: quarantine of an external trust, Selective Authentication, and the domains of a trusted forest whose SIDs pass a forest trust. Everything else is reported as not modelled, never guessed (a synthetic logon to find out would not be read-only). See L4 and L15 in known-limitations.md.";
                     color: Theme.text-muted;
                     font-size: 11px;
                     wrap: word-wrap;

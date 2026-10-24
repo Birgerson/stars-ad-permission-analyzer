@@ -43,7 +43,7 @@ use tracing::debug;
 
 use crate::principal::{
     disabled_from_ldap, push_diagnostics, GroupResolutionStatus, IdentityScopeStatus,
-    PrincipalResolution, TrustContext, TrustedDomainBackend,
+    PrincipalResolution, TrustContext, TrustedDomainBackend, TrustedForest,
 };
 use crate::resolver::{account_domain_of, LdapResolver};
 
@@ -104,8 +104,9 @@ pub fn select_cross_domain_memberships(
 pub struct SidFilterOutcome {
     /// SIDs the quarantine removes — `name (SID)`.
     pub filtered: Vec<String>,
-    /// SIDs of a third domain on a trust without quarantine — left out,
-    /// reported as gaps (not modelled).
+    /// SIDs whose fate is not modelled — of a third domain on a trust
+    /// without quarantine, or of no enabled domain of a trusted forest.
+    /// Left out and reported as gaps.
     pub not_modelled: Vec<String>,
 }
 
@@ -118,17 +119,34 @@ fn of_domain(sid: &Sid, domain_sid: &str) -> bool {
 /// `sIDHistory` and to the kept memberships (group SID and the group's
 /// `sIDHistory`). Removed values are taken out of both the list and the
 /// count, so they do not reappear as "not evaluated". Pure — no LDAP.
+///
+/// - SIDs of the account's own domain always pass.
+/// - Forest trust (ADR 0084, lab 2026-10-24, real SMB logons): SIDs of every
+///   domain of the trusted forest whose SID its forest trust information
+///   lists as enabled pass — `PARTNER\pt_user02` reached a corp.test folder
+///   through `CHILD\UG_CH_Forest`. Every other SID is not modelled.
+/// - Quarantined trust that is no forest trust (ADR 0078, measured): every
+///   other SID is removed. Quarantine on a forest trust was not measured, so
+///   there the other SIDs are not modelled either.
+/// - Any other trust: every other SID is not modelled.
 pub fn apply_sid_filtering(
     identity: &mut Identity,
     memberships: &mut Vec<GroupMembership>,
     trusted_domain_sid: &str,
     attributes: TrustAttributes,
+    forest: Option<&TrustedForest>,
 ) -> SidFilterOutcome {
-    let quarantined = attributes.sid_filtering_enabled();
+    let quarantined = attributes.sid_filtering_enabled() && !attributes.forest_transitive();
+    let forest = forest.filter(|_| attributes.forest_transitive());
     let mut out = SidFilterOutcome::default();
     let drop_it = |sid: &Sid, name: Option<&str>, out: &mut SidFilterOutcome| -> bool {
         if of_domain(sid, trusted_domain_sid) {
             return false;
+        }
+        if let (Some(f), Some(d)) = (forest, account_domain_of(sid)) {
+            if f.contains(&d) {
+                return false;
+            }
         }
         let shown = display(sid, name);
         if quarantined {
@@ -158,6 +176,31 @@ pub fn apply_sid_filtering(
         m.group_sid_history_count = m.group_sid_history_count.saturating_sub(removed);
     }
     out
+}
+
+/// Reader-facing gap for a SID whose fate across the trust is not modelled.
+fn not_modelled_gap(shown: &str, trust: &TrustContext) -> String {
+    match &trust.forest {
+        Some(f) if trust.attributes.forest_transitive() => match &f.info_error {
+            None => format!(
+                "{shown} belongs to no domain of the trusted forest {} whose SID its forest \
+                 trust information lists as enabled; whether the trust's SID filtering lets it \
+                 through is not modelled, so it was left out",
+                f.trust_partner
+            ),
+            Some(e) => format!(
+                "{shown} belongs to another domain than {}; the domains of the trusted forest \
+                 {} are not known ({e}), so whether the trust's SID filtering lets it through \
+                 is not known — it was left out",
+                trust.partner, f.trust_partner
+            ),
+        },
+        _ => format!(
+            "{shown} belongs to neither {} nor the configured domain; whether the trust's SID \
+             filtering lets it through is not modelled, so it was left out",
+            trust.partner
+        ),
+    }
 }
 
 /// Step 3: continues a resource-domain membership of `via` (an FSP chain
@@ -207,7 +250,7 @@ pub fn chain_through(
 pub struct LdapTrustedDomainBackend {
     trusted: Arc<LdapResolver>,
     resource: Arc<LdapResolver>,
-    served: Mutex<Option<Option<String>>>,
+    served: Mutex<Option<Result<String, String>>>,
 }
 
 impl LdapTrustedDomainBackend {
@@ -222,16 +265,19 @@ impl LdapTrustedDomainBackend {
 
 #[async_trait]
 impl TrustedDomainBackend for LdapTrustedDomainBackend {
-    async fn served_domain_sid(&self) -> Option<String> {
+    async fn served_domain_sid(&self) -> Result<String, String> {
         let mut cached = self.served.lock().await;
         if let Some(v) = cached.as_ref() {
             return v.clone();
         }
         let v = match self.trusted.configured_domain_sid().await {
-            Ok(v) => v,
+            Ok(Some(sid)) => Ok(sid),
+            Ok(None) => {
+                Err("the directory returned no domain SID for the configured base".to_owned())
+            }
             Err(e) => {
                 debug!(error = %e, "trusted-domain connection: domain SID not readable");
-                None
+                Err(e.to_string())
             }
         };
         *cached = Some(v.clone());
@@ -257,7 +303,18 @@ impl TrustedDomainBackend for LdapTrustedDomainBackend {
 
         // Step 1: its groups there, restricted to what crosses the trust.
         let home = self.trusted.resolve_group_memberships(sid).await?;
-        let mut gaps = home.gaps;
+        // ADR 0084: the set that crosses the trust comes from the DC's own
+        // tokenGroupsGlobalAndUniversal below, read or the resolution fails —
+        // so the gaps that only concern which groups the token holds (e.g. a
+        // universal group of another domain of the forest, outside this
+        // domain's partition) are settled by it. Every other gap stays.
+        let token_set: HashSet<&String> = home.token_set_gaps.iter().collect();
+        let mut gaps: Vec<String> = home
+            .gaps
+            .iter()
+            .filter(|g| !token_set.contains(g))
+            .cloned()
+            .collect();
         let mut excluded = home.excluded_groups;
         let global_and_universal = self
             .trusted
@@ -296,13 +353,10 @@ impl TrustedDomainBackend for LdapTrustedDomainBackend {
             &mut memberships,
             &trust.domain_sid,
             trust.attributes,
+            trust.forest.as_ref(),
         );
         for s in &filter.not_modelled {
-            gaps.push(format!(
-                "{s} belongs to neither {} nor the configured domain; whether the trust's SID \
-                 filtering lets it through is not modelled, so it was left out",
-                trust.partner
-            ));
+            gaps.push(not_modelled_gap(s, trust));
         }
 
         // Step 3: domain-local groups of the resource domain through FSPs.
@@ -489,7 +543,7 @@ mod tests {
         g.group_sid_history = vec![sid(&format!("{OTHER}-77"))];
         g.group_sid_history_count = 1;
         let mut ms = vec![g, member(&format!("{OTHER}-1112"), "UG_Forest", &[])];
-        let out = apply_sid_filtering(&mut id, &mut ms, EXT, TrustAttributes::from_bits(0x4));
+        let out = apply_sid_filtering(&mut id, &mut ms, EXT, TrustAttributes::from_bits(0x4), None);
         assert_eq!(id.sid_history, [sid(&format!("{EXT}-1600"))]);
         assert_eq!(
             id.sid_history_count, 1,
@@ -508,7 +562,7 @@ mod tests {
     fn without_quarantine_a_third_domain_sid_is_not_modelled() {
         let mut id = user();
         let mut ms = vec![member(&format!("{OTHER}-1112"), "UG_Forest", &[])];
-        let out = apply_sid_filtering(&mut id, &mut ms, EXT, TrustAttributes::from_bits(0x8));
+        let out = apply_sid_filtering(&mut id, &mut ms, EXT, TrustAttributes::from_bits(0x8), None);
         assert!(ms.is_empty());
         assert!(out.filtered.is_empty());
         assert_eq!(out.not_modelled, [format!("UG_Forest ({OTHER}-1112)")]);
@@ -519,10 +573,111 @@ mod tests {
         let mut id = user();
         let mut ms = vec![member(&format!("{EXT}-1110"), "GG_ExtPartners", &[])];
         for bits in [0x4, 0x8, 0x0] {
-            let out = apply_sid_filtering(&mut id, &mut ms, EXT, TrustAttributes::from_bits(bits));
+            let out = apply_sid_filtering(
+                &mut id,
+                &mut ms,
+                EXT,
+                TrustAttributes::from_bits(bits),
+                None,
+            );
             assert_eq!(ms.len(), 1);
             assert_eq!(out, SidFilterOutcome::default());
         }
+    }
+
+    fn forest(domains: &[&str], info_error: Option<&str>) -> TrustedForest {
+        TrustedForest {
+            trust_partner: "partner.test".to_owned(),
+            domain_sids: domains.iter().map(|d| (*d).to_owned()).collect(),
+            info_error: info_error.map(str::to_owned),
+        }
+    }
+
+    /// ADR 0084, lab 2026-10-24 (real SMB logon): `PARTNER\pt_user02` holds
+    /// `CHILD\UG_CH_Forest` in its token at a corp.test resource — a SID of
+    /// another domain of the trusted forest passes the forest trust.
+    #[test]
+    fn a_forest_trust_lets_the_sids_of_its_forest_domains_pass() {
+        let mut id = user();
+        id.sid_history = vec![sid(&format!("{OTHER}-1500"))];
+        id.sid_history_count = 1;
+        let mut ms = vec![
+            member(&format!("{EXT}-1110"), "GG_Root", &[]),
+            member(&format!("{OTHER}-1107"), "UG_CH_Forest", &[]),
+            member("S-1-5-21-7-7-7-1200", "UG_ThirdForest", &[]),
+        ];
+        let f = forest(&[EXT, OTHER], None);
+        let out = apply_sid_filtering(
+            &mut id,
+            &mut ms,
+            EXT,
+            TrustAttributes::from_bits(0x8),
+            Some(&f),
+        );
+        assert_eq!(
+            id.sid_history.len(),
+            1,
+            "a history SID of a forest domain passes"
+        );
+        assert_eq!(ms.len(), 2);
+        assert!(out.filtered.is_empty());
+        assert_eq!(out.not_modelled, ["UG_ThirdForest (S-1-5-21-7-7-7-1200)"]);
+    }
+
+    /// The forest list counts only on a forest trust, and quarantine on a
+    /// forest trust (not measured) removes nothing — it is not modelled.
+    #[test]
+    fn quarantine_on_a_forest_trust_is_not_modelled() {
+        let f = forest(&[EXT], None);
+        let mut id = user();
+        let mut ms = vec![member(&format!("{OTHER}-1112"), "UG_Other", &[])];
+        let out = apply_sid_filtering(
+            &mut id,
+            &mut ms,
+            EXT,
+            TrustAttributes::from_bits(0xC),
+            Some(&f),
+        );
+        assert!(out.filtered.is_empty());
+        assert_eq!(out.not_modelled.len(), 1);
+
+        // A forest passed for a trust that is no forest trust is ignored.
+        let g = forest(&[EXT, OTHER], None);
+        let mut ms = vec![member(&format!("{OTHER}-1112"), "UG_Other", &[])];
+        let out = apply_sid_filtering(
+            &mut id,
+            &mut ms,
+            EXT,
+            TrustAttributes::from_bits(0x4),
+            Some(&g),
+        );
+        assert_eq!(
+            out.filtered.len(),
+            1,
+            "external quarantine still removes it"
+        );
+    }
+
+    #[test]
+    fn the_not_modelled_gap_names_the_forest_and_unknown_forest_information() {
+        let mut trust = TrustContext {
+            partner: "child.partner.test".to_owned(),
+            domain_sid: OTHER.to_owned(),
+            attributes: TrustAttributes::from_bits(0x8),
+            forest: Some(forest(&[EXT, OTHER], None)),
+        };
+        let g = not_modelled_gap("X (S-1-5-21-7-7-7-1)", &trust);
+        assert!(
+            g.contains("no domain of the trusted forest partner.test"),
+            "{g}"
+        );
+        trust.forest = Some(forest(&[], Some("not returned")));
+        let g = not_modelled_gap("X (S-1-5-21-7-7-7-1)", &trust);
+        assert!(g.contains("are not known (not returned)"), "{g}");
+        trust.forest = None;
+        trust.attributes = TrustAttributes::from_bits(0x0);
+        let g = not_modelled_gap("X (S-1-5-21-7-7-7-1)", &trust);
+        assert!(g.contains("belongs to neither child.partner.test"), "{g}");
     }
 
     /// The resource-domain chain continues the home-domain path:

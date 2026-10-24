@@ -2401,9 +2401,11 @@ impl TrustDirection {
 
 /// Parsed `trustAttributes` bitmask (MS-ADTS 6.1.6.7.9). Read-only inventory
 /// data (L4): Stars surfaces these so an auditor can see whether a trust is
-/// configured to filter SIDs or gate authentication, but it deliberately does
-/// **not** model the runtime effect — that would require a synthetic logon,
-/// which violates the read-only principle.
+/// configured to filter SIDs or gate authentication. For an account of a
+/// trusted domain resolved there, the effects measured in the lab are
+/// modelled (ADR 0078, 0079, 0084); everything else is reported as not
+/// modelled, never guessed — a synthetic logon to find out would violate the
+/// read-only principle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct TrustAttributes {
     /// The raw bitmask, preserved so nothing is lost.
@@ -2512,6 +2514,59 @@ pub struct DomainTrust {
     pub attributes: TrustAttributes,
     /// Domain SID of the trusted domain (`securityIdentifier`), when present.
     pub sid: Option<Sid>,
+    /// Forest trust only: the domains of the trusted forest, from the trust
+    /// object's `msDS-TrustForestTrustInfo` (ADR 0084). Empty for other
+    /// trusts, and when the information could not be read (`forest_info_error`).
+    #[serde(default)]
+    pub forest_domains: Vec<ForestTrustDomain>,
+    /// Forest trust only: why `msDS-TrustForestTrustInfo` could not be read
+    /// or parsed. `None` when it was read, or for a trust that is no forest
+    /// trust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forest_info_error: Option<String>,
+}
+
+/// One domain of a trusted forest, as the forest trust information of the
+/// trust object lists it (`msDS-TrustForestTrustInfo`, MS-ADTS 6.1.6.9.3,
+/// record type `ForestTrustDomainInfo`; ADR 0084).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForestTrustDomain {
+    /// DNS name of the domain.
+    pub dns_name: String,
+    /// NetBIOS name of the domain.
+    pub netbios_name: String,
+    /// Domain SID.
+    pub sid: Sid,
+    /// The record's raw flags (MS-ADTS: 0x1 SID disabled by an
+    /// administrator, 0x2 SID disabled because of a conflict, 0x4 / 0x8 the
+    /// same for the NetBIOS name), preserved so nothing is lost.
+    pub flags: u32,
+}
+
+impl ForestTrustDomain {
+    /// SID disabled by an administrator.
+    pub const SID_DISABLED_ADMIN: u32 = 0x0000_0001;
+    /// SID disabled because of a conflict with another forest.
+    pub const SID_DISABLED_CONFLICT: u32 = 0x0000_0002;
+
+    /// `true` when the record's SID is enabled — neither disabled by an
+    /// administrator nor because of a conflict.
+    pub fn sid_enabled(&self) -> bool {
+        self.flags & (Self::SID_DISABLED_ADMIN | Self::SID_DISABLED_CONFLICT) == 0
+    }
+
+    /// One line for the trust inventory: `dns (NETBIOS)  SID`, plus the
+    /// raw flags and "SID disabled" when they are set.
+    pub fn label(&self) -> String {
+        let mut s = format!("{} ({})  {}", self.dns_name, self.netbios_name, self.sid.0);
+        if !self.sid_enabled() {
+            s.push_str("  — SID disabled");
+        }
+        if self.flags != 0 {
+            s.push_str(&format!("  [flags 0x{:X}]", self.flags));
+        }
+        s
+    }
 }
 
 #[cfg(test)]
@@ -2530,10 +2585,48 @@ mod tests {
             direction: TrustDirection::Unknown(9),
             attributes: TrustAttributes::from_bits(0x8000_001C),
             sid: Some(Sid("S-1-5-21-1-2-3".to_owned())),
+            forest_domains: vec![ForestTrustDomain {
+                dns_name: "child.ext.test".to_owned(),
+                netbios_name: "CHILD".to_owned(),
+                sid: Sid("S-1-5-21-4-5-6".to_owned()),
+                flags: 0x1,
+            }],
+            forest_info_error: Some("x".to_owned()),
         };
         let json = serde_json::to_string(&t).unwrap();
         let back: DomainTrust = serde_json::from_str(&json).unwrap();
         assert_eq!(back, t);
+    }
+
+    /// ADR 0084: a trust stored before the forest fields existed still reads.
+    #[test]
+    fn a_stored_trust_without_forest_fields_reads() {
+        let old = r#"{"partner":"ext.test","flat_name":null,"direction":"Bidirectional","attributes":{"raw":4},"sid":null}"#;
+        let t: DomainTrust = serde_json::from_str(old).unwrap();
+        assert!(t.forest_domains.is_empty());
+        assert!(t.forest_info_error.is_none());
+    }
+
+    #[test]
+    fn forest_trust_domain_sid_enabled_follows_the_two_sid_flags() {
+        let d = |flags| ForestTrustDomain {
+            dns_name: "a.test".to_owned(),
+            netbios_name: "A".to_owned(),
+            sid: Sid("S-1-5-21-1-2-3".to_owned()),
+            flags,
+        };
+        assert!(d(0).sid_enabled());
+        assert!(
+            d(0x4).sid_enabled(),
+            "a disabled NetBIOS name keeps the SID"
+        );
+        assert!(!d(0x1).sid_enabled());
+        assert!(!d(0x2).sid_enabled());
+        assert_eq!(d(0).label(), "a.test (A)  S-1-5-21-1-2-3");
+        assert_eq!(
+            d(0x2).label(),
+            "a.test (A)  S-1-5-21-1-2-3  — SID disabled  [flags 0x2]"
+        );
     }
 
     /// ADR 0079 addendum: a logon-unknown marker stored before the field

@@ -957,6 +957,17 @@ pub fn print_shares(
     println!("{}", heavy_line());
 }
 
+/// Closing note of the trust inventory: what Stars models of a trust and
+/// what not (ADR 0078, 0079, 0084).
+const TRUST_NOTE: &[&str] = &[
+    "Note: Stars reads trusts read-only. For an account of a trusted domain that is",
+    "resolved with a trusted-domain connection (--trust-server), the measured effects",
+    "are evaluated: quarantine of an external trust, Selective Authentication, and the",
+    "domains of a trusted forest whose SIDs pass a forest trust. Everything else is",
+    "reported as not modelled, never guessed (a synthetic logon to find out would not",
+    "be read-only). See L4 and L15 in known-limitations.md.",
+];
+
 /// Prints the read-only domain trust inventory (L4). One block per trust with
 /// its direction and decoded `trustAttributes`; SID filtering and Selective
 /// Authentication get an explicit callout because those are the settings that
@@ -991,10 +1002,32 @@ pub fn print_trusts(trusts: &[DomainTrust]) {
         if let Some(sid) = &t.sid {
             println!("    Domain SID   : {}", sid.0);
         }
+        if t.attributes.forest_transitive() {
+            match &t.forest_info_error {
+                None => {
+                    println!("    Forest domains ({}):", t.forest_domains.len());
+                    for d in &t.forest_domains {
+                        println!("      - {}", d.label());
+                    }
+                }
+                Some(e) => {
+                    println!("    ! Forest domains not known: {e}.");
+                    println!("      A SID of a domain of this forest cannot be told apart from a");
+                    println!(
+                        "      SID of an unrelated domain; Stars reports such SIDs as unknown."
+                    );
+                }
+            }
+        }
         if t.attributes.sid_filtering_enabled() {
             println!("    ! SID filtering (quarantine) is ON — historical / foreign SIDs across");
-            println!("      this trust are dropped at runtime, so a finding that relies on such a");
-            println!("      SID may over-report. Stars shows the DACL view, not the filtered one.");
+            println!(
+                "      this trust are dropped at runtime. Stars applies this to accounts of this"
+            );
+            println!(
+                "      domain resolved with a trusted-domain connection; any other finding that"
+            );
+            println!("      relies on such a SID shows the DACL view and may over-report.");
         }
         if t.attributes.selective_authentication() {
             println!("    ! Selective Authentication is ON — trust principals need an explicit");
@@ -1003,9 +1036,9 @@ pub fn print_trusts(trusts: &[DomainTrust]) {
         }
     }
     println!();
-    println!("  Note: Stars reads these attributes read-only and does not model the runtime");
-    println!("  filter effect (that would need a synthetic logon — out of scope). See the L4");
-    println!("  section of known-limitations.md.");
+    for line in TRUST_NOTE {
+        println!("  {line}");
+    }
     println!();
     println!("{}", heavy_line());
 }

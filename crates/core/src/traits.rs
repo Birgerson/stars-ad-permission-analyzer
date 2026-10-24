@@ -139,6 +139,13 @@ pub struct GroupMembershipResolution {
     /// Groups left out because Windows does not put them into the token —
     /// distribution groups and groups reached only through one (ADR 0067).
     pub excluded_groups: Vec<String>,
+    /// The entries of `gaps` (also contained there) that only concern which
+    /// groups the token holds — groups outside the resolved set and the
+    /// differences to the DC's `tokenGroups`. A caller that takes the group
+    /// set from the DC's own list instead (an account of a trusted domain:
+    /// `tokenGroupsGlobalAndUniversal`, ADR 0078 / 0084) may drop exactly
+    /// these; every other gap stays.
+    pub token_set_gaps: Vec<String>,
 }
 
 pub struct PermissionEvaluationInput {
