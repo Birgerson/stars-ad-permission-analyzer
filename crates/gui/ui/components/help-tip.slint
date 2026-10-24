@@ -1,26 +1,38 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-// The "?" help tip next to a field.
+// The help tip next to a field: a circled "?".
 
 import { Theme } from "../theme/theme.slint";
 
-// Wiederverwendbares ⓘ-Help-Icon. Bei Hover erscheint ein kleiner
-// Reusable ⓘ help icon. On hover a small dark tooltip box appears
-// right next to the icon. The tooltip is only shown while hovered,
-// overlays its neighbors (Slint renders children over siblings)
-// and disappears as soon as the mouse leaves.
+// Reusable help icon — a "?" in a drawn circle (ADR 0083: the character in
+// the GUI's font, the circle a shape, no symbol-font glyph; a small "i"
+// reads like a power symbol). On hover a small dark tooltip box appears
+// right next to the icon. The tooltip is only shown while hovered, overlays
+// its neighbors (Slint renders children over siblings) and disappears as
+// soon as the mouse leaves.
 export component HelpTip inherits Rectangle {
     in property <string> tip;
     width: 20px;
     height: 20px;
 
-    Text {
-        text: "ⓘ";
-        font-size: Theme.font-lg;
-        color: Theme.accent;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        border-radius: self.width / 2;
+        border-width: 1.5px;
+        border-color: Theme.accent;
+
+        Text {
+            text: "?";
+            font-size: Theme.font-sm;
+            font-weight: 700;
+            color: Theme.accent;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
     }
 
     ta := TouchArea {

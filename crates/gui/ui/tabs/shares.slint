@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Birger Labinsch
 
 // The Shares tab (ADR 0082): its state (`SharesState`, read and written by
-// src/main.rs) and its layout (`SharesTab`).
+// src/tabs/shares.rs) and its layout (`SharesTab`).
 
 import {
     VerticalBox,
@@ -80,7 +80,7 @@ export component SharesTab inherits ScrollView {
             spacing: Theme.spacing-sm;
             padding: 0px;
             Button {
-                text: "📂 List shares";
+                text: "List shares";
                 enabled: !SharesState.is-running;
                 clicked => { SharesState.list-clicked(); }
             }
@@ -130,7 +130,7 @@ export component SharesTab inherits ScrollView {
                             }
                             Text {
                                 text: s.is-admin ? "administrative share (system)"
-                                    : s.is-hidden ? "⚠ hidden data share ($) — not listed when browsing, NOT administrative"
+                                    : s.is-hidden ? "[!] hidden data share ($) — not listed when browsing, NOT administrative"
                                     : "";
                                 color: s.is-admin ? Theme.text-muted : Theme.warning;
                                 font-size: 11px;
@@ -145,7 +145,7 @@ export component SharesTab inherits ScrollView {
                             overflow: elide;
                         }
                         if s.dacl-status != "": Text {
-                            text: (s.dacl-level == 0 ? "ℹ " : "⚠ ") + s.dacl-status;
+                            text: (s.dacl-level == 0 ? "[i] " : "[!] ") + s.dacl-status;
                             color: s.dacl-level == 2 ? Theme.danger
                                  : s.dacl-level == 1 ? Theme.warning
                                  : Theme.text-secondary;
@@ -172,7 +172,7 @@ export component SharesTab inherits ScrollView {
                             }
                         }
                         if s.unsupported > 0: Text {
-                            text: "⚠ " + s.unsupported + " share ACE(s) could not be evaluated — this share's permissions are INCOMPLETE (a hidden Deny among them could change the result).";
+                            text: "[!] " + s.unsupported + " share ACE(s) could not be evaluated — this share's permissions are INCOMPLETE (a hidden Deny among them could change the result).";
                             color: Theme.danger;
                             wrap: word-wrap;
                         }
@@ -187,7 +187,7 @@ export component SharesTab inherits ScrollView {
                         color: Theme.danger;
                     }
                     for e in SharesState.errors: Text {
-                        text: "⚠ " + e;
+                        text: "[!] " + e;
                         color: Theme.danger;
                         wrap: word-wrap;
                     }

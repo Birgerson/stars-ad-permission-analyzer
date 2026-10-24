@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Birger Labinsch
 
 // The Delta tab (ADR 0082): its state (`DeltaState`, read and written by
-// src/main.rs) and its layout (`DeltaTab`).
+// src/tabs/delta.rs) and its layout (`DeltaTab`).
 
 import {
     VerticalBox,
@@ -54,6 +54,10 @@ export global DeltaState {
 
 export component DeltaTab inherits ScrollView {
     VerticalBox {
+        // ADR 0083: everything at its natural height, from the top; the
+        // free height stays below (otherwise the run list sank to the
+        // bottom of the tab).
+        alignment: start;
         padding: Theme.spacing-md;
         spacing: Theme.spacing-sm;
 
@@ -69,7 +73,7 @@ export component DeltaTab inherits ScrollView {
             alignment: start;
             spacing: Theme.spacing-sm;
             PrimaryButton {
-                text: DeltaState.is-loading ? "Loading..." : "📂  Load scan history";
+                text: DeltaState.is-loading ? "Loading..." : "Load scan history";
                 enabled: !DeltaState.is-loading;
                 clicked => { DeltaState.load-runs-clicked(); }
             }
@@ -129,20 +133,20 @@ export component DeltaTab inherits ScrollView {
                     // Disabled when the run recorded
                     // none.
                     Button {
-                        text: "⚠ " + run.error_count;
-                        width: 52px;
+                        text: "Errors (" + run.error_count + ")";
+                        width: 110px;
                         enabled: run.error_count > 0;
                         clicked => {
                             DeltaState.show-errors(run.id, run.label);
                         }
                     }
-                    // Trash button — opens the
+                    // Delete button — opens the
                     // confirmation dialog, no instant
                     // delete. The actual action runs
                     // only after confirmation.
                     Button {
-                        text: "🗑";
-                        width: 36px;
+                        text: "Delete";
+                        width: 80px;
                         clicked => {
                             DeltaState.pending-delete-id = run.id;
                             DeltaState.pending-delete-label = run.label;
@@ -156,7 +160,7 @@ export component DeltaTab inherits ScrollView {
             alignment: start;
             spacing: Theme.spacing-sm;
             PrimaryButton {
-                text: "⟳  Compare";
+                text: "Compare";
                 clicked => { DeltaState.compare-clicked(); }
             }
         }
@@ -183,7 +187,7 @@ export component DeltaTab inherits ScrollView {
                 for err[i] in DeltaState.run-errors: VerticalBox {
                     spacing: 0px;
                     Text {
-                        text: "⚠ " + err.path;
+                        text: err.path;
                         font-weight: 700;
                         wrap: word-wrap;
                     }

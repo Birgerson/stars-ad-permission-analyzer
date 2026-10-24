@@ -5,11 +5,9 @@
 
 import { Theme } from "../theme/theme.slint";
 
-// ThemeToggle — sun/moon switcher for light/dark, rendered as a
-// clearly clickable button. Deliberately uses a text label instead of a sole
-// Unicode glyph, because Slint's software backend on Windows Server
-// (default font) does not reliably render U+263E (☾) / U+2600 (☀).
-// With border + background + text the toggle is clearly visible.
+// ThemeToggle — light/dark switcher, rendered as a clearly clickable
+// button with a word as its label: no sun/moon glyph (ADR 0083 — Arial has
+// none, and the symbol font it would come from is not the GUI's font).
 export component ThemeToggle inherits Rectangle {
     height: 32px;
     width: 110px;
@@ -23,14 +21,7 @@ export component ThemeToggle inherits Rectangle {
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 8px;
-        spacing: 6px;
         alignment: center;
-        Text {
-            text: Theme.dark ? "☀" : "☾";
-            font-size: 14px;
-            color: Theme.text-primary;
-            vertical-alignment: center;
-        }
         Text {
             text: Theme.dark ? "Light" : "Dark";
             font-size: Theme.font-sm;
@@ -45,15 +36,13 @@ export component ThemeToggle inherits Rectangle {
     }
 }
 
-// HeaderBar — Brand-Block links, Status-/Theme-Controls rechts.
-// HeaderBar — brand block left, status/theme controls right.
+// HeaderBar — brand block left, theme toggle right.
 export component HeaderBar inherits Rectangle {
     in property <string> app-title: "Stars";
     in property <string> app-subtitle: "AD Permission Analyzer";
     in property <string> version-text;
     height: 48px;
     background: Theme.bg-header;
-    // Dezente untere Trennlinie
     // Subtle bottom separator
     Rectangle {
         x: 0;
@@ -73,11 +62,19 @@ export component HeaderBar inherits Rectangle {
         // Brand block: star + title (incl. version) + subtitle
         HorizontalLayout {
             spacing: Theme.spacing-sm;
-            Text {
-                text: "★";
-                font-size: Theme.font-xxl;
-                color: Theme.accent;
-                vertical-alignment: center;
+            // The star as a vector shape, not a font glyph (ADR 0083):
+            // a regular five-pointed star, outer radius 10, inner 3.82,
+            // centred at (12, 12.5) in a 24 × 24 box.
+            VerticalLayout {
+                alignment: center;
+                Path {
+                    width: 20px;
+                    height: 20px;
+                    viewbox-width: 24;
+                    viewbox-height: 24;
+                    commands: "M 12 2.5 L 14.25 9.41 L 21.51 9.41 L 15.63 13.68 L 17.88 20.59 L 12 16.32 L 6.12 20.59 L 8.37 13.68 L 2.49 9.41 L 9.75 9.41 Z";
+                    fill: Theme.accent;
+                }
             }
             VerticalLayout {
                 HorizontalLayout {

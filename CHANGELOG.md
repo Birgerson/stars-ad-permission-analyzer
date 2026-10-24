@@ -29,6 +29,23 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
     actions as above, plus deleting a scan run in the Delta tab.
   - The language gate now also checks `.slint` and `.html` files, so the UI
     texts stay covered.
+- **One font, no symbol icons (ADR 0083).** Every text of the GUI is Arial,
+  set in one place (`Theme.font-family`); no emoji or symbol icons that
+  Windows would draw from another font. Severity markers read `[!]` and
+  `[i]`, the same as the CLI; buttons carry words only (the Delta tab's run
+  buttons: *Errors (n)*, *Delete*). A test fails on any character in the GUI
+  texts that Arial cannot draw. The graph saved as SVG names Arial as well.
+- **Input fields keep their height (ADR 0083).** Fields, buttons and
+  sections no longer grow while a tab has room and shrink again when a
+  suggestion list or a result appears; every tab starts at the top with
+  natural heights. The Delta tab's run list no longer sinks to the bottom.
+
+### Fixed
+
+- **Scan Tree: *Start scan* and *Cancel* disappeared** as soon as the
+  results were taller than the window — during a long scan *Cancel* could
+  not be seen or clicked, and afterwards no second scan could be started.
+  The buttons now have a fixed height (ADR 0083). Present in v1.17.0.
 
 ## [1.17.0] — 2026-10-18
 

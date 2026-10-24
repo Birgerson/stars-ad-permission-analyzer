@@ -15,6 +15,8 @@
 
 mod identity_input;
 mod tabs;
+#[cfg(test)]
+mod ui_text_tests;
 mod view_models;
 mod worker;
 

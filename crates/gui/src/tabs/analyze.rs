@@ -160,7 +160,7 @@ pub fn wire(ui: &MainWindow, req_tx: &Sender<WorkerRequest>) {
             // pipeline resolves a name itself, otherwise the local LSA/SAM path
             // does. No LSA pre-resolve here: it used to abort on identities only
             // LDAP can resolve, even with a sufficient LDAP mode configured
-            // (review 2026-07-01 deep pass, finding 1). The "🔍 Resolve SID"
+            // (review 2026-07-01 deep pass, finding 1). The "Resolve SID"
             // button remains the explicit LSA preview.
             let mut identity = ui.global::<AnalyzeState>().get_sid().to_string();
             if identity.trim().is_empty() {

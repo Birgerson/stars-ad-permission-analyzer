@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Birger Labinsch
 
 // The Analyze tab (ADR 0082): its state (`AnalyzeState`, read and written by
-// src/main.rs) and its layout (`AnalyzeTab`).
+// src/tabs/analyze.rs) and its layout (`AnalyzeTab`).
 
 import {
     VerticalBox,
@@ -28,9 +28,6 @@ import {
 import { Theme } from "../theme/theme.slint";
 
 export global AnalyzeState {
-    // ============================================================
-    // Analyze-Tab Properties / Analyze tab properties
-    // ============================================================
     // Pre-fill the SYSVOL directory: exists on every default
     // Windows Server DC install, is audit-relevant (Group Policy
     // templates, login scripts) and saves the first keystroke. The
@@ -45,13 +42,15 @@ export global AnalyzeState {
     in property <string> name-error;
     in property <[IdentitySuggestionVm]> suggestions;
     // Feedback line for the "Search AD" directory picker (match count,
-    // "searching…", or an error). Separate from a-status so a directory
+    // "searching…", or an error). Separate from `status` so a directory
     // search never overwrites the analysis status.
     in property <string> search-status;
     in-out property <string> sid;
     // LDAP mode: 0 = off (SAM/LSA, recommended on DC),
     //            1 = LDAPS (encrypted, port 636),
-    //            2 = plain LDAP (port 389, test only).
+    //            2 = plain LDAP (port 389, test only),
+    //            3 = Global Catalog (LDAPS 3269),
+    //            4 = signed LDAP (Kerberos sign & seal, port 389).
     in-out property <int>    ldap-mode: 0;
     in-out property <string> ldap-server;
     in-out property <string> ldap-base-dn;
@@ -98,6 +97,11 @@ export global AnalyzeState {
 
 export component AnalyzeTab inherits ScrollView {
     VerticalBox {
+        // ADR 0083: every field at its natural height, from the top. Without
+        // this, free height is shared out over all rows, so the fields grew
+        // while the tab had room and shrank again as soon as the suggestion
+        // list or a result took it.
+        alignment: start;
         padding: Theme.spacing-md;
         spacing: Theme.spacing-sm;
 
@@ -139,11 +143,11 @@ export component AnalyzeTab inherits ScrollView {
                             spacing: Theme.spacing-sm;
                             padding: 0px;
                             Button {
-                                text: "🔍 Resolve SID";
+                                text: "Resolve SID";
                                 clicked => { AnalyzeState.resolve-name-clicked(); }
                             }
                             Button {
-                                text: "🌐 Search AD";
+                                text: "Search AD";
                                 enabled: AnalyzeState.ldap-mode > 0;
                                 clicked => { AnalyzeState.search-directory-clicked(); }
                             }
@@ -343,11 +347,10 @@ export component AnalyzeTab inherits ScrollView {
             alignment: start;
             spacing: Theme.spacing-sm;
             PrimaryButton {
-                text: AnalyzeState.is-running ? "Running..." : "▶  Analyze";
+                text: AnalyzeState.is-running ? "Running..." : "Analyze";
                 enabled: !AnalyzeState.is-running;
                 clicked => { AnalyzeState.clicked(); }
             }
-            // Zweite Audit-Frage: pfadzentrierte
             // Second audit question: path-centric
             // trustee view. Needs no identity because
             // it lists every ACE on the path.
@@ -435,7 +438,7 @@ export component AnalyzeTab inherits ScrollView {
                         color: Theme.text-primary;
                     }
                     for d in AnalyzeState.diagnostics: Text {
-                        text: (d.level == 0 ? "ℹ " : "⚠ ") + d.text;
+                        text: (d.level == 0 ? "[i] " : "[!] ") + d.text;
                         color: d.level == 2 ? Theme.danger
                              : d.level == 1 ? Theme.warning
                              : Theme.text-secondary;

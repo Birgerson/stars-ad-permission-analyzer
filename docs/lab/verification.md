@@ -1567,3 +1567,42 @@ The GUI identity picker is now live-verified end to end (narrow **and** broad
 queries), and the rc=88 paged-limit-abandon bug it surfaced is fixed. The
 refreshed `stars-analyze-tab.png` shows the new Search AD button. This closes
 the last unexercised v1.7.8 surface.
+
+## Block Q — GUI design step (ADR 0083) live against the lab (2026-10-24)
+
+**Stars version:** `main` after the GUI modularization (ADR 0082, steps
+1–4) plus ADR 0083 (one font, no symbol icons, fields at their natural
+height, fixed button height), debug build, driven from the workstation
+against `corp.test` (DC-01 `192.168.11.147`, Plain LDAP, full bind DN,
+timeout 120 s), MS-01 and the ext.test trust. Lab health first: both DCs
+with all AD services, the trust verified from both sides, MS-01's secure
+channel `NERR_Success`.
+
+| Tab | Case | Result |
+| --- | --- | --- |
+| Analyze | `u00030` on `\\MS-01\MSData\F06_LocalGroupDomUsersDeny`, share `MSData` | **Read & Execute + Delete (RX+DE)**, mask `0x001300A9`, share line NTFS ∩ Share (Share = Full Control), 70 memberships collapsed, the Deny of `msg_deny` removes the write bits, "Limited by NTFS" — the documented result |
+| Graph | same result, click on *Share* | four named token groups + "+69 further groups", Deny double red line, two bands; the route through *Share* bright, NTFS faded, detail "Share: Full Control (0x001F01FF)"; the graph canvas is **pixel-identical** to the v1.17.0 documentation image |
+| Groups | `rt_gt01`, Member of | 7 groups, 4 direct; `[i] 4 group(s) are not in the token and were left out` (distribution groups) |
+| Groups | *Domain Users* (German-language DC), Members | **10015 members — 10 direct, 10005 via primaryGroupID**, disabled accounts marked |
+| Analyze | Search AD `u00042` | "1 directory match.", picker row `[U] u00042 S-1-5-21-…-1144`; the fields keep their height while the list is open |
+| Trusts | corp.test | ext.test (EXT), bidirectional, SID filtering `raw 0x00000004`, callout `[!] SID filtering (quarantine) is ON …` |
+| Shares | DC-01 | 16 shares, 13 shown, 3 administrative hidden; the `$`-named data share flagged `[!] hidden data share`, a share with an empty DACL `[i] Empty DACL`, a share-level Deny in red |
+| Scan Tree | the DC's `$`-named data share for `u00030` | during the scan *Running…* and a red, clickable *Cancel*; *Cancel* → "Scan cancelled — results are incomplete." (taken at the start of the walk); two full runs: 689 paths, 5 errors each (access denied, duplicate reparse target, cycle — the known special cases); the buttons stay visible with the results overflowing; row detail with `[i] Non-canonical DACL order …` and the trustee table (Allow green, Deny red) |
+| Delta | the two full runs | **0 added, 0 removed, 0 changed**, "No differences found …"; the cancelled run's error list: "Scan cancelled by user — results are partial"; *Errors (n)* / *Delete* buttons |
+
+Observations, not changed in this step (ADR 0083, Consequences): with 689
+streamed rows the Scan Tree lags for a few seconds (the list is not
+virtualized and every row rebuilds the shown model); a *Cancel* during the
+group resolution only takes effect when the walk starts.
+
+**Incident during the run, cleaned up:** the GUI was still drawing the
+10,015-member list when the driver pasted the next tab's LDAP fields; the
+posted Ctrl+V keystrokes were processed late, at a moment when the lab
+password was already on the clipboard, so it landed in two visible fields
+and in one screenshot of the session. The screenshot was deleted, the GUI
+closed; the GUI log never contained it; no repository file or commit did.
+The driver now settles before the password goes onto the clipboard and
+compares the neighbouring rows before and after the paste (any change
+aborts the run and deletes the capture). The lab password is to be changed.
+
+The eight documentation screenshots were retaken from this run.

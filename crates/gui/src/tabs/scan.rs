@@ -401,12 +401,12 @@ pub fn handle_export_done(ui: &MainWindow, result: Result<(), String>) {
     match result {
         Ok(()) => {
             ui.global::<ScanState>()
-                .set_export_message("✓ Export successful.".into());
+                .set_export_message("Export successful.".into());
             ui.global::<ScanState>().set_export_is_error(false);
         }
         Err(e) => {
             ui.global::<ScanState>()
-                .set_export_message(format!("✗ Export failed: {e}").into());
+                .set_export_message(format!("Export failed: {e}").into());
             ui.global::<ScanState>().set_export_is_error(true);
         }
     }

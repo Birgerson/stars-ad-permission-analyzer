@@ -8,8 +8,12 @@ import { Theme } from "../theme/theme.slint";
 // PrimaryButton — accent background, white text. For main actions
 // like Analyze, Start Scan, Compare.
 //
-// Important: pinning stretch + max-height keeps the parent layout
-// from inflating the button to fill the available space.
+// Important: the height is fixed at 30 px — min, preferred and max. The
+// max keeps a layout from inflating the button; the min keeps it from
+// squeezing it away: a ScrollView sizes its content to the content's
+// MINIMUM height once it is taller than the window, and with a min of 0
+// the Scan Tree's Start/Cancel buttons vanished as soon as the results
+// overflowed (ADR 0083).
 export component PrimaryButton inherits Rectangle {
     in property <string> text;
     in property <bool> enabled: true;
@@ -21,6 +25,7 @@ export component PrimaryButton inherits Rectangle {
     border-radius: Theme.radius-sm;
     horizontal-stretch: 0;
     vertical-stretch: 0;
+    min-height: 30px;
     preferred-height: 30px;
     max-height: 30px;
     preferred-width: label.preferred-width + 2 * Theme.spacing-lg;
@@ -60,6 +65,7 @@ export component DangerButton inherits Rectangle {
     border-radius: Theme.radius-sm;
     horizontal-stretch: 0;
     vertical-stretch: 0;
+    min-height: 30px;
     preferred-height: 30px;
     max-height: 30px;
     preferred-width: dlabel.preferred-width + 2 * Theme.spacing-lg;

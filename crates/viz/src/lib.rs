@@ -47,8 +47,11 @@ const FIRST_BASELINE: f64 = 18.0;
 const LINE_H: f64 = 16.0;
 const BOTTOM_PAD: f64 = 12.0;
 const TEXT_PAD: f64 = 10.0;
-/// Average advance of one character at [`FONT_SIZE`] (bold Segoe UI) —
-/// used to fit texts into a box instead of cutting them off.
+/// Average advance of one character at [`FONT_SIZE`] — used to fit texts
+/// into a box instead of cutting them off. The graph is drawn in Arial (the
+/// GUI's font, ADR 0083); measured at 12 px, mixed text needs 5–6 px per
+/// character, a capitals-only rights label such as `RX+WA,WEA,DC,DE,WDAC,WO`
+/// about 7.8 px, so such a label can still overrun a box edge.
 const CHAR_W: f64 = 6.7;
 const LEGEND_ROW_H: f64 = 22.0;
 const LEGEND_SWATCH: f64 = 28.0;
@@ -1324,7 +1327,7 @@ impl GraphLayout {
             String::new()
         };
         let mut s = format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width:.0}\" height=\"{height:.0}\" viewBox=\"0 0 {width:.0} {height:.0}\"{style} font-family=\"Segoe UI, Arial, sans-serif\" font-size=\"{FONT_SIZE:.0}\">"
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width:.0}\" height=\"{height:.0}\" viewBox=\"0 0 {width:.0} {height:.0}\"{style} font-family=\"Arial, sans-serif\" font-size=\"{FONT_SIZE:.0}\">"
         );
         if with_text {
             s.push_str(&format!("<title>{}</title>", esc(&self.title)));

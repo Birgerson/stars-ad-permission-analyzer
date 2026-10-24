@@ -98,9 +98,8 @@ export component MainWindow inherits Window {
     min-width: 800px;
     min-height: 560px;
     background: Theme.bg-app;
-    // Stars only runs on Windows Server hosts (see AGENTS.md).
-    // Arial is guaranteed and renders consistently across editions.
-    default-font-family: "Arial";
+    // One font for every text and widget (Theme.font-family, ADR 0083).
+    default-font-family: Theme.font-family;
 
     // Pin Slint widget palette to our explicit toggle so the
     // host theme cannot override readability. Reactive binding via

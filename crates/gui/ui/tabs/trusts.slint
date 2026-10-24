@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Birger Labinsch
 
 // The Trusts tab (ADR 0082): its state (`TrustsState`, read and written by
-// src/main.rs) and its layout (`TrustsTab`).
+// src/tabs/trusts.rs) and its layout (`TrustsTab`).
 
 import {
     VerticalBox,
@@ -122,7 +122,7 @@ export component TrustsTab inherits ScrollView {
             spacing: Theme.spacing-sm;
             padding: 0px;
             Button {
-                text: "🔗 Read trusts";
+                text: "Read trusts";
                 enabled: !TrustsState.is-running;
                 clicked => { TrustsState.list-clicked(); }
             }
@@ -167,12 +167,12 @@ export component TrustsTab inherits ScrollView {
                         font-size: 11px;
                     }
                     if t.sid-filtering: Text {
-                        text: "⚠ SID filtering (quarantine) is ON — historical / foreign SIDs across this trust are dropped at runtime, so a finding that relies on such a SID may over-report. Stars shows the DACL view, not the filtered one.";
+                        text: "[!] SID filtering (quarantine) is ON — historical / foreign SIDs across this trust are dropped at runtime, so a finding that relies on such a SID may over-report. Stars shows the DACL view, not the filtered one.";
                         color: Theme.warning;
                         wrap: word-wrap;
                     }
                     if t.selective-auth: Text {
-                        text: "⚠ Selective Authentication is ON — principals from this trust need an explicit 'allowed to authenticate' right on the target, so a DACL grant alone does not imply real access.";
+                        text: "[!] Selective Authentication is ON — principals from this trust need an explicit 'allowed to authenticate' right on the target, so a DACL grant alone does not imply real access.";
                         color: Theme.warning;
                         wrap: word-wrap;
                     }

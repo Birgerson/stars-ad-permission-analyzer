@@ -22,7 +22,7 @@ If `%APPDATA%` is not set, the application falls back to the directory next to t
 |---|---|
 | `scan_runs` | One row per completed scan: UUID, start time, end time, target path |
 | `effective_permissions` | Every evaluated path per run with an identity snapshot, NTFS mask, share mask, effective mask, explanation path, diagnostic markers |
-| `scan_errors` | Walk and eval errors per scan (e.g. "Access denied", "Path not found"). Reviewable per run via `adpa runs` / `adpa errors --run-id <ID>` and the Delta tab's ⚠ button (since the persistence review 2026-07-26 — before that this evidence was write-only). |
+| `scan_errors` | Walk and eval errors per scan (e.g. "Access denied", "Path not found"). Reviewable per run via `adpa runs` / `adpa errors --run-id <ID>` and the Delta tab's Errors button (since the persistence review 2026-07-26 — before that this evidence was write-only). |
 | `identities` | SID → name/domain/kind/disabled, written by every stored permission. **Note:** since v1.5.16 the identity snapshot is stored per permission row in `effective_permissions` itself — this table is **no longer the source for historical reports** (audit integrity). |
 | `group_memberships` | **Legacy, empty in practice.** Its writer (a persistent membership cache) was removed in the persistence review 2026-07-26 (PS-2) because it had no production reader. The table stays — migrations are append-only and existing databases must keep opening cleanly. |
 
@@ -57,5 +57,5 @@ Since the persistence review 2026-07-26 the comparison also refuses semantically
 
 Every run's stored error list answers the question "**what could this scan not read?**" — those paths are missing from the run's results, so the list is part of the audit evidence:
 
-- **GUI:** the Delta tab's run list shows the true error count per run and a **⚠ button** that opens the run's error list (path + reason per entry).
+- **GUI:** the Delta tab's run list shows the true error count per run and an **Errors (n)** button that opens the run's error list (path + reason per entry).
 - **CLI:** `adpa runs --db <DB>` lists the stored runs with their path/error counts; `adpa errors --db <DB> --run-id <ID>` prints one run's error list. Both are strictly read-only and refuse to *create* a database file that does not exist.

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Birger Labinsch
 
 // The Graph tab (ADR 0082): its state (`GraphState`, read and written by
-// src/main.rs) and its layout (`GraphTab`).
+// src/tabs/graph.rs) and its layout (`GraphTab`).
 
 import { VerticalBox, LineEdit, Button, CheckBox, ScrollView } from "std-widgets.slint";
 import { GraphTextVm, GraphNodeVm } from "../models.slint";
@@ -129,7 +129,7 @@ export component GraphTab inherits VerticalBox {
                 horizontal-stretch: 1;
             }
             Button {
-                text: "💾  Save graph (SVG)";
+                text: "Save graph (SVG)";
                 clicked => { GraphState.save-svg(); }
             }
         }

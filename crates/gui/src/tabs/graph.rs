@@ -214,7 +214,7 @@ fn draw(ui: &MainWindow, perm: &EffectivePermission) {
                 .map(|t| GraphTextVm {
                     x: t.x as f32,
                     // Baseline (SVG) to the top of the text box: one font
-                    // size up is close enough for 12 px Segoe UI.
+                    // size up is close enough for 12 px Arial.
                     y: (t.baseline - viz::FONT_SIZE) as f32,
                     text: t.text.as_str().into(),
                     bold: t.style.bold(),
