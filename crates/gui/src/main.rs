@@ -98,7 +98,6 @@ fn main() {
     );
 
     std::env::set_var("SLINT_BACKEND", "winit-software");
-    // Default je nach System-Theme blasse Standard-Texte produzieren.
     // Force fluent style so default widget text colors stay legible
     // regardless of the host system theme.
     std::env::set_var("SLINT_STYLE", "fluent");

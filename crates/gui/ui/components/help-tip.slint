@@ -1,0 +1,50 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
+// The "?" help tip next to a field.
+
+import { Theme } from "../theme/theme.slint";
+
+// Wiederverwendbares ⓘ-Help-Icon. Bei Hover erscheint ein kleiner
+// Reusable ⓘ help icon. On hover a small dark tooltip box appears
+// right next to the icon. The tooltip is only shown while hovered,
+// overlays its neighbors (Slint renders children over siblings)
+// and disappears as soon as the mouse leaves.
+export component HelpTip inherits Rectangle {
+    in property <string> tip;
+    width: 20px;
+    height: 20px;
+
+    Text {
+        text: "ⓘ";
+        font-size: Theme.font-lg;
+        color: Theme.accent;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: help;
+    }
+
+    if ta.has-hover: Rectangle {
+        x: parent.width + 6px;
+        y: parent.height / 2;
+        background: Theme.dark ? #15151c : #1f2937;
+        border-radius: Theme.radius-sm;
+        border-color: Theme.border-strong;
+        border-width: 1px;
+        width: 320px;
+        height: tip-text.preferred-height + 14px;
+
+        tip-text := Text {
+            x: 8px;
+            y: 6px;
+            width: parent.width - 16px;
+            text: root.tip;
+            color: white;
+            font-size: Theme.font-xs;
+            wrap: word-wrap;
+        }
+    }
+}

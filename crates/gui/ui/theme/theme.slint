@@ -1,0 +1,82 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
+// Design tokens: every colour (light and dark), type size, spacing and
+// radius of the GUI. Components and tabs take their values from here.
+
+// ============================================================
+// Theme — global design tokens with light/dark switching.
+// Theme — global design language with light/dark toggle.
+// ============================================================
+// All colors, spacings and font sizes live here. Components
+// reference `Theme.bg-app`, `Theme.accent`, `Theme.spacing-md`, …
+// instead of hardcoded hex values.
+export global Theme {
+    // Toggle: false = Light (Default), true = Dark.
+    in-out property <bool> dark: false;
+
+    // --- Backgrounds ---
+    // Neutral, only slightly off-white app background so Slint
+    // default widgets stay legible with their system-default text.
+    out property <color> bg-app:    dark ? #1a1a24 : #eef0f5;
+    out property <color> bg-card:   dark ? #25252f : #ffffff;
+    out property <color> bg-header: dark ? #1f1f29 : #ffffff;
+    out property <color> bg-input:  dark ? #1a1a26 : #ffffff;
+    out property <color> bg-hover:  dark ? #2f2f3c : #e4e8f0;
+    out property <color> bg-active: dark ? #34344a : #d4d9e4;
+
+    // --- Text ---
+    out property <color> text-primary:   dark ? #e8e8ec : #1f2937;
+    out property <color> text-secondary: dark ? #a5a5b5 : #4b5563;
+    out property <color> text-muted:     dark ? #707080 : #6b7280;
+    out property <color> text-inverse:   #ffffff;
+
+    // --- Borders ---
+    // Slightly darker default border so cards and inputs stand out
+    // clearly against the light background.
+    out property <color> border:        dark ? #3a3a4a : #a8b1c2;
+    out property <color> border-strong: dark ? #4a4a5c : #7a8499;
+
+    // --- Accent (Stars warm orange) ---
+    // A dark, warm orange reads more comfortably than blue for many
+    // eyes and gives Stars a distinct identity. On the light app
+    // background a deep orange keeps strong contrast; on dark mode a
+    // slightly muted warm tone is used for the soft accent.
+    // Hex values deliberately avoid "digit(s) directly followed by
+    // e/E", which Rust's tokenizer parses as a float exponent.
+    out property <color> accent:         #C2410C;
+    out property <color> accent-hover:   #9A3412;
+    out property <color> accent-soft:    dark ? #7C3A12 : #FFEDD5;
+    out property <color> accent-text:    #ffffff;
+
+    // --- Semantic ramp (diagnostic & severity), light + dark ---
+    // correct = Microsoft blue (calm "all good"); info = teal; warning =
+    // amber; danger = orange-red (under-report); error = red; ok = green.
+    // Hex values avoid "digit directly followed by e/E" (Rust tokenizer).
+    out property <color> correct:  dark ? #4DA3FF : #0067C0;
+    out property <color> info:     dark ? #45C2D6 : #0891B2;
+    out property <color> warning:  dark ? #F5A623 : #D97706;
+    out property <color> danger:   dark ? #FB7335 : #EA580C;
+    out property <color> error:    dark ? #F05252 : #DC2626;
+    out property <color> success:  dark ? #34C759 : #16A34A;
+
+    // --- Spacing (6er-Skala) ---
+    out property <length> spacing-xs: 4px;
+    out property <length> spacing-sm: 6px;
+    out property <length> spacing-md: 10px;
+    out property <length> spacing-lg: 14px;
+    out property <length> spacing-xl: 20px;
+
+    // --- Radius ---
+    out property <length> radius-sm: 4px;
+    out property <length> radius-md: 6px;
+    out property <length> radius-lg: 10px;
+
+    // --- Fonts ---
+    out property <length> font-xs:  11px;
+    out property <length> font-sm:  12px;
+    out property <length> font-md:  13px;
+    out property <length> font-lg:  14px;
+    out property <length> font-xl:  16px;
+    out property <length> font-xxl: 20px;
+}

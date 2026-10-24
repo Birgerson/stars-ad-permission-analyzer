@@ -1,572 +1,68 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-// The Stars GUI — compiled by build.rs (slint-build) and included in
-// src/main.rs through `slint::include_modules!()`.
+// The Stars window: header, tab bar and the eight tabs. Compiled by the
+// `slint!` macro in src/main.rs (ADR 0082). Design tokens live in
+// theme/, reusable building blocks in components/, view models in
+// models.slint.
 
 import {
-    TabWidget, VerticalBox, HorizontalBox, GridBox, GroupBox,
-    LineEdit, Button, CheckBox, ScrollView, SpinBox, ComboBox,
+    TabWidget,
+    VerticalBox,
+    HorizontalBox,
+    GridBox,
+    GroupBox,
+    LineEdit,
+    Button,
+    CheckBox,
+    ScrollView,
+    SpinBox,
+    ComboBox,
     Palette,
 } from "std-widgets.slint";
+import { PrimaryButton, DangerButton } from "components/buttons.slint";
+import { HeaderBar } from "components/header.slint";
+import { HelpTip } from "components/help-tip.slint";
+import { TrustDomainFields } from "components/trust-domain-fields.slint";
+import {
+    TrusteeRowVm,
+    DiagnosticVm,
+    GroupMemberVm,
+    ShareVm,
+    TrustVm,
+    GraphTextVm,
+    GraphNodeVm,
+    StepVm,
+    ScanRowVm,
+    ScanErrorVm,
+    RiskItemVm,
+    ScanRunVm,
+    RunErrorVm,
+    DeltaRowVm,
+    IdentitySuggestionVm,
+} from "models.slint";
+import { Theme } from "theme/theme.slint";
 
-// ============================================================
-// Theme — global design tokens with light/dark switching.
-// Theme — global design language with light/dark toggle.
-// ============================================================
-// All colors, spacings and font sizes live here. Components
-// reference `Theme.bg-app`, `Theme.accent`, `Theme.spacing-md`, …
-// instead of hardcoded hex values.
-export global Theme {
-    // Toggle: false = Light (Default), true = Dark.
-    in-out property <bool> dark: false;
-
-    // --- Backgrounds ---
-    // Neutral, only slightly off-white app background so Slint
-    // default widgets stay legible with their system-default text.
-    out property <color> bg-app:    dark ? #1a1a24 : #eef0f5;
-    out property <color> bg-card:   dark ? #25252f : #ffffff;
-    out property <color> bg-header: dark ? #1f1f29 : #ffffff;
-    out property <color> bg-input:  dark ? #1a1a26 : #ffffff;
-    out property <color> bg-hover:  dark ? #2f2f3c : #e4e8f0;
-    out property <color> bg-active: dark ? #34344a : #d4d9e4;
-
-    // --- Text ---
-    out property <color> text-primary:   dark ? #e8e8ec : #1f2937;
-    out property <color> text-secondary: dark ? #a5a5b5 : #4b5563;
-    out property <color> text-muted:     dark ? #707080 : #6b7280;
-    out property <color> text-inverse:   #ffffff;
-
-    // --- Borders ---
-    // Slightly darker default border so cards and inputs stand out
-    // clearly against the light background.
-    out property <color> border:        dark ? #3a3a4a : #a8b1c2;
-    out property <color> border-strong: dark ? #4a4a5c : #7a8499;
-
-    // --- Accent (Stars warm orange) ---
-    // A dark, warm orange reads more comfortably than blue for many
-    // eyes and gives Stars a distinct identity. On the light app
-    // background a deep orange keeps strong contrast; on dark mode a
-    // slightly muted warm tone is used for the soft accent.
-    // Hex values deliberately avoid "digit(s) directly followed by
-    // e/E", which Rust's tokenizer parses as a float exponent.
-    out property <color> accent:         #C2410C;
-    out property <color> accent-hover:   #9A3412;
-    out property <color> accent-soft:    dark ? #7C3A12 : #FFEDD5;
-    out property <color> accent-text:    #ffffff;
-
-    // --- Semantic ramp (diagnostic & severity), light + dark ---
-    // correct = Microsoft blue (calm "all good"); info = teal; warning =
-    // amber; danger = orange-red (under-report); error = red; ok = green.
-    // Hex values avoid "digit directly followed by e/E" (Rust tokenizer).
-    out property <color> correct:  dark ? #4DA3FF : #0067C0;
-    out property <color> info:     dark ? #45C2D6 : #0891B2;
-    out property <color> warning:  dark ? #F5A623 : #D97706;
-    out property <color> danger:   dark ? #FB7335 : #EA580C;
-    out property <color> error:    dark ? #F05252 : #DC2626;
-    out property <color> success:  dark ? #34C759 : #16A34A;
-
-    // --- Spacing (6er-Skala) ---
-    out property <length> spacing-xs: 4px;
-    out property <length> spacing-sm: 6px;
-    out property <length> spacing-md: 10px;
-    out property <length> spacing-lg: 14px;
-    out property <length> spacing-xl: 20px;
-
-    // --- Radius ---
-    out property <length> radius-sm: 4px;
-    out property <length> radius-md: 6px;
-    out property <length> radius-lg: 10px;
-
-    // --- Fonts ---
-    out property <length> font-xs:  11px;
-    out property <length> font-sm:  12px;
-    out property <length> font-md:  13px;
-    out property <length> font-lg:  14px;
-    out property <length> font-xl:  16px;
-    out property <length> font-xxl: 20px;
-}
-
-// PrimaryButton — accent background, white text. For main actions
-// like Analyze, Start Scan, Compare.
-//
-// Important: pinning stretch + max-height keeps the parent layout
-// from inflating the button to fill the available space.
-component PrimaryButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> enabled: true;
-    callback clicked;
-
-    background: !enabled
-        ? Theme.border
-        : (ta.has-hover ? Theme.accent-hover : Theme.accent);
-    border-radius: Theme.radius-sm;
-    horizontal-stretch: 0;
-    vertical-stretch: 0;
-    preferred-height: 30px;
-    max-height: 30px;
-    preferred-width: label.preferred-width + 2 * Theme.spacing-lg;
-    min-width: 96px;
-
-    animate background { duration: 80ms; }
-
-    label := Text {
-        x: Theme.spacing-md;
-        y: 0;
-        height: parent.height;
-        width: parent.width - 2 * Theme.spacing-md;
-        text: root.text;
-        color: Theme.text-inverse;
-        font-size: Theme.font-md;
-        font-weight: 600;
-        vertical-alignment: center;
-        horizontal-alignment: center;
-    }
-
-    ta := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: enabled ? pointer : default;
-        clicked => { root.clicked(); }
-    }
-}
-
-// DangerButton — destructive actions like Cancel/Delete.
-component DangerButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> enabled: true;
-    callback clicked;
-
-    background: !enabled
-        ? Theme.border
-        : (ta.has-hover ? #b91c1c : Theme.error);
-    border-radius: Theme.radius-sm;
-    horizontal-stretch: 0;
-    vertical-stretch: 0;
-    preferred-height: 30px;
-    max-height: 30px;
-    preferred-width: dlabel.preferred-width + 2 * Theme.spacing-lg;
-    min-width: 96px;
-
-    animate background { duration: 80ms; }
-
-    dlabel := Text {
-        x: Theme.spacing-md;
-        y: 0;
-        height: parent.height;
-        width: parent.width - 2 * Theme.spacing-md;
-        text: root.text;
-        color: Theme.text-inverse;
-        font-size: Theme.font-md;
-        font-weight: 600;
-        vertical-alignment: center;
-        horizontal-alignment: center;
-    }
-
-    ta := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: enabled ? pointer : default;
-        clicked => { root.clicked(); }
-    }
-}
-
-// ThemeToggle — sun/moon switcher for light/dark, rendered as a
-// clearly clickable button. Deliberately uses a text label instead of a sole
-// Unicode glyph, because Slint's software backend on Windows Server
-// (default font) does not reliably render U+263E (☾) / U+2600 (☀).
-// With border + background + text the toggle is clearly visible.
-component ThemeToggle inherits Rectangle {
-    height: 32px;
-    width: 110px;
-    border-radius: Theme.radius-sm;
-    border-width: 1px;
-    border-color: ta.has-hover ? Theme.accent : Theme.border;
-    background: ta.has-hover ? Theme.bg-hover : Theme.bg-card;
-
-    animate background, border-color { duration: 80ms; }
-
-    HorizontalLayout {
-        padding-left: 8px;
-        padding-right: 8px;
-        spacing: 6px;
-        alignment: center;
-        Text {
-            text: Theme.dark ? "☀" : "☾";
-            font-size: 14px;
-            color: Theme.text-primary;
-            vertical-alignment: center;
-        }
-        Text {
-            text: Theme.dark ? "Light" : "Dark";
-            font-size: Theme.font-sm;
-            color: Theme.text-primary;
-            vertical-alignment: center;
-        }
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { Theme.dark = !Theme.dark; }
-    }
-}
-
-// HeaderBar — Brand-Block links, Status-/Theme-Controls rechts.
-// HeaderBar — brand block left, status/theme controls right.
-component HeaderBar inherits Rectangle {
-    in property <string> app-title: "Stars";
-    in property <string> app-subtitle: "AD Permission Analyzer";
-    in property <string> version-text;
-    height: 48px;
-    background: Theme.bg-header;
-    // Dezente untere Trennlinie
-    // Subtle bottom separator
-    Rectangle {
-        x: 0;
-        y: parent.height - 1px;
-        width: parent.width;
-        height: 1px;
-        background: Theme.border;
-    }
-
-    HorizontalLayout {
-        padding-left: Theme.spacing-lg;
-        padding-right: Theme.spacing-md;
-        padding-top: Theme.spacing-sm;
-        padding-bottom: Theme.spacing-sm;
-        spacing: Theme.spacing-md;
-
-        // Brand block: star + title (incl. version) + subtitle
-        HorizontalLayout {
-            spacing: Theme.spacing-sm;
-            Text {
-                text: "★";
-                font-size: Theme.font-xxl;
-                color: Theme.accent;
-                vertical-alignment: center;
-            }
-            VerticalLayout {
-                HorizontalLayout {
-                    spacing: Theme.spacing-sm;
-                    alignment: start;
-                    Text {
-                        text: root.app-title;
-                        font-size: Theme.font-xl;
-                        font-weight: 700;
-                        color: Theme.text-primary;
-                        vertical-alignment: center;
-                    }
-                    if root.version-text != "": Text {
-                        text: root.version-text;
-                        font-size: Theme.font-sm;
-                        font-weight: 500;
-                        color: Theme.text-secondary;
-                        vertical-alignment: center;
-                    }
-                }
-                Text {
-                    text: root.app-subtitle;
-                    font-size: Theme.font-xs;
-                    color: Theme.text-muted;
-                }
-            }
-        }
-
-        // Spacer
-        Rectangle { horizontal-stretch: 1; }
-
-        ThemeToggle {}
-    }
-}
-
-// Wiederverwendbares ⓘ-Help-Icon. Bei Hover erscheint ein kleiner
-// Reusable ⓘ help icon. On hover a small dark tooltip box appears
-// right next to the icon. The tooltip is only shown while hovered,
-// overlays its neighbors (Slint renders children over siblings)
-// and disappears as soon as the mouse leaves.
-component HelpTip inherits Rectangle {
-    in property <string> tip;
-    width: 20px;
-    height: 20px;
-
-    Text {
-        text: "ⓘ";
-        font-size: Theme.font-lg;
-        color: Theme.accent;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-
-    ta := TouchArea {
-        mouse-cursor: help;
-    }
-
-    if ta.has-hover: Rectangle {
-        x: parent.width + 6px;
-        y: parent.height / 2;
-        background: Theme.dark ? #15151c : #1f2937;
-        border-radius: Theme.radius-sm;
-        border-color: Theme.border-strong;
-        border-width: 1px;
-        width: 320px;
-        height: tip-text.preferred-height + 14px;
-
-        tip-text := Text {
-            x: 8px;
-            y: 6px;
-            width: parent.width - 16px;
-            text: root.tip;
-            color: white;
-            font-size: Theme.font-xs;
-            wrap: word-wrap;
-        }
-    }
-}
-
-// One row in the trustee view — declared ahead of ScanRowVm because
-// ScanRowVm carries the model as a field and Slint's parser requires
-// forward declarations.
-export struct TrusteeRowVm {
-    display_name: string,
-    sid: string,
-    kind: string,
-    kind_color: color,
-    rights_label: string,
-    mask_hex: string,
-    source: string,
-    applies_to: string,
-    category: string,
-}
-
-// One diagnostic marker — its reason plus whether it is a warning
-// (evaluation may be incomplete) or only informational. Declared ahead of
-// ScanRowVm because that struct carries the model as a field.
-export struct DiagnosticVm {
-    text: string,
-    // 0 = info, 1 = warning, 2 = high (PermissionDiagnostic::severity).
-    level: int,
-}
-
-// One group-membership row for the Groups tab — a group the identity is in,
-// how that membership arose, and whether the group is privileged.
-export struct GroupMemberVm {
-    name: string,
-    sid: string,
-    // "direct", "via A → B", "primary group", "local group", …
-    origin: string,
-    privileged: bool,
-    // Privileged role name (e.g. "Domain Admins") when `privileged`.
-    role: string,
-}
-
-// One ACE of a share's DACL for the Shares tab.
-export struct ShareAceVm {
-    // "Allow" or "Deny".
-    kind: string,
-    // Resolved account name, or the SID when unresolved.
-    trustee: string,
-    sid: string,
-    rights: string,
-    mask: string,
-}
-
-// One share for the Shares tab.
-export struct ShareVm {
-    name: string,
-    unc: string,
-    local: string,
-    is-admin: bool,
-    // `$` name; when not also is-admin it is a hidden DATA share.
-    is-hidden: bool,
-    // Empty for a normal ACE list; otherwise NULL DACL / empty DACL /
-    // not read (kept distinct — ADR 0017).
-    dacl-status: string,
-    // 0 = neutral, 1 = notice, 2 = concern.
-    dacl-level: int,
-    aces: [ShareAceVm],
-    // > 0 = the share mask is incomplete.
-    unsupported: int,
-}
-
-// One domain trust for the Trusts tab.
-export struct TrustVm {
-    partner: string,
-    flat-name: string,
-    direction: string,
-    attributes: string,
-    raw-hex: string,
-    sid: string,
-    sid-filtering: bool,
-    selective-auth: bool,
-}
-
-// One step of the Analyze permission path (review CR-12): `number` is
-// the step's number in the full path (CSV / CLI numbering), `collapsible`
-// marks a membership that did not matter for the result, `toggle` is the
-// single line that shows / hides those (`hidden_count` of them).
-// ADR 0077: one text of the permission graph, drawn natively on top of
-// the shape-only SVG (Slint's SVG renderer has no fonts). `y` is the top
-// of the text box in graph pixels.
-export struct GraphTextVm {
-    x: float,
-    y: float,
-    text: string,
-    bold: bool,
-    // ADR 0081: the text colour in the light and in the dark palette.
-    color-light: color,
-    color-dark: color,
-    // ADR 0081: off every route through the selected box.
-    faded: bool,
-}
-
-// ADR 0081: one box of the permission graph as a click target.
-export struct GraphNodeVm {
-    x: float,
-    y: float,
-    w: float,
-    h: float,
-    index: int,
-}
-
-export struct StepVm {
-    number: int,
-    text: string,
-    collapsible: bool,
-    toggle: bool,
-    hidden_count: int,
-}
-
-// A row in the scan result.
-export struct ScanRowVm {
-    path: string,
-    rights_label: string,
-    mask_hex: string,
-    steps: [string],
-    // Path-centric trustee list (every ACE resolved). Shown in the
-    // expanded state alongside the identity-based explanation path.
-    trustees: [TrusteeRowVm],
-    expanded: bool,
-    has_diagnostic: bool,
-    // Row presentation level: 0 = neutral, 1 = notice (amber),
-    // 2 = concern (orange-red) — see worker::row_severity.
-    row_severity: int,
-    // Per-diagnostic reasons for this row (engine review 2026-06-13
-    // finding 2), each with its severity. Shown in the expanded detail so
-    // the GUI surfaces *why* a row is flagged, warnings apart from info.
-    diagnostics: [DiagnosticVm],
-}
-
-// A scan error (a path could not be evaluated).
-export struct ScanErrorVm {
-    path: string,
-    message: string,
-}
-
-// A risk finding.
-// A risk finding.
-export struct RiskItemVm {
-    severity_label: string,
-    severity_color: color,
-    rule_id: string,
-    description: string,
-    affected_path: string,
-    incomplete: bool,
-}
-
-// A persisted scan run in the Delta tab's list.
-export struct ScanRunVm {
-    id: string,
-    label: string,
-    selected_as_old: bool,
-    selected_as_new: bool,
-    // Stored scan errors of this run — drives the per-run error view
-    // (persistence review 2026-07-26, PS-1).
-    error_count: int,
-}
-
-// One stored scan error of a historical run (Delta tab error view).
-export struct RunErrorVm {
-    path: string,
-    message: string,
-}
-
-// A delta row (Added / Removed / Changed).
-export struct DeltaRowVm {
-    path: string,
-    kind_label: string,
-    kind_color: color,
-    old_rights: string,
-    new_rights: string,
-}
-
-// A suggestion in the live search below the name field.
-export struct IdentitySuggestionVm {
-    name: string,
-    qualified: string,
-    kind_icon: string,
-    description: string,
-    // Resolved SID for a live directory hit (empty for a local
-    // autocomplete entry, which is resolved on pick via LSA instead).
-    sid: string,
-}
-
-// ADR 0078 (L15): optional connection to a domain controller of a
-// trusted domain — one component for Analyze, Scan Tree and Groups so the
-// three tabs cannot drift apart. Mirrors the CLI `--trust-*` flags.
-component TrustDomainFields inherits VerticalBox {
-    in-out property <bool>   enabled;
-    in-out property <string> server;
-    in-out property <string> base-dn;
-    in-out property <string> bind-dn;
-    in-out property <string> secret;
-    in property <bool>       signing;
-    padding: 0px;
-    spacing: Theme.spacing-sm;
-    HorizontalBox {
-        padding: 0px;
-        spacing: Theme.spacing-sm;
-        CheckBox {
-            text: "Also resolve accounts of a trusted domain";
-            checked <=> root.enabled;
-        }
-        HelpTip {
-            tip: "Optional. For an account of a TRUSTED domain (e.g. a partner domain), the configured domain does not know its groups. With a connection to a domain controller of that trusted domain, Stars resolves the account there, the way Windows builds its token for a resource here:\n\n• its global and universal groups there (as that DC hands them to other domains) — its builtin and domain-local groups there do not count and are named as left out;\n• the trust's SID filtering (quarantine);\n• the domain-local groups of this domain it reaches through a Foreign Security Principal.\n\nUsed only for accounts that belong to that trusted domain; every other account is resolved exactly as without it. Same encryption mode and timeout as above.";
-        }
-    }
-    if root.enabled: GridBox {
-        spacing: Theme.spacing-sm;
-        Row {
-            Text { text: "Trusted DC:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
-            LineEdit {
-                placeholder-text: "dc01.partner.local";
-                text <=> root.server;
-            }
-            HelpTip { tip: "Domain controller of the trusted domain (FQDN; with Signed LDAP it must be the FQDN)."; }
-        }
-        Row {
-            Text { text: "Trusted base DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
-            LineEdit {
-                placeholder-text: "DC=partner,DC=local";
-                text <=> root.base-dn;
-            }
-            HelpTip { tip: "Domain root of the trusted domain, e.g. DC=partner,DC=local."; }
-        }
-        if !root.signing: Row {
-            Text { text: "Trusted bind DN:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
-            LineEdit {
-                placeholder-text: "PARTNER\\user  ·  user@partner.local";
-                text <=> root.bind-dn;
-            }
-            HelpTip { tip: "An account OF THE TRUSTED DOMAIN. A simple bind with an account of this domain is refused across the trust (measured: error 52e). With Signed LDAP the current Windows logon is used instead."; }
-        }
-        if !root.signing: Row {
-            Text { text: "Trusted password:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
-            LineEdit {
-                input-type: password;
-                text <=> root.secret;
-            }
-            HelpTip { tip: "Password of the trusted bind account. Not persisted, only held in memory for the running session."; }
-        }
-    }
-}
+// Re-exported for the Rust side (the generated API stays the same).
+export { Theme } from "theme/theme.slint";
+export {
+    TrusteeRowVm,
+    DiagnosticVm,
+    GroupMemberVm,
+    ShareAceVm,
+    ShareVm,
+    TrustVm,
+    GraphTextVm,
+    GraphNodeVm,
+    StepVm,
+    ScanRowVm,
+    ScanErrorVm,
+    RiskItemVm,
+    ScanRunVm,
+    RunErrorVm,
+    DeltaRowVm,
+    IdentitySuggestionVm,
+} from "models.slint";
 
 export component MainWindow inherits Window {
     title: "Stars — AD Permission Analyzer";
