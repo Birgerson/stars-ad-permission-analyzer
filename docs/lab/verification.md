@@ -1603,6 +1603,8 @@ and in one screenshot of the session. The screenshot was deleted, the GUI
 closed; the GUI log never contained it; no repository file or commit did.
 The driver now settles before the password goes onto the clipboard and
 compares the neighbouring rows before and after the paste (any change
-aborts the run and deletes the capture). The lab password is to be changed.
+aborts the run and deletes the capture). The lab is isolated; the owner keeps its password.
 
-The eight documentation screenshots were retaken from this run.
+The eight documentation screenshots were retaken from this run, and once more with the release build of v1.18.0 (same cases, same results, each part in a fresh GUI with the guarded driver).
+
+**Release regression v1.17.0 → v1.18.0 (2026-10-24):** the same CLI scans with both release builds (v1.17.0 built from its tag) — DC-01's data share for 37 identities (25,493 rows), the group-types fixture (78 rows), MS-01 `MSData` with LDAP (135 rows) and with local accounts (135 rows): **0 differing rows** in every column. Expected, because the analysis crates are unchanged since v1.17.0.

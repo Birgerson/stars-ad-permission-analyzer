@@ -59,3 +59,7 @@ Every run's stored error list answers the question "**what could this scan not r
 
 - **GUI:** the Delta tab's run list shows the true error count per run and an **Errors (n)** button that opens the run's error list (path + reason per entry).
 - **CLI:** `adpa runs --db <DB>` lists the stored runs with their path/error counts; `adpa errors --db <DB> --run-id <ID>` prints one run's error list. Both are strictly read-only and refuse to *create* a database file that does not exist.
+
+### Removing a run
+
+The Delta tab's **Delete** button removes one run from this database after a confirmation box ("Really remove this scan run?" → *Delete permanently*), together with its stored permissions and scan errors; the run list then reloads. It changes only Stars' own local history file, never a target system. A cancelled scan stays in the history like any other run, with the stored error "Scan cancelled by user — results are partial".
