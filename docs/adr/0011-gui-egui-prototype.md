@@ -1,7 +1,7 @@
 # ADR 0011 — GUI prototype with egui/eframe
 
 ## Status
-**Superseded by the later Slint switch** (no formal superseding ADR; the switch is recorded in the v0.2.0-rc7..rc11 CHANGELOG entries). Kept here for historical context. The current GUI is inline Slint in `crates/gui/src/main.rs` and uses the software backend — see the rationale in `crates/gui/Cargo.toml`.
+**Superseded by the later Slint switch** (no formal superseding ADR; the switch is recorded in the v0.2.0-rc7..rc11 CHANGELOG entries). Kept here for historical context. The current GUI is Slint with its UI in `crates/gui/ui/*.slint` (ADR 0082) and uses the software backend — see the rationale in `crates/gui/Cargo.toml`.
 
 ## Context
 

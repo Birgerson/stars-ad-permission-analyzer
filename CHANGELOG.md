@@ -10,6 +10,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Changed
+
+- **GUI made modular (ADR 0082), in steps; nothing visible changes.**
+  - The UI left `main.rs`: it lives in `crates/gui/ui/*.slint`, compiled by
+    the `slint!` macro (no new dependency). Checked: all eight tabs, light
+    and dark, empty and with a result, pixel-identical to v1.17.0.
+  - The language gate now also checks `.slint` and `.html` files, so the UI
+    texts stay covered.
+
 ## [1.17.0] — 2026-10-18
 
 **The permission graph, redrawn: NTFS and share as two bands, the logon in
