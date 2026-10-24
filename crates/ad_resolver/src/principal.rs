@@ -122,13 +122,36 @@ pub enum SidDomainRelation {
     ConfiguredDomainPartialBase { base_dn: String },
     /// The SID belongs to a domain the configured domain trusts.
     /// `domain_sid` and `attributes` come from the trust object (ADR 0078).
+    /// `partner` is the SID's own domain; `forest` is set when the trust is a
+    /// forest trust — the domain may then be any domain of the trusted forest
+    /// its forest trust information lists (ADR 0084).
     TrustedDomain {
         partner: String,
         domain_sid: String,
         attributes: adpa_core::model::TrustAttributes,
+        forest: Option<TrustedForest>,
+    },
+    /// The SID belongs to a domain of a trusted forest whose SID the forest
+    /// trust information marks as disabled (ADR 0084). What Windows does with
+    /// such a SID is not modelled.
+    ForestDomainSidDisabled {
+        domain: String,
+        domain_sid: String,
+        forest: String,
+        flags: u32,
+    },
+    /// Global Catalog bind (ADR 0084): the SID belongs to the partner of a
+    /// trust that is no forest trust, held by one domain of the forest
+    /// (`holder`). Only that domain trusts it; which domain the resource
+    /// belongs to is not known from a forest-wide bind.
+    TrustedByForestDomain {
+        partner: String,
+        domain_sid: String,
+        holder: String,
     },
     /// The SID belongs to another domain that is neither the configured one
-    /// nor listed among its trusts.
+    /// nor listed among its trusts (nor among the domains of a trusted
+    /// forest).
     OtherDomain { domain_sid: String },
     /// The relation could not be determined.
     Unknown { reason: String },
@@ -146,10 +169,36 @@ impl SidDomainRelation {
                  whether the account exists elsewhere in the domain is unknown",
                 sid.0
             )),
-            SidDomainRelation::TrustedDomain { partner, .. } => Some(format!(
-                "SID {} belongs to the trusted domain {partner}; its group memberships in \
+            SidDomainRelation::TrustedDomain {
+                partner, forest, ..
+            } => Some(format!(
+                "SID {} belongs to the trusted domain {partner}{}; its group memberships in \
                  {partner} are unknown — they can be resolved with a connection to a domain \
                  controller of {partner} (CLI --trust-server, ADR 0078)",
+                sid.0,
+                forest_suffix(partner, forest.as_ref())
+            )),
+            SidDomainRelation::ForestDomainSidDisabled {
+                domain,
+                domain_sid,
+                forest,
+                flags,
+            } => Some(format!(
+                "SID {} belongs to {domain} ({domain_sid}), a domain of the trusted forest \
+                 {forest}, whose SID the forest trust information marks as disabled (flags \
+                 0x{flags:X}) — whether Windows still accepts SIDs of that domain is not \
+                 modelled, so the account and its memberships are unknown",
+                sid.0
+            )),
+            SidDomainRelation::TrustedByForestDomain {
+                partner,
+                domain_sid,
+                holder,
+            } => Some(format!(
+                "SID {} belongs to {partner} ({domain_sid}), which the domain {holder} of this \
+                 forest trusts (a trust that is not forest-wide); with a Global Catalog bind \
+                 it is not known whether the resource's domain trusts it too — the account and \
+                 its memberships are unknown",
                 sid.0
             )),
             SidDomainRelation::OtherDomain { domain_sid } => Some(format!(
@@ -159,7 +208,8 @@ impl SidDomainRelation {
             )),
             SidDomainRelation::Unknown { reason } => Some(format!(
                 "SID {} has no object under the configured LDAP base, the local LSA cannot \
-                 resolve it, and its domain could not be determined ({reason}) — whether the \
+                 resolve it, and how its domain relates to the configured domain could not be \
+                 determined ({reason}) — whether the \
                  account exists is unknown",
                 sid.0
             )),
@@ -449,12 +499,63 @@ pub trait IdentityBackend: Send + Sync {
 }
 
 /// The trust a SID belongs to, as the configured domain's trust object
-/// describes it (ADR 0078).
+/// describes it (ADR 0078). `forest` is set for a forest trust (ADR 0084).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustContext {
     pub partner: String,
     pub domain_sid: String,
     pub attributes: adpa_core::model::TrustAttributes,
+    pub forest: Option<TrustedForest>,
+}
+
+/// The trusted forest behind a forest trust (ADR 0084): the trust object's
+/// partner (the forest root) and the SIDs of the forest's domains whose SID
+/// its forest trust information lists as enabled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedForest {
+    /// `trustPartner` of the forest trust — the forest root domain.
+    pub trust_partner: String,
+    /// Domain SIDs of the forest's domains with an enabled SID.
+    pub domain_sids: Vec<String>,
+    /// Why the forest trust information is not known, when it is not; the
+    /// domain list is then empty.
+    pub info_error: Option<String>,
+}
+
+impl TrustedForest {
+    /// Builds the forest of a forest trust; `None` for any other trust.
+    pub fn of(trust: &adpa_core::model::DomainTrust) -> Option<Self> {
+        trust.attributes.forest_transitive().then(|| Self {
+            trust_partner: trust.partner.clone(),
+            domain_sids: trust
+                .forest_domains
+                .iter()
+                .filter(|d| d.sid_enabled())
+                .map(|d| d.sid.0.clone())
+                .collect(),
+            info_error: trust.forest_info_error.clone(),
+        })
+    }
+
+    /// `true` when `domain_sid` is an enabled domain of this forest.
+    pub fn contains(&self, domain_sid: &str) -> bool {
+        self.domain_sids
+            .iter()
+            .any(|d| d.eq_ignore_ascii_case(domain_sid))
+    }
+}
+
+/// " (a domain of the trusted forest X, through the forest trust)" when the
+/// SID's domain is not the forest root the trust object names; empty
+/// otherwise.
+fn forest_suffix(partner: &str, forest: Option<&TrustedForest>) -> String {
+    match forest {
+        Some(f) if !f.trust_partner.eq_ignore_ascii_case(partner) => format!(
+            " (a domain of the trusted forest {}, through the forest trust)",
+            f.trust_partner
+        ),
+        _ => String::new(),
+    }
 }
 
 /// Optional second directory connection to a domain controller of a
@@ -465,8 +566,10 @@ pub struct TrustContext {
 #[async_trait]
 pub trait TrustedDomainBackend: Send + Sync {
     /// Domain SID of the trusted domain this connection serves, read from
-    /// its directory; `None` when it could not be read.
-    async fn served_domain_sid(&self) -> Option<String>;
+    /// its directory; `Err` with the reason when it could not be read (lab
+    /// 2026-10-24: a Server 2025 DC refuses a simple bind without signing —
+    /// the reason must reach the reader, not only the debug log).
+    async fn served_domain_sid(&self) -> Result<String, String>;
 
     /// Resolves an account of the trusted domain: identity and groups there,
     /// filtered to what crosses the trust, plus the resource-domain groups
@@ -861,7 +964,7 @@ where
         let SidDomainRelation::TrustedDomain { domain_sid, .. } = &relation else {
             return None;
         };
-        let served = backend.served_domain_sid().await?;
+        let served = backend.served_domain_sid().await.ok()?;
         if !served.eq_ignore_ascii_case(domain_sid) {
             return None;
         }
@@ -881,6 +984,7 @@ where
             partner,
             domain_sid,
             attributes,
+            forest,
         } = relation
         else {
             return None;
@@ -889,18 +993,19 @@ where
         let served = backend.served_domain_sid().await;
         if !served
             .as_deref()
-            .is_some_and(|s| s.eq_ignore_ascii_case(domain_sid))
+            .is_ok_and(|s| s.eq_ignore_ascii_case(domain_sid))
         {
+            let suffix = forest_suffix(partner, forest.as_ref());
             let reason = match served {
-                Some(other) => format!(
-                    "SID {} belongs to the trusted domain {partner} ({domain_sid}), but the \
-                     configured trusted-domain connection serves another domain ({other})",
+                Ok(other) => format!(
+                    "SID {} belongs to the trusted domain {partner}{suffix} ({domain_sid}), but \
+                     the configured trusted-domain connection serves another domain ({other})",
                     sid.0
                 ),
-                None => format!(
-                    "SID {} belongs to the trusted domain {partner}; the domain SID of the \
-                     configured trusted-domain connection could not be read, so it is not \
-                     known to serve {partner}",
+                Err(e) => format!(
+                    "SID {} belongs to the trusted domain {partner}{suffix}; the domain SID of \
+                     the configured trusted-domain connection could not be read ({e}), so it is \
+                     not known to serve {partner}",
                     sid.0
                 ),
             };
@@ -910,6 +1015,7 @@ where
             partner: partner.clone(),
             domain_sid: domain_sid.clone(),
             attributes: *attributes,
+            forest: forest.clone(),
         };
         match backend.resolve_account(sid, &trust).await {
             Ok(resolution) => Some(resolution),
@@ -1283,6 +1389,7 @@ mod tests {
                 memberships: self.memberships.get(&sid.0).cloned().unwrap_or_default(),
                 gaps: Vec::new(),
                 excluded_groups: Vec::new(),
+                token_set_gaps: Vec::new(),
             })
         }
 
@@ -1565,6 +1672,7 @@ mod tests {
             partner: "ext.test".to_owned(),
             domain_sid: "S-1-5-21-1667335488-272840759-1416816776".to_owned(),
             attributes: adpa_core::model::TrustAttributes::from_bits(0x4),
+            forest: None,
         }))
         .await;
         assert_unresolvable(&res, "trusted domain ext.test");
@@ -1584,8 +1692,10 @@ mod tests {
 
     #[async_trait]
     impl TrustedDomainBackend for FakeTrusted {
-        async fn served_domain_sid(&self) -> Option<String> {
-            self.served.clone()
+        async fn served_domain_sid(&self) -> Result<String, String> {
+            self.served
+                .clone()
+                .ok_or_else(|| "LDAP bind rejected (test)".to_owned())
         }
         async fn resolve_account(
             &self,
@@ -1642,6 +1752,7 @@ mod tests {
             partner: "ext.test".to_owned(),
             domain_sid: TRUST_DOMAIN_SID.to_owned(),
             attributes: adpa_core::model::TrustAttributes::from_bits(attributes),
+            forest: None,
         }
     }
 
@@ -1761,6 +1872,29 @@ mod tests {
         let res = resolve_with_trusted(trusted_relation(0x4), trusted.clone()).await;
         assert_eq!(trusted.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_unresolvable(&res, "could not be read");
+        // Lab 2026-10-24: the reason reaches the reader, not only the log.
+        assert_unresolvable(&res, "(LDAP bind rejected (test))");
+    }
+
+    /// ADR 0084: a domain of a trusted forest is named with its forest.
+    #[tokio::test]
+    async fn a_forest_domain_is_named_with_its_forest() {
+        let relation = SidDomainRelation::TrustedDomain {
+            partner: "child.partner.test".to_owned(),
+            domain_sid: TRUST_DOMAIN_SID.to_owned(),
+            attributes: adpa_core::model::TrustAttributes::from_bits(0x8),
+            forest: Some(TrustedForest {
+                trust_partner: "partner.test".to_owned(),
+                domain_sids: vec![TRUST_DOMAIN_SID.to_owned()],
+                info_error: None,
+            }),
+        };
+        let res = resolve_unresolved(Some(relation)).await;
+        assert_unresolvable(
+            &res,
+            "trusted domain child.partner.test (a domain of the trusted forest partner.test, \
+             through the forest trust)",
+        );
     }
 
     /// A failure on the trusted DC stays "not resolvable", with the reason.
@@ -1940,6 +2074,7 @@ mod tests {
                     memberships: Vec::new(),
                     gaps: vec!["the primary group S-1-5-21-1-1-1-513 was not found".to_owned()],
                     excluded_groups: Vec::new(),
+                    token_set_gaps: Vec::new(),
                 })
             }
         }

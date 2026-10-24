@@ -10,7 +10,37 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Fixed
+
+- **Accounts of a trusted forest's other domains (ADR 0084).** Behind a
+  forest trust, an account of a child domain of the partner forest (which
+  has no trust object of its own in your domain) was reported as *"neither
+  the configured domain nor one of its trusts"*. That was wrong. Stars now
+  reads the forest trust information (`msDS-TrustForestTrustInfo`) and
+  names such a domain as trusted, together with its forest.
+- **SIDs of the trusted forest on a forest trust (ADR 0084).** An account
+  of a trusted domain whose token holds a group of another domain of the
+  same forest (for example a universal group of the child domain) was not
+  determinable on every path. Measured with real SMB logons, those SIDs
+  pass the forest trust. Stars now counts them, and the lab accounts
+  match Windows on every folder.
+- **Global Catalog bind (ADR 0084).** With `--global-catalog`, even a SID
+  of a directly trusted domain was reported as *"not one of its trusts"*.
+  Stars now reads the trust objects of the whole forest. A trust that is
+  not forest-wide is named with the domain that holds it.
+- **The reason for a failed trusted-domain connection is shown.** When the
+  connection cannot read its domain SID, the error is now part of the
+  result instead of only the debug log. Example: a Server 2025 DC refuses
+  a simple bind without signing.
+
 ### Changed
+
+- **Trust inventory (`adpa trusts`, GUI Trusts tab).** A forest trust lists
+  the domains of the trusted forest, or why they could not be read. The
+  closing note now says what Stars models of a trust and what not; it no
+  longer claims that no runtime effect is modelled.
+- **Quarantine on a forest trust** (not measured) no longer removes the
+  other SIDs; it reports them as not modelled.
 
 - **One analysis pipeline for CLI and GUI, first part (ADR 0082 step 5a).**
   The account's local groups on the target server (with the UAC and

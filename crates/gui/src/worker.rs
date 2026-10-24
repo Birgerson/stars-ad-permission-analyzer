@@ -2665,6 +2665,12 @@ pub struct TrustRow {
     /// Selective Authentication is on: a DACL grant alone does not imply
     /// real access for principals from this trust.
     pub selective_auth: bool,
+    /// Forest trust (ADR 0084).
+    pub forest: bool,
+    /// Forest trust: one line per domain of the trusted forest.
+    pub forest_domains: Vec<String>,
+    /// Forest trust: why its domains are not known, empty when they are.
+    pub forest_info_error: String,
 }
 
 /// Reads the domain's trust inventory for the Trusts tab — the GUI
@@ -2701,6 +2707,9 @@ pub fn trust_to_row(t: &adpa_core::model::DomainTrust) -> TrustRow {
         sid: t.sid.as_ref().map(|s| s.0.clone()).unwrap_or_default(),
         sid_filtering: t.attributes.sid_filtering_enabled(),
         selective_auth: t.attributes.selective_authentication(),
+        forest: t.attributes.forest_transitive(),
+        forest_domains: t.forest_domains.iter().map(|d| d.label()).collect(),
+        forest_info_error: t.forest_info_error.clone().unwrap_or_default(),
     }
 }
 
@@ -3832,9 +3841,12 @@ mod tests {
                 TrustAttributes::QUARANTINED_DOMAIN | TrustAttributes::CROSS_ORGANIZATION,
             ),
             sid: Some(Sid("S-1-5-21-9-9-9".to_owned())),
+            forest_domains: Vec::new(),
+            forest_info_error: None,
         };
         let row = trust_to_row(&t);
         assert!(row.sid_filtering && row.selective_auth);
+        assert!(!row.forest && row.forest_domains.is_empty());
         assert_eq!(row.direction, "bidirectional");
         assert!(
             row.attributes.contains("SID-filtering"),
@@ -3858,12 +3870,45 @@ mod tests {
             direction: TrustDirection::Unknown(7),
             attributes: TrustAttributes::default(),
             sid: None,
+            forest_domains: Vec::new(),
+            forest_info_error: None,
         };
         let row = trust_to_row(&t);
         assert!(!row.sid_filtering && !row.selective_auth);
         assert_eq!(row.attributes, "(none)");
         assert_eq!(row.direction, "unknown (7)");
         assert!(row.flat_name.is_empty() && row.sid.is_empty());
+    }
+
+    /// ADR 0084: a forest trust carries its domains, or why they are unknown.
+    #[test]
+    fn trust_row_carries_the_forest_domains_or_their_error() {
+        use adpa_core::model::{DomainTrust, ForestTrustDomain, TrustAttributes, TrustDirection};
+        let mut t = DomainTrust {
+            partner: "partner.test".to_owned(),
+            flat_name: Some("PARTNER".to_owned()),
+            direction: TrustDirection::Bidirectional,
+            attributes: TrustAttributes::from_bits(TrustAttributes::FOREST_TRANSITIVE),
+            sid: None,
+            forest_domains: vec![ForestTrustDomain {
+                dns_name: "child.partner.test".to_owned(),
+                netbios_name: "CHILD".to_owned(),
+                sid: Sid("S-1-5-21-4-5-6".to_owned()),
+                flags: 0,
+            }],
+            forest_info_error: None,
+        };
+        let row = trust_to_row(&t);
+        assert!(row.forest);
+        assert_eq!(
+            row.forest_domains,
+            ["child.partner.test (CHILD)  S-1-5-21-4-5-6"]
+        );
+        assert!(row.forest_info_error.is_empty());
+        t.forest_domains.clear();
+        t.forest_info_error = Some("not returned".to_owned());
+        let row = trust_to_row(&t);
+        assert_eq!(row.forest_info_error, "not returned");
     }
 
     /// Trusts need LDAP — without it the worker answers with an explicit

@@ -1608,3 +1608,64 @@ aborts the run and deletes the capture). The lab is isolated; the owner keeps it
 The eight documentation screenshots were retaken from this run, and once more with the release build of v1.18.0 (same cases, same results, each part in a fresh GUI with the guarded driver).
 
 **Release regression v1.17.0 → v1.18.0 (2026-10-24):** the same CLI scans with both release builds (v1.17.0 built from its tag) — DC-01's data share for 37 identities (25,493 rows), the group-types fixture (78 rows), MS-01 `MSData` with LDAP (135 rows) and with local accounts (135 rows): **0 differing rows** in every column. Expected, because the analysis crates are unchanged since v1.17.0.
+
+## Block R — Forest trust: domains of the trusted forest (ADR 0084, 2026-10-24)
+
+**Lab:**
+
+- **Forests.** `partner.test` (forest root, DC-03 `192.168.11.163`, Server 2022 en-us) with the child domain `child.partner.test` (DC-04 `192.168.11.164`, Server 2025 en-us).
+- **Trust.** A bidirectional forest trust corp.test ⇄ partner.test (`trustAttributes` 0x8). corp.test has trust objects only for `ext.test` and `partner.test`.
+- **Fixture.** `C:\ForestTest` on DC-01, share `ForestTest`, outside the regression trees. It has 13 folders, each with one Allow ACE:
+  - the user, a global, a universal and a home domain-local group of each partner domain
+  - a corp.test domain-local group that holds both global groups as FSPs
+  - This Organization
+  - Domain Users of both domains
+  - Authenticated Users
+- **Accounts.**
+  - `PARTNER\pt_user01`, member of the three partner groups
+  - `PARTNER\pt_user02`, member of the universal group `CHILD\UG_CH_Forest`
+  - `CHILD\ch_user01`, member of the three child groups
+  - `CHILD\ch_user02`, member of the universal group `PARTNER\UG_PT_Forest`, added after the first measurement
+
+**Ground truth.**
+
+- **Authz oracle** on DC-01 (`forest-oracle.ps1`).
+- **Real SMB logons** from MS-01 (`net use` as the account, then each folder opened with single access rights; nothing written).
+- **Agreement.** The two match for `pt_user01`, `pt_user02` and `ch_user01`. For `ch_user02` the Authz context lacked This Organization (S4U fallback), but the real logon read the This Organization folder. The real logon counts.
+
+Key results:
+
+- **`pt_user02`.** Its token holds the child domain's SID `CHILD\UG_CH_Forest` and gets **Modify** on that folder.
+- **`ch_user01`.** It gets its child groups and the FSP chain, but not `DL_CH_Local`.
+- **Conclusion.** A forest trust lets the SIDs of every domain of the trusted forest pass.
+
+**`msDS-TrustForestTrustInfo`.** Read on both sides (Server 2022 de and en-us). The format is MS-ADTS 6.1.6.9.3, except that the **last** record carries `RecordLen` 0. The Global Catalog (port 3268) returns the trust objects of the forest with `trustPartner`, `trustDirection`, `trustAttributes`, `securityIdentifier` and `msDS-TrustForestTrustInfo`, but without `flatName`.
+
+| Case | v1.18.0 (main a6c26e1) | branch `forest-trust-domains` | Windows |
+| --- | --- | --- | --- |
+| `pt_user01`, 14 rows | exact | exact (unchanged) | same |
+| `pt_user02`, 14 rows | **NOT DETERMINABLE on every row** — `UG_CH_Forest` "not modelled", plus "outside the resolved set" / "missing from tokenGroups" | **exact, Modify on `FG_ch_universal`** | Modify on `FG_ch_universal` |
+| `ch_user01` without a trust connection | **"neither the configured domain nor one of its trusts"** | "belongs to the trusted domain child.partner.test (a domain of the trusted forest partner.test, through the forest trust)" | trusted |
+| `ch_user01` with `--trust-server` DC-04 | "the domain SID … could not be read" | the same, **with the reason**: `strongerAuthRequired` (Server 2025 refuses a simple bind without signing) | — |
+| `--global-catalog`, SID of `ext.test` | **"neither the configured domain nor one of its trusts"** | "belongs to ext.test, which the domain DC=corp,DC=test of this forest trusts (a trust that is not forest-wide) …" | trusted by corp.test |
+| `--global-catalog`, SID of `child.partner.test` | **"neither … nor one of its trusts"** | trusted, named with its forest | trusted |
+| `adpa trusts` | partner.test without domains; note "does not model the runtime filter effect" | "Forest domains (2): child.partner.test (CHILD) …, partner.test (PARTNER) …"; corrected note | — |
+
+**Domain-joined runner (found during this block, fixed in the next change).** Stars ran on MS-01 as `CORP\Administrator` (a scheduled task), with Signed LDAP to DC-01 and DC-04. There, Windows LSA resolves the child account by name. Stars then took the LSA path ("outside the configured LDAP base") and never consulted the trusted-domain connection. This affects every account of a trusted domain without an FSP on a domain-joined machine, ext.test included. It has been so since ADR 0078.
+
+**Regression.** The step 5a binary against this branch's binary, column by column, found **0 differing rows**:
+
+- DC-01's data share for 37 identities: 25,493 rows
+- the group-types fixture: 78 rows
+- MS-01 `MSData` with LDAP: 135 rows
+- MS-01 `MSData` with local accounts: 135 rows
+- the ext.test trust fixture with the trusted-domain connection, five accounts: 65 rows (quarantine path, ADR 0078 / 0079)
+
+**GUI.** The Trusts tab against corp.test, filled by the guarded driver, shows:
+
+- `partner.test (PARTNER)`, `forest-transitive [raw 0x00000008]`
+- "Forest domains (2): child.partner.test (CHILD) S-1-5-21-3448014159-…, partner.test (PARTNER) S-1-5-21-3785515468-…"
+- the corrected quarantine callout on ext.test and the new closing note
+- the status line "2 trust(s) — 1 with SID filtering, Selective Authentication or unknown forest domains"
+
+The documentation screenshot `stars-trusts-tab.png` was retaken from this run.

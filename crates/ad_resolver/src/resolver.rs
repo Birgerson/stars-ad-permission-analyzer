@@ -280,9 +280,16 @@ impl LdapResolver {
             {
                 return Ok(SidDomainRelation::ConfiguredDomainWholeBase);
             }
-            return Ok(SidDomainRelation::OtherDomain {
-                domain_sid: sid_domain.to_owned(),
-            });
+            // ADR 0084 (lab 2026-10-24): until v1.18.0 every other SID was
+            // "neither the configured domain nor one of its trusts" — also
+            // a SID of a directly trusted domain. The Global Catalog holds
+            // the trust objects of every domain of the forest.
+            let entries = ldap_client::search_domain_trusts(ldap, &self.config.base_dn).await?;
+            return Ok(classify_against_trusts(
+                sid_domain,
+                &held_trusts(&entries),
+                TrustView::Forest,
+            ));
         }
         let Some(root) = domain_root_dn(&self.config.base_dn) else {
             return Ok(SidDomainRelation::Unknown {
@@ -309,23 +316,23 @@ impl LdapResolver {
                 }
             });
         }
-        let trusts = ldap_client::search_domain_trusts(ldap, &root).await?;
-        for trust in trusts.iter().filter_map(crate::trusts::parse_trust) {
-            if trust
-                .sid
-                .as_ref()
-                .is_some_and(|s| s.0.eq_ignore_ascii_case(sid_domain))
-            {
-                return Ok(SidDomainRelation::TrustedDomain {
-                    partner: trust.partner,
-                    domain_sid: sid_domain.to_owned(),
-                    attributes: trust.attributes,
-                });
+        let entries = ldap_client::search_domain_trusts(ldap, &root).await?;
+        let trusts = held_trusts(&entries);
+        // A domain of a forest with several domains that is not the forest
+        // root does not hold the forest's forest trusts — see TrustView.
+        let is_forest_root = if trusts.iter().any(|t| t.trust.attributes.within_forest()) {
+            match ldap_client::search_root_domain_nc(ldap).await {
+                Ok(Some(nc)) => Some(dn_eq(&nc, &root)),
+                Ok(None) | Err(_) => None,
             }
-        }
-        Ok(SidDomainRelation::OtherDomain {
-            domain_sid: sid_domain.to_owned(),
-        })
+        } else {
+            Some(true)
+        };
+        Ok(classify_against_trusts(
+            sid_domain,
+            &trusts,
+            TrustView::Domain { is_forest_root },
+        ))
     }
 
     /// ADR 0078: `tokenGroupsGlobalAndUniversal` of the account with this
@@ -545,6 +552,7 @@ impl LdapResolver {
                     sid.0, self.config.base_dn
                 )],
                 excluded_groups: Vec::new(),
+                token_set_gaps: Vec::new(),
             });
         };
 
@@ -615,14 +623,20 @@ impl LdapResolver {
             assemble_memberships(sid, &entry, primary_ref, &transitive_groups, &pg_parents);
         gaps.extend(assembled.gaps);
         gaps.extend(token_size_gap(&assembled.memberships));
+        let mut token_set_gaps = assembled.token_set_gaps;
         match &token_groups {
-            Some(token) => gaps.extend(token_groups_gaps(&assembled.memberships, token)),
+            Some(token) => {
+                let diff = token_groups_gaps(&assembled.memberships, token);
+                token_set_gaps.extend(diff.iter().cloned());
+                gaps.extend(diff);
+            }
             None => debug!(sid = %sid.0, "tokenGroups not available — no cross-check"),
         }
         Ok(GroupMembershipResolution {
             memberships: assembled.memberships,
             gaps,
             excluded_groups: assembled.excluded,
+            token_set_gaps,
         })
     }
 }
@@ -963,14 +977,17 @@ fn assemble_memberships(
             summarize_dns(&without_sid)
         ));
     }
+    let mut token_set_gaps: Vec<String> = Vec::new();
     if !outside.is_empty() {
-        gaps.push(format!(
+        let gap = format!(
             "the account is (directly or through its groups) a member of {} group(s) outside \
              the resolved set — typically outside the configured LDAP base or in another \
              domain — which are not in the evaluated token: {}",
             outside.len(),
             summarize_dns(&outside)
-        ));
+        );
+        token_set_gaps.push(gap.clone());
+        gaps.push(gap);
     }
 
     // Hop-1 seeds: the principal's direct groups plus the primary group.
@@ -1100,6 +1117,7 @@ fn assemble_memberships(
         memberships,
         gaps,
         excluded,
+        token_set_gaps,
     }
 }
 
@@ -1110,6 +1128,162 @@ struct AssembledMemberships {
     memberships: Vec<GroupMembership>,
     gaps: Vec<String>,
     excluded: Vec<String>,
+    /// The part of `gaps` that only concerns which groups the token holds.
+    token_set_gaps: Vec<String>,
+}
+
+/// A parsed trust object with the domain that holds it (the DC= part of its
+/// DN, `CN=<partner>,CN=System,<domain>`).
+pub(crate) struct HeldTrust {
+    pub(crate) trust: adpa_core::model::DomainTrust,
+    pub(crate) holder: String,
+}
+
+fn held_trusts(entries: &[RawEntry]) -> Vec<HeldTrust> {
+    entries
+        .iter()
+        .filter_map(|e| {
+            Some(HeldTrust {
+                trust: crate::trusts::parse_trust(e)?,
+                holder: domain_root_dn(&e.dn).unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+/// Which trust objects the classification sees (ADR 0084).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrustView {
+    /// Domain bind: the configured domain's own trust objects.
+    /// `is_forest_root` — the configured domain is the root of its forest
+    /// (or the only domain); `None` when that could not be read. A domain
+    /// that is not the root does not hold the forest's forest trusts, which
+    /// still apply to it.
+    Domain { is_forest_root: Option<bool> },
+    /// Global Catalog bind: the trust objects of every domain of the forest.
+    /// A forest trust applies to all of them; any other trust only to the
+    /// domain that holds it.
+    Forest,
+}
+
+/// Classifies the domain SID of an unresolved SID against the trusts
+/// (ADR 0064, 0078, 0084). Pure — no LDAP.
+///
+/// 1. A trust object whose `securityIdentifier` is the SID's domain.
+/// 2. A domain of a trusted forest, from the forest trust information
+///    (lab 2026-10-24: an account of `child.partner.test` reaches corp.test
+///    resources through the forest trust with `partner.test`; until v1.18.0
+///    Stars reported its domain as "neither the configured domain nor one of
+///    its trusts").
+/// 3. Not found, but the forest trust information of a forest trust is not
+///    known: the SID may belong to that forest — unknown, not "other".
+/// 4. Not found from a domain that is not the forest root: a forest trust
+///    of the root may cover it — unknown, not "other".
+/// 5. Otherwise another domain.
+pub(crate) fn classify_against_trusts(
+    sid_domain: &str,
+    trusts: &[HeldTrust],
+    view: TrustView,
+) -> SidDomainRelation {
+    use crate::principal::TrustedForest;
+    for HeldTrust { trust, holder } in trusts {
+        if trust
+            .sid
+            .as_ref()
+            .is_some_and(|s| s.0.eq_ignore_ascii_case(sid_domain))
+        {
+            if view == TrustView::Forest && !trust.attributes.forest_transitive() {
+                return SidDomainRelation::TrustedByForestDomain {
+                    partner: trust.partner.clone(),
+                    domain_sid: sid_domain.to_owned(),
+                    holder: holder.clone(),
+                };
+            }
+            return SidDomainRelation::TrustedDomain {
+                partner: trust.partner.clone(),
+                domain_sid: sid_domain.to_owned(),
+                attributes: trust.attributes,
+                forest: TrustedForest::of(trust),
+            };
+        }
+    }
+    for trust in trusts
+        .iter()
+        .map(|h| &h.trust)
+        .filter(|t| t.attributes.forest_transitive())
+    {
+        let Some(domain) = trust
+            .forest_domains
+            .iter()
+            .find(|d| d.sid.0.eq_ignore_ascii_case(sid_domain))
+        else {
+            continue;
+        };
+        if !domain.sid_enabled() {
+            return SidDomainRelation::ForestDomainSidDisabled {
+                domain: domain.dns_name.clone(),
+                domain_sid: sid_domain.to_owned(),
+                forest: trust.partner.clone(),
+                flags: domain.flags,
+            };
+        }
+        return SidDomainRelation::TrustedDomain {
+            partner: domain.dns_name.clone(),
+            domain_sid: sid_domain.to_owned(),
+            attributes: trust.attributes,
+            forest: TrustedForest::of(trust),
+        };
+    }
+    let unknown: Vec<String> = trusts
+        .iter()
+        .map(|h| &h.trust)
+        .filter(|t| t.attributes.forest_transitive())
+        .filter_map(|t| {
+            t.forest_info_error
+                .as_ref()
+                .map(|e| format!("{}: {e}", t.partner))
+        })
+        .collect();
+    if !unknown.is_empty() {
+        return SidDomainRelation::Unknown {
+            reason: format!(
+                "domain {sid_domain} is neither the configured domain nor one of its trust \
+                 objects, and the domains of {} trusted forest(s) are not known ({}) — it may \
+                 be a domain of such a forest",
+                unknown.len(),
+                unknown.join("; ")
+            ),
+        };
+    }
+    if let TrustView::Domain { is_forest_root } = view {
+        match is_forest_root {
+            Some(true) => {}
+            Some(false) => {
+                return SidDomainRelation::Unknown {
+                    reason: format!(
+                        "domain {sid_domain} is not one of the configured domain's trust \
+                         objects, but the configured domain is not the root of its forest — \
+                         a trust held by another domain of the forest (such as a forest trust \
+                         of the forest root) may cover it and is not read through a domain \
+                         bind (a Global Catalog bind reads it)"
+                    ),
+                };
+            }
+            None => {
+                return SidDomainRelation::Unknown {
+                    reason: format!(
+                        "domain {sid_domain} is not one of the configured domain's trust \
+                         objects; the configured domain belongs to a forest with several \
+                         domains, and whether it is the forest root (which holds the forest \
+                         trusts) could not be read"
+                    ),
+                };
+            }
+        }
+    }
+    SidDomainRelation::OtherDomain {
+        domain_sid: sid_domain.to_owned(),
+    }
 }
 
 /// Compares the reconstructed group set with the DC's own `tokenGroups`
@@ -1607,6 +1781,198 @@ async fn resolve_primary_group(
 mod tests {
     use super::*;
     use crate::config::LdapConfig;
+
+    // --- ADR 0084: classification against trusts and forest trust info ---
+
+    const PARTNER: &str = "S-1-5-21-3785515468-3306783081-2229146106";
+    const CHILD: &str = "S-1-5-21-3448014159-2562745005-117851997";
+    const EXT: &str = "S-1-5-21-1667335488-272840759-1416816776";
+
+    fn trust(partner: &str, sid: &str, attrs: u32) -> adpa_core::model::DomainTrust {
+        adpa_core::model::DomainTrust {
+            partner: partner.to_owned(),
+            flat_name: None,
+            direction: adpa_core::model::TrustDirection::Bidirectional,
+            attributes: adpa_core::model::TrustAttributes::from_bits(attrs),
+            sid: Some(Sid(sid.to_owned())),
+            forest_domains: Vec::new(),
+            forest_info_error: None,
+        }
+    }
+
+    fn forest_domain(dns: &str, sid: &str, flags: u32) -> adpa_core::model::ForestTrustDomain {
+        adpa_core::model::ForestTrustDomain {
+            dns_name: dns.to_owned(),
+            netbios_name: dns.split('.').next().unwrap().to_ascii_uppercase(),
+            sid: Sid(sid.to_owned()),
+            flags,
+        }
+    }
+
+    /// The lab topology of 2026-10-24: external trust ext.test (quarantine)
+    /// and forest trust partner.test with child.partner.test.
+    fn lab_trusts() -> Vec<HeldTrust> {
+        let mut forest = trust("partner.test", PARTNER, 0x8);
+        forest.forest_domains = vec![
+            forest_domain("child.partner.test", CHILD, 0),
+            forest_domain("partner.test", PARTNER, 0),
+        ];
+        [trust("ext.test", EXT, 0x4), forest]
+            .into_iter()
+            .map(|trust| HeldTrust {
+                trust,
+                holder: "DC=corp,DC=test".to_owned(),
+            })
+            .collect()
+    }
+
+    const ROOT: TrustView = TrustView::Domain {
+        is_forest_root: Some(true),
+    };
+
+    /// Lab finding 2026-10-24: a child domain of a trusted forest was
+    /// reported as "neither the configured domain nor one of its trusts".
+    #[test]
+    fn a_domain_of_a_trusted_forest_is_a_trusted_domain() {
+        let r = classify_against_trusts(CHILD, &lab_trusts(), ROOT);
+        let SidDomainRelation::TrustedDomain {
+            partner,
+            domain_sid,
+            attributes,
+            forest,
+        } = r
+        else {
+            panic!("expected TrustedDomain, got {r:?}");
+        };
+        assert_eq!(partner, "child.partner.test");
+        assert_eq!(domain_sid, CHILD);
+        assert!(attributes.forest_transitive());
+        let forest = forest.expect("a forest trust carries its forest");
+        assert_eq!(forest.trust_partner, "partner.test");
+        assert!(forest.contains(CHILD) && forest.contains(PARTNER));
+    }
+
+    #[test]
+    fn the_forest_root_keeps_its_trust_object_and_carries_the_forest() {
+        let r = classify_against_trusts(PARTNER, &lab_trusts(), ROOT);
+        let SidDomainRelation::TrustedDomain {
+            partner, forest, ..
+        } = r
+        else {
+            panic!("expected TrustedDomain, got {r:?}");
+        };
+        assert_eq!(partner, "partner.test");
+        assert_eq!(forest.unwrap().domain_sids.len(), 2);
+    }
+
+    #[test]
+    fn an_external_trust_carries_no_forest() {
+        let r = classify_against_trusts(EXT, &lab_trusts(), ROOT);
+        assert!(matches!(
+            r,
+            SidDomainRelation::TrustedDomain { forest: None, .. }
+        ));
+    }
+
+    #[test]
+    fn a_disabled_forest_domain_is_not_counted_as_trusted() {
+        let mut trusts = lab_trusts();
+        trusts[1].trust.forest_domains[0].flags = 0x1;
+        let r = classify_against_trusts(CHILD, &trusts, ROOT);
+        assert!(
+            matches!(
+                r,
+                SidDomainRelation::ForestDomainSidDisabled { flags: 1, .. }
+            ),
+            "{r:?}"
+        );
+        let SidDomainRelation::TrustedDomain { forest, .. } =
+            classify_against_trusts(PARTNER, &trusts, ROOT)
+        else {
+            panic!("the root stays trusted");
+        };
+        assert!(!forest.unwrap().contains(CHILD));
+    }
+
+    /// Unknown forest information: a SID of no listed domain may still be
+    /// one of that forest — never "neither … nor one of its trusts".
+    #[test]
+    fn unknown_forest_information_makes_another_domain_unknown() {
+        let mut trusts = lab_trusts();
+        trusts[1].trust.forest_domains.clear();
+        trusts[1].trust.forest_info_error = Some("not returned".to_owned());
+        let r = classify_against_trusts(CHILD, &trusts, ROOT);
+        let SidDomainRelation::Unknown { reason } = r else {
+            panic!("expected Unknown, got {r:?}");
+        };
+        assert!(reason.contains("partner.test: not returned"), "{reason}");
+    }
+
+    #[test]
+    fn a_domain_of_no_trust_and_no_forest_is_another_domain() {
+        let r = classify_against_trusts("S-1-5-21-9-9-9", &lab_trusts(), ROOT);
+        assert!(matches!(r, SidDomainRelation::OtherDomain { .. }));
+    }
+
+    /// Lab 2026-10-24, Global Catalog bind: even a SID of the directly
+    /// trusted ext.test was "neither the configured domain nor one of its
+    /// trusts". A forest trust covers the whole forest; any other trust only
+    /// the domain that holds it.
+    #[test]
+    fn a_global_catalog_bind_reads_the_trusts_of_the_forest() {
+        let r = classify_against_trusts(CHILD, &lab_trusts(), TrustView::Forest);
+        assert!(
+            matches!(&r, SidDomainRelation::TrustedDomain { partner, .. } if partner == "child.partner.test"),
+            "{r:?}"
+        );
+        let r = classify_against_trusts(EXT, &lab_trusts(), TrustView::Forest);
+        let SidDomainRelation::TrustedByForestDomain {
+            partner, holder, ..
+        } = r
+        else {
+            panic!("expected TrustedByForestDomain, got {r:?}");
+        };
+        assert_eq!(partner, "ext.test");
+        assert_eq!(holder, "DC=corp,DC=test");
+        let r = classify_against_trusts("S-1-5-21-9-9-9", &lab_trusts(), TrustView::Forest);
+        assert!(matches!(r, SidDomainRelation::OtherDomain { .. }));
+    }
+
+    /// A domain that is not the forest root does not hold the forest trusts
+    /// that still apply to it — a miss there is unknown, never "other".
+    #[test]
+    fn a_miss_from_a_domain_that_is_not_the_forest_root_is_unknown() {
+        for is_forest_root in [Some(false), None] {
+            let r = classify_against_trusts(
+                "S-1-5-21-9-9-9",
+                &lab_trusts(),
+                TrustView::Domain { is_forest_root },
+            );
+            assert!(matches!(r, SidDomainRelation::Unknown { .. }), "{r:?}");
+        }
+        // A match is still a match.
+        let r = classify_against_trusts(
+            EXT,
+            &lab_trusts(),
+            TrustView::Domain {
+                is_forest_root: Some(false),
+            },
+        );
+        assert!(matches!(r, SidDomainRelation::TrustedDomain { .. }));
+    }
+
+    #[test]
+    fn the_holder_of_a_trust_object_is_its_domain() {
+        let mut attrs = HashMap::new();
+        attrs.insert("trustPartner".to_string(), vec!["ext.test".to_string()]);
+        let entry = RawEntry {
+            dn: "CN=ext.test,CN=System,DC=child,DC=corp,DC=test".to_string(),
+            attrs,
+            bin_attrs: HashMap::new(),
+        };
+        let held = held_trusts(&[entry]);
+        assert_eq!(held[0].holder, "DC=child,DC=corp,DC=test");
+    }
 
     // --- Unit tests (no LDAP needed): sIDHistory count from the entry ---
 

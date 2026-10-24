@@ -46,11 +46,12 @@ pub fn handle_done(ui: &MainWindow, result: Result<Vec<TrustRow>, String>) {
         Ok(rows) => {
             let flagged = rows
                 .iter()
-                .filter(|t| t.sid_filtering || t.selective_auth)
+                .filter(|t| t.sid_filtering || t.selective_auth || !t.forest_info_error.is_empty())
                 .count();
             let status = if flagged > 0 {
                 format!(
-                    "{} trust(s) — {flagged} with SID filtering or Selective Authentication",
+                    "{} trust(s) — {flagged} with SID filtering, Selective Authentication or \
+                     unknown forest domains",
                     rows.len()
                 )
             } else {
@@ -69,6 +70,14 @@ pub fn handle_done(ui: &MainWindow, result: Result<Vec<TrustRow>, String>) {
                     sid: t.sid.into(),
                     sid_filtering: t.sid_filtering,
                     selective_auth: t.selective_auth,
+                    forest: t.forest,
+                    forest_domains: slint::ModelRc::new(slint::VecModel::from(
+                        t.forest_domains
+                            .into_iter()
+                            .map(slint::SharedString::from)
+                            .collect::<Vec<_>>(),
+                    )),
+                    forest_info_error: t.forest_info_error.into(),
                 })
                 .collect();
             ui.global::<TrustsState>()

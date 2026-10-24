@@ -549,11 +549,22 @@ finding read *higher* than the access a user really gets:
 - **Selective Authentication** — principals from the trust need an
   explicit "allowed to authenticate" right on the target.
 
+For a **forest trust** the block also lists the **domains of the trusted
+forest** (DNS name, NetBIOS name, domain SID), read from the trust
+object's forest trust information (ADR 0084). Every one of them counts as a
+trusted domain, for example a child domain of the partner forest that has
+no trust object of its own in your domain. When that information cannot be
+read, the block says so with `[!] Forest domains not known`. A SID of that
+forest then cannot be told apart from a SID of an unrelated domain, and
+Stars reports it as unknown.
+
 For an account of a trusted domain, Stars evaluates Selective
-Authentication when the trusted-domain connection is configured (see
-[Accounts of a trusted domain](#accounts-of-a-trusted-domain),
-ADR 0079). The SID filtering of a forest trust for SIDs of third domains
-stays the DACL view (known-limitations L4).
+Authentication and the trust's SID filtering when the trusted-domain
+connection is configured (see
+[Accounts of a trusted domain](#accounts-of-a-trusted-domain), ADR 0079,
+ADR 0084). The SID filtering of a forest trust for SIDs of third domains
+is not modelled. Stars reports it instead of assuming it
+(known-limitations L4).
 
 ### `Shares` tab — which shares does a server publish?
 
@@ -884,7 +895,9 @@ Stars then counts what Windows counts for a resource in **your** domain
   as left out;
 - the trust's **SID filtering**: on a quarantined trust (the default for
   an external trust) every SID that does not belong to the trusted domain
-  — including `sIDHistory` — is removed and named;
+  — including `sIDHistory` — is removed and named; on a **forest trust**
+  the SIDs of every domain of the trusted forest pass (for example a
+  universal group of the partner forest's child domain);
 - the **domain-local groups of your domain** that contain one of those
   SIDs as a Foreign Security Principal, with the whole chain
   (account → partner group → your group);
@@ -897,7 +910,23 @@ as without it. This also holds when the account has a Foreign Security
 Principal object in your domain (it was once added to one of your groups):
 it is still resolved on the trusted domain controller. Not modelled, and
 therefore reported instead of assumed: on a trust without quarantine,
-SIDs of a third domain.
+SIDs of a third domain; on a forest trust, SIDs of domains that are not
+part of the trusted forest.
+
+**A forest with several domains.** Behind a forest trust, an account can
+belong to any domain of the partner forest, for example
+`child.partner.local`. Stars recognises such a domain from the forest
+trust (see the `Trusts` tab). To resolve the account, point the
+trusted-domain connection at a domain controller of **the account's own
+domain**, here a DC of `child.partner.local` with base DN
+`DC=child,DC=partner,DC=local`. If the connection points at another
+domain, the result names both domains and stays not resolvable.
+
+**Server 2025 domain controllers** refuse a simple bind without signing
+by default. Stars then reports *"the domain SID of the configured
+trusted-domain connection could not be read (… strongerAuthRequired …)"*.
+Use Signed LDAP (`--ldap-signing`, from a domain-joined machine) or LDAPS
+for such a DC.
 
 #### Selective Authentication — may the account log on at all?
 

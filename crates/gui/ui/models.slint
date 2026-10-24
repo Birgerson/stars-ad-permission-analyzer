@@ -78,6 +78,11 @@ export struct TrustVm {
     sid: string,
     sid-filtering: bool,
     selective-auth: bool,
+    // Forest trust (ADR 0084): one line per domain of the trusted forest, or
+    // why they are not known.
+    forest: bool,
+    forest-domains: [string],
+    forest-info-error: string,
 }
 
 // One step of the Analyze permission path (review CR-12): `number` is

@@ -106,6 +106,8 @@ const TRUST_ATTRS: &[&str] = &[
     "trustAttributes",
     "trustType",
     "securityIdentifier",
+    // ADR 0084: the domains of a trusted forest.
+    "msDS-TrustForestTrustInfo",
 ];
 
 /// Raw LDAP entry after a search.
@@ -323,6 +325,27 @@ pub async fn search_domain_sid(
     Ok(entry
         .first_bin_attr("objectSid")
         .and_then(|b| crate::sid_util::bytes_to_sid_str(b).ok()))
+}
+
+/// `rootDomainNamingContext` of the RootDSE — the DN of the forest root
+/// domain (ADR 0084). `Ok(None)` when the server does not return it.
+pub async fn search_root_domain_nc(ldap: &mut Ldap) -> Result<Option<String>, CoreError> {
+    let (rs, _res) = ldap
+        .search(
+            "",
+            Scope::Base,
+            "(objectClass=*)",
+            vec!["rootDomainNamingContext"],
+        )
+        .await
+        .map_err(|e| CoreError::LdapQuery(format!("RootDSE search failed: {e}")))?
+        .success()
+        .map_err(|e| CoreError::LdapQuery(format!("RootDSE search result error: {e}")))?;
+    Ok(rs
+        .into_iter()
+        .next()
+        .map(RawEntry::from_search_entry)
+        .and_then(|e| e.first_attr("rootDomainNamingContext").map(str::to_owned)))
 }
 
 /// Domain SIDs of every domain head object (`domainDNS`) visible under
