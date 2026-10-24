@@ -1,0 +1,204 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
+// The Shares tab (ADR 0082): its state (`SharesState`, read and written by
+// src/main.rs) and its layout (`SharesTab`).
+
+import {
+    VerticalBox,
+    HorizontalBox,
+    GridBox,
+    GroupBox,
+    LineEdit,
+    Button,
+    CheckBox,
+    ScrollView,
+} from "std-widgets.slint";
+import { HelpTip } from "../components/help-tip.slint";
+import { ShareVm } from "../models.slint";
+import { Theme } from "../theme/theme.slint";
+
+export global SharesState {
+    // ============================================================
+    // Shares tab properties
+    // ============================================================
+    in-out property <string> server;
+    // Administrative shares (C$, ADMIN$, IPC$) are hidden by default
+    // (AGENTS.md SMB rule 3); toggling re-filters without a re-run.
+    in-out property <bool>   include-admin: false;
+    in property <bool>       is-running;
+    in property <string>     status;
+    in property <bool>       status-is-error;
+    in property <bool>       has-result;
+    in property <string>     result-server;
+    in property <[ShareVm]>  shares;
+    in property <[string]>   errors;
+    in property <int>        admin-count;
+    callback list-clicked();
+}
+
+export component SharesTab inherits ScrollView {
+    VerticalBox {
+        alignment: start;
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-sm;
+
+        Text {
+            text: "Which shares does a server publish, and what do their SHARE-level permissions allow? Read-only — Stars never changes a share. For a user's effective right (share and NTFS combined) use the Analyze tab.";
+            color: Theme.text-muted;
+            font-size: 11px;
+            wrap: word-wrap;
+        }
+
+        GroupBox {
+            title: "Server";
+            VerticalBox {
+                spacing: Theme.spacing-sm;
+                GridBox {
+                    spacing: Theme.spacing-sm;
+                    Row {
+                        Text { text: "Server:"; vertical-alignment: center; horizontal-stretch: 0; width: 140px; }
+                        LineEdit {
+                            placeholder-text: "fileserver01  ·  fileserver01.domain.local  ·  10.0.0.5";
+                            text <=> SharesState.server;
+                            accepted(s) => { SharesState.list-clicked(); }
+                        }
+                        HelpTip {
+                            tip: "NetBIOS name, DNS name or IPv4 address of the server whose shares should be listed. No backslashes, no share name.\n\nReading share permissions requires administrative rights on the target server.";
+                        }
+                    }
+                }
+                CheckBox {
+                    text: "Show administrative shares (C$, ADMIN$, IPC$, …)";
+                    checked <=> SharesState.include-admin;
+                }
+            }
+        }
+
+        HorizontalBox {
+            alignment: start;
+            spacing: Theme.spacing-sm;
+            padding: 0px;
+            Button {
+                text: "📂 List shares";
+                enabled: !SharesState.is-running;
+                clicked => { SharesState.list-clicked(); }
+            }
+            Text {
+                text: SharesState.status;
+                color: SharesState.status-is-error ? Theme.error : Theme.text-secondary;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+
+        if SharesState.has-result: GroupBox {
+            title: "Shares on " + SharesState.result-server;
+            VerticalBox {
+                spacing: Theme.spacing-sm;
+                Text {
+                    text: SharesState.include-admin || SharesState.admin-count == 0
+                        ? (SharesState.shares.length + " share(s) shown")
+                        : ((SharesState.shares.length - SharesState.admin-count) + " share(s) shown, " + SharesState.admin-count + " administrative share(s) hidden");
+                    color: Theme.text-secondary;
+                }
+                if !SharesState.include-admin && SharesState.shares.length > 0 && SharesState.shares.length == SharesState.admin-count: Text {
+                    text: "No non-administrative shares found — tick 'Show administrative shares' to see them.";
+                    color: Theme.text-muted;
+                    wrap: word-wrap;
+                }
+                if SharesState.shares.length == 0: Text {
+                    text: "No shares found on this server.";
+                    color: Theme.text-muted;
+                }
+                // The `if` sits inside the per-share layout so a hidden
+                // administrative share takes no space at all.
+                for s in SharesState.shares: VerticalLayout {
+                    padding: 0px;
+                    spacing: 0px;
+                    if !s.is-admin || SharesState.include-admin: VerticalLayout {
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+                        spacing: 2px;
+                        HorizontalLayout {
+                            spacing: Theme.spacing-sm;
+                            Text {
+                                text: s.name;
+                                font-weight: 700;
+                                color: Theme.text-primary;
+                                horizontal-stretch: 0;
+                            }
+                            Text {
+                                text: s.is-admin ? "administrative share (system)"
+                                    : s.is-hidden ? "⚠ hidden data share ($) — not listed when browsing, NOT administrative"
+                                    : "";
+                                color: s.is-admin ? Theme.text-muted : Theme.warning;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        Text {
+                            text: s.unc + "   →   " + s.local;
+                            color: Theme.text-secondary;
+                            font-size: 11px;
+                            overflow: elide;
+                        }
+                        if s.dacl-status != "": Text {
+                            text: (s.dacl-level == 0 ? "ℹ " : "⚠ ") + s.dacl-status;
+                            color: s.dacl-level == 2 ? Theme.danger
+                                 : s.dacl-level == 1 ? Theme.warning
+                                 : Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                        for a in s.aces: HorizontalLayout {
+                            spacing: Theme.spacing-sm;
+                            padding-left: 12px;
+                            Text {
+                                text: a.kind;
+                                width: 44px;
+                                color: a.kind == "Deny" ? Theme.danger : Theme.text-primary;
+                                font-weight: a.kind == "Deny" ? 700 : 400;
+                            }
+                            Text {
+                                text: a.trustee != a.sid ? a.trustee + "  (" + a.sid + ")" : a.sid;
+                                color: Theme.text-primary;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: a.rights + "  " + a.mask;
+                                color: Theme.text-secondary;
+                            }
+                        }
+                        if s.unsupported > 0: Text {
+                            text: "⚠ " + s.unsupported + " share ACE(s) could not be evaluated — this share's permissions are INCOMPLETE (a hidden Deny among them could change the result).";
+                            color: Theme.danger;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                if SharesState.errors.length > 0: VerticalBox {
+                    padding: 0px;
+                    spacing: 2px;
+                    Text {
+                        text: "Shares that could not be read (" + SharesState.errors.length + "):";
+                        font-weight: 700;
+                        color: Theme.danger;
+                    }
+                    for e in SharesState.errors: Text {
+                        text: "⚠ " + e;
+                        color: Theme.danger;
+                        wrap: word-wrap;
+                    }
+                }
+                Text {
+                    text: "Note: these are SHARE-level rights only. A user's effective right over SMB is the more restrictive combination of share and NTFS — use the Analyze tab with a \\\\server\\share\\… path for that.";
+                    color: Theme.text-muted;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}

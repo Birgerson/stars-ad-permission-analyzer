@@ -1,0 +1,322 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
+// The Delta tab (ADR 0082): its state (`DeltaState`, read and written by
+// src/main.rs) and its layout (`DeltaTab`).
+
+import {
+    VerticalBox,
+    HorizontalBox,
+    GroupBox,
+    Button,
+    CheckBox,
+    ScrollView,
+} from "std-widgets.slint";
+import { PrimaryButton } from "../components/buttons.slint";
+import { ScanRunVm, RunErrorVm, DeltaRowVm } from "../models.slint";
+import { Theme } from "../theme/theme.slint";
+
+export global DeltaState {
+    // ============================================================
+    // Delta-Tab Properties / Delta tab properties
+    // ============================================================
+    in property <bool>   is-loading;
+    in property <string> status;
+    in property <bool>   status-is-error;
+    in property <[ScanRunVm]>  scan-runs;
+    in property <[DeltaRowVm]> rows;
+    in property <bool>   has-result;
+    in property <int>    added-count;
+    in property <int>    removed-count;
+    in property <int>    changed-count;
+    // Stored scan errors of one historical run — the paths that run
+    // could not read. Filled via the per-run warning button
+    // (persistence review 2026-07-26, PS-1).
+    in property <[RunErrorVm]> run-errors;
+    // Label of the run whose errors are shown; empty = panel hidden.
+    // in-out so the panel's Close button can clear it.
+    in-out property <string> errors-title;
+    callback load-runs-clicked();
+    callback pick-old(string);
+    callback pick-new(string);
+    callback compare-clicked();
+    // Request to delete a scan run. The GUI prompts via the
+    // d-pending-delete dialog first; the worker only sees the request
+    // after confirmation.
+    callback delete-confirmed(string);
+    // Load the stored scan errors of a run (id, label).
+    callback show-errors(string, string);
+    // ID of the scan run for which the confirmation dialog should be
+    // visible. Empty = no dialog open.
+    in-out property <string> pending-delete-id;
+    in-out property <string> pending-delete-label;
+}
+
+export component DeltaTab inherits ScrollView {
+    VerticalBox {
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-sm;
+
+        Text {
+            text: "Compare two scan runs — show paths "
+                + "that were added, removed, or saved with different "
+                + "rights.";
+            wrap: word-wrap;
+            color: Theme.text-secondary;
+        }
+
+        HorizontalBox {
+            alignment: start;
+            spacing: Theme.spacing-sm;
+            PrimaryButton {
+                text: DeltaState.is-loading ? "Loading..." : "📂  Load scan history";
+                enabled: !DeltaState.is-loading;
+                clicked => { DeltaState.load-runs-clicked(); }
+            }
+        }
+
+        if DeltaState.status != "": Text {
+            text: DeltaState.status;
+            color: DeltaState.status-is-error ? Theme.error : Theme.text-primary;
+            wrap: word-wrap;
+        }
+
+        if DeltaState.scan-runs.length > 0: GroupBox {
+            title: "Available scan runs (select the older one as 'Old')";
+            VerticalBox {
+                spacing: 4px;
+                HorizontalBox {
+                    spacing: Theme.spacing-sm;
+                    Text {
+                        text: "Old";
+                        width: 60px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: "New";
+                        width: 60px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: "Scan run";
+                        horizontal-stretch: 1;
+                        font-weight: 700;
+                    }
+                }
+                for run[i] in DeltaState.scan-runs: HorizontalBox {
+                    spacing: Theme.spacing-sm;
+                    CheckBox {
+                        text: "";
+                        width: 60px;
+                        checked: run.selected_as_old;
+                        toggled => { DeltaState.pick-old(run.id); }
+                    }
+                    CheckBox {
+                        text: "";
+                        width: 60px;
+                        checked: run.selected_as_new;
+                        toggled => { DeltaState.pick-new(run.id); }
+                    }
+                    Text {
+                        text: run.label;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                        wrap: no-wrap;
+                    }
+                    // Error-evidence button — shows the
+                    // stored scan errors of this run
+                    // (the paths it could not read).
+                    // Disabled when the run recorded
+                    // none.
+                    Button {
+                        text: "⚠ " + run.error_count;
+                        width: 52px;
+                        enabled: run.error_count > 0;
+                        clicked => {
+                            DeltaState.show-errors(run.id, run.label);
+                        }
+                    }
+                    // Trash button — opens the
+                    // confirmation dialog, no instant
+                    // delete. The actual action runs
+                    // only after confirmation.
+                    Button {
+                        text: "🗑";
+                        width: 36px;
+                        clicked => {
+                            DeltaState.pending-delete-id = run.id;
+                            DeltaState.pending-delete-label = run.label;
+                        }
+                    }
+                }
+            }
+        }
+
+        if DeltaState.scan-runs.length > 0: HorizontalBox {
+            alignment: start;
+            spacing: Theme.spacing-sm;
+            PrimaryButton {
+                text: "⟳  Compare";
+                clicked => { DeltaState.compare-clicked(); }
+            }
+        }
+
+        // Stored scan errors of one run — the paths that
+        // run could NOT read, i.e. what is missing from
+        // its results. Before this panel the persisted
+        // error evidence was write-only (persistence
+        // review 2026-07-26, PS-1).
+        if DeltaState.errors-title != "": GroupBox {
+            title: "Scan errors — " + DeltaState.errors-title;
+            VerticalBox {
+                spacing: 2px;
+                Text {
+                    text: "These paths could not be read during the scan — they are missing from the run's results.";
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                    font-size: 12px;
+                }
+                if DeltaState.run-errors.length == 0: Text {
+                    text: "Loading…";
+                    color: Theme.text-secondary;
+                }
+                for err[i] in DeltaState.run-errors: VerticalBox {
+                    spacing: 0px;
+                    Text {
+                        text: "⚠ " + err.path;
+                        font-weight: 700;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: err.message;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                        font-size: 12px;
+                    }
+                }
+                HorizontalBox {
+                    alignment: start;
+                    Button {
+                        text: "Close";
+                        clicked => { DeltaState.errors-title = ""; }
+                    }
+                }
+            }
+        }
+
+        // Confirmation dialog — not a separate popup but an
+        // inline visible box so a stray trash click does
+        // not delete immediately.
+        if DeltaState.pending-delete-id != "": Rectangle {
+            background: #fff3cd;
+            border-color: #c69210;
+            border-width: 1px;
+            border-radius: 4px;
+            VerticalBox {
+                padding: Theme.spacing-md;
+                spacing: Theme.spacing-sm;
+                Text {
+                    text: "Really remove this scan run?";
+                    font-weight: 700;
+                    color: #5c4500;
+                }
+                Text {
+                    text: DeltaState.pending-delete-label;
+                    color: #5c4500;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "This action cannot be undone. All permissions and scan errors stored for this run will be deleted along with it.";
+                    color: #5c4500;
+                    wrap: word-wrap;
+                    font-size: 12px;
+                }
+                HorizontalBox {
+                    spacing: Theme.spacing-sm;
+                    alignment: end;
+                    Button {
+                        text: "Cancel";
+                        clicked => {
+                            DeltaState.pending-delete-id = "";
+                            DeltaState.pending-delete-label = "";
+                        }
+                    }
+                    Button {
+                        text: "Delete permanently";
+                        clicked => {
+                            DeltaState.delete-confirmed(DeltaState.pending-delete-id);
+                            DeltaState.pending-delete-id = "";
+                            DeltaState.pending-delete-label = "";
+                        }
+                    }
+                }
+            }
+        }
+
+        if DeltaState.has-result: GroupBox {
+            title: "Delta (" + DeltaState.added-count + " added, "
+                + DeltaState.removed-count + " removed, "
+                + DeltaState.changed-count + " changed)";
+            VerticalBox {
+                spacing: 2px;
+                HorizontalBox {
+                    spacing: Theme.spacing-sm;
+                    Text {
+                        text: "Path";
+                        font-weight: 700;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: "Kind";
+                        font-weight: 700;
+                        width: 110px;
+                    }
+                    Text {
+                        text: "Old";
+                        font-weight: 700;
+                        width: 180px;
+                    }
+                    Text {
+                        text: "New";
+                        font-weight: 700;
+                        width: 180px;
+                    }
+                }
+                // Empty delta: explicitly state that the comparison ran and
+                // found nothing — otherwise the user sees an empty table and
+                // thinks the click was lost.
+                if DeltaState.rows.length == 0: Text {
+                    text: "No differences found between the two scans. Both runs contain the same paths with identical effective permissions.";
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+                for entry[i] in DeltaState.rows: HorizontalBox {
+                    spacing: Theme.spacing-sm;
+                    Text {
+                        text: entry.path;
+                        color: Theme.text-primary;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: entry.kind_label;
+                        color: entry.kind_color;
+                        width: 110px;
+                    }
+                    Text {
+                        text: entry.old_rights;
+                        color: Theme.text-secondary;
+                        width: 180px;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: entry.new_rights;
+                        color: Theme.text-secondary;
+                        width: 180px;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+}

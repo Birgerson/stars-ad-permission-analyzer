@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 Birger Labinsch
+
+// Application-wide state that the header and several tabs show (ADR 0082).
+// Tab-specific state lives in each tab's own global (tabs/*.slint).
+
+export global AppState {
+    // Version / branding text for the HeaderBar and the Info tab — set by
+    // main.rs at setup so the UI does not need to decide what to render.
+    in property <string> version: "";
+}

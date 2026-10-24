@@ -18,6 +18,9 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
     `theme/`, the reusable building blocks in `components/` and the view
     models in `models.slint`. Checked: all eight tabs, light and dark, empty
     and with a result, pixel-identical to v1.17.0.
+  - Each tab is its own file (`ui/tabs/`) with its own state (a Slint
+    global per tab) instead of 179 properties on one window. Checked as
+    well: one real action per tab gives the same result as v1.17.0.
   - The language gate now also checks `.slint` and `.html` files, so the UI
     texts stay covered.
 
