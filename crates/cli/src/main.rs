@@ -1092,9 +1092,15 @@ async fn run_analyze(
     // Review 2026-06-04 round 2, finding 6: from here on we forward the
     // rejected empty paths, trimmed whitespace and canonicalised long-
     // path forms — downstream code must see exactly that form.
-    let path = validate_path(&path)
+    let requested_path = validate_path(&path)
         .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
         .0;
+    // ADR 0085: a path of a DFS namespace is evaluated where Windows serves
+    // it — on the folder target this machine is referred to.
+    let analysis::dfs::EvaluationTarget {
+        evaluated_path: path,
+        dfs,
+    } = analysis::dfs::resolve_evaluation_target(&requested_path);
     // Review 2026-06-04 round 3 finding 2 + round 4 finding 2: classify on
     // the trimmed value.
     let user_trimmed = user.trim();
@@ -1120,7 +1126,12 @@ async fn run_analyze(
     let smb_server = conn.smb_server;
     let share_name = conn.share_name;
 
-    let fso = read_fso(&path).map_err(|e| anyhow::anyhow!("Cannot read path '{}': {}", path, e))?;
+    let mut fso =
+        read_fso(&path).map_err(|e| anyhow::anyhow!("Cannot read path '{}': {}", path, e))?;
+    // The report names the path as given; the DFS marker names the target.
+    if dfs.is_some() {
+        fso.path = NormalizedPath(requested_path.clone());
+    }
 
     // AGENTS.md DoD 11: validate the explicit LDAP timeout (1–600s) before it
     // reaches LdapConfig; None keeps the 10s default.
@@ -1276,10 +1287,14 @@ async fn run_analyze(
         sid_names,
         resolution: engine_flags,
         selective_authentication: selective_authentication.clone(),
+        dfs: dfs.clone(),
     };
     let mut result = DefaultPermissionEngine
         .evaluate(input)
         .map_err(|e| anyhow::anyhow!("Permission evaluation failed: {e}"))?;
+    if let Some(d) = &dfs {
+        analysis::dfs::attach_step(&mut result.path_explanation, d);
+    }
     // Review CR-7: the share side explained ACE by ACE.
     permission_engine::engine::attach_share_provenance(
         &mut result.path_explanation,
@@ -1379,9 +1394,15 @@ async fn run_scan(
     } = opts;
 
     // Review 2026-06-04 round 2, finding 6: propagate the normalized form.
-    let path = validate_path(&path)
+    let requested_path = validate_path(&path)
         .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
         .0;
+    // ADR 0085: a scan root of a DFS namespace is scanned on the folder
+    // target this machine is referred to; rows keep the requested form.
+    let analysis::dfs::EvaluationTarget {
+        evaluated_path: path,
+        dfs: scan_dfs,
+    } = analysis::dfs::resolve_evaluation_target(&requested_path);
     // AGENTS.md DoD 11: validate numeric inputs centrally before they reach
     // WalkConfig — otherwise --max-depth=4_000_000_000 would let the walker
     // run until RAM exhaustion.
@@ -1546,13 +1567,22 @@ async fn run_scan(
         scan_unsupported_share_ace_count,
     );
     print_scan_header(
-        &path,
+        &requested_path,
         &resolved,
         max_depth,
         &run_id,
         scan_share_mask_for_header.as_ref(),
         &scan_wide,
     );
+    if let Some(d) = &scan_dfs {
+        let tag = if d.marker().is_incompleteness_trigger() {
+            "[!]"
+        } else {
+            "[i]"
+        };
+        println!("  {tag} {}", d.marker().summary());
+        println!();
+    }
 
     // 6. Walk the tree.
     // Ctrl-C triggers a cooperative cancellation instead of killing the process.
@@ -1647,7 +1677,13 @@ async fn run_scan(
 
     while let Some(item) = rx.recv().await {
         match item {
-            fs_scanner::WalkItem::Error(walk_err) => {
+            fs_scanner::WalkItem::Error(mut walk_err) => {
+                if let Some((requested, _)) = scan_dfs
+                    .as_ref()
+                    .and_then(|d| analysis::dfs::for_scanned_object(&walk_err.path, d))
+                {
+                    walk_err.path = requested;
+                }
                 walk_error_count += 1;
                 println!("  [Error]         {}: {}", walk_err.path, walk_err.error);
                 scan_errors_for_db.push(ScanError {
@@ -1655,8 +1691,15 @@ async fn run_scan(
                     message: walk_err.error.to_string(),
                 });
             }
-            fs_scanner::WalkItem::Object(fso) => {
+            fs_scanner::WalkItem::Object(mut fso) => {
                 object_count += 1;
+                // ADR 0085: the row keeps the requested form, its marker
+                // names the target path.
+                let row_dfs = scan_dfs.as_ref().and_then(|d| {
+                    let (requested, own) = analysis::dfs::for_scanned_object(&fso.path.0, d)?;
+                    fso.path = NormalizedPath(requested);
+                    Some(own)
+                });
 
                 // Resolve this object's trustee SIDs into the lazy cache,
                 // then snapshot the map for this object's evaluation and
@@ -1705,10 +1748,14 @@ async fn run_scan(
                     sid_names,
                     resolution: scan_engine_flags.clone(),
                     selective_authentication: scan_selective_authentication.clone(),
+                    dfs: row_dfs.clone(),
                 };
                 let mut result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
                     anyhow::anyhow!("Permission evaluation failed for '{path_display}': {e}")
                 })?;
+                if let Some(d) = &row_dfs {
+                    analysis::dfs::attach_step(&mut result.path_explanation, d);
+                }
                 // Review CR-7: the share side explained ACE by ACE.
                 #[cfg(windows)]
                 permission_engine::engine::attach_share_provenance(
@@ -1759,7 +1806,7 @@ async fn run_scan(
             id: run_id,
             started_at,
             finished_at: Some(Utc::now()),
-            target: path.clone(),
+            target: requested_path.clone(),
             errors: vec![],
         };
         db.scan_store()

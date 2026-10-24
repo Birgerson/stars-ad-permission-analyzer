@@ -111,3 +111,4 @@ principle they cite is stated in the public documents:
 | 0082 | Modular GUI: design tokens, components, one module per tab |
 | 0083 | GUI design: one font, no symbol icons, fields at their natural height |
 | 0084 | Domains of a trusted forest and forest-trust SID filtering |
+| 0085 | DFS paths are evaluated on the target the client is referred to |

@@ -16,9 +16,9 @@ use std::os::windows::ffi::OsStrExt;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FileIdInfo, GetFileInformationByHandleEx, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    OPEN_EXISTING,
+    CreateFileW, FileIdInfo, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 
 /// Closes the wrapped handle on drop, on every return path.
@@ -49,7 +49,49 @@ impl Drop for HandleGuard {
 /// Only `FILE_ID_INFO` is used: the older `GetFileInformationByHandle`
 /// reports a volume serial of 0 over SMB (observed against Windows Server
 /// 2022), which cannot tell two volumes behind one share apart.
+#[cfg(test)]
 pub(crate) fn directory_identity(path: &str) -> Option<String> {
+    probe_directory(path).identity
+}
+
+/// What one open of a directory tells the walker: its identity (see
+/// [`directory_identity`]) and the path the handle was really opened on
+/// (ADR 0085).
+pub(crate) struct DirectoryProbe {
+    pub(crate) identity: Option<String>,
+    /// `\\server\share\…` the redirector opened, or `None`.
+    pub(crate) final_path: Option<String>,
+}
+
+/// Opens `path` once and reads both its identity and its final path.
+pub(crate) fn probe_directory(path: &str) -> DirectoryProbe {
+    let Some(guard) = open_for_attributes(path) else {
+        return DirectoryProbe {
+            identity: None,
+            final_path: None,
+        };
+    };
+    DirectoryProbe {
+        identity: identity_of(&guard),
+        final_path: final_path_of(&guard),
+    }
+}
+
+/// The UNC path the redirector really opened for `path`, as
+/// `\\server\share\…` — for a path through a DFS namespace the folder
+/// target this machine is referred to (ADR 0085, lab 2026-10-24:
+/// `\\corp.test\dfs\Projects\Sub` → `\\FS-01.corp.test\DfsProj\Sub`; a
+/// plain UNC path comes back with the same server and share, only the case
+/// normalized). `None` for a local path or when the open or the query fails.
+///
+/// Over SMB the components *below* the share are not reliable for a
+/// server-side junction (ADR 0062); callers use only server and share.
+pub fn final_unc_path(path: &str) -> Option<String> {
+    let guard = open_for_attributes(path)?;
+    final_path_of(&guard)
+}
+
+fn open_for_attributes(path: &str) -> Option<HandleGuard> {
     let api_path = validation::path::to_windows_api_path(path);
     let wide: Vec<u16> = OsStr::new(&api_path)
         .encode_wide()
@@ -74,8 +116,46 @@ pub(crate) fn directory_identity(path: &str) -> Option<String> {
     if handle == INVALID_HANDLE_VALUE || handle.is_null() {
         return None;
     }
-    let guard = HandleGuard(handle);
+    Some(HandleGuard(handle))
+}
 
+/// `\\server\share\…` of an open handle, `None` unless it is a UNC path.
+fn final_path_of(guard: &HandleGuard) -> Option<String> {
+    let mut buf: Vec<u16> = vec![0; 1024];
+    loop {
+        // SAFETY: `guard.0` is a valid open handle; `buf` is a writable
+        // buffer whose length in UTF-16 units is passed explicitly.
+        let n = unsafe {
+            GetFinalPathNameByHandleW(
+                guard.0,
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+                FILE_NAME_NORMALIZED,
+            )
+        } as usize;
+        if n == 0 {
+            return None;
+        }
+        if n < buf.len() {
+            let raw = String::from_utf16(&buf[..n]).ok()?;
+            return unc_form(&raw);
+        }
+        // Too small: `n` is the size needed, terminator included. Bounded
+        // by the longest Windows path.
+        if n > 32_768 {
+            return None;
+        }
+        buf = vec![0; n];
+    }
+}
+
+/// `\\?\UNC\server\share\…` → `\\server\share\…`; anything else → `None`.
+fn unc_form(raw: &str) -> Option<String> {
+    let unc = validation::path::strip_long_path_prefix(raw);
+    validation::path::parse_unc_components(&unc).map(|_| unc)
+}
+
+fn identity_of(guard: &HandleGuard) -> Option<String> {
     let mut info = FILE_ID_INFO {
         VolumeSerialNumber: 0,
         FileId: windows_sys::Win32::Storage::FileSystem::FILE_ID_128 {
@@ -124,6 +204,23 @@ mod tests {
             identity_key(0x9c6e_9943_6e99_16dc, id).as_deref(),
             Some("fid:9c6e99436e9916dc:000000000000000200000000000071c3")
         );
+    }
+
+    #[test]
+    fn unc_form_keeps_only_unc_paths() {
+        assert_eq!(
+            unc_form(r"\\?\UNC\FS-01.corp.test\DfsProj\Sub").as_deref(),
+            Some(r"\\FS-01.corp.test\DfsProj\Sub")
+        );
+        assert_eq!(unc_form(r"\\?\C:\data"), None);
+        assert_eq!(unc_form(r"C:\data"), None);
+    }
+
+    #[test]
+    fn a_local_path_has_no_final_unc_path() {
+        let root = temp_dir("final");
+        assert_eq!(final_unc_path(&root.to_string_lossy()), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

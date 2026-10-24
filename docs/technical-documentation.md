@@ -165,14 +165,14 @@ directed — higher layers depend on lower ones, never the reverse:
 | `validation` | Typed wrappers for every user input (`ValidatedSid`, `ValidatedDn`, `ValidatedServerName`, …), path/UNC handling, and the central RFC-4515 LDAP filter escaper | `sid.rs`, `net.rs`, `path.rs`, `numbers.rs`, `ldap.rs`, `export_path.rs`, `db_path.rs`, `update_source.rs` |
 | `win_safe` | RAII guards so native allocations are always released (`NetApiBuffer`, `LocalFreeGuard`) plus the shared guard-based SID→string conversion | `netapi.rs`, `localalloc.rs`, `sid.rs` |
 | `ad_resolver` | AD / LSA / SAM access; **central Principal pipeline** lives here; read-only trust inventory | `principal.rs`, `resolver.rs`, `ldap_client.rs`, `sam.rs`, `local_groups.rs`, `enumerate.rs`, `trusts.rs`, `forest_trust_info.rs` (forest trust information parser, ADR 0084), `trusted.rs`, `sid_util.rs`, `config.rs` |
-| `fs_scanner` | NTFS DACL read + walker with reparse cycle/duplicate detection, cancellation, per-scan SD cache | `acl.rs`, `walker.rs`, `cancel.rs`, `scanner.rs` (dormant `Scanner` seam) |
-| `share_scanner` | SMB share enumeration + share DACL read via Windows API; the shared CLI/GUI share-mask orchestration | `scanner.rs` |
+| `fs_scanner` | NTFS DACL read + walker with reparse cycle/duplicate detection, cancellation, per-scan SD cache; the final (redirected) UNC path of a handle and the "served from another share" check of remote scans (ADR 0085) | `acl.rs`, `walker.rs`, `file_id.rs`, `cancel.rs`, `scanner.rs` (dormant `Scanner` seam) |
+| `share_scanner` | SMB share enumeration + share DACL read via Windows API; the shared CLI/GUI share-mask orchestration; the DFS client's folder and targets for a path (`NetDfsGetClientInfo`, ADR 0085) | `scanner.rs`, `dfs.rs` |
 | `permission_engine` | AccessCheck reproduction, token SID assembly, permission path generation, mask normalization | `engine.rs`, `mask.rs` |
 | `risk_engine` | Six risk rules + `is_incomplete()` delegation | `rules.rs` |
 | `persistence` | SQLite schema + migrations (v1–v8) + `ScanStore`, delta comparison | `scan_store.rs`, `migrations.rs`, `delta.rs`, `db.rs` |
 | `exporter` | CSV / JSON / HTML renderers + the shared path-centric trustee view | `csv.rs`, `json.rs`, `html.rs`, `trustees.rs` |
 | `viz` | Permission graph (ADR 0077, layout v2 ADR 0081): column layout of one `EffectivePermission` from its `trace` — NTFS and share bands, layer results, logon node — rendered as SVG (HTML report, saved graph) or as text-free shapes plus native texts (GUI), light or dark; presentation only, no permission logic | `lib.rs` |
-| `analysis` | The analysis steps the CLI and the GUI both run, implemented once (ADR 0082 step 5): the account's local groups on the target server with UAC and anonymous-Everyone handling, the share mask of an SMB path for the account's token; orchestration only, the permission logic stays in `permission_engine` | `local_groups.rs`, `share.rs` |
+| `analysis` | The analysis steps the CLI and the GUI both run, implemented once (ADR 0082 step 5): the account's local groups on the target server with UAC and anonymous-Everyone handling, the share mask of an SMB path for the account's token; where a DFS path is evaluated (ADR 0085); orchestration only, the permission logic stays in `permission_engine` | `local_groups.rs`, `share.rs`, `dfs.rs` |
 | `update_manager` | Fail-closed seam for signature-checked updates (L12) + the manual read-only update check (ADR 0061) | `checker.rs`, `manager.rs`, `manifest.rs`, `verifier.rs`, `version.rs` |
 | `cli` | Command-line front-end (`adpa.exe`): `analyze`, `scan`, `groups`, `members`, `shares`, `runs`, `errors`, `check-update`, `trusts` | `main.rs`, `output.rs` |
 | `gui` | Slint-based GUI (`adpa-gui.exe`) with eight tabs (Analyze, Graph, Groups, Scan Tree, Delta, Trusts, Shares, Info); the UI lives in `ui/*.slint` (design tokens, components, one file per tab — ADR 0082, carried out in steps) and is compiled by the `slint!` macro in `main.rs`; the Rust side of each tab is its own module in `src/tabs/`, `main.rs` only starts the GUI and routes the worker's events | `ui/app.slint`, `main.rs`, `src/tabs/`, `identity_input.rs`, `worker.rs` |
@@ -1706,7 +1706,7 @@ suffered from the "validate, then forward the raw value" anti-pattern
 
 1. **Unit tests** in every module (`#[cfg(test)] mod tests`).
    Cover engine logic, validations, marker system. Run in
-   `cargo test --workspace` — currently ~485 tests, all green.
+   `cargo test --workspace` — currently about 1,040 tests, all green.
 
 2. **Fake-based integration** in
    [`crates/ad_resolver/src/principal.rs`](../crates/ad_resolver/src/principal.rs).

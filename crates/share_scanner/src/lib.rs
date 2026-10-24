@@ -3,6 +3,7 @@
 
 //! share_scanner — SMB share enumeration and permission reading
 
+pub mod dfs;
 pub mod scanner;
 
 pub use scanner::{

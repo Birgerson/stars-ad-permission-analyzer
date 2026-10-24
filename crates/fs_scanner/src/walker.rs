@@ -216,6 +216,28 @@ impl<'a> DuplicateRoute<'a> {
 /// The diagnostic for a second route to a directory already enumerated in
 /// this scan under `first_path` (ADR 0058). Pure, so every wording is
 /// unit-testable.
+/// ADR 0085: the reader-facing reason when a directory is served from
+/// another share than the scan root, `None` when it is the same share (or
+/// either side is unknown — no claim without evidence). Pure.
+fn other_share_message(
+    root_share: Option<&(String, String)>,
+    final_path: Option<&str>,
+) -> Option<String> {
+    let (root_server, root_name) = root_share?;
+    let final_path = final_path?;
+    let (server, share) = validation::path::parse_unc_components(final_path)?;
+    if server.eq_ignore_ascii_case(root_server) && share.eq_ignore_ascii_case(root_name) {
+        return None;
+    }
+    Some(format!(
+        "this directory is served from \\\\{server}\\{share}, not from the share of the scan root \
+         (\\\\{root_server}\\{root_name}) — a folder of a DFS namespace or a link to another \
+         share. Its share permissions and local groups are those of that share's server, so it \
+         was not evaluated in this scan and its content was not enumerated; scan this path on \
+         its own."
+    ))
+}
+
 fn duplicate_route_message(first_path: &str, route: DuplicateRoute<'_>) -> String {
     let first = validation::path::strip_long_path_prefix(first_path);
     match route {
@@ -372,6 +394,17 @@ fn walk_dir(
     // Decided once per walk from the root: everything below a UNC root is
     // reached over SMB too.
     let remote = is_remote_path(path);
+    // ADR 0085: the share the root is really served from. A directory below
+    // it that the redirector opens on another share (a DFS folder of a
+    // namespace root) is outside this scan's share context.
+    let root_share = if remote {
+        crate::file_id::final_unc_path(path)
+            .as_deref()
+            .and_then(validation::path::parse_unc_components)
+            .or_else(|| validation::path::parse_unc_components(path))
+    } else {
+        None
+    };
     let mut stack = vec![WalkWork::Visit {
         path: path.to_owned(),
         parent_canonical: parent_canonical.map(str::to_owned),
@@ -421,6 +454,25 @@ fn walk_dir(
                 let is_dir = fso.is_directory;
                 let is_reparse = fso.is_reparse_point;
                 debug!(path, is_dir, is_reparse, depth = current_depth, "Read FSO");
+                // One open per remote directory: its identity for the loop
+                // detection (ADR 0062) and the share it is served from.
+                let probe = (remote && is_dir).then(|| crate::file_id::probe_directory(&path));
+                if parent_canonical.is_some() {
+                    if let Some(message) = other_share_message(
+                        root_share.as_ref(),
+                        probe.as_ref().and_then(|p| p.final_path.as_deref()),
+                    ) {
+                        info!(
+                            path,
+                            "Directory is served from another share — not enumerated"
+                        );
+                        on_item(WalkItem::Error(WalkError {
+                            path: path.clone(),
+                            error: CoreError::OtherShare(message),
+                        }));
+                        continue;
+                    }
+                }
                 on_item(WalkItem::Object(fso));
 
                 // An unresolvable reparse target (broken link, no access) stops
@@ -471,11 +523,7 @@ fn walk_dir(
                 // Over SMB the canonical path of a junction is unreliable
                 // (ADR 0062), so remote scans key directories by volume
                 // serial + file ID; `canonical` stays the display form.
-                let file_identity = if remote {
-                    crate::file_id::directory_identity(&path)
-                } else {
-                    None
-                };
+                let file_identity = probe.and_then(|p| p.identity);
                 let keyed_by_file_id = remote && file_identity.is_some();
                 let loop_key = select_loop_key(remote, file_identity, &canonical);
                 debug!(path, canonical = %canonical, key = %loop_key, "Directory loop identity");
@@ -1190,6 +1238,28 @@ mod tests {
     }
 
     // --- ADR 0062 / FS3-1: loop identity for scans over SMB ---
+
+    /// ADR 0085, lab 2026-10-24: in the namespace root `\\corp.test\dfs`
+    /// (served from DC-01's share `dfs`) the folder `Projects` is opened on
+    /// `\\FS-01.corp.test\DfsProj`.
+    #[test]
+    fn a_directory_on_another_share_is_named_with_both_shares() {
+        use super::other_share_message;
+        let root = ("WIN-MONCCCT07FT.corp.test".to_owned(), "dfs".to_owned());
+        let m = other_share_message(Some(&root), Some(r"\\FS-01.corp.test\DfsProj"))
+            .expect("another share");
+        assert!(m.contains(r"\\FS-01.corp.test\DfsProj"), "{m}");
+        assert!(m.contains(r"\\WIN-MONCCCT07FT.corp.test\dfs"), "{m}");
+        assert!(m.contains("scan this path on its own"), "{m}");
+        // Same share, other case and a sub-path: no claim.
+        assert_eq!(
+            other_share_message(Some(&root), Some(r"\\win-moncccT07ft.CORP.test\DFS\Sub")),
+            None
+        );
+        // Unknown on either side: no claim.
+        assert_eq!(other_share_message(None, Some(r"\\FS-01\DfsProj")), None);
+        assert_eq!(other_share_message(Some(&root), None), None);
+    }
 
     #[test]
     fn remote_path_detection() {

@@ -7,9 +7,9 @@ use async_trait::async_trait;
 
 use crate::error::CoreError;
 use crate::model::{
-    AccessContext, AceOutcome, EffectivePermission, FileSystemObject, GroupMembership, Identity,
-    LocalGroupEvalStatus, PathTrustees, RemoteUacFiltering, RiskFinding, ScanError,
-    ShareMaskStatus, Sid,
+    AccessContext, AceOutcome, DfsEvaluation, EffectivePermission, FileSystemObject,
+    GroupMembership, Identity, LocalGroupEvalStatus, PathTrustees, RemoteUacFiltering, RiskFinding,
+    ScanError, ShareMaskStatus, Sid,
 };
 
 pub struct ScanRequest {
@@ -193,6 +193,10 @@ pub struct PermissionEvaluationInput {
     /// trusted domain on the target server. `None` — the default — for every
     /// other account and trust, so nothing changes there.
     pub selective_authentication: Option<SelectiveAuthenticationCheck>,
+    /// ADR 0085: the path lies in a DFS namespace and is evaluated on the
+    /// folder target this machine is referred to. `None` — the default —
+    /// for every path outside DFS.
+    pub dfs: Option<DfsEvaluation>,
     /// Access context (local interactive / remote SMB / unspecified).
     /// Controls which well-known SIDs are added to the token implicitly
     /// (e.g. `NETWORK` for SMB, `INTERACTIVE` for local). The default

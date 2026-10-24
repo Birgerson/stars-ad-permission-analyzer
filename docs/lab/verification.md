@@ -1684,3 +1684,49 @@ The fix for the finding above was run on MS-01 (member of corp.test).
 Kerberos crossed the forest trust for the Signed LDAP connection to DC-04: the bind account `CORP\Administrator` read the child domain.
 
 **Observation for a later measurement, unrelated to this change.** The real SMB probe grants Read / Write attributes (`0x180` / `0x1A0`) on the share root `ForestTest`. Its DACL holds only Administrators and SYSTEM, and Stars reports No access there. A plausible explanation is the implicit `FILE_READ_ATTRIBUTES` through the parent's List folder, but that is not established. To be measured on its own.
+
+## Block S — DFS paths evaluated on their target (ADR 0085, 2026-10-24)
+
+**Lab:**
+
+- **Namespace:** the domain-based namespace `\corp.test\dfs` on DC-01, root share `dfs` (Everyone Read).
+- **Folder `Projects`** has two targets with different permissions on purpose:
+  - `\FS-01\DfsProj`: share Everyone Change; NTFS `rt_gt01` Modify, Domain Users RX.
+  - `\FS-02\DfsProj`: share Everyone Read; NTFS `rt_gt01` RX, `rt_gt02` Modify.
+- **Folder `Team`** has one target, `\FS-02\DfsTeam`: share Everyone Full; NTFS `rt_gt02` Modify, Domain Users RX.
+- Each target root holds `target.txt` with its server name.
+
+**Ground truth.** Real SMB from MS-01, with sessions as the account to the namespace and to both file servers. Each folder was opened with single access rights, and `target.txt` was read. MS-01 is referred to FS-01 for `Projects` and to FS-02 for `Team`.
+
+| Path | Account | Windows | v1.18.0 / main 79e316e | this change |
+| --- | --- | --- | --- | --- |
+| `Projects\Sub` | `rt_gt01` | Modify bits (`0x301A7`), FS-01 | **Read & Execute**, "limited by the share" (the root share `dfs`) | NOT DETERMINABLE, known data **Modify** (FS-01); further target `\FS-02.corp.test\DfsProj` named |
+| `Projects\Sub` | `rt_gt02` | Read & Execute (`0x201A1`) | Read & Execute | NOT DETERMINABLE, known data Read & Execute (FS-01) |
+| `Team\Sub` | `rt_gt01` | Read & Execute | Read & Execute | **exact** Read & Execute |
+| `Team\Sub` | `rt_gt02` | Modify bits (`0x301A7`) | **Read & Execute** | **exact Modify** |
+| `\corp.test\dfs` | both | Read & Execute | Read & Execute | exact, on `\WIN-MONCCCT07FT.corp.test\dfs` |
+
+**Scans.**
+
+- **`scan \corp.test\dfs`:** 1 row (the root), plus two errors "Served from another share: this directory is served from `\FS-01.corp.test\DfsProj` / `\FS-02.corp.test\DfsTeam` …; scan this path on its own". Before, the folders were scanned with the root share.
+- **`scan \corp.test\dfs\Projects` and `…\Team`:** rows in the requested form, evaluated on the target. `Team` is exact Modify for `rt_gt02` (3 rows); `Projects` is not determinable (3 rows).
+
+**API facts** (`dfs-api-probe.ps1`, `dfs-api-probe2.ps1`):
+
+- `GetFinalPathNameByHandle` returns the target for every name form, including the physical root share `\DC-01\dfs\Projects\…`.
+- For plain UNC paths it returns the same server and share, case-normalized.
+- `NetDfsGetClientInfo` matches by prefix. It answers 2662 outside DFS, and for some name forms also until the first open.
+
+**Regression.** Against the step 5a binary, column by column, **0 differing rows**:
+
+- the four release sets: 25,841 rows
+- the ext.test trust fixture with the trusted-domain connection: 65 rows
+
+**GUI.** The functional check of all 11 tab captures, v1.18.0 against this change, is pixel-identical; the only difference is the label in the saved graph's file name. While doing this, the driver (`tabfunc.ps1`, scratchpad) had stale coordinates from before ADR 0083. Its Analyze and Scan captures had shown no result, in every earlier comparison too. Fixed: identity row y=240, Analyze y=613, Start scan y=636.
+
+**Mass-test fixture**, built in the same session on FS-01 (Server 2025 en-us), data disk `T:` (200 GB):
+
+- `T:\MassData`: 20 departments × 50 projects × 10 folders × 150 files = **1,500,560 files, 11,139 folders**, generated in 582 s.
+- Every 5th project breaks inheritance with explicit group ACEs; every 7th folder adds Modify for a group; every 50th folder adds a Deny Write.
+- One long path (> 260 characters), Unicode names and credential-like file names per department.
+- Share `MassData`.

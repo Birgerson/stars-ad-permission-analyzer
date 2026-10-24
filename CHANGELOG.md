@@ -12,6 +12,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **DFS paths were evaluated with the namespace server's share permissions
+  (ADR 0085).** For a path through a DFS namespace, the NTFS permissions
+  came from the folder target, but the share permissions, local groups and
+  policies came from the namespace server. In the lab, an account with
+  Modify through the target's share was shown with Read & Execute. Stars
+  now evaluates a DFS path on the target this machine is referred to, and
+  the report names it (marker `DfsTargetEvaluated`, step "DFS: … evaluated
+  on …"). A DFS folder with several targets is marked not determinable,
+  with the other targets listed (known limitation L18). A scan of a
+  namespace root reports each folder on another share as an error
+  ("Served from another share") instead of evaluating it with the wrong
+  share.
 - **The trusted-domain connection works on a domain-joined machine (ADR
   0078 addendum).** There, Windows names every account of a trusted
   domain. Stars then took the "outside the configured LDAP base" path and
