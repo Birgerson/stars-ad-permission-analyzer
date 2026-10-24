@@ -66,6 +66,9 @@ should be changeable in one place.
 | 1 | UI moved unchanged from the macro into `ui/app.slint`; gate covers `.slint` | done — 18 of 18 screenshots identical |
 | 2 | `theme/theme.slint` (tokens), `components/` (buttons, header, help tip, trusted-domain fields), `models.slint` (view models) split out of `app.slint`; `app.slint` re-exports what Rust uses | done — 18 of 18 identical |
 | 3 | Each tab in `tabs/<tab>.slint`: its state as a global (`AnalyzeState`, `GraphState`, `GroupsState`, `ScanState`, `DeltaState`, `TrustsState`, `SharesState`, `InfoState`; prefixes dropped, `a-status` → `AnalyzeState.status`) and its layout as a component; `AppState` holds the version that header and Info tab show. `MainWindow` keeps no property; `app.slint` shrinks from 3,011 to 212 lines | done — 18 of 18 identical; one real action per tab identical as well |
+| 4 | Rust side per tab: `src/tabs/<tab>.rs` wires its tab's callbacks (`wire`) and applies the worker's answers (`handle_*`), with the tab's own bookkeeping (scan rows, delta selection, the Analyze path, the graph's result); `identity_input.rs` holds what Analyze, Groups and Scan Tree share (identity cache, suggestion models, LSA lookup); `view_models.rs` the one trustee-row builder that Analyze and Scan Tree had twice. `main.rs` (2,517 → 246 lines) creates the window, starts the worker, lets each tab wire itself and routes each worker event to its tab | done — see below |
+| 5 | One analysis pipeline for CLI and GUI (decision 3) | open |
+| 6 | `worker.rs` split by task | open |
 
 Step 3 also introduced a functional check: with a fresh, empty scan history
 (APPDATA redirected), one action per tab — analysis, a click into the graph,
@@ -79,6 +82,21 @@ on the way: the Analyze tab's old name `resolve-name-clicked` equalled the
 Scan Tree tab's new one, and the Scan handler was routed twice — the build
 failed on it, the rename now skips accessors already routed to a global.
 
+Step 4 was checked at three levels. The code: a script compared every
+function and every callback closure of the old `main.rs` with its new place,
+comments and whitespace ignored — all 30 callbacks and all functions are the
+same code, apart from the shared trustee-row builder (field for field the
+two former copies) and the event routing to the new module paths. The
+screen: 18 of 18 screenshots identical, and the functional check gives the
+same results with a byte-identical saved SVG. And the one path whose wiring
+moved — deleting a scan run, after which the Delta tab reloads the history
+through its own worker sender — deleted the run and reloaded the list
+exactly like v1.17.0 (four screenshots identical). One screenshot first
+differed: the dark Analyze tab drew the "Include share mask" checkbox in its
+hover shade. v1.17.0 itself, run again at the same time, drew it the same
+way, and step 4 is identical to that run — the shade comes from the desktop
+session, not from the code.
+
 Screenshot comparison notes: the Windows title bar (top 31 rows) is drawn
 by Windows, not Stars — its text colour follows whether the window is in
 the foreground — and is left out of the comparison. A widget under the
@@ -89,5 +107,7 @@ between runs and is repeated, a real change is the same in every run.
 
 - Editing the UI no longer means editing a 5,000-line Rust file; a tab, a
   component or a token has its own file.
-- The Rust API of the UI (`MainWindow`, the view-model structs, `Theme`)
-  stays the same until step 2 moves tab state into globals.
+- The Rust API of the UI changed once, in step 3: tab state moved from
+  `MainWindow` properties into one global per tab (`ui.global::<ScanState>()`).
+- A tab's behaviour is in two files that carry its name —
+  `ui/tabs/<tab>.slint` and `src/tabs/<tab>.rs`.

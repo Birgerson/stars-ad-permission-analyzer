@@ -21,6 +21,12 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   - Each tab is its own file (`ui/tabs/`) with its own state (a Slint
     global per tab) instead of 179 properties on one window. Checked as
     well: one real action per tab gives the same result as v1.17.0.
+  - The Rust side follows: one module per tab (`src/tabs/`), the identity
+    input that three tabs share in `identity_input.rs`, and `main.rs` only
+    starts the GUI and routes the worker's answers to the tabs (from 2,517
+    to 246 lines). The two copies of the trustee-row builder (Analyze,
+    Scan Tree) are one function now. Checked: the same screenshots and
+    actions as above, plus deleting a scan run in the Delta tab.
   - The language gate now also checks `.slint` and `.html` files, so the UI
     texts stay covered.
 
