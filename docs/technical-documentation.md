@@ -622,7 +622,7 @@ the GUI consistently marks the list as *Local*.
 
 | Input form | Behavior |
 |---|---|
-| Partial name + **🌐 Search AD** (Analyze tab) | On-demand, single LDAP query fills the picker with domain matches — exactly the "explicitly requested" path from point 4; each hit carries its SID, so picking one fills the SID field directly |
+| Partial name + **Search AD** (Analyze tab) | On-demand, single LDAP query fills the picker with domain matches — exactly the "explicitly requested" path from point 4; each hit carries its SID, so picking one fills the SID field directly |
 | `DOMAIN\user`, UPN, SID | Type directly → click `Resolve SID` → one-shot LDAP lookup |
 | Plain `sAMAccountName` | Also works as long as an AD server is configured |
 

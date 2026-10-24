@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Birger Labinsch
 
 // The Groups tab (ADR 0082): its state (`GroupsState`, read and written by
-// src/main.rs) and its layout (`GroupsTab`).
+// src/tabs/groups.rs) and its layout (`GroupsTab`).
 
 import {
     VerticalBox,
@@ -247,7 +247,7 @@ export component GroupsTab inherits ScrollView {
             spacing: Theme.spacing-sm;
             padding: 0px;
             Button {
-                text: GroupsState.direction == 1 ? "👥 Show members" : "👥 Show groups";
+                text: GroupsState.direction == 1 ? "Show members" : "Show groups";
                 enabled: !GroupsState.is-running;
                 clicked => { GroupsState.resolve-clicked(); }
             }
@@ -272,7 +272,7 @@ export component GroupsTab inherits ScrollView {
                     color: Theme.danger;
                 }
                 if !GroupsState.ad-connected && !GroupsState.result-is-members: Text {
-                    text: "⚠ No AD/LDAP connection — only direct (SAM/LSA) groups resolved.";
+                    text: "[!] No AD/LDAP connection — only direct (SAM/LSA) groups resolved.";
                     color: Theme.warning;
                     wrap: word-wrap;
                 }
@@ -286,7 +286,7 @@ export component GroupsTab inherits ScrollView {
                         padding: 6px;
                         spacing: 2px;
                         for p in GroupsState.privileged: Text {
-                            text: "⚠ " + p;
+                            text: "[!] " + p;
                             color: Theme.danger;
                             font-weight: 700;
                         }
@@ -338,7 +338,7 @@ export component GroupsTab inherits ScrollView {
                         color: Theme.text-primary;
                     }
                     for d in GroupsState.diagnostics: Text {
-                        text: (d.level == 0 ? "ℹ " : "⚠ ") + d.text;
+                        text: (d.level == 0 ? "[i] " : "[!] ") + d.text;
                         color: d.level == 2 ? Theme.danger
                              : d.level == 1 ? Theme.warning
                              : Theme.text-secondary;

@@ -116,6 +116,12 @@ weaknesses:
 - Text widths are estimated (6.7 px per character at 12 px Segoe UI), not
   measured. The estimate is conservative; a font much wider than Segoe UI
   could still overrun a box edge.
+  *Correction (2026-10-24, ADR 0083):* measured, the estimate is
+  conservative for mixed text only. A capitals-only rights label such as
+  `RX+WA,WEA,DC,DE,WDAC,WO` needs about 7.2 px per character in Segoe UI and
+  7.8 px in Arial, the font the graph uses since ADR 0083 (the GUI drew it in
+  Arial before already), so a long label of that kind can overrun a box
+  edge.
 
 ## Verification (2026-10-18)
 

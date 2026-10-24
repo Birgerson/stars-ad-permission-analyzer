@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Birger Labinsch
 
 // The Scan Tree tab (ADR 0082): its state (`ScanState`, read and written by
-// src/main.rs) and its layout (`ScanTab`).
+// src/tabs/scan.rs) and its layout (`ScanTab`).
 
 import {
     VerticalBox,
@@ -83,6 +83,9 @@ export global ScanState {
 
 export component ScanTab inherits ScrollView {
     VerticalBox {
+        // ADR 0083: every field at its natural height, from the top; the
+        // free height stays below.
+        alignment: start;
         padding: Theme.spacing-md;
         spacing: Theme.spacing-sm;
 
@@ -124,7 +127,7 @@ export component ScanTab inherits ScrollView {
                             spacing: Theme.spacing-sm;
                             padding: 0px;
                             Button {
-                                text: "🔍 Resolve SID";
+                                text: "Resolve SID";
                                 clicked => { ScanState.resolve-name-clicked(); }
                             }
                         }
@@ -212,7 +215,6 @@ export component ScanTab inherits ScrollView {
                                     height: 30px;
                                 }
                             }
-                            // verbreitern.
                             // Spacer to keep contents left-
                             // aligned without inflating.
                             Rectangle { horizontal-stretch: 1; }
@@ -352,12 +354,12 @@ export component ScanTab inherits ScrollView {
             alignment: start;
             spacing: Theme.spacing-sm;
             PrimaryButton {
-                text: ScanState.is-running ? "Running..." : "▶  Start scan";
+                text: ScanState.is-running ? "Running..." : "Start scan";
                 enabled: !ScanState.is-running;
                 clicked => { ScanState.clicked(); }
             }
             DangerButton {
-                text: "■  Cancel";
+                text: "Cancel";
                 enabled: ScanState.is-running;
                 clicked => { ScanState.cancel-clicked(); }
             }
@@ -392,7 +394,7 @@ export component ScanTab inherits ScrollView {
                             spacing: Theme.spacing-sm;
                             alignment: start;
                             Text {
-                                text: row.expanded ? "▼" : "▶";
+                                text: row.expanded ? "▼" : "►";
                                 width: 16px;
                             }
                             Text {
@@ -445,9 +447,9 @@ export component ScanTab inherits ScrollView {
                                 color: Theme.text-secondary;
                                 font-weight: 700;
                             }
-                            // neutral (ℹ, grey) · notice (⚠, amber) · concern (⚠, orange-red).
+                            // neutral ([i], grey) · notice ([!], amber) · concern ([!], orange-red).
                             for diag[d] in row.diagnostics: Text {
-                                text: (diag.level == 0 ? "ℹ " : "⚠ ") + diag.text;
+                                text: (diag.level == 0 ? "[i] " : "[!] ") + diag.text;
                                 color: diag.level == 2 ? Theme.danger
                                      : diag.level == 1 ? Theme.warning
                                      : Theme.text-secondary;
@@ -539,7 +541,7 @@ export component ScanTab inherits ScrollView {
                     }
                     Text {
                         text: risk.incomplete
-                            ? "⚠ incomplete — " + risk.description
+                            ? "[!] incomplete — " + risk.description
                             : risk.description;
                         color: #444;
                         wrap: word-wrap;
@@ -569,7 +571,7 @@ export component ScanTab inherits ScrollView {
                         text <=> ScanState.export-path;
                     }
                     PrimaryButton {
-                        text: "💾  Export";
+                        text: "Export";
                         clicked => { ScanState.export-clicked(); }
                     }
                 }

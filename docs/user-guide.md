@@ -190,7 +190,7 @@ user can effectively do there.
   user from the shown chain alone does **not** remove the membership,
 - **all diagnostic markers of this result**, listed under
   *Diagnostics* with the same wording the CLI and the reports use —
-  informational ones with `ℹ`, warnings with `⚠` in the attention
+  informational ones with `[i]`, warnings with `[!]` in the attention
   colour. Since the gui review 2026-07-26 this block exists; before
   that the Analyze tab silently dropped every marker, so an
   understated right (unevaluated `sIDHistory`) or a flat SAM-fallback
@@ -474,7 +474,7 @@ diagnostic markers.
 **Fields:**
 
 - **Left run** and **right run** selected from the scan history. Each
-  run's row shows its true error count and a **⚠ button** that opens
+  run's row shows its true error count and an **Errors (n)** button that opens
   the run's stored error list — the paths that scan could **not** read
   and which are therefore missing from its results.
 - **Compare** — table with `Before → After` per path, including a
@@ -508,7 +508,7 @@ root** (e.g. `DC=corp,DC=local`) — the trust objects live under
 direction (`inbound`, `outbound`, `bidirectional`, `disabled`, or
 `unknown (<code>)` for a value outside the documented range),
 attributes with the raw bitmask, and the partner's domain SID. Two
-settings get an explicit ⚠ callout, because they can make a Stars
+settings get an explicit `[!]` callout, because they can make a Stars
 finding read *higher* than the access a user really gets:
 
 - **SID filtering (quarantine)** — foreign and historical
@@ -534,7 +534,7 @@ share name) and a **Show administrative shares** checkbox. `C$`,
 `ADMIN$`, `IPC$` and similar system shares are hidden by default; the
 checkbox re-filters the current result without a new query. Hidden data
 shares (a `$` name that is not a system share, e.g. `Data$`) are always
-shown, with a ⚠ "hidden data share" label. Reading share
+shown, with a `[!]` "hidden data share" label. Reading share
 permissions needs administrative rights on the target server.
 
 **Output:** per share the UNC path, the local target (or "none
@@ -625,14 +625,14 @@ every keystroke.** Typing `m` for `max.mustermann001` surfaces no AD
 suggestions while you type — this is **not a bug**, it is by design
 (rationale below and in the technical documentation).
 
-**2. Live directory search — the "🌐 Search AD" button (Analyze tab).**
+**2. Live directory search — the "Search AD" button (Analyze tab).**
 When the local list does not contain the identity you need — typically a
 **domain** user or group — pick it straight from Active Directory:
 
 1. Select an **LDAP mode** (LDAPS / Plain / Global Catalog / Signed). The
-   **🌐 Search AD** button is disabled while the mode is *Off*.
+   **Search AD** button is disabled while the mode is *Off*.
 2. Type a name, or just part of one, into the identity field.
-3. Click **🌐 Search AD**. Stars runs a **single** LDAP query against the
+3. Click **Search AD**. Stars runs a **single** LDAP query against the
    configured directory and fills the *same* suggestion list with the
    matching domain users (`[U]`) and groups (`[G]`); each row shows the
    display name and the resolved SID.
@@ -649,11 +649,11 @@ autocomplete.
 
 | Action | Example |
 |---|---|
-| Click **🌐 Search AD** after typing part of the name | `mustermann` → pick *Max Mustermann* |
+| Click **Search AD** after typing part of the name | `mustermann` → pick *Max Mustermann* |
 | Type the full `DOMAIN\user` directly | `CORP\mustermann001` |
 | Or the UPN | `mustermann001@corp.local` |
 | Or the raw SID if known | `S-1-5-21-…-1128` |
-| Then click **"🔍 Resolve SID"** (for the typed forms above) | Stars performs a one-shot LDAP/LSA lookup and fills the SID field |
+| Then click **"Resolve SID"** (for the typed forms above) | Stars performs a one-shot LDAP/LSA lookup and fills the SID field |
 
 **Why not a live lookup on every keystroke?** Issuing an LDAP search to
 the DC for every typed character would turn each keystroke into a
@@ -1227,8 +1227,8 @@ Via the **Export** menu (or `--output` flag in the CLI):
     for the ones whose evaluation was complete,
   - trustee table per path (NTFS + share separated),
   - diagnostic markers as colour-coded badges by **attention** — neutral
-    grey (`ℹ`, expected/context), amber (`⚠`, worth a look), orange-red
-    (`⚠`, likely a real gap). See the colour legend in
+    grey (`[i]`, expected/context), amber (`[!]`, worth a look), orange-red
+    (`[!]`, likely a real gap) — the markers the GUI and the CLI use. See the colour legend in
     [features-and-limitations.md](features-and-limitations.md).
   - scan errors in their own section,
   - per row, next to the explanation, a collapsed **permission graph** —
@@ -1556,7 +1556,7 @@ adpa errors --db "C:\audits\stars_data.db" --run-id "9be04a2e-…"
 unreadable path with the reason. Both commands are **strictly read-only**:
 they validate the database path, refuse a file that does not exist
 (opening would otherwise create an empty database), and never modify the
-history. The GUI shows the same evidence via the ⚠ button in the Delta
+history. The GUI shows the same evidence via the Errors button in the Delta
 tab's run list.
 
 ### Check for a newer Stars version (read-only)

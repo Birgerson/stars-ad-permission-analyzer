@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Birger Labinsch
 
 // The Info tab (ADR 0082): its state (`InfoState`, read and written by
-// src/main.rs) and its layout (`InfoTab`).
+// src/tabs/info.rs) and its layout (`InfoTab`).
 
 import {
     VerticalBox,
@@ -27,6 +27,8 @@ export global InfoState {
 
 export component InfoTab inherits ScrollView {
     VerticalBox {
+        // ADR 0083: natural heights from the top, free height below.
+        alignment: start;
         padding: Theme.spacing-md;
         spacing: Theme.spacing-md;
 

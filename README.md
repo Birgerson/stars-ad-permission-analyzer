@@ -16,7 +16,7 @@ For every user, the tool shows the effective access rights that actually apply t
 
 > **Stars is exclusively a read-and-analyze tool. It does not modify any permissions, groups, or AD objects.**
 
-![Stars Analyze tab (v1.13.0) — a lab domain user on a member server's share, resolved via LDAP: effective right "Read & Execute + Delete" with access mask and the share line (NTFS ∩ Share), then the numbered permission path — how the access is evaluated (network logon over SMB), the 70 memberships that did not matter collapsed behind one toggle, the two decisive groups, the Deny ACE and what it takes away, the share ACEs with what each grants, and the closing "Limited by NTFS" step](docs/screenshots/stars-analyze-tab.png)
+![Stars Analyze tab — a lab domain user on a member server's share, resolved via LDAP: effective right "Read & Execute + Delete" with access mask and the share line (NTFS ∩ Share), then the numbered permission path — how the access is evaluated (network logon over SMB), the 70 memberships that did not matter collapsed behind one toggle, the two decisive groups, the Deny ACE and what it takes away, the share ACEs with what each grants, and the closing "Limited by NTFS" step](docs/screenshots/stars-analyze-tab.png)
 
 ## Contents
 
@@ -74,7 +74,7 @@ A level stands alone only when the mask is **exactly** that level; every right b
 - handle nested AD groups, local server groups (`BUILTIN\…`), Deny ACEs, and protected inheritance
 - use a tool that changes **nothing** in AD, NTFS, or SMB — not even “just to fix it”
 - snapshot a directory tree (e.g. 5000 folders) as CSV / JSON / HTML
-- prove later **what a stored scan could not read** — every run keeps its error evidence (`adpa runs` / `adpa errors`, or the ⚠ button in the Delta tab)
+- prove later **what a stored scan could not read** — every run keeps its error evidence (`adpa runs` / `adpa errors`, or the Errors button in the Delta tab)
 
 **❌ Stars is *not* the right tool for:**
 
@@ -399,7 +399,7 @@ Inputs:
 - Optional: LDAP connection settings for group resolution (not needed on a DC — SAM/LSA is enough).
 
 Actions:
-- **Analyze** — identity-bound evaluation (NTFS and share rights, effective permission, full explanation chain), including a **Diagnostics block** listing every marker of this result (ℹ informational, ⚠ warning) — an understated right or an incomplete group resolution is visible right here, not only in exports.
+- **Analyze** — identity-bound evaluation (NTFS and share rights, effective permission, full explanation chain), including a **Diagnostics block** listing every marker of this result (`[i]` informational, `[!]` warning — the markers the CLI uses) — an understated right or an incomplete group resolution is visible right here, not only in exports.
 - **Who has access?** — path-centric trustee table of all ACEs (NTFS and share separated); unreadable ACLs, partially unevaluated ACEs and empty DACLs appear as explicit diagnostic rows.
 
 #### `Graph` tab
@@ -410,7 +410,7 @@ Shows the last `Analyze` result as a diagram, read left to right: account → to
 
 #### `Groups` tab
 
-![Stars Groups tab (v1.13.0) — direction "Member of" with Plain LDAP against the lab DC: a test user resolved to its seven security groups — primary group, direct global, universal and domain local groups, and the nested chain global → universal → domain local, each labelled with how it arose — and a Diagnostics line naming the four groups left out because they are distribution groups or reached only through one](docs/screenshots/stars-groups-tab.png)
+![Stars Groups tab — direction "Member of" with Plain LDAP against the lab DC: a test user resolved to its seven security groups — primary group, direct global, universal and domain local groups, and the nested chain global → universal → domain local, each labelled with how it arose — and a Diagnostics line naming the four groups left out because they are distribution groups or reached only through one](docs/screenshots/stars-groups-tab.png)
 
 Answers a pure identity question — **"which groups is this user (or group) in?"** — without touching a path or computing rights. A **direction toggle** flips it to the reverse question, **"who is in this group?"** (see below).
 
@@ -427,7 +427,7 @@ Output:
 
 Switch the **Direction** toggle to **Members** to list **who is in a group** instead — direct members plus accounts whose *primary* group it is (found via a `primaryGroupID` search and tagged, so *Domain Users* is not wrongly shown as empty).
 
-![Stars Groups tab, Members direction (v1.13.0) — the domain's default user group enumerated to 10015 members: 10 direct and 10005 tagged "via primaryGroupID" (a naive member-attribute read would show only the 10), with the LDAP connection fields above, each member with its SID and kind, and disabled accounts marked DISABLED](docs/screenshots/stars-members-view.png) Large groups are read via a paged search, so they are not silently truncated; a member that is itself a privileged group is flagged. This direction requires LDAP and lists direct members (recursive nesting planned). To check effective rights on a path, switch to the `Analyze` or `Scan Tree` tab.
+![Stars Groups tab, Members direction — the domain's default user group enumerated to 10015 members: 10 direct and 10005 tagged "via primaryGroupID" (a naive member-attribute read would show only the 10), with the LDAP connection fields above, each member with its SID and kind, and disabled accounts marked DISABLED](docs/screenshots/stars-members-view.png) Large groups are read via a paged search, so they are not silently truncated; a member that is itself a privileged group is flagged. This direction requires LDAP and lists direct members (recursive nesting planned). To check effective rights on a path, switch to the `Analyze` or `Scan Tree` tab.
 
 #### `Scan Tree` tab
 
@@ -450,25 +450,25 @@ Output:
 Compares two persisted scan runs and shows what has changed — not just the effective right, but also NTFS/share composition, status (e.g. `ReadFailed`), and diagnostic markers.
 
 Inputs:
-- "📂 Load scan history" reads from the local SQLite DB.
+- "Load scan history" reads from the local SQLite DB.
 - Mark one run as "Old" and one as "New".
 
 Output:
 - List of path, change kind (Added / Removed / Changed), rights before and after.
 - "Changed (...)" column names the concrete reasons (e.g. "NTFS mask + share status").
 - Color code: green = Added, red = Removed, yellow = Changed.
-- Each stored run shows its **true error count** and a **⚠ button** opening the run's error list — the paths that scan could not read.
+- Each stored run shows its **true error count** and an **Errors (n)** button opening the run's error list — the paths that scan could not read.
 - Two runs with different targets are refused with a clear message instead of producing a meaningless comparison.
 
 #### `Trusts` tab
 
-![Stars Trusts tab (v1.13.0) — Plain LDAP to the lab DC of corp.test, one trust found: ext.test (NetBIOS EXT), direction bidirectional, attributes "SID-filtering (quarantined)" with the raw mask 0x00000004 and the partner's domain SID, plus the orange callout that historical / foreign SIDs across this trust are dropped at runtime, so a finding relying on one may over-report](docs/screenshots/stars-trusts-tab.png)
+![Stars Trusts tab — Plain LDAP to the lab DC of corp.test, one trust found: ext.test (NetBIOS EXT), direction bidirectional, attributes "SID-filtering (quarantined)" with the raw mask 0x00000004 and the partner's domain SID, plus the orange callout that historical / foreign SIDs across this trust are dropped at runtime, so a finding relying on one may over-report](docs/screenshots/stars-trusts-tab.png)
 
-The GUI counterpart to `adpa trusts`: the domain's Active Directory trusts with direction and decoded `trustAttributes`, read over LDAP (base DN = domain root). **SID filtering** and **Selective Authentication** get an explicit ⚠ callout — both can make a finding read higher than the real runtime access. For accounts of a trusted domain analyzed with the trusted-domain connection, Stars checks Selective Authentication itself ("Allowed to authenticate" on the target's computer object, ADR 0079); the SID filtering of a forest trust for third-domain SIDs stays a caveat (known-limitations L4). Read-only.
+The GUI counterpart to `adpa trusts`: the domain's Active Directory trusts with direction and decoded `trustAttributes`, read over LDAP (base DN = domain root). **SID filtering** and **Selective Authentication** get an explicit `[!]` callout — both can make a finding read higher than the real runtime access. For accounts of a trusted domain analyzed with the trusted-domain connection, Stars checks Selective Authentication itself ("Allowed to authenticate" on the target's computer object, ADR 0079); the SID filtering of a forest trust for third-domain SIDs stays a caveat (known-limitations L4). Read-only.
 
 #### `Shares` tab
 
-![Stars Shares tab (v1.13.0) — the lab DC's shares with administrative shares hidden (11 shown, 3 hidden): every trustee shown by name (resolved on the server) and SID, a $-named data share flagged "hidden data share ($) — not listed when browsing, NOT administrative", a share with share-level Read entries, a share with an empty DACL ("no access via this share"), a share with a share-level Deny shown in red, each share with its UNC path, local target, and Allow/Deny entries with rights label and raw mask](docs/screenshots/stars-shares-tab.png)
+![Stars Shares tab — the lab DC's shares with administrative shares hidden (13 shown, 3 hidden): every trustee shown by name (resolved on the server) and SID, a $-named data share flagged "hidden data share ($) — not listed when browsing, NOT administrative", a share with share-level Read entries, a share with an empty DACL ("no access via this share"), a share with a share-level Deny shown in red, each share with its UNC path, local target, and Allow/Deny entries with rights label and raw mask](docs/screenshots/stars-shares-tab.png)
 
 The GUI counterpart to `adpa shares`: a server's SMB shares with their share-level permissions. NULL DACL (no share restriction), empty DACL (no access) and an ACE list stay visibly distinct; account names are resolved where possible; administrative shares are hidden unless the checkbox is ticked; unreadable shares and unevaluated ACEs are shown, not dropped. Read-only.
 
@@ -495,7 +495,7 @@ The list is built once at app start from local NetAPI sources: domain users, glo
 | `[L]` | **Local group** (`NetLocalGroupEnum`, shown with `BUILTIN` authority in the UI) | `[L] BUILTIN\Administrators` |
 | `[W]` | **Well-known identity** (audit-relevant standard SIDs from a built-in table) | `[W] NT AUTHORITY\Authenticated Users` |
 
-#### 2. "🔍 Resolve SID" button
+#### 2. "Resolve SID" button
 
 If you already know the full name, type it and click the button — or press **Enter** in the name field. The lookup goes through `LookupAccountNameW`, accepts both `Administrator` and `DOMAIN\Administrator`, and works for groups as well (`BUILTIN\Administrators`, `Everyone`).
 

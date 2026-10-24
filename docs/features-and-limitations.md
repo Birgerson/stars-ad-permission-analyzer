@@ -186,7 +186,7 @@ that applies.
 - **Per-run error evidence is reviewable** (persistence review
   2026-07-26): `adpa runs` lists stored runs with true path/error
   counts, `adpa errors --run-id <ID>` prints the paths a run could not
-  read, and the Delta tab's ⚠ button shows the same list in the GUI.
+  read, and the Delta tab's Errors button shows the same list in the GUI.
   Before this, the stored error lists had no reader — and the GUI run
   label claimed "(0 errors)" for every run.
 - **Delta comparison** between two scans (what changed per path in
@@ -222,11 +222,11 @@ and JSON render every marker with its own description.
 
 - **Attention** — the **colour**, "do I need to look?". From
   `PermissionDiagnostic::severity`, shared identically by the GUI and HTML:
-  - **Neutral** — grey, `ℹ` (CLI `[i]`): correct, or an *expected* caveat you
+  - **Neutral** — grey, `[i]` (GUI, CLI and HTML report alike): correct, or an *expected* caveat you
     already know about. No action implied.
-  - **Notice** — amber, `⚠` (CLI `[!]`): worth a look — a hidden Deny among
+  - **Notice** — amber, `[!]` (GUI, CLI and HTML report alike): worth a look — a hidden Deny among
     skipped ACEs could change the result.
-  - **Concern** — orange-red, `⚠` (CLI `[!]`): likely a real gap — an
+  - **Concern** — orange-red, `[!]` (GUI, CLI and HTML report alike): likely a real gap — an
     under-report or a hard resolution failure.
 - **Correctness** — the **`Risk incomplete?`** flag, "may the result be
   wrong?". From `PermissionDiagnostic::is_incompleteness_trigger`; drives
@@ -334,7 +334,7 @@ permanently not part of the product:
   not recognized in the finding.
 - **How visible:** Marker `DomainGroupRecursionIncomplete` on every
   finding; risk findings are `incomplete = true`. Shown **calmly** as an
-  expected caveat — CLI `[i]`, a neutral grey `ℹ` badge in the GUI / HTML
+  expected caveat — `[i]` in CLI and GUI, a neutral grey `[i]` badge in the HTML report
   (the result is incomplete, but running SAM-only is a known limitation,
   not a per-finding alarm — see the colour legend above).
 - **Solution:** Set `--server`, `--base-dn`, `--bind-dn` and a

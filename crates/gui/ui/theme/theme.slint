@@ -1,16 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Birger Labinsch
 
-// Design tokens: every colour (light and dark), type size, spacing and
-// radius of the GUI. Components and tabs take their values from here.
-
-// ============================================================
-// Theme — global design tokens with light/dark switching.
-// Theme — global design language with light/dark toggle.
-// ============================================================
-// All colors, spacings and font sizes live here. Components
-// reference `Theme.bg-app`, `Theme.accent`, `Theme.spacing-md`, …
-// instead of hardcoded hex values.
+// Design tokens: every colour (light and dark), the font, type size,
+// spacing and radius of the GUI. Components and tabs take their values from
+// here — `Theme.bg-app`, `Theme.accent`, `Theme.spacing-md`, … instead of
+// hardcoded values.
 export global Theme {
     // Toggle: false = Light (Default), true = Dark.
     in-out property <bool> dark: false;
@@ -60,7 +54,7 @@ export global Theme {
     out property <color> error:    dark ? #F05252 : #DC2626;
     out property <color> success:  dark ? #34C759 : #16A34A;
 
-    // --- Spacing (6er-Skala) ---
+    // --- Spacing ---
     out property <length> spacing-xs: 4px;
     out property <length> spacing-sm: 6px;
     out property <length> spacing-md: 10px;
@@ -73,6 +67,12 @@ export global Theme {
     out property <length> radius-lg: 10px;
 
     // --- Fonts ---
+    // The one font of the whole GUI (ADR 0083): the window passes it on to
+    // every text and widget. Arial ships with every Windows and Windows
+    // Server edition and renders the same on all of them. No text uses a
+    // character Arial has no glyph for (no emoji, no symbol icons) — such a
+    // glyph would be drawn from another font.
+    out property <string> font-family: "Arial";
     out property <length> font-xs:  11px;
     out property <length> font-sm:  12px;
     out property <length> font-md:  13px;
