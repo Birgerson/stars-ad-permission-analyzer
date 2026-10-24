@@ -35,6 +35,7 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   `[i]`, the same as the CLI; buttons carry words only (the Delta tab's run
   buttons: *Errors (n)*, *Delete*). A test fails on any character in the GUI
   texts that Arial cannot draw. The graph saved as SVG names Arial as well.
+  The HTML report's badges use the same `[!]` / `[i]` markers.
 - **Input fields keep their height (ADR 0083).** Fields, buttons and
   sections no longer grow while a tab has room and shrink again when a
   suggestion list or a result appears; every tab starts at the top with

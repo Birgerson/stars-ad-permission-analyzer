@@ -1227,8 +1227,8 @@ Via the **Export** menu (or `--output` flag in the CLI):
     for the ones whose evaluation was complete,
   - trustee table per path (NTFS + share separated),
   - diagnostic markers as colour-coded badges by **attention** — neutral
-    grey (`ℹ`, expected/context), amber (`⚠`, worth a look), orange-red
-    (`⚠`, likely a real gap). See the colour legend in
+    grey (`[i]`, expected/context), amber (`[!]`, worth a look), orange-red
+    (`[!]`, likely a real gap) — the markers the GUI and the CLI use. See the colour legend in
     [features-and-limitations.md](features-and-limitations.md).
   - scan errors in their own section,
   - per row, next to the explanation, a collapsed **permission graph** —

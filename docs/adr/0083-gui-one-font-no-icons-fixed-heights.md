@@ -61,6 +61,11 @@ between an empty and a filled state. Looking into them showed:
    height stays below the content.
 4. **Buttons have a fixed height**: `min-height`, `preferred-height` and
    `max-height` of `PrimaryButton` and `DangerButton` are 30 px.
+5. **The HTML report follows** (its own commit): its badges read `[!]` and
+   `[i]` instead of ⚠ and ℹ, "No risk findings." loses its ✓. The report's
+   body was Arial already; paths and SIDs stay in a monospace font, so that
+   every character of them can be read. `html::tests::report_markers_are_text_not_symbol_icons`
+   fails on a symbol icon in the exporter's code (checked with a ✓ put back).
 
 ## Verification (2026-10-24)
 
@@ -78,7 +83,11 @@ between an empty and a filled state. Looking into them showed:
   [lab/verification.md, Block Q](../lab/verification.md): every tab driven
   against the lab with the results of the earlier runs; the graph of
   `u00030` on `F06` is pixel-identical to the v1.17.0 documentation image.
-- Gates: fmt, clippy, 993 tests, language and secret gate.
+- Report: a lab scan exported as HTML (the data share's special-case
+  folder for `u00030`) carries `[!]` / `[i]` badges, no symbol icon, and all
+  90 embedded graphs name Arial.
+- Gates: fmt, clippy, 993 tests with the GUI step, 994 with the report
+  step, language and secret gate.
 
 ## Consequences
 

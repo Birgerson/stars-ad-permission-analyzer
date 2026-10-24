@@ -167,7 +167,7 @@ fn card(s: &mut String, n: usize, label: &str, class: &str) {
 
 fn write_risk_table(s: &mut String, findings: &[RiskFinding]) -> Result<(), CoreError> {
     if findings.is_empty() {
-        s.push_str("<h2>Risk Findings</h2>\n<p style=\"color:#66bb6a\">✓ No risk findings.</p>\n");
+        s.push_str("<h2>Risk Findings</h2>\n<p style=\"color:#66bb6a\">No risk findings.</p>\n");
         return Ok(());
     }
     s.push_str("<h2>Risk Findings</h2>\n");
@@ -182,7 +182,7 @@ fn write_risk_table(s: &mut String, findings: &[RiskFinding]) -> Result<(), Core
         // Incomplete findings must be visibly flagged — otherwise gaps in the
         // underlying evaluation go unnoticed in the report.
         let confidence = if f.incomplete {
-            "<span class=\"badge badge-medium\" title=\"Underlying evaluation was incomplete — interpret cautiously\">⚠ incomplete</span>"
+            "<span class=\"badge badge-medium\" title=\"Underlying evaluation was incomplete — interpret cautiously\">[!] incomplete</span>"
         } else {
             "<span class=\"badge badge-correct\">confirmed</span>"
         };
@@ -280,19 +280,19 @@ fn write_permissions_table(
         let mut diag_parts: Vec<String> = Vec::new();
         if p.unsupported_ace_count > 0 {
             diag_parts.push(format!(
-                "<span class=\"badge badge-medium\" title=\"DACL evaluation may be incomplete\">⚠ {} unsupported ACE(s)</span>",
+                "<span class=\"badge badge-medium\" title=\"DACL evaluation may be incomplete\">[!] {} unsupported ACE(s)</span>",
                 p.unsupported_ace_count
             ));
         }
         if let ShareEvalStatus::ReadFailed(reason) = &p.share_status {
             diag_parts.push(format!(
-                "<span class=\"badge badge-high\" title=\"{}\">⚠ share DACL unreadable</span>",
+                "<span class=\"badge badge-high\" title=\"{}\">[!] share DACL unreadable</span>",
                 escape_html(reason)
             ));
         }
         if let LocalGroupEvalStatus::NotAvailable(reason) = &p.local_group_status {
             diag_parts.push(format!(
-                "<span class=\"badge badge-neutral\" title=\"{}\">ℹ local groups unavailable</span>",
+                "<span class=\"badge badge-neutral\" title=\"{}\">[i] local groups unavailable</span>",
                 escape_html(reason)
             ));
         }
@@ -300,7 +300,7 @@ fn write_permissions_table(
             match d {
                 PermissionDiagnostic::InheritedDenyAfterInheritedAllow { .. } => {
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-neutral\" title=\"{}\">ℹ inherited order: levels unknown</span>",
+                        "<span class=\"badge badge-neutral\" title=\"{}\">[i] inherited order: levels unknown</span>",
                         escape_html(&d.summary())
                     ));
                 }
@@ -310,7 +310,7 @@ fn write_permissions_table(
                          title=\"DACL is not in Windows-canonical order (first \
                          violating ACE at index {at_index}). Windows AccessCheck \
                          walks in stored order — the result is exact but may \
-                         differ from canonicalized expectations.\">ℹ non-canonical DACL</span>"
+                         differ from canonicalized expectations.\">[i] non-canonical DACL</span>"
                     ));
                 }
                 PermissionDiagnostic::UnsupportedShareAces { count } => {
@@ -319,7 +319,7 @@ fn write_permissions_table(
                          title=\"The share DACL contained {count} ACE type(s) \
                          the parser could not interpret (object/callback/\
                          conditional or vendor-specific). The share mask is \
-                         potentially incomplete.\">⚠ {count} unsupported share ACE(s)</span>"
+                         potentially incomplete.\">[!] {count} unsupported share ACE(s)</span>"
                     ));
                 }
                 PermissionDiagnostic::UnsupportedNtfsAces { count } => {
@@ -332,7 +332,7 @@ fn write_permissions_table(
                          trustee SID could not be read, or a DACL that could not \
                          be read at all. The displayed effective \
                          permission is a lower-confidence approximation — a hidden \
-                         Deny among them could change the result.\">⚠ {count} unevaluated NTFS ACE(s) — approximate result</span>"
+                         Deny among them could change the result.\">[!] {count} unevaluated NTFS ACE(s) — approximate result</span>"
                     ));
                 }
                 PermissionDiagnostic::DomainGroupRecursionIncomplete => {
@@ -343,7 +343,7 @@ fn write_permissions_table(
                          direct global groups — nested domain groups are not \
                          recursively resolved. ACEs targeting deeply nested \
                          groups may be missed; treat the finding as \
-                         incomplete.\">ℹ SAM fallback — nested groups not resolved</span>"
+                         incomplete.\">[i] SAM fallback — nested groups not resolved</span>"
                             .to_string(),
                     );
                 }
@@ -354,7 +354,7 @@ fn write_permissions_table(
                          (userAccountControl ACCOUNTDISABLE). Computed \
                          rights are ACL-theoretically correct, but the \
                          account normally cannot authenticate / access \
-                         SMB.\">ℹ disabled account</span>"
+                         SMB.\">[i] disabled account</span>"
                             .to_string(),
                     );
                 }
@@ -367,7 +367,7 @@ fn write_permissions_table(
                          domains). Domain group recursion ran only through \
                          the user's home domain — nested cross-domain \
                          memberships may be missing. Treat the finding as \
-                         incomplete.\">ℹ identity outside configured LDAP base</span>"
+                         incomplete.\">[i] identity outside configured LDAP base</span>"
                             .to_string(),
                     );
                 }
@@ -379,7 +379,7 @@ fn write_permissions_table(
                          without NetUserGetInfo, or LDAP did not return \
                          the user object). Computed rights are \
                          ACL-theoretically correct, but whether the \
-                         account is enabled is unknown.\">ℹ disabled status unknown</span>"
+                         account is enabled is unknown.\">[i] disabled status unknown</span>"
                             .to_string(),
                     );
                 }
@@ -390,7 +390,7 @@ fn write_permissions_table(
                          The analysis ran with a placeholder identity \
                          and an empty token; ACEs targeting domain \
                          groups may be missing. Treat as incomplete.\">\
-                         ⚠ identity lookup failed</span>",
+                         [!] identity lookup failed</span>",
                         escape_html(reason)
                     ));
                 }
@@ -400,7 +400,7 @@ fn write_permissions_table(
                          title=\"Recursive group resolution failed or \
                          was skipped: {}. ACEs on domain groups may be \
                          missing from the computed effective right. \
-                         Treat as incomplete.\">⚠ group resolution failed</span>",
+                         Treat as incomplete.\">[!] group resolution failed</span>",
                         escape_html(reason)
                     ));
                 }
@@ -413,7 +413,7 @@ fn write_permissions_table(
                          entry governs the owner's rights — the implicit \
                          READ_CONTROL + WRITE_DAC owner grant was \
                          suppressed. The evaluation is exact; this is \
-                         informational.\">ℹ OWNER RIGHTS ACE applied</span>"
+                         informational.\">[i] OWNER RIGHTS ACE applied</span>"
                             .to_string(),
                     );
                 }
@@ -426,7 +426,7 @@ fn write_permissions_table(
                          Home-domain group memberships were resolved \
                          through the FSP — but the principal's \
                          memberships in its own forest are unknown. \
-                         Treat the finding as incomplete.\">ℹ resolved via FSP — trust-side groups unknown</span>"
+                         Treat the finding as incomplete.\">[i] resolved via FSP — trust-side groups unknown</span>"
                             .to_string(),
                     );
                 }
@@ -438,7 +438,7 @@ fn write_permissions_table(
                          memberships replicate fully to the GC — global \
                          and domain-local memberships of foreign domains \
                          can be missing. Treat the finding as \
-                         incomplete.\">ℹ groups via Global Catalog — may be partial</span>"
+                         incomplete.\">[i] groups via Global Catalog — may be partial</span>"
                             .to_string(),
                     );
                 }
@@ -448,7 +448,7 @@ fn write_permissions_table(
                          title=\"This historical row could not be fully decoded \
                          from the database: {}. The reconstructed result may be \
                          less complete than originally stored — treat as \
-                         incomplete.\">⚠ persisted evidence decode failed</span>",
+                         incomplete.\">[!] persisted evidence decode failed</span>",
                         escape_html(detail)
                     ));
                 }
@@ -462,7 +462,7 @@ fn write_permissions_table(
                          (value unreadable, or the row was stored before \
                          evaluation existed). The real logon token includes \
                          them — effective rights may be understated. Treat as \
-                         incomplete.\">⚠ {count} historical SID(s) not evaluated</span>"
+                         incomplete.\">[!] {count} historical SID(s) not evaluated</span>"
                     ));
                 }
                 PermissionDiagnostic::SidHistoryEvaluated { count } => {
@@ -474,7 +474,7 @@ fn write_permissions_table(
                          identity were evaluated into the token. ACEs referencing \
                          an old SID match exactly like in the real logon token — \
                          the explanation path names each historical SID. \
-                         Informational.\">ℹ {count} historical SID(s) evaluated</span>"
+                         Informational.\">[i] {count} historical SID(s) evaluated</span>"
                     ));
                 }
                 PermissionDiagnostic::GroupSidHistoryEvaluated { groups, count } => {
@@ -486,7 +486,7 @@ fn write_permissions_table(
                          {groups} token group(s) were evaluated into the token. \
                          ACEs referencing a migrated group's old SID match exactly \
                          like in the real logon token — the membership steps name \
-                         each historical SID. Informational.\">ℹ {count} group \
+                         each historical SID. Informational.\">[i] {count} group \
                          historical SID(s) evaluated</span>"
                     ));
                 }
@@ -499,7 +499,7 @@ fn write_permissions_table(
                          groups could NOT be evaluated into the token (unreadable \
                          value). The real logon token includes them — effective \
                          rights may be understated. Treat as \
-                         incomplete.\">⚠ {count} group historical SID(s) not \
+                         incomplete.\">[!] {count} group historical SID(s) not \
                          evaluated</span>"
                     ));
                 }
@@ -507,7 +507,7 @@ fn write_permissions_table(
                 // report says what the CLI and GUI say.
                 PermissionDiagnostic::TrustedDomainAccountResolved { domain, .. } => {
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-neutral\" title=\"{}\">ℹ resolved in trusted domain {}</span>",
+                        "<span class=\"badge badge-neutral\" title=\"{}\">[i] resolved in trusted domain {}</span>",
                         escape_html(&d.summary()),
                         escape_html(domain)
                     ));
@@ -521,7 +521,7 @@ fn write_permissions_table(
                          SID filtering / quarantine and Selective Authentication may \
                          reduce actual access — these runtime trust effects are not \
                          modeled, so the shown access can be too high for a \
-                         cross-forest identity.\">ℹ trust-boundary effects not modeled</span>"
+                         cross-forest identity.\">[i] trust-boundary effects not modeled</span>"
                             .to_string(),
                     );
                 }
@@ -533,7 +533,7 @@ fn write_permissions_table(
                     diag_parts.push(format!(
                         "<span class=\"badge badge-neutral\" \
                          title=\"{count} member(s) were found via their primaryGroupID \
-                         and included so the member count is complete.\">ℹ {count} via \
+                         and included so the member count is complete.\">[i] {count} via \
                          primaryGroupID</span>"
                     ));
                 }
@@ -542,7 +542,7 @@ fn write_permissions_table(
                     diag_parts.push(format!(
                         "<span class=\"badge badge-high\" \
                          title=\"Group members could not be enumerated completely \
-                         ({safe}); the list is a lower bound.\">⚠ member list \
+                         ({safe}); the list is a lower bound.\">[!] member list \
                          incomplete</span>"
                     ));
                 }
@@ -551,7 +551,7 @@ fn write_permissions_table(
                         "<span class=\"badge badge-neutral\" \
                          title=\"Universal group queried over a domain bind — members \
                          from other domains of the forest are not visible here; in a \
-                         multi-domain forest the list may be incomplete.\">ℹ universal \
+                         multi-domain forest the list may be incomplete.\">[i] universal \
                          group: cross-domain members not visible</span>"
                             .to_string(),
                     );
@@ -561,7 +561,7 @@ fn write_permissions_table(
                         "<span class=\"badge badge-high\" \
                          title=\"The identity could not be resolved: {}. Its group \
                          memberships are unknown — the rights computed for the bare \
-                         SID can be too low or too high.\">⚠ identity not resolvable \
+                         SID can be too low or too high.\">[!] identity not resolvable \
                          — memberships unknown</span>",
                         escape_html(reason)
                     ));
@@ -572,7 +572,7 @@ fn write_permissions_table(
                          title=\"The SID has no account in its domain any more \
                          (orphaned / deleted account): nobody can log on with it. \
                          The rights shown are what a logon with this SID would get; \
-                         an ACE naming it is a dead entry.\">ℹ orphaned SID — account \
+                         an ACE naming it is a dead entry.\">[i] orphaned SID — account \
                          no longer exists</span>"
                             .to_string(),
                     );
@@ -580,7 +580,7 @@ fn write_permissions_table(
                 PermissionDiagnostic::RemoteUacPolicy { .. } => {
                     // ADR 0076: the model's summary is the single wording.
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-neutral\" title=\"{}\">ℹ Remote UAC from target \
+                        "<span class=\"badge badge-neutral\" title=\"{}\">[i] Remote UAC from target \
                          policy</span>",
                         escape_html(&d.summary())
                     ));
@@ -588,13 +588,13 @@ fn write_permissions_table(
                 // ADR 0079: wording from `summary()`, like the CLI and GUI.
                 PermissionDiagnostic::SelectiveAuthenticationAllowed { .. } => {
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-neutral\" title=\"{}\">ℹ allowed to authenticate</span>",
+                        "<span class=\"badge badge-neutral\" title=\"{}\">[i] allowed to authenticate</span>",
                         escape_html(&d.summary())
                     ));
                 }
                 PermissionDiagnostic::SelectiveAuthenticationDenied { .. } => {
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-medium\" title=\"{}\">⚠ logon refused (Selective Authentication)</span>",
+                        "<span class=\"badge badge-medium\" title=\"{}\">[!] logon refused (Selective Authentication)</span>",
                         escape_html(&d.summary())
                     ));
                 }
@@ -603,21 +603,21 @@ fn write_permissions_table(
                     ..
                 } => {
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-high\" title=\"{}\">⚠ logon not determinable</span>",
+                        "<span class=\"badge badge-high\" title=\"{}\">[!] logon not determinable</span>",
                         escape_html(&d.summary())
                     ));
                 }
                 // ADR 0079 addendum: the permissions grant nothing — exact.
                 PermissionDiagnostic::SelectiveAuthenticationUnknown { .. } => {
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-neutral\" title=\"{}\">ℹ logon not determinable — no access either way</span>",
+                        "<span class=\"badge badge-neutral\" title=\"{}\">[i] logon not determinable — no access either way</span>",
                         escape_html(&d.summary())
                     ));
                 }
                 // ADR 0080: wording from `summary()`, like the CLI and GUI.
                 PermissionDiagnostic::SynchronizeNotGranted { .. } => {
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-medium\" title=\"{}\">⚠ no SYNCHRONIZE — Windows programs get access denied</span>",
+                        "<span class=\"badge badge-medium\" title=\"{}\">[!] no SYNCHRONIZE — Windows programs get access denied</span>",
                         escape_html(&d.summary())
                     ));
                 }
@@ -627,7 +627,7 @@ fn write_permissions_table(
                         PermissionDiagnostic::GuestOrAnonymousToken { sids: sids.clone() }
                             .summary();
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-medium\" title=\"{}\">⚠ Guest / anonymous \
+                        "<span class=\"badge badge-medium\" title=\"{}\">[!] Guest / anonymous \
                          token</span>",
                         escape_html(&summary)
                     ));
@@ -639,7 +639,7 @@ fn write_permissions_table(
                          (deny-only): in a local session that is not elevated, and for a local \
                          account over the network unless LocalAccountTokenFilterPolicy = 1 \
                          (built-in Administrator: only with FilterAdministratorToken = 1). Deny \
-                         ACEs for them apply, Allow ACEs bound the result.\">⚠ UAC may filter \
+                         ACEs for them apply, Allow ACEs bound the result.\">[!] UAC may filter \
                          {} group(s)</span>",
                         escape_html(&groups.join(", ")),
                         groups.len()
@@ -649,7 +649,7 @@ fn write_permissions_table(
                     diag_parts.push(format!(
                         "<span class=\"badge badge-neutral\" \
                          title=\"Not in the token and left out — Windows ignores distribution \
-                         groups and nesting through them: {}\">ℹ {} non-security group(s) \
+                         groups and nesting through them: {}\">[i] {} non-security group(s) \
                          excluded</span>",
                         escape_html(&groups.join("; ")),
                         groups.len()
@@ -659,7 +659,7 @@ fn write_permissions_table(
                     diag_parts.push(format!(
                         "<span class=\"badge badge-high\" \
                          title=\"Group resolution is incomplete: {} — the evaluated \
-                         token may lack these groups.\">⚠ group resolution \
+                         token may lack these groups.\">[!] group resolution \
                          incomplete</span>",
                         escape_html(reason)
                     ));
@@ -673,7 +673,7 @@ fn write_permissions_table(
                         "<span class=\"badge badge-medium\" \
                          title=\"ACE(s) for {} apply only for certain logons \
                          (authentication type, organization, logon type), which Stars \
-                         does not model.\">⚠ logon-dependent ACE(s) — NTFS between {} \
+                         does not model.\">[!] logon-dependent ACE(s) — NTFS between {} \
                          and {}</span>",
                         escape_html(&sids.join(", ")),
                         escape_html(&NormalizedRights::new(*min_mask).display_name()),
@@ -1011,7 +1011,7 @@ mod tests {
         q.diagnostics.push(marker(true));
         let mut s = String::new();
         write_permissions_table(&mut s, std::slice::from_ref(&q)).unwrap();
-        assert!(s.contains("badge-high") && s.contains("⚠ logon not determinable<"));
+        assert!(s.contains("badge-high") && s.contains("[!] logon not determinable<"));
         assert!(s.contains("NOT DETERMINABLE"), "the range stays open");
     }
 
@@ -1272,5 +1272,26 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// ADR 0083: the report's markers are text, the same as the GUI and the
+    /// CLI (`[!]`, `[i]`) — no symbol icon a browser would draw from an
+    /// emoji or symbol font instead of the report's Arial.
+    #[test]
+    fn report_markers_are_text_not_symbol_icons() {
+        let source = include_str!("html.rs");
+        let icons = ['\u{26A0}', '\u{2139}', '\u{2713}', '\u{2717}', '\u{1F50D}'];
+        let found: Vec<String> = source
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim_start().starts_with("//"))
+            .filter(|(_, l)| l.chars().any(|c| icons.contains(&c)))
+            .map(|(n, l)| format!("{}: {}", n + 1, l.trim()))
+            .collect();
+        assert!(
+            found.is_empty(),
+            "symbol icons in the report:\n{}",
+            found.join("\n")
+        );
     }
 }
