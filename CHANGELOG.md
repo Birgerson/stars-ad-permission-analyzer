@@ -10,6 +10,31 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+## [1.18.0] — 2026-10-24
+
+**A calmer GUI: one font, words instead of icons, fields that keep their
+height — and a Scan Tree whose Cancel button no longer disappears.**
+
+Every text is Arial now, the markers read `[!]` and `[i]` like the CLI
+(also in the HTML report), and every tab lays out from the top, so fields
+and buttons no longer grow and shrink with the content. On the way a real
+bug came to light: in the Scan Tree tab *Start scan* and *Cancel*
+disappeared as soon as the results were taller than the window, so a long
+scan could not be cancelled. Underneath, the GUI is modular now — one file
+per tab for the layout and one module per tab for its Rust side.
+
+No rights value changes. The same CLI scans with v1.17.0 and v1.18.0
+agree in every column — 25,493 rows on DC-01's data share for 37
+identities, 78 rows of the group-types fixture, 135 rows each on MS-01
+with LDAP and with local accounts. The analysis crates (core, engine,
+resolver, scanners, risk rules) are unchanged since v1.17.0; only the GUI,
+the HTML report's badges and the graph's font name changed.
+
+Why minor: the GUI's look and wording change visibly (markers, button
+labels, layout) and the HTML report's badges with it — not a patch by the
+rule of v1.9.2. No stored format changes (JSON schema stays at version 4,
+the scan history is unchanged).
+
 ### Changed
 
 - **GUI made modular (ADR 0082), in steps; nothing visible changes.**
@@ -40,6 +65,13 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   sections no longer grow while a tab has room and shrink again when a
   suggestion list or a result appears; every tab starts at the top with
   natural heights. The Delta tab's run list no longer sinks to the bottom.
+- **Documentation.** The user guide explains how the GUI shows markers and
+  lays out its tabs, what *Cancel* does during a scan (also during the
+  group resolution), how to remove a run from the scan history (the
+  Delta tab's *Delete* — it was not described before) and what to expect
+  with large trees. The screenshots in README and user guide are retaken
+  on v1.18.0 against the lab. ADR 0081's claim of a conservative text
+  width estimate is corrected with measurements.
 
 ### Fixed
 

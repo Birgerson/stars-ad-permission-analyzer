@@ -1,6 +1,6 @@
 # Stars — User Guide
 
-**Version:** v1.17.0 (see [CHANGELOG](../CHANGELOG.md))
+**Version:** v1.18.0 (see [CHANGELOG](../CHANGELOG.md))
 **Audience:** Windows / AD administrators who want to audit NTFS and
 SMB permissions **without changing anything**.
 
@@ -104,7 +104,7 @@ The full list lives in
 Get the installer from the GitHub release page:
 [releases](https://github.com/Birgerson/stars-ad-permission-analyzer/releases).
 Always take the newest **`Stars-vX.Y.Z-Setup.exe`** at the top of the list
-(the current release is `v1.17.0`), and — recommended — the matching
+(the current release is `v1.18.0`), and — recommended — the matching
 `.sha256` file to verify integrity.
 
 ### Installation
@@ -142,6 +142,22 @@ and shows the engine in action.
 > **Important on terminology:** "Identity", "Trustees", and "Risk
 > findings" are **not separate tabs**. They are sections inside the
 > real tabs (`Analyze`, `Groups`, `Scan Tree`, `Delta`, `Info`).
+
+**How the GUI shows things** (since v1.18.0, ADR 0083):
+
+- **One font, no icons.** Every text is Arial; buttons carry words, not
+  symbols. The light/dark switch in the top right reads *Dark* or
+  *Light*; the circled **?** next to a field shows a short help text
+  while the mouse rests on it.
+- **Markers as text.** A line that starts with **`[!]`** is a warning
+  (amber or orange-red — worth a look or a likely gap), a line with
+  **`[i]`** a note (grey — informational or an expected caveat). They
+  are the same markers the CLI prints and the HTML report shows; see
+  [Reading findings — diagnostic markers](#reading-findings--diagnostic-markers).
+- **Fixed layout.** Every tab starts at the top; fields and buttons
+  keep their height whether a field is empty or filled and whether a
+  suggestion list or a result is open. A long result scrolls — the
+  buttons above it stay where they are.
 
 ---
 
@@ -416,8 +432,19 @@ nesting (the full member tree) is planned.
   [Which mode to choose](#which-mode-to-choose).
 - **Maximum scan depth** — protects against runaway walks; empty =
   unbounded.
-- **Start scan** — cancellable any time via the cancel button; the
-  GUI stays responsive during the scan.
+- **Start scan** — cancellable any time via **Cancel**, which stays
+  visible and clickable during the whole scan, also once the results
+  fill the window (before v1.18.0 both buttons disappeared as soon as
+  the results were taller than the window). A cancel during the group
+  resolution at the start takes effect when the directory walk begins;
+  the status then reads "Scan cancelled — results are incomplete.", and
+  the stored run carries the error "Scan cancelled by user — results
+  are partial", so a partial run is never mistaken for a complete one.
+- **Large trees:** the result list shows every row (it is not paged).
+  With several hundred rows the GUI needs a few seconds while the rows
+  arrive (689 rows in the lab); for trees with thousands of paths the
+  CLI with `--output` is the faster way, and the file can be filtered
+  in any tool.
 
 **Result:** a table of all paths, their effective rights, a per-path
 trustee table, and a **risk findings section** with the rules that
@@ -486,6 +513,12 @@ diagnostic markers.
   configured — the reasons include **determinability**.
 
 Unchanged paths are hidden so only the relevant entries remain.
+
+**Delete** next to a run removes it from the scan history — only after a
+confirmation box ("Really remove this scan run?" → *Delete permanently*),
+together with its stored permissions and scan errors; the list reloads
+by itself. This deletes an entry of Stars' **own local** scan history
+(`%APPDATA%\Stars\stars_data.db`), never anything on a target system.
 
 Two runs with **different targets** are refused with a clear error —
 comparing scans of two different trees would produce a plausible-looking
@@ -1161,6 +1194,12 @@ Every `EffectivePermission` entry in CLI, HTML, or JSON carries a
 `diagnostics` list. A marker means Stars **warned** you that
 something about the computation is uncertain.
 
+In the GUI and the CLI a marker line starts with **`[!]`** (warning:
+amber or orange-red) or **`[i]`** (note: grey); the HTML report shows
+the same markers as coloured badges. The colour says how much attention
+a marker needs, the *Risk `incomplete`* column below whether the result
+may be wrong.
+
 The table below covers the markers you meet most often. The **complete**
 list, grouped by visual severity (grey / amber / orange-red) with the
 exact wording, lives in
@@ -1700,6 +1739,9 @@ Common causes:
   yields a `LookupFailed` marker instead of blocking.
 - **Huge DACLs**: identical security descriptors are deduplicated by
   hash, but very wide trees with many unique ACLs take time.
+- **Many rows in the GUI's Scan Tree**: the list is not paged, so with
+  hundreds of rows the GUI catches up for a few seconds after the scan.
+  For large trees use the CLI with `--output` (CSV / JSON / HTML).
 
 Stars has **no** background scans, **no** auto-refresh, **no**
 writes — when it takes long, it really is reading.
