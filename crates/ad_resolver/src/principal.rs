@@ -891,7 +891,7 @@ where
                     // Selective Authentication check) instead of through
                     // the FSP, whose home-domain groups are unknown.
                     // Without such a connection nothing changes.
-                    if let Some(resolution) = self.resolve_fsp_in_trusted_domain(&sid).await {
+                    if let Some(resolution) = self.resolve_with_serving_connection(&sid).await {
                         return Ok(resolution);
                     }
                     return self.resolve_fsp_hit(sid, identity).await;
@@ -954,11 +954,13 @@ where
         }
     }
 
-    /// ADR 0079: the FSP hit of a SID whose trusted domain the configured
-    /// trusted-domain connection serves → [`Self::resolve_in_trusted_domain`].
-    /// `None` (keep the FSP path) without a connection, for a SID of no
-    /// trusted domain, or when the connection serves another domain.
-    async fn resolve_fsp_in_trusted_domain(&self, sid: &Sid) -> Option<PrincipalResolution> {
+    /// A SID the configured directory found only as an FSP (ADR 0079) or not
+    /// at all while the local LSA named it (lab 2026-10-24): when its
+    /// trusted domain is the one the configured trusted-domain connection
+    /// serves → [`Self::resolve_in_trusted_domain`]. `None` (keep the FSP /
+    /// LSA path) without a connection, for a SID of no trusted domain, or
+    /// when the connection serves another domain.
+    async fn resolve_with_serving_connection(&self, sid: &Sid) -> Option<PrincipalResolution> {
         let backend = self.trusted_backend.as_ref()?;
         let relation = self.identity_backend.classify_unresolved_sid(sid).await;
         let SidDomainRelation::TrustedDomain { domain_sid, .. } = &relation else {
@@ -1042,6 +1044,15 @@ where
 
         match lsa.lookup_account_for_sid(sid) {
             Ok(account) => {
+                // Lab 2026-10-24: on a domain-joined machine LSA names every
+                // account of a trusted domain, so this path — not the
+                // classification below — is the normal one there. Until
+                // then a configured trusted-domain connection was never
+                // used on such a machine (ADR 0078 was measured from a
+                // workstation outside the domain).
+                if let Some(resolution) = self.resolve_with_serving_connection(sid).await {
+                    return Ok(resolution);
+                }
                 let identity = Identity {
                     sid: sid.clone(),
                     name: if account.name.is_empty() {
@@ -1855,6 +1866,51 @@ mod tests {
         .await;
         assert_eq!(t.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(res.resolved_via_fsp);
+    }
+
+    /// Lab 2026-10-24: on a domain-joined machine the local LSA names an
+    /// account of a trusted domain. The configured connection to its domain
+    /// is used all the same; without one (or to another domain) the LSA
+    /// path stays.
+    #[tokio::test]
+    async fn an_lsa_hit_of_a_served_trusted_domain_uses_the_trusted_connection() {
+        let sid = Sid(format!("{TRUST_DOMAIN_SID}-1108"));
+        let run = |trusted: Option<Arc<FakeTrusted>>, relation: SidDomainRelation| {
+            let ldap = FakeLdapBackend::with_relation(relation);
+            let mut lsa = FakeLsaBackend::new();
+            lsa.sid_to_account.insert(
+                sid.0.clone(),
+                LsaAccountInfo {
+                    name: "ext_partner04".to_owned(),
+                    domain: "EXT".to_owned(),
+                    kind: IdentityKind::User,
+                },
+            );
+            let mut r = PrincipalResolver::new(ldap, Some(lsa));
+            if let Some(t) = trusted {
+                r = r.with_trusted_domain(t);
+            }
+            let sid = sid.clone();
+            async move { r.resolve(PrincipalInput::Sid(sid)).await.unwrap() }
+        };
+
+        let trusted = fake_trusted(Some(TRUST_DOMAIN_SID), false);
+        let res = run(Some(trusted.clone()), trusted_relation(0x4)).await;
+        assert_eq!(trusted.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(res.trusted_domain.is_some());
+
+        let res = run(None, trusted_relation(0x4)).await;
+        assert_eq!(
+            res.scope_status,
+            IdentityScopeStatus::OutsideConfiguredLdapBase
+        );
+        let other = fake_trusted(Some("S-1-5-21-9-9-9"), false);
+        let res = run(Some(other.clone()), trusted_relation(0x4)).await;
+        assert_eq!(other.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            res.scope_status,
+            IdentityScopeStatus::OutsideConfiguredLdapBase
+        );
     }
 
     /// A connection to the wrong domain is never used for the account.

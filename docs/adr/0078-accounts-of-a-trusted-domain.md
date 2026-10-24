@@ -118,3 +118,33 @@ domain needs credentials of that domain, or a Kerberos signed bind.
   differences after replacing it, 3,445 rows).
 - GUI: Analyze tab with the trusted section on `TrustTest\TE_fsp_chain` →
   Modify with the full chain; Graph tab shows it.
+
+## Addendum (2026-10-24) — the connection is used on a domain-joined machine too
+
+The lab evidence above was taken from a workstation outside the domain.
+There, Windows LSA cannot name an account of a trusted domain, so the
+resolver falls through to the classification and from there to the
+trusted-domain connection.
+
+On a **domain-joined** machine LSA names every such account
+(`EXT\ext_partner02`). The resolver then took its LSA path ("outside the
+configured LDAP base", groups not attempted) and **never used the
+configured connection**. The only exception was an account with a Foreign
+Security Principal object here (ADR 0079).
+
+Measured on MS-01 (member of corp.test, as SYSTEM, the same five ext.test
+accounts and the `TrustTest` fixture, with the connection to DC-02):
+
+- **v1.18.0 / main 7ad1dc7:** 65 of 65 rows NOT DETERMINABLE.
+- **With the fix:** 65 of 65 rows determinable and identical, column by
+  column in rights and mask, to the workstation run.
+
+The accounts of partner.test and child.partner.test (ADR 0084) ran on MS-01
+as `CORP\Administrator` with Signed LDAP. All 56 rows were determinable and
+match the real SMB logons, including `CHILD\ch_user02` reaching a folder
+through the forest root's universal group `PARTNER\UG_PT_Forest`.
+
+**Decision.** An LSA hit now asks the configured connection first, under the
+same rule as the FSP hit: only when the SID's domain is a trusted domain
+and the connection serves exactly that domain. Otherwise the LSA path stays
+unchanged.
