@@ -1885,3 +1885,9 @@ MS-01's policy was restored afterwards (R2L disabled) and the marker folder remo
 - drive-path recognition.
 
 `fs_scanner`: 62 tests pass.
+
+**Regression against main a74a70a** (release builds, the five regression sets, 25,906 rows):
+
+- **CSV:** 0 differing rows.
+- **Console output:** identical except the random scan id and one line per identity. That line is DC-01's symbolic link fixture `Spezial\Verknuepfung_readme.txt`, which used to read "this machine's symbolic link evaluation policy does not allow following this link type (Windows error 1463 …)". It now names what the link stores: "this symbolic link points to C:\LabShare\readme.txt, a path on the server's own disk. Over SMB, Windows follows a symbolic link on the client, so this machine resolved C:\LabShare\readme.txt on itself: its symbolic link evaluation policy does not allow that (Windows error 1463 …)".
+- **Other scan errors:** the junction duplicate, the cycle and the two access-denied folders are unchanged.
