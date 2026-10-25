@@ -626,6 +626,19 @@ fn write_permissions_table(
                         escape_html(&d.summary())
                     ));
                 }
+                // ADR 0088: wording from `summary()`, like the CLI and GUI.
+                PermissionDiagnostic::LinkObject { .. } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-medium\" title=\"{}\">[!] link: rights of the link itself, the target decides access</span>",
+                        escape_html(&d.summary())
+                    ));
+                }
+                PermissionDiagnostic::DirectoryIdentityUnknown { .. } => {
+                    diag_parts.push(format!(
+                        "<span class=\"badge badge-medium\" title=\"{}\">[!] folder identity unknown — may be listed twice</span>",
+                        escape_html(&d.summary())
+                    ));
+                }
                 // ADR 0080: wording from `summary()`, like the CLI and GUI.
                 PermissionDiagnostic::SynchronizeNotGranted { .. } => {
                     diag_parts.push(format!(

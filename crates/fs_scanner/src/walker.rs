@@ -27,12 +27,14 @@
 
 use std::collections::HashMap;
 
-use adpa_core::{error::CoreError, model::FileSystemObject};
+use adpa_core::{
+    error::CoreError,
+    model::{FileSystemObject, LinkInfo, LinkKind},
+};
 use tracing::{debug, info, warn};
 
 use crate::acl::read_file_system_object_cached;
 use crate::cancel::CancellationToken;
-use crate::file_id::{LinkKind, LinkTarget};
 
 /// Configuration for the walker.
 pub struct WalkConfig {
@@ -219,7 +221,7 @@ impl<'a> DuplicateRoute<'a> {
 /// stores. Pure.
 fn unresolved_reparse_error(
     os_error: Option<i32>,
-    link: Option<&LinkTarget>,
+    link: Option<&LinkInfo>,
     remote: bool,
 ) -> CoreError {
     const TAIL: &str = "Recursion stopped at this junction/link. The object itself is in the \
@@ -325,7 +327,7 @@ fn unresolved_reparse_error(
 /// remote-to-local evaluation enabled here, an absolute target such as
 /// `C:\Data` reaches this computer's own folder. Its content is not on the
 /// server, so it is not enumerated. Pure.
-fn local_resolution_error(resolved: &str, link: Option<&LinkTarget>) -> CoreError {
+fn local_resolution_error(resolved: &str, link: Option<&LinkInfo>) -> CoreError {
     let stored = link.map_or(String::new(), |l| format!(" (it stores {})", l.target));
     CoreError::ReparseNotFollowed(format!(
         "this link{stored} resolves to {resolved} on this machine, not on the server: over SMB, \
@@ -492,6 +494,10 @@ enum WalkWork {
         path: String,
         parent_canonical: Option<String>,
         depth: u32,
+        /// ADR 0088: the parent's directory listing marks this entry as a
+        /// junction or symbolic link. Over SMB the listing is reliable where
+        /// the attributes of an open are not (the open follows the link).
+        listed_as_link: bool,
     },
     Leave,
     DirEntryError(WalkError),
@@ -542,6 +548,7 @@ fn walk_dir(
         path: path.to_owned(),
         parent_canonical: parent_canonical.map(str::to_owned),
         depth: current_depth,
+        listed_as_link: false,
     }];
 
     while let Some(work) = stack.pop() {
@@ -558,7 +565,7 @@ fn walk_dir(
             return;
         }
 
-        let (path, parent_canonical, current_depth) = match work {
+        let (path, parent_canonical, current_depth, listed_as_link) = match work {
             WalkWork::Leave => {
                 detector.leave();
                 continue;
@@ -572,7 +579,8 @@ fn walk_dir(
                 path,
                 parent_canonical,
                 depth,
-            } => (path, parent_canonical, depth),
+                listed_as_link,
+            } => (path, parent_canonical, depth, listed_as_link),
         };
 
         match read_file_system_object_cached(&path, sd_cache) {
@@ -583,13 +591,42 @@ fn walk_dir(
                     error: e,
                 }));
             }
-            Ok(fso) => {
+            Ok(mut fso) => {
                 let is_dir = fso.is_directory;
                 let is_reparse = fso.is_reparse_point;
                 debug!(path, is_dir, is_reparse, depth = current_depth, "Read FSO");
+                // ADR 0088: a link the attributes did not show (over SMB the
+                // open follows it) but the directory listing did.
+                if fso.link.is_none() && listed_as_link {
+                    fso.link = crate::file_id::link_target(&path);
+                }
                 // One open per remote directory: its identity for the loop
                 // detection (ADR 0062) and the share it is served from.
                 let probe = (remote && is_dir).then(|| crate::file_id::probe_directory(&path));
+                // ADR 0088: without an identity a second route here is not
+                // recognized. The row says so only where the walk descends —
+                // a folder it cannot enter cannot be listed twice.
+                let identity_reason = probe
+                    .as_ref()
+                    .filter(|p| p.identity.is_none())
+                    .and_then(|p| p.identity_error.clone());
+                if let Some(reason) = &identity_reason {
+                    warn!(path, reason, "Directory identity could not be read");
+                }
+                let link = fso.link.clone();
+                // The row is emitted once it is known whether the walk
+                // descends — always before its errors and its children.
+                let mut pending = Some(fso);
+                macro_rules! emit_object {
+                    ($descends:expr) => {
+                        if let Some(mut object) = pending.take() {
+                            if $descends {
+                                object.identity_unknown = identity_reason.clone();
+                            }
+                            on_item(WalkItem::Object(object));
+                        }
+                    };
+                }
                 if parent_canonical.is_some() {
                     if let Some(message) = other_share_message(
                         root_share.as_ref(),
@@ -606,7 +643,6 @@ fn walk_dir(
                         continue;
                     }
                 }
-                on_item(WalkItem::Object(fso));
 
                 // An unresolvable reparse target stops here for files and
                 // directories alike — visible, not silent, with the reason
@@ -616,10 +652,10 @@ fn walk_dir(
                     match std::fs::canonicalize(&api_path) {
                         Err(e) => {
                             warn!(path, error = %e, "Reparse point target could not be resolved");
+                            emit_object!(false);
                             // What the link stores tells who resolves it (lab
                             // 2026-10-25: "broken" for a symbolic link the
                             // client resolved on itself).
-                            let link = crate::file_id::link_target(&path);
                             on_item(WalkItem::Error(WalkError {
                                 path: path.clone(),
                                 error: unresolved_reparse_error(
@@ -638,7 +674,7 @@ fn walk_dir(
                             );
                             if validation::path::parse_unc_components(&resolved).is_none() {
                                 warn!(path, resolved, "Link of the share resolves to this machine");
-                                let link = crate::file_id::link_target(&path);
+                                emit_object!(false);
                                 on_item(WalkItem::Error(WalkError {
                                     path: path.clone(),
                                     error: local_resolution_error(&resolved, link.as_ref()),
@@ -653,6 +689,7 @@ fn walk_dir(
                 // Only directories recurse, so only directories need the cycle /
                 // duplicate-target bookkeeping (a file symlink cannot loop).
                 if !is_dir {
+                    emit_object!(false);
                     continue;
                 }
 
@@ -697,6 +734,7 @@ fn walk_dir(
                             target = %ancestor,
                             "Reparse point target is an ancestor of the active chain — cycle, recursion stopped"
                         );
+                        emit_object!(false);
                         on_item(WalkItem::Error(WalkError {
                             path: path.clone(),
                             error: CoreError::ReparseCycle(format!(
@@ -721,6 +759,7 @@ fn walk_dir(
                             is_reparse,
                             &canonical,
                         );
+                        emit_object!(false);
                         on_item(WalkItem::Error(WalkError {
                             path: path.clone(),
                             error: CoreError::ReparseDuplicateTarget(duplicate_route_message(
@@ -750,6 +789,7 @@ fn walk_dir(
                     match std::fs::read_dir(&api_path) {
                         Err(e) => {
                             warn!(path, error = %e, "Cannot enumerate directory");
+                            emit_object!(false);
                             on_item(WalkItem::Error(WalkError {
                                 path: path.clone(),
                                 error: CoreError::AccessDenied(format!(
@@ -758,6 +798,9 @@ fn walk_dir(
                             }));
                         }
                         Ok(entries) => {
+                            // The walk descends: only here can a second
+                            // route go unrecognized.
+                            emit_object!(true);
                             // Collect in read_dir's own order, then push in
                             // reverse — the LIFO stack then pops them back
                             // in original order, so the next directory
@@ -777,10 +820,17 @@ fn walk_dir(
                                     }
                                     Ok(entry) => {
                                         let child = entry.path().to_string_lossy().into_owned();
+                                        // On Windows a junction counts as a
+                                        // symbolic link here (a name-surrogate
+                                        // reparse point), from the listing's
+                                        // own data — no extra call.
+                                        let listed_as_link =
+                                            entry.file_type().is_ok_and(|t| t.is_symlink());
                                         children.push(WalkWork::Visit {
                                             path: child,
                                             parent_canonical: Some(canonical.clone()),
                                             depth: current_depth + 1,
+                                            listed_as_link,
                                         });
                                     }
                                 }
@@ -791,6 +841,8 @@ fn walk_dir(
                         }
                     }
                 }
+                // Not entered (the depth limit): the row without the marker.
+                emit_object!(false);
             }
         }
     }
@@ -1146,6 +1198,29 @@ mod tests {
             .map(|o| o.path.0.to_ascii_lowercase())
             .collect();
 
+        // ADR 0088: the junction's own row names what it stores; the real
+        // directory is no link, and a local scan probes no identity.
+        let row = |p: &std::path::Path| {
+            result
+                .objects
+                .iter()
+                .find(|o| o.path.0.eq_ignore_ascii_case(&p.to_string_lossy()))
+                .expect("a row for the path")
+        };
+        let stored = row(&link)
+            .link
+            .as_ref()
+            .expect("the junction's stored target");
+        assert_eq!(stored.kind, adpa_core::model::LinkKind::Junction);
+        assert!(
+            stored
+                .target
+                .eq_ignore_ascii_case(&target.to_string_lossy()),
+            "{stored:?}"
+        );
+        assert!(row(&target).link.is_none());
+        assert!(result.objects.iter().all(|o| o.identity_unknown.is_none()));
+
         // NTFS enumerates alphabetically: `link` before `target`, so the
         // junction route enumerates the content first (the SYSVOL case).
         let inside_via_link = link.join("inside").to_string_lossy().to_ascii_lowercase();
@@ -1471,9 +1546,9 @@ mod tests {
     #[test]
     fn an_unresolved_link_is_explained_by_what_it_stores() {
         use super::unresolved_reparse_error;
-        use crate::file_id::{LinkKind, LinkTarget};
         use adpa_core::error::CoreError;
-        let link = |kind, target: &str, relative| LinkTarget {
+        use adpa_core::model::{LinkInfo, LinkKind};
+        let link = |kind, target: &str, relative| LinkInfo {
             kind,
             target: target.to_owned(),
             relative,
@@ -1548,9 +1623,9 @@ mod tests {
     #[test]
     fn a_link_that_reaches_this_machine_is_named_not_walked() {
         use super::local_resolution_error;
-        use crate::file_id::{LinkKind, LinkTarget};
         use adpa_core::error::CoreError;
-        let link = LinkTarget {
+        use adpa_core::model::{LinkInfo, LinkKind};
+        let link = LinkInfo {
             kind: LinkKind::SymbolicLink,
             target: r"C:\Data".into(),
             relative: false,

@@ -114,3 +114,4 @@ principle they cite is stated in the public documents:
 | 0085 | DFS paths are evaluated on the target the client is referred to |
 | 0086 | CLI scan results are streamed to the database and the CSV export |
 | 0087 | A scan row lists the memberships that can change its result |
+| 0088 | A link's row says what opening it reaches; a folder without identity says it may be listed twice |

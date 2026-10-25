@@ -283,6 +283,8 @@ fn stars_multigroup_mask(fixture: &[MultiAce], user_sid: &str, owner: Principal)
         unsupported_aces: vec![],
         null_dacl: false,
         sd_hash: None,
+        link: None,
+        identity_unknown: None,
     };
 
     let identity = Identity {
@@ -461,6 +463,8 @@ fn stars_effective_mask(fixture: &[FixtureAce], sid_str: &str) -> u32 {
         unsupported_aces: vec![],
         null_dacl: false,
         sd_hash: None,
+        link: None,
+        identity_unknown: None,
     };
 
     let identity = Identity {

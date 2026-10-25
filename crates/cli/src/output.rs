@@ -573,6 +573,11 @@ pub fn print_diagnostics(diagnostics: &[PermissionDiagnostic]) {
                 // ADR 0076: the model's summary is the single wording.
                 println!("  [i] {}", d.summary());
             }
+            PermissionDiagnostic::LinkObject { .. }
+            | PermissionDiagnostic::DirectoryIdentityUnknown { .. } => {
+                // ADR 0088: the model's summary is the single wording.
+                println!("  [!] {}", d.summary());
+            }
             PermissionDiagnostic::DfsTargetEvaluated { .. } => {
                 // ADR 0085: the model's summary is the single wording.
                 let tag = if d.is_incompleteness_trigger() {

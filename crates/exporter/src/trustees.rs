@@ -289,6 +289,8 @@ mod tests {
             unsupported_aces: Vec::new(),
             null_dacl: false,
             sd_hash: None,
+            link: None,
+            identity_unknown: None,
         }
     }
 
@@ -337,6 +339,8 @@ mod tests {
             unsupported_aces: Vec::new(),
             null_dacl: true,
             sd_hash: None,
+            link: None,
+            identity_unknown: None,
         };
         let trustees = build_path_trustees_with_share(&f, None);
         assert_eq!(trustees.len(), 1, "exactly one diagnostic for NULL DACL");
@@ -432,6 +436,8 @@ mod tests {
             unsupported_aces: Vec::new(),
             null_dacl: true,
             sd_hash: None,
+            link: None,
+            identity_unknown: None,
         };
         let mut sid_names: BTreeMap<String, String> = BTreeMap::new();
         sid_names.insert("S-1-1-0".to_owned(), "Everyone".to_owned());

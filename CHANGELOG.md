@@ -29,6 +29,21 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **The row of a junction or symbolic link looked like the rights on its
+  content (ADR 0088).** Stars, like Windows' security dialog, shows the
+  rights on the link object itself. Opening the path, however, reaches the
+  target, whose own permissions decide. In the enterprise campaign, a real
+  logon of an account with Modify on a junction got access denied on its
+  target. The row now says so: the marker `LinkObject` and a last
+  explanation step name the stored target. Links are recognized from the
+  directory listing too, which over SMB is reliable where the attributes of
+  an open are not.
+- **A folder could be listed twice when its identity could not be read
+  (ADR 0088).** Over SMB, Stars recognizes a second route to a folder by its
+  volume serial and file ID. In one of four archive scans that ran at once,
+  reading them failed once, and the 83 objects of one folder appeared twice
+  (with correct values). The query is now retried twice. If it still fails,
+  the row carries the marker `DirectoryIdentityUnknown` with the reason.
 - **A symbolic link to a drive path of the server was called "a broken
   link".** Over SMB, Windows follows a symbolic link on the client. A link
   on the share to `T:\…`, a path of the server's own disk, is therefore

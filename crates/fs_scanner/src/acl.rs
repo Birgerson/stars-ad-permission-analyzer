@@ -342,6 +342,12 @@ pub fn read_file_system_object_cached(
         unsupported_aces: parsed.unsupported_aces,
         null_dacl: parsed.null_dacl,
         sd_hash: Some(sd_hash),
+        // ADR 0088: what a link stores — its row is the link object's own
+        // DACL, and opening its path reaches this target.
+        link: is_reparse_point
+            .then(|| crate::file_id::link_target(path))
+            .flatten(),
+        identity_unknown: None,
     })
 }
 
