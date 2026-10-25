@@ -269,6 +269,7 @@ The generator could not create 7,904 objects. They lie below the 30 admin-free a
 | Identity | Scope | Rows | Equal to Windows, bit for bit |
 | --- | --- | --- | --- |
 | `ent_std` | whole tree | 1,647,949 | 1,647,938, plus 11 NULL-DACL folders (see below) |
+| `ent_std`, scanned **locally on FS-01** (`T:\Enterprise`, LDAP to DC-01) | whole tree | 1,647,949 | 1,647,938, plus the same 11 NULL-DACL folders |
 | `ent_heavy` (874 groups) | Archive | 243,262 | all |
 | `ent_svc` | Archive | 243,262 | all |
 | `u00001` | Archive | 243,345 | all |
@@ -279,6 +280,9 @@ The generator could not create 7,904 objects. They lie below the 30 admin-free a
 | `ext_partner01` | IT (15 foreign-SID folders) | 134,083 | all, including 2 NULL-DACL objects (kernel) |
 | `pt_user01` | HR (15 foreign-SID folders) | 123,823 | all, including 1 NULL-DACL object (kernel) |
 | `ent_local` | Production (14 local-group folders) | 126,800 | all |
+| `ent_heavy`, `ent_svc`, `u00001`, `ent_std` (the logged load test, four at a time) | Archive | 4 × 243,262 | all |
+
+In all: 20 scans, 7,092,437 rows, each compared with Windows.
 | `ent_power` (1,721 groups) | Finance | 124,617 | Windows builds no context (Authz error 8); Stars reports every row NOT DETERMINABLE: "more than the 1015 [SIDs] that fit into a Windows logon token; a logon of this account fails" |
 
 - **The 11 NULL-DACL folders:** Authz returns `0x001FFFFF` for `MAXIMUM_ALLOWED`, because it has no generic mapping for files. The NTFS kernel, with a real logon, grants exactly `0x001F01FF` (FILE_ALL_ACCESS), which is what Stars reports. Asked for a right without meaning for files (0x200), the kernel drops it.
@@ -302,6 +306,11 @@ The first probe run reported FILE_WRITE_ATTRIBUTES (and sometimes FILE_EXECUTE) 
 3. The control, a folder with Modify, allowed both.
 
 The probe therefore asks for these rights first and exercises WRITE_ATTRIBUTES. The same artifact explains an older observation of 0x180 / 0x1A0 attribute bits on a share root.
+
+**Local scan on the file server** (`ent-local-scan.ps1`, Stars on FS-01 as SYSTEM, main b33a80e):
+
+- 1,647,949 rows in about 3 h 33 min (≈ 129 paths per second), every row determinable and equal to Windows.
+- Slower than the scan over SMB from the workstation (349 paths per second), although FS-01 was almost idle (1 % CPU) and Stars used 0.16 cores: the process was waiting most of the time. The cause was not analysed. The domain member resolves names through its own LSA and the DC, which is a likely factor.
 
 **Builds.** The full scan and the first eight identity scans ran with main a74a70a, and the last six with the fix of ADR 0088. Values do not differ between them: every row was compared with the same oracle.
 

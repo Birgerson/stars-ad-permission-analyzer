@@ -1870,7 +1870,8 @@ The full account, with every constellation, is in `docs/testing/enterprise-test-
 **Results.**
 
 - **Full tree, `ent_std` over SMB:** 4,716 s (349 paths per second), 292 MB peak, CSV 2,562 MB, database 3,455 MB, 82 scan errors (all built in), 0 rows not determinable.
-- **Exhaustive comparison** (`ent_exhaustive.py`), 18 scans, about 2.9 million rows: every exact row equals Windows bit for bit, and completeness holds in both directions.
+- **Full tree scanned locally on FS-01:** about 3 h 33 min (≈ 129 paths per second), the process mostly waiting; every row equal to Windows.
+- **Exhaustive comparison** (`ent_exhaustive.py`), 20 scans, 7,092,437 rows: every exact row equals Windows bit for bit, and completeness holds in both directions.
   - The 11 NULL-DACL folders: Authz gives `0x001FFFFF`; the kernel, with a real logon, grants `0x001F01FF`, as Stars does.
   - `ent_power`: Windows builds no token (Authz error 8), and Stars reports every row NOT DETERMINABLE for the token limit.
 - **Real SMB opens:** 8,988 of 9,094 equal. The rest is explained:
