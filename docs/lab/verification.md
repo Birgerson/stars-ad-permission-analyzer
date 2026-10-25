@@ -1905,3 +1905,27 @@ MS-01's policy was restored afterwards (R2L disabled) and the marker folder remo
 | `pt_user01` | 243,289 | the cycle `P02_Contracts\Link_to_dept` not recognized: 218,733 rows listed under the cycle's path, the 27 direct subfolders of the archive reported as "duplicate routes" |
 
 The values of every row were exact in all three runs: equal to Windows, bit for bit. The cause is that the directory's identity is read with one open over SMB. When that open failed, the walker silently keyed the directory by its path, which no other route shares.
+
+**After the fix** (branch `link-rows-and-identity`, release builds):
+
+- **Ten parallel archive scans, every one exact.**
+  - The first six ran six at a time: three archive scans and three department scans. The archive scans had **exactly 243,262 rows** and the expected 3 scan errors: no double listing, and the cycle recognized.
+  - The next four ran four at a time, the same.
+  - Every row of these scans equals the oracle bit for bit.
+- **The feature-specific scans:**
+
+  | Identity | Department | Exceptions there | Rows | Equal to Windows |
+  | --- | --- | --- | --- | --- |
+  | `ext_partner01` | IT | 15 foreign-SID folders | 134,083 | all |
+  | `pt_user01` | HR | 15 foreign-SID folders | 123,823 | all |
+  | `ent_local` | Production | 14 local-group folders | 126,800 | all |
+
+  The IT and HR rows include three NULL-DACL objects, equal to the kernel.
+- **With `RUST_LOG=fs_scanner=info`,** each of the four logged scans had exactly one directory whose identity stayed unknown: the directory symbolic link to `T:\…`, which the client cannot open (error 3). It is logged. Its row carries no identity marker, because the walk does not descend there. No probe needed a retry in these runs, so the retry itself is covered by the tests, not by a measured recovery.
+- **Every link row** carries `LinkObject` and the last explanation step naming its target.
+
+**Regression against main 20963bb** (`cmp88.py`, 25,906 rows):
+
+- Only the 73 link rows of DC-01's data share (its junctions and the symbolic link fixture) gained the marker and the one last step.
+- No other column, diagnostic or step differs.
+- The console output is identical.
