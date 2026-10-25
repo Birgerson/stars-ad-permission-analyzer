@@ -1760,3 +1760,32 @@ Kerberos crossed the forest trust for the Signed LDAP connection to DC-04: the b
 Scan error paths are shown like the rows (`\192.168.11.161\LocTest\…`, not `\?\UNC\…`). Before and after, with the step 5a binary as baseline: all 104 rows of both servers are unchanged.
 
 Release regression of this fix against the step 5a binary: 25,841 rows, 0 differing. The DC-01 data share has five scan errors in both versions. One of them, the symbolic link fixture `Spezial\Verknuepfung_readme.txt`, changed from "Access denied" to "Link not followed … (Windows error 1463 …)". The four others are unchanged: two access denied, one duplicate target, one cycle.
+
+## Block U — Mass scan: 1.5 million files, results streamed (ADR 0086, 2026-10-25)
+
+**Fixture.** FS-01 (Server 2025 en-US, data disk `T:`), `T:\MassData`, share `MassData`.
+
+- **Size:** 20 departments × 50 projects × 10 folders × 150 files = 1,500,560 files.
+- **ACLs:**
+  - every 5th project breaks inheritance with group ACEs (200 corp.test groups)
+  - every 7th folder has a Modify ACE
+  - every 50th folder has a Deny Write for Domain Users
+- **Edge cases:** a long path (> 260 characters) per department, Unicode names, credential-like file names.
+
+**Account.** `u00030`, about 70 groups. The runs went over SMB from the workstation, with release builds. Memory comes from the OS peak counters of the process (`mass-run.ps1`). A first sampling harness with an event-based stdout reader stalled under the output volume. It was replaced, and its numbers were discarded.
+
+| Run | Paths | Time | Peak working set / commit | CSV | DB |
+| --- | --- | --- | --- | --- | --- |
+| one department, main 1ca851b | 75,586 | 160 s | 2,001 MB / 1,922 MB | 907.9 MB | 922.7 MB |
+| one department, streaming | 75,586 | 125 s | **29 MB / 14 MB** | 907.9 MB, **byte-identical** | 922.7 MB, **identical** (every column but the run id, digest) |
+| whole tree, streaming | **1,511,721** | 3,182 s (53 min, ≈ 475 paths/s) | **91 MB / 91 MB** | 18,146 MB | 18,437 MB |
+
+**Further checks.**
+
+- **Old against new:** the console output is identical except the export path, and the risk findings are the same 11,634.
+- **The whole tree:** 0 scan errors, 146,439 risk findings.
+- **Cancel:** a real Ctrl-C (`ctrlc-test.ps1`, the CLI in its own console, the event sent by a helper attached to it) after 40 s. The run was committed with a finish time and the error "Scan cancelled by user — results are partial". It holds 15,795 rows, and the CSV has the same 15,795 rows. No `.partial` file was left, and the exit code was 0.
+
+Integrity of the whole-tree output (`mass_integrity.py`, 166 s): the CSV and the database hold the same 1,511,721 rows with the same set of paths. The run is committed with its finish time, with 0 scan errors.
+
+Extrapolated, the old code would have needed about 40 GB for the whole tree. A machine with 16 GB would have failed at about half a million paths.

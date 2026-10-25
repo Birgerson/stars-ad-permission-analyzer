@@ -86,13 +86,125 @@ impl Exporter for CsvExporter {
 /// Fields are comma-separated; fields containing special characters are automatically
 /// quoted (handled by the `csv` crate).
 pub fn write_csv<W: Write>(writer: W, permissions: &[EffectivePermission]) -> csv::Result<()> {
-    let mut wtr = csv::Writer::from_writer(writer);
-    wtr.write_record(HEADERS)?;
+    let mut wtr = CsvRowWriter::new(writer)?;
     for perm in permissions {
-        wtr.write_record(record_for(perm)?)?;
+        wtr.write(perm)?;
     }
-    wtr.flush()?;
-    Ok(())
+    wtr.finish().map(|_| ())
+}
+
+/// ADR 0086: writes the CSV one row at a time — the same header and rows as
+/// [`write_csv`], without the whole result set in memory.
+pub struct CsvRowWriter<W: Write> {
+    wtr: csv::Writer<W>,
+}
+
+impl<W: Write> CsvRowWriter<W> {
+    /// Starts the file with the header row.
+    pub fn new(writer: W) -> csv::Result<Self> {
+        let mut wtr = csv::Writer::from_writer(writer);
+        wtr.write_record(HEADERS)?;
+        Ok(Self { wtr })
+    }
+
+    /// Appends one result row.
+    pub fn write(&mut self, perm: &EffectivePermission) -> csv::Result<()> {
+        self.wtr.write_record(record_for(perm)?)
+    }
+
+    /// Flushes the rows and returns the writer.
+    pub fn finish(self) -> csv::Result<W> {
+        self.wtr
+            .into_inner()
+            .map_err(|e| csv::Error::from(std::io::Error::other(e.to_string())))
+    }
+}
+
+/// ADR 0086: a CSV export file written row by row during a scan. The rows
+/// go to `<target>.partial`; [`Self::finish`] renames it to the target. A
+/// writer dropped without `finish` (the scan failed) removes the partial
+/// file, so no half-written export can be taken for a complete one.
+pub struct CsvFileWriter {
+    rows: Option<CsvRowWriter<std::fs::File>>,
+    partial: std::path::PathBuf,
+    target: std::path::PathBuf,
+    overwrite: bool,
+}
+
+impl CsvFileWriter {
+    /// Checks the target with its overwrite policy (`ExportTarget::File`
+    /// refuses an existing file) and starts the partial file.
+    pub fn create(target: ExportTarget) -> Result<Self, CoreError> {
+        let (target, overwrite) = match target {
+            ExportTarget::File(p) => (p, false),
+            ExportTarget::FileOverwrite(p) => (p, true),
+        };
+        if !overwrite && target.exists() {
+            return Err(CoreError::Export(format!(
+                "Cannot create export file '{}': it already exists",
+                target.display()
+            )));
+        }
+        let mut name = target.clone().into_os_string();
+        name.push(".partial");
+        let partial = std::path::PathBuf::from(name);
+        let file = crate::open_export_file(ExportTarget::FileOverwrite(partial.clone()))?;
+        let rows = CsvRowWriter::new(file)
+            .map_err(|e| CoreError::Export(format!("CSV write error: {e}")))?;
+        Ok(Self {
+            rows: Some(rows),
+            partial,
+            target,
+            overwrite,
+        })
+    }
+
+    /// Appends one result row.
+    pub fn write(&mut self, perm: &EffectivePermission) -> Result<(), CoreError> {
+        match self.rows.as_mut() {
+            Some(rows) => rows
+                .write(perm)
+                .map_err(|e| CoreError::Export(format!("CSV write error: {e}"))),
+            None => Err(CoreError::Export("CSV export already finished".to_owned())),
+        }
+    }
+
+    /// Flushes the rows and moves the file to the target.
+    pub fn finish(mut self) -> Result<(), CoreError> {
+        let rows = self
+            .rows
+            .take()
+            .ok_or_else(|| CoreError::Export("CSV export already finished".to_owned()))?;
+        let file = rows
+            .finish()
+            .map_err(|e| CoreError::Export(format!("CSV write error: {e}")))?;
+        file.sync_all()
+            .map_err(|e| CoreError::Export(format!("CSV write error: {e}")))?;
+        drop(file);
+        if !self.overwrite && self.target.exists() {
+            return Err(CoreError::Export(format!(
+                "Cannot create export file '{}': it was created by someone else during the scan",
+                self.target.display()
+            )));
+        }
+        std::fs::rename(&self.partial, &self.target).map_err(|e| {
+            CoreError::Export(format!(
+                "Cannot move the export to '{}': {e}",
+                self.target.display()
+            ))
+        })?;
+        Ok(())
+    }
+}
+
+impl Drop for CsvFileWriter {
+    fn drop(&mut self) {
+        // Not finished, or finishing failed: the partial file goes.
+        self.rows.take();
+        if self.partial.exists() {
+            let _ = std::fs::remove_file(&self.partial);
+        }
+    }
 }
 
 /// Converts a `serde_json` serialization failure into a `csv::Error` so it
@@ -238,7 +350,7 @@ mod tests {
     use adpa_core::traits::{AnalysisResult, ExportTarget};
     use permission_engine::mask::MASK_READ;
 
-    use super::{write_csv, CsvExporter};
+    use super::{write_csv, CsvExporter, CsvFileWriter};
     use adpa_core::traits::Exporter;
 
     fn make_perm(
@@ -290,6 +402,57 @@ mod tests {
             rows.push(record.unwrap().iter().map(str::to_owned).collect());
         }
         rows
+    }
+
+    /// ADR 0086: rows written one by one give the same file as the batch
+    /// writer; an unfinished export leaves no file behind; an existing
+    /// target is refused without overwrite.
+    #[test]
+    fn the_file_writer_streams_renames_and_cleans_up() {
+        let dir = std::env::temp_dir().join(format!("adpa-csvstream-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("result.csv");
+        let _ = std::fs::remove_file(&target);
+        let perms = vec![
+            make_perm(
+                r"C:\data\a",
+                "S-1-5-21-1-2-3-1001",
+                "alice",
+                0x1200A9,
+                None,
+                0x1200A9,
+                vec!["User: alice"],
+            ),
+            make_perm(
+                r"C:\data\b",
+                "S-1-5-21-1-2-3-1001",
+                "alice",
+                0x1301BF,
+                None,
+                0x1301BF,
+                vec!["User: alice"],
+            ),
+        ];
+
+        let mut w = CsvFileWriter::create(ExportTarget::File(target.clone())).unwrap();
+        for p in &perms {
+            w.write(p).unwrap();
+        }
+        w.finish().unwrap();
+        let mut batch = Vec::new();
+        write_csv(&mut batch, &perms).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), batch);
+        assert!(!dir.join("result.csv.partial").exists());
+
+        assert!(CsvFileWriter::create(ExportTarget::File(target.clone())).is_err());
+
+        let other = dir.join("aborted.csv");
+        {
+            let mut w = CsvFileWriter::create(ExportTarget::File(other.clone())).unwrap();
+            w.write(&perms[0]).unwrap();
+        }
+        assert!(!other.exists() && !dir.join("aborted.csv.partial").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

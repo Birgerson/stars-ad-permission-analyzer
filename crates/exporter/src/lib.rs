@@ -8,7 +8,9 @@ pub mod html;
 pub mod json;
 pub mod trustees;
 
-pub use csv::{neutralize_spreadsheet_formula, write_csv, CsvExporter};
+pub use csv::{
+    neutralize_spreadsheet_formula, write_csv, CsvExporter, CsvFileWriter, CsvRowWriter,
+};
 pub use html::{render_html, HtmlExporter};
 pub use json::JsonExporter;
 pub use trustees::{

@@ -183,6 +183,45 @@ impl RuleRegistry {
             .flat_map(|r| r.evaluate(context))
             .collect()
     }
+
+    /// ADR 0086: evaluates results one at a time, for a scan that does not
+    /// keep them all. [`RiskAccumulator::finish`] returns the findings in
+    /// exactly the order of [`Self::evaluate_all`] over the same results
+    /// (rule by rule, results in the order added) — every rule evaluates
+    /// each result on its own.
+    pub fn accumulator(&self) -> RiskAccumulator<'_> {
+        RiskAccumulator {
+            registry: self,
+            per_rule: vec![Vec::new(); self.rules.len()],
+        }
+    }
+}
+
+/// Findings collected result by result (ADR 0086), from
+/// [`RuleRegistry::accumulator`].
+pub struct RiskAccumulator<'r> {
+    registry: &'r RuleRegistry,
+    per_rule: Vec<Vec<RiskFinding>>,
+}
+
+impl RiskAccumulator<'_> {
+    /// Evaluates every rule for `perm` and hands it back (moved through the
+    /// rule context, not copied).
+    pub fn add(&mut self, perm: EffectivePermission) -> EffectivePermission {
+        let context = RiskContext {
+            findings: vec![perm],
+        };
+        for (rule, out) in self.registry.rules.iter().zip(self.per_rule.iter_mut()) {
+            out.extend(rule.evaluate(&context));
+        }
+        let mut findings = context.findings;
+        findings.remove(0)
+    }
+
+    /// All findings, in the order of [`RuleRegistry::evaluate_all`].
+    pub fn finish(self) -> Vec<RiskFinding> {
+        self.per_rule.into_iter().flatten().collect()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -651,6 +690,32 @@ mod tests {
             inheritance_flags: 0,
             propagation_flags: 0,
         }
+    }
+
+    /// ADR 0086: result by result gives exactly the findings, in exactly
+    /// the order, of the evaluation over all results at once.
+    #[test]
+    fn the_accumulator_matches_evaluate_all_in_content_and_order() {
+        let perms = vec![
+            perm("S-1-1-0", MASK_FULL_CONTROL, r"C:\data\a", vec![]),
+            perm("S-1-5-11", MASK_MODIFY, r"C:\data\passwords", vec![]),
+            perm(USER_SID, MASK_READ, r"C:\data\b", vec![]),
+            perm(USER_SID, MASK_MODIFY, r"C:\data\c", vec![]),
+        ];
+        let registry = RuleRegistry::with_defaults();
+        let all = registry.evaluate_all(&ctx(perms.clone()));
+        let mut acc = registry.accumulator();
+        for p in perms.clone() {
+            let back = acc.add(p.clone());
+            assert_eq!(back.path, p.path, "the result is handed back unchanged");
+        }
+        let streamed = acc.finish();
+        assert!(!all.is_empty());
+        let key = |f: &RiskFinding| format!("{f:?}");
+        assert_eq!(
+            all.iter().map(key).collect::<Vec<_>>(),
+            streamed.iter().map(key).collect::<Vec<_>>()
+        );
     }
 
     fn ctx(permissions: Vec<EffectivePermission>) -> RiskContext {
