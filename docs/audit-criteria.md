@@ -315,7 +315,7 @@ Stars classifies every finding into one of five levels (`adpa_core::model::RiskS
 
 Every `RiskFinding` carries a boolean `incomplete` field. It marks findings whose underlying **permission evaluation** had gaps and which should therefore be read **cautiously**.
 
-`incomplete = true` is set when the underlying evaluation has at least one of the gaps listed below. **Authoritative source:** `EffectivePermission::is_incomplete()` together with `PermissionDiagnostic::is_incompleteness_trigger()` in `crates/core/src/model.rs` — `rules.rs::is_incomplete()` is a thin delegate to it. The list here must stay in sync with the code (last verified 2026-10-24 for v1.18.0; `crates/core` unchanged since v1.17.0).
+`incomplete = true` is set when the underlying evaluation has at least one of the gaps listed below. **Authoritative source:** `EffectivePermission::is_incomplete()` together with `PermissionDiagnostic::is_incompleteness_trigger()` in `crates/core/src/model.rs` — `rules.rs::is_incomplete()` is a thin delegate to it. The list here must stay in sync with the code (last verified 2026-10-25 for v1.19.0 against `uncertain_layer()`; since v1.18.0 `crates/core` gained `DfsTargetEvaluated`, `LinkObject` and `DirectoryIdentityUnknown`).
 
 **Direct evaluation gaps:**
 
@@ -372,6 +372,9 @@ Every `RiskFinding` carries a boolean `incomplete` field. It marks findings whos
 17. **Whether Selective Authentication allows the logon is not determinable** (`PermissionDiagnostic::SelectiveAuthenticationUnknown { server, reason, affects_result: true }`).
     The trust uses Selective Authentication and the target's computer object could not be read or evaluated, or an ACE for a SID whose presence is unknown decides it — the effective right lies between No access and what the permissions grant. Only while the permissions grant something: with nothing granted (`affects_result: false`) the result is an exact No access and the marker does not contribute to incomplete. See ADR 0079 and its addendum.
 
+18. **A DFS folder has further targets, or whether it has could not be read** (`PermissionDiagnostic::DfsTargetEvaluated` with `other_targets` not empty or `other_targets_known: false`).
+    The path was evaluated on the target this machine's DFS client is referred to; a client referred to another target can get other rights (NTFS and share alike). With exactly one known target the marker is informational and the result exact. See ADR 0085.
+
 Markers that do **not** contribute to incomplete — informational:
 
 - `PermissionDiagnostic::IdentityDisabled` (account flagged disabled in AD via `userAccountControl`; ACL-theoretical rights are correct).
@@ -389,6 +392,9 @@ Markers that do **not** contribute to incomplete — informational:
 - `PermissionDiagnostic::GuestOrAnonymousToken { sids }` (the account is Guest or anonymous; Authenticated Users is absent from such a token — lab-measured; for anonymous, Everyone is bounded because `EveryoneIncludesAnonymous` is not read, and an applicable Everyone ACE is what turns the result into a `LogonDependentTrustees` range). See ADR 0072.
 - `PermissionDiagnostic::UacFilteredGroups { groups }` (the token holds groups User Account Control may filter; by itself the result stays exact — an applicable Allow ACE for one of them is what turns it into a `LogonDependentTrustees` range). See ADR 0070 / 0071.
 - `PermissionDiagnostic::RemoteUacPolicy { filtered, reason }` (remote UAC decided from the target's policies — the UAC groups are certainly deny-only or certainly enabled; informational, the result is exact). See ADR 0076.
+- `PermissionDiagnostic::DfsTargetEvaluated` with a single known target (the path was evaluated on the one target clients are referred to; exact). See ADR 0085.
+- `PermissionDiagnostic::LinkObject { link_kind, target }` (the object is a junction or symbolic link; its values are the exact rights on the link object itself, and opening the path reaches the target, whose own permissions decide there). See ADR 0088.
+- `PermissionDiagnostic::DirectoryIdentityUnknown { reason }` (over SMB the folder's file ID could not be read; a second route to it may list its content twice — the values are exact). See ADR 0088.
 
 A finding with `incomplete = true` does **not** mean it is wrong — it means the underlying result might not be 100 % complete. For an audit that is the honest statement; for an automated escalation you should not blindly trust it.
 
