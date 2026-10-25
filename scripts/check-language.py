@@ -64,6 +64,8 @@ DE_WORDS = [
     "Eingabeformen", "Walk-Fehler",
     "Schliesst",
     "Tiefe",
+    # Lab 2026-10-25: umlaut-free comment leftovers the gate missed
+    "Kombination", "zweier", "Restriktivere", "restriktivere",
     # German compound nouns from Stars' GUI that have no English meaning
     "Berechtigungspfad", "Berechtigungen", "Berechtigung",
     "Zieldatei", "Zielordner", "Berichte",
@@ -379,6 +381,9 @@ def selftest() -> int:
         "Berechtigungspfad",             # compound
         "der Scan",                      # whole-word denylist still works
         "Schlüssel",                     # umlaut pass still works
+        # Lab 2026-10-25: the exact lines that slipped through.
+        "/// Restriktivere Kombination zweier Masken (z. B. NTFS ∩ Share).",
+        "// --- Share-∩-NTFS-Kombination / share ∩ NTFS combination ---",
         # Deep review 2026-07-04 F3: the exact umlaut-free lines that
         # slipped through the gate while it reported green.
         "Haupt-Aktionen wie Analyze, Scan starten, Vergleichen.",

@@ -474,7 +474,6 @@ impl NormalizedRights {
         }
     }
 
-    /// Restriktivere Kombination zweier Masken (z. B. NTFS ∩ Share).
     /// More restrictive combination of two masks (e.g. NTFS ∩ Share).
     pub fn intersect(self, other: NormalizedRights) -> NormalizedRights {
         NormalizedRights::new(self.raw & other.raw)
@@ -798,7 +797,7 @@ mod tests {
         assert_eq!(back.0, MASK_FULL_CONTROL);
     }
 
-    // --- Intersect (restriktivere Kombination / restrictive combination) ---
+    // --- Intersect (restrictive combination) ---
 
     #[test]
     fn intersect_share_read_ntfs_modify_yields_read() {

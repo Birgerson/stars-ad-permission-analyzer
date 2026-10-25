@@ -3494,7 +3494,7 @@ mod tests {
         );
     }
 
-    // --- Share-∩-NTFS-Kombination / share ∩ NTFS combination ---
+    // --- share ∩ NTFS combination ---
 
     #[test]
     fn share_read_ntfs_modify_yields_read() {
