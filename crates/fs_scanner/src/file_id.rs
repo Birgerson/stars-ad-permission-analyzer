@@ -17,9 +17,22 @@ use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FileIdInfo, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_EXISTING,
 };
+use windows_sys::Win32::System::IO::DeviceIoControl;
+
+/// `FSCTL_GET_REPARSE_POINT` (winioctl.h).
+const FSCTL_GET_REPARSE_POINT: u32 = 0x0009_00A8;
+/// `IO_REPARSE_TAG_MOUNT_POINT`: a junction (winnt.h).
+const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
+/// `IO_REPARSE_TAG_SYMLINK`: a symbolic link (winnt.h).
+const IO_REPARSE_TAG_SYMLINK: u32 = 0xA000_000C;
+/// `SYMLINK_FLAG_RELATIVE`: the target is relative to the link's folder.
+const SYMLINK_FLAG_RELATIVE: u32 = 1;
+/// `MAXIMUM_REPARSE_DATA_BUFFER_SIZE` (winnt.h).
+const MAX_REPARSE_DATA: usize = 16 * 1024;
 
 /// Closes the wrapped handle on drop, on every return path.
 struct HandleGuard(HANDLE);
@@ -91,7 +104,122 @@ pub fn final_unc_path(path: &str) -> Option<String> {
     final_path_of(&guard)
 }
 
+/// What a junction or symbolic link points to, as the link itself stores it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LinkTarget {
+    pub(crate) kind: LinkKind,
+    /// The stored target: its print name, else its substitute name without
+    /// the `\??\` prefix.
+    pub(crate) target: String,
+    /// A symbolic link whose target is relative to the link's folder.
+    pub(crate) relative: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkKind {
+    /// Resolved by the computer that holds it — over SMB, the server.
+    Junction,
+    /// Resolved by the computer that opens it — over SMB, the client.
+    SymbolicLink,
+}
+
+/// Reads the target the junction or symbolic link at `path` stores
+/// (`FSCTL_GET_REPARSE_POINT` on the link itself, not its target). `None`
+/// when the link cannot be opened or read, is neither a junction nor a
+/// symbolic link, or its data fails validation.
+pub(crate) fn link_target(path: &str) -> Option<LinkTarget> {
+    let guard = open_handle(
+        path,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+    )?;
+    let mut buf = vec![0u8; MAX_REPARSE_DATA];
+    let mut returned: u32 = 0;
+    // SAFETY: `guard.0` is a valid open handle; there is no input buffer;
+    // `buf` is a writable buffer whose length is passed explicitly, and
+    // `returned` receives the byte count. No OVERLAPPED: a synchronous call.
+    let ok = unsafe {
+        DeviceIoControl(
+            guard.0,
+            FSCTL_GET_REPARSE_POINT,
+            std::ptr::null(),
+            0,
+            buf.as_mut_ptr().cast(),
+            buf.len() as u32,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    parse_reparse_data(buf.get(..returned as usize)?)
+}
+
+/// Parses a `REPARSE_DATA_BUFFER` of a junction or symbolic link. Every
+/// length and offset Windows (or an SMB server) returned is checked before
+/// use; anything out of bounds, odd-sized, empty or with control characters
+/// gives `None`. Pure.
+fn parse_reparse_data(data: &[u8]) -> Option<LinkTarget> {
+    let u16_at = |b: &[u8], o: usize| b.get(o..o + 2).map(|x| u16::from_le_bytes([x[0], x[1]]));
+    let tag = data
+        .get(0..4)
+        .map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]))?;
+    let body_len = u16_at(data, 4)? as usize;
+    let body = data.get(8..8 + body_len)?;
+    let (kind, names_at, relative) = match tag {
+        IO_REPARSE_TAG_MOUNT_POINT => (LinkKind::Junction, 8, false),
+        IO_REPARSE_TAG_SYMLINK => {
+            let flags = body
+                .get(8..12)
+                .map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]))?;
+            (
+                LinkKind::SymbolicLink,
+                12,
+                flags & SYMLINK_FLAG_RELATIVE != 0,
+            )
+        }
+        _ => return None,
+    };
+    let names = body.get(names_at..)?;
+    let name = |offset: usize, len: usize| -> Option<String> {
+        if !offset.is_multiple_of(2) || !len.is_multiple_of(2) {
+            return None;
+        }
+        let units: Vec<u16> = names
+            .get(offset..offset.checked_add(len)?)?
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
+            .collect();
+        String::from_utf16(&units).ok()
+    };
+    let print = name(u16_at(body, 4)? as usize, u16_at(body, 6)? as usize)?;
+    let target = if print.is_empty() {
+        let substitute = name(u16_at(body, 0)? as usize, u16_at(body, 2)? as usize)?;
+        substitute
+            .strip_prefix(r"\??\")
+            .map(str::to_owned)
+            .unwrap_or(substitute)
+    } else {
+        print
+    };
+    if target.is_empty() || target.len() > 32_767 || target.chars().any(char::is_control) {
+        return None;
+    }
+    Some(LinkTarget {
+        kind,
+        target,
+        relative,
+    })
+}
+
 fn open_for_attributes(path: &str) -> Option<HandleGuard> {
+    open_handle(path, FILE_FLAG_BACKUP_SEMANTICS)
+}
+
+/// Opens `path` for its attributes with the given flags.
+fn open_handle(path: &str, flags: FILE_FLAGS_AND_ATTRIBUTES) -> Option<HandleGuard> {
     let api_path = validation::path::to_windows_api_path(path);
     let wide: Vec<u16> = OsStr::new(&api_path)
         .encode_wide()
@@ -100,8 +228,8 @@ fn open_for_attributes(path: &str) -> Option<HandleGuard> {
 
     // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the
     // call; the security-attributes and template-handle pointers are null,
-    // which CreateFileW permits. FILE_FLAG_BACKUP_SEMANTICS is required to
-    // open a directory handle.
+    // which CreateFileW permits. FILE_FLAG_BACKUP_SEMANTICS (in `flags`) is
+    // required to open a directory handle.
     let handle = unsafe {
         CreateFileW(
             wide.as_ptr(),
@@ -109,7 +237,7 @@ fn open_for_attributes(path: &str) -> Option<HandleGuard> {
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             std::ptr::null(),
             OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
+            flags,
             std::ptr::null_mut(),
         )
     };
@@ -295,5 +423,136 @@ mod tests {
             directory_identity(r"C:\adpa-definitely-missing-dir-7f3a"),
             None
         );
+    }
+
+    /// A `REPARSE_DATA_BUFFER` as Windows returns it: header, the four name
+    /// offsets/lengths, the flags for a symbolic link, then both names.
+    fn reparse_buffer(tag: u32, flags: Option<u32>, substitute: &str, print: &str) -> Vec<u8> {
+        let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(u16::to_le_bytes).collect() };
+        let (sub, pr) = (utf16(substitute), utf16(print));
+        let mut names = sub.clone();
+        names.extend([0, 0]);
+        let print_offset = names.len();
+        names.extend(&pr);
+        names.extend([0, 0]);
+        let mut body = Vec::new();
+        body.extend(0u16.to_le_bytes());
+        body.extend((sub.len() as u16).to_le_bytes());
+        body.extend((print_offset as u16).to_le_bytes());
+        body.extend((pr.len() as u16).to_le_bytes());
+        if let Some(f) = flags {
+            body.extend(f.to_le_bytes());
+        }
+        body.extend(names);
+        let mut data = Vec::new();
+        data.extend(tag.to_le_bytes());
+        data.extend((body.len() as u16).to_le_bytes());
+        data.extend([0, 0]);
+        data.extend(body);
+        data
+    }
+
+    #[test]
+    fn reparse_data_of_junctions_and_symbolic_links_is_parsed() {
+        let junction = reparse_buffer(
+            IO_REPARSE_TAG_MOUNT_POINT,
+            None,
+            r"\??\T:\Enterprise\Finance\P01",
+            r"T:\Enterprise\Finance\P01",
+        );
+        assert_eq!(
+            parse_reparse_data(&junction),
+            Some(LinkTarget {
+                kind: LinkKind::Junction,
+                target: r"T:\Enterprise\Finance\P01".into(),
+                relative: false,
+            })
+        );
+        let absolute = reparse_buffer(
+            IO_REPARSE_TAG_SYMLINK,
+            Some(0),
+            r"\??\T:\Enterprise\Finance\P02_2021",
+            r"T:\Enterprise\Finance\P02_2021",
+        );
+        let parsed = parse_reparse_data(&absolute).unwrap();
+        assert_eq!(parsed.kind, LinkKind::SymbolicLink);
+        assert!(!parsed.relative);
+        assert_eq!(parsed.target, r"T:\Enterprise\Finance\P02_2021");
+        let relative = reparse_buffer(IO_REPARSE_TAG_SYMLINK, Some(1), r"..\P02", r"..\P02");
+        assert!(parse_reparse_data(&relative).unwrap().relative);
+        // No print name: the substitute name, without `\??\`.
+        let no_print = reparse_buffer(IO_REPARSE_TAG_MOUNT_POINT, None, r"\??\C:\data", "");
+        assert_eq!(parse_reparse_data(&no_print).unwrap().target, r"C:\data");
+    }
+
+    /// Values from the OS (or an SMB server) are validated before use.
+    #[test]
+    fn malformed_reparse_data_is_rejected() {
+        let good = reparse_buffer(IO_REPARSE_TAG_SYMLINK, Some(0), r"\??\C:\x", r"C:\x");
+        assert!(parse_reparse_data(&good).is_some());
+        // Truncated anywhere.
+        for len in [0, 3, 7, 12, 19, good.len() - 1] {
+            assert_eq!(parse_reparse_data(&good[..len]), None, "length {len}");
+        }
+        // Another reparse tag (e.g. a cloud file placeholder).
+        let mut other = good.clone();
+        other[0..4].copy_from_slice(&0x9000_001Au32.to_le_bytes());
+        assert_eq!(parse_reparse_data(&other), None);
+        // A declared body longer than the data.
+        let mut long = good.clone();
+        long[4..6].copy_from_slice(&u16::MAX.to_le_bytes());
+        assert_eq!(parse_reparse_data(&long), None);
+        // An odd or out-of-range print-name offset.
+        let mut odd = good.clone();
+        odd[12..14].copy_from_slice(&3u16.to_le_bytes());
+        assert_eq!(parse_reparse_data(&odd), None);
+        let mut far = good.clone();
+        far[12..14].copy_from_slice(&4000u16.to_le_bytes());
+        assert_eq!(parse_reparse_data(&far), None);
+        // A control character in the stored target.
+        let ctl = reparse_buffer(
+            IO_REPARSE_TAG_SYMLINK,
+            Some(0),
+            "\\??\\C:\\a\u{7}b",
+            "C:\\a\u{7}b",
+        );
+        assert_eq!(parse_reparse_data(&ctl), None);
+        // Neither name set.
+        let empty = reparse_buffer(IO_REPARSE_TAG_MOUNT_POINT, None, "", "");
+        assert_eq!(parse_reparse_data(&empty), None);
+    }
+
+    /// A real junction (`mklink /J` needs no privilege): its stored target is
+    /// read from the link itself, not from what it points to.
+    #[test]
+    fn the_target_of_a_real_junction_is_read() {
+        let root = std::env::temp_dir().join(format!("adpa-link-target-{}", std::process::id()));
+        let target = root.join("target");
+        let link = root.join("link");
+        std::fs::create_dir_all(&target).unwrap();
+        let status = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &link.to_string_lossy(),
+                &target.to_string_lossy(),
+            ])
+            .status()
+            .expect("spawn mklink");
+        assert!(status.success(), "mklink /J failed ({status})");
+        let read = link_target(&link.to_string_lossy());
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "rmdir", &link.to_string_lossy()])
+            .status();
+        let _ = std::fs::remove_dir_all(&root);
+        let read = read.expect("link target of a junction");
+        assert_eq!(read.kind, LinkKind::Junction);
+        assert_eq!(
+            read.target.to_lowercase(),
+            target.to_string_lossy().to_lowercase()
+        );
+        // A plain directory is no link.
+        assert_eq!(link_target(&std::env::temp_dir().to_string_lossy()), None);
     }
 }

@@ -75,6 +75,23 @@ To answer them, Stars reads:
   SymlinkEvaluation`). It is **not** missing access. "Access denied" now
   appears only when the link's target refused access (error 5), and
   "Path not found" for a broken link.
+  Stars reads what the link stores, so the message names the target and
+  who resolves it:
+  - **A symbolic link to a drive path of the server** (`T:\…`) is resolved
+    by the SMB client, on the client itself. Where this machine has no
+    such drive, Windows answers "not found" (error 3). Stars says so: "this
+    symbolic link points to T:\…, a path on the server's own disk … this
+    machine resolved T:\… on itself: that path does not exist here". It
+    does not call the link broken, because whether the folder exists on
+    the server cannot be seen over SMB, and no SMB client reaches it
+    through the link.
+  - **A junction** is resolved by the server. "Not found" then means the
+    target is missing on the server: a broken junction.
+  - **Remote-to-local evaluation enabled on the scanning machine** (not the
+    default): such a link then reaches a folder of the scanning machine
+    itself. Stars does not walk it: "this link … resolves to C:\… on this
+    machine, not on the server". Versions before this fix listed that
+    local folder as part of the share.
 - **Long paths** (`\\?\…`, UNC long-path form `\\?\UNC\…`).
 
 For each finding Stars builds **structured diagnostic markers** when
