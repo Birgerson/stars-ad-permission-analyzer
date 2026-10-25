@@ -1920,6 +1920,10 @@ the configuration for you**. That's your call.
   roadmap tracking.
 - **[audit-criteria.md](audit-criteria.md)** — Domain evaluation
   rules and severity per risk rule.
+- **[testing/enterprise-test-campaign.md](testing/enterprise-test-campaign.md)**
+  — What Stars was tested against: every constellation, how Windows
+  itself supplied the expected value, the results, and what the tests do
+  not cover.
 - **[adr/](adr/)** — Architecture Decision Records — historical
   justifications for individual model, pipeline, and API decisions.
 - **[../README.md](../README.md)** — Project overview, build

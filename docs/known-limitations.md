@@ -933,6 +933,20 @@ does not:
 For trees with more than a few tens of thousands of paths, use the CLI
 with `--db` and a `.csv` export.
 
+## L20 — Over SMB, an open also needs the right to read attributes
+
+**Priority:** Low — measured in the enterprise campaign 2026-10-25 (verification Block W).
+
+Stars shows the exact AccessCheck result: the rights the object's DACL grants. Over SMB, the file server opens the object for the client, and the open also needs the right to read its attributes. That right comes from the object's own DACL or from List folder on its parent. For a right that lacks SYNCHRONIZE as well, Stars already says that Windows programs cannot open the object (`SynchronizeNotGranted`, ADR 0080).
+
+Measured from a Windows 11 client:
+
+- 69 such objects in all.
+- An open for exactly the right Stars shows, without SYNCHRONIZE, succeeded on the 5 whose parent grants List folder.
+- It failed on the 64 whose parent does not.
+
+On those 64, the rights shown cannot be used over SMB. Stars does not yet say so for an account without read-attributes, because it would need the parent's right on the row.
+
 ---
 
 ## Status overview
@@ -958,6 +972,7 @@ with `--db` and a `.csv` export.
 | L17 — Guest / anonymous tokens | Low | **yes** (GuestOrAnonymousToken) | **closed 2026-10-14** — Guest, Authenticated Users and anonymous Everyone exact (policy read); bounded only when the policy is unreadable |
 | L18 — DFS folders with several targets | Medium | **yes** (DfsTargetEvaluated; OtherShare scan error) | partial (ADR 0085): evaluated on the referred target, exact with one target; several targets → not determinable, scan each target |
 | L19 — GUI Scan Tree keeps the whole tree | Medium | n/a (documented) | the CLI streams (ADR 0086); the GUI's walk, result list and history still to be streamed / virtualized |
+| L20 — SMB open needs read-attributes | Low | partly (`SynchronizeNotGranted`) | documented; a note on the row needs the parent's right |
 
 ## Contribution policy
 

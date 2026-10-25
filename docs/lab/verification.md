@@ -1846,6 +1846,49 @@ The regression sets were compared with the fresh main 1ca851b baseline of Block 
   - Selective Authentication
 - **Engine tests:** 219 pass. Windows conformance: 10 of 10 (`--ignored`).
 
+## Block W — Enterprise campaign: 1.65 million objects against Windows (2026-10-25)
+
+The full account, with every constellation, is in `docs/testing/enterprise-test-campaign.md` (section 3.6). This is the short record.
+
+**Fixture.**
+
+- **Directory:** corp.test with 1,476 domain-local resource groups (AGDLP) over the 5,000 global role groups.
+- **File server:** FS-01 `T:\Enterprise`, share `Enterprise` (Everyone Change, Administrators Full), 1,647,949 objects.
+  - 62,411 distinct descriptors, 66,574 objects with more than 100 ACEs.
+  - 29 kinds of exceptions, per department a junction duplicate, a junction cycle and a directory symbolic link.
+- **Identities:**
+  - `ent_std` (78 groups), `ent_heavy` (874), `ent_power` (1,721, over the token limit), `ent_svc`, `ent_disabled`;
+  - the local `FS-01\ent_local`, the legacy `u00001`;
+  - `ext_partner01` (external trust) and `pt_user01` (forest trust).
+
+**Ground truth.**
+
+1. **Exhaustive oracle** (`ent-oracle-full.ps1`): Authz for every object × nine identities on FS-01, in 372 s.
+2. **NTFS kernel with a real network logon** (`nulldacl-kernel.ps1`, `wattr-probe.ps1`).
+3. **Real SMB opens from WIN11-01** (`ent-smbprobe.ps1`): 9,094 objects × 13 rights.
+
+**Results.**
+
+- **Full tree, `ent_std` over SMB:** 4,716 s (349 paths per second), 292 MB peak, CSV 2,562 MB, database 3,455 MB, 82 scan errors (all built in), 0 rows not determinable.
+- **Exhaustive comparison** (`ent_exhaustive.py`), 18 scans, about 2.9 million rows: every exact row equals Windows bit for bit, and completeness holds in both directions.
+  - The 11 NULL-DACL folders: Authz gives `0x001FFFFF`; the kernel, with a real logon, grants `0x001F01FF`, as Stars does.
+  - `ent_power`: Windows builds no token (Authz error 8), and Stars reports every row NOT DETERMINABLE for the token limit.
+- **Real SMB opens:** 8,988 of 9,094 equal. The rest is explained:
+  - 22 junction paths whose open gets the target's row;
+  - 12 symbolic links no client can follow;
+  - 69 rights without SYNCHRONIZE, of which an open without SYNCHRONIZE succeeded only where the parent grants List folder (5 of 69).
+
+  A first run reported FILE_WRITE_ATTRIBUTES on 195 objects. That came from the Windows SMB client answering attribute-only opens on a cached handle; on a fresh session the server refused the open, and it refused every actual use. The probe now asks for those rights first and exercises them.
+- **Delta:** a seven-object fixture on MS-01, changed between two scans. Stars' `compare_scans` reports exactly the two changed objects, the added file and the removed file.
+
+**Findings.**
+
+1. A symbolic link to a drive path of the server was called broken: fixed (Block X).
+2. A link that the scanning machine resolves on itself was walked as part of the share: fixed (Block X).
+3. A link's row looked like the rights on its content: fixed (ADR 0088, Block Y).
+4. Over SMB, an open also needs read-attributes: measured, documented, a follow-up decision.
+5. A folder could be listed twice when its identity could not be read: fixed (ADR 0088, Block Y).
+
 ## Block X — Links: what the link stores, and links that reach the scanning machine (2026-10-25)
 
 **Finding 1 — "a broken link" for a folder that exists.** In the enterprise tree (Block W), each department holds a directory symbolic link to a sibling project, stored as an absolute path (`T:\Enterprise\Finance\P02_2021`). Over SMB, Windows follows a symbolic link on the client, so the scanning machine resolves `T:\…` on itself. The workstation has no drive `T:` and answers error 3 (path not found). In Block T the target was on `C:`, which the client has, and the answer was 1463. `fsutil behavior query SymlinkEvaluation` on the workstation shows remote-to-local disabled, the default. Stars reported "the target of this junction/link does not exist — a broken link". On the server, the folder exists.

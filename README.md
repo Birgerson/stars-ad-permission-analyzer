@@ -138,7 +138,7 @@ On WSL / Linux / macOS, `sha256sum -c Stars-v1.18.0-Setup.exe.sha256` works dire
 
 > **What the hash file gives you — and what it doesn't:** The hash protects against tampered downloads (mirror modification, MITM). It does **not** replace code signing — you verify the authenticity of the source through the GitHub repo itself, not through the hash. Code signing is planned; see [`docs/codesigning.md`](docs/codesigning.md) for status.
 
-> **Tested platforms:** Stars is verified against **Windows Server 2022 Standard** and **Windows Server 2025 Standard** — in a 3-forest lab (1000 test users, 5000 directories) and a dedicated scale lab of **10,000 users and 5,000 groups** with 49-deep group nesting (see [`docs/lab/verification.md`](docs/lab/verification.md) Block O).
+> **Tested platforms:** Stars is verified against **Windows Server 2022 Standard** and **Windows Server 2025 Standard** — in a 3-forest lab (1000 test users, 5000 directories) and a dedicated scale lab of **10,000 users and 5,000 groups** with 49-deep group nesting (see [`docs/lab/verification.md`](docs/lab/verification.md) Block O). The enterprise campaign compared every row of 18 scans over a file server with 1.65 million objects with Windows' own access checks, bit for bit; [`docs/testing/enterprise-test-campaign.md`](docs/testing/enterprise-test-campaign.md) describes every constellation, the ground truth and what is not covered.
 >
 > **Use at your own risk. Make a full backup before any production use.** → [Full disclaimer](#disclaimer)
 
