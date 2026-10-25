@@ -1292,7 +1292,15 @@ account with Allow Modify and Deny Write:
 
 So, for a security review: a denied "Write" does **not** make the data
 unreadable or undeletable. It only breaks the programs that request
-SYNCHRONIZE. If the goal is "read-only", grant Read & execute instead of
+SYNCHRONIZE.
+
+One more condition applies over SMB (known limitation L20, measured in the
+enterprise campaign): the file server's open also needs the right to read
+the object's attributes, from the object itself or through List folder on
+its parent folder. An account that has neither cannot open the object over
+SMB at all, so the rights shown cannot be used that way. In the lab this
+affected 64 of 1.65 million objects; with List folder on the parent, the
+open worked (5 of 5). If the goal is "read-only", grant Read & execute instead of
 Modify; do not rely on a Deny that blocks Explorer.
 
 To check by hand, run `icacls <path>`: a denied Write appears as
@@ -1920,6 +1928,10 @@ the configuration for you**. That's your call.
   roadmap tracking.
 - **[audit-criteria.md](audit-criteria.md)** — Domain evaluation
   rules and severity per risk rule.
+- **[testing/enterprise-test-campaign.md](testing/enterprise-test-campaign.md)**
+  — What Stars was tested against: every constellation, how Windows
+  itself supplied the expected value, the results, and what the tests do
+  not cover.
 - **[adr/](adr/)** — Architecture Decision Records — historical
   justifications for individual model, pipeline, and API decisions.
 - **[../README.md](../README.md)** — Project overview, build
