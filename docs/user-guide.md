@@ -66,6 +66,15 @@ To answer them, Stars reads:
   this scan under '…' — this path leads to the same directory (same volume
   serial and file ID)": the server does not reliably say which of the two
   routes is the junction, so Stars names only what it checked.
+  A link Stars cannot follow is reported with the reason Windows gives.
+  The most common case over SMB is "Link not followed: … symbolic link
+  evaluation policy … (Windows error 1463)". It is a symbolic link on the
+  share that points to a local path of the server ("remote to local"),
+  which Windows does not follow by default. Clients with the same policy
+  cannot follow it either (check with `fsutil behavior query
+  SymlinkEvaluation`). It is **not** missing access. "Access denied" now
+  appears only when the link's target refused access (error 5), and
+  "Path not found" for a broken link.
 - **Long paths** (`\\?\…`, UNC long-path form `\\?\UNC\…`).
 
 For each finding Stars builds **structured diagnostic markers** when
