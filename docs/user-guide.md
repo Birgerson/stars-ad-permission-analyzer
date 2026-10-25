@@ -459,7 +459,10 @@ nesting (the full member tree) is planned.
 
 **Result:** a table of all paths, their effective rights, a per-path
 trustee table, and a **risk findings section** with the rules that
-fired per path. Auto-persisted to the SQLite scan history.
+fired per path. Auto-persisted to the SQLite scan history. The first row
+lists the account's memberships in full; the other rows list only those
+that can change their result (ADR 0087, see
+["NOT DETERMINABLE" — when Stars cannot give the answer](#not-determinable--when-stars-cannot-give-the-answer)).
 
 A path whose evaluation is uncertain or informational is shown in the
 **error color** in the list. **Expand the row** (click it) to read the
@@ -1202,6 +1205,28 @@ every surface says:
   result behind "▼ Show N further memberships (not decisive for this
   result)". Memberships marked decisive, deny-only or uncertain always stay
   visible; the step numbers are those of the full path, as in the CSV.
+- **Scan rows list the memberships that can change their result** (ADR 0087).
+  This applies to the CLI `scan`, the GUI's Scan Tree, the CSV, the database
+  and the reports.
+  - The **first row** of a scan lists every membership of the account, with
+    its route.
+  - **Every other row** lists the memberships whose group an ACE of the
+    object or of its share names (also through a historical SID of the
+    group), the group that owns the object, and every membership with a
+    warning (deny-only, uncertain, chain unknown).
+  - The others are one step: "Not listed: N further group membership(s) of
+    this account — no ACE on this object or its share names these groups
+    and none of them owns the object, so they cannot change this result;
+    the full list is in the result for `<first path>`".
+  - A row still lists **every** membership when Stars cannot tell which
+    groups can change it: the object or its share has an ACE Stars cannot
+    evaluate (its condition can test any group), the share permissions
+    could not be read, or a Selective Authentication check applies.
+  - The values do not change, only the length of the text. For an account
+    in 874 groups a row went from about 130,000 characters to about 1,300
+    on average, and the scan from 135 to 50 seconds (11,579 paths). A
+    single analysis (`Analyze` tab, `adpa analyze`) always lists every
+    membership.
 - Further aids in the explanation: memberships whose group's ACE decided
   the result are marked `[decisive]`; the Deny step says which bits a Deny
   really takes away and which it only denies in advance; for a file
@@ -1558,6 +1583,10 @@ Without `--db` the scan is printed and exported but **not stored** — add
 `--db` to compare it later (`runs`, `errors`, the GUI's Delta tab). Paths
 the scan could not read are listed as errors and kept with the run.
 
+The explanation of the first row lists every membership of the account.
+The other rows list the memberships that can change their result and count
+the rest in one "Not listed: N …" step (ADR 0087).
+
 ### Show a user's groups
 
 The CLI counterpart of the `Groups` tab — recursive group memberships,
@@ -1814,10 +1843,13 @@ Common causes:
   The CSV goes to `<file>.partial` and is renamed when the scan ends, so it
   never holds all results in memory. Lab: about 30 MB of memory for
   75,000 paths, and the same for the whole 1.5-million-file tree
-  (ADR 0086). Plan the **disk space**: about 12 KB per row each for the
-  CSV and the database for an account in about 70 groups, which is
-  mostly the explanation path. A `.json` or `.html` report needs every
-  result in memory at the end, so keep it for smaller trees.
+  (ADR 0086). Plan the **disk space**: about 2 KB per row each for the
+  CSV and the database. Lab: 2.0 KB and 2.3 KB for an account in about 100
+  groups, 1.7 KB and 2.1 KB for one in 874 groups. Rows are this small
+  because a scan row lists only the memberships that can change its
+  result (ADR 0087); only the first row lists them all. A
+  `.json` or `.html` report needs every result in memory at the end, so
+  keep it for smaller trees.
 - **The export file is checked before the scan starts.** An existing file
   without `--force` stops the run at once, not after the scan. If the
   scan fails, no partial export is left behind. A scan cancelled with

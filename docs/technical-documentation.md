@@ -767,6 +767,7 @@ struct PermissionEvaluationInput {
     identity_disabled_status_unknown: bool,
     identity_lookup_failure_reason: Option<String>,
     group_resolution_failure_reason: Option<String>,
+    membership_detail: MembershipDetail,  // ADR 0087: All / NamedOnly { full_list_at }
 }
 ```
 
@@ -932,6 +933,31 @@ memberships that may be collapsed — never a decisive, deny-only or
 uncertain one; the GUI (`StepVm`, toggle filtered in Rust) and the HTML
 report (`<details>`) use that rule.
 
+`PermissionEvaluationInput::membership_detail` (ADR 0087) decides how many
+memberships a result lists. The default `All` is used by a single analysis
+and the first row of a scan. Every other scan row is `NamedOnly
+{ full_list_at }`, which lists a membership only when:
+
+- an ACE of the DACL or a share outcome names its group SID, or one of the
+  group's historical SIDs;
+- the group is the object's owner;
+- its step carries a warning: deny-only, uncertain, or chain unknown.
+
+The others are counted in one "Not listed: N …" step that names
+`full_list_at`, and `trace.other` stays empty (the count `other_groups` is
+kept). The decision is made before the step text is built, with the same
+predicate as `is_collapsible_membership_step`.
+
+`evaluate` falls back to `All` when the deciding groups are not known:
+
+- `FileSystemObject::unsupported_aces` or `unsupported_share_ace_count` is
+  non-zero;
+- the share status is `ReadFailed`;
+- a `selective_authentication` check is present.
+
+The CLI and the GUI set `full_list_at` once the first row with the full
+list exists.
+
 Share ACE steps come from `share_scanner::share_ace_decisions` (same DACL
 read and same walk as the share mask) via `share_decision_steps` and
 `attach_share_provenance`; a share without security descriptor is
@@ -1009,7 +1035,10 @@ route chosen by a fixed rule, with every further entry into the group named
 in the same step. A group that arrives from two sources (LDAP and the
 local-group lookup on a domain controller) is one step;
 `merged_memberships_per_group` keeps the most informative entry and adds the
-other source's mediator to its further routes.
+other source's mediator to its further routes. It indexes the entries by
+group once. Before ADR 0087 it looked through every membership for each
+group, which was quadratic per result: for an account in 874 groups that was
+most of a scan's time.
 
 `sid_names` is built up front (`build_sid_name_map_for_target` /
 `SidNameResolver::new_for_target`, review CR-4): the analysed identity,

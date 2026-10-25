@@ -10,6 +10,23 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Changed
+
+- **Scan rows list the memberships that can change their result (ADR
+  0087).** Every row of a scan used to list every membership of the account
+  with its route. For an account in 874 groups that was about 130,000
+  characters per row: 1.5 GB of CSV for 11,579 paths, and most of the scan
+  time went into building these texts. Now the first row of a scan lists
+  every membership. The other rows list the groups an ACE of the object or
+  its share names (also through a historical SID), the group that owns the
+  object, and every membership with a warning. The rest is one step, "Not
+  listed: N further group membership(s) … the full list is in the result
+  for <first path>". A row whose deciding groups Stars cannot know lists
+  every membership: an ACE Stars cannot evaluate, unread share permissions,
+  a Selective Authentication check. The values, diagnostics and risk
+  findings do not change. A single analysis is unchanged. Two quadratic
+  code paths in the membership handling are gone as well.
+
 ### Fixed
 
 - **Large CLI scans no longer hold every result in memory (ADR 0086).** A

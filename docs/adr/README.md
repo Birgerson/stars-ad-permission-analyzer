@@ -113,3 +113,4 @@ principle they cite is stated in the public documents:
 | 0084 | Domains of a trusted forest and forest-trust SID filtering |
 | 0085 | DFS paths are evaluated on the target the client is referred to |
 | 0086 | CLI scan results are streamed to the database and the CSV export |
+| 0087 | A scan row lists the memberships that can change its result |

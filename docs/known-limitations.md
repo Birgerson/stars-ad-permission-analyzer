@@ -923,8 +923,10 @@ about 30 MB of memory whatever the size of the tree. The GUI's Scan Tree
 does not:
 
 - It reads the whole walk first.
-- It keeps every result for the list, the Delta tab and the history, at
-  about 26 KB per result for an account in about 70 groups.
+- It keeps every result for the list, the Delta tab and the history:
+  about 26 KB per result for an account in about 70 groups, measured
+  before ADR 0087 made the rows of a scan shorter. The memory still grows
+  with the tree.
 - Its list is not virtualized, so streamed rows make the GUI catch up for
   seconds even with hundreds of rows.
 

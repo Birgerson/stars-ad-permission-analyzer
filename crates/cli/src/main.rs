@@ -14,7 +14,10 @@ use ad_resolver::{
 #[cfg(not(windows))]
 use adpa_core::model::{Identity, IdentityKind};
 use adpa_core::{
-    model::{AccessContext, EffectivePermission, NormalizedPath, RiskFinding, ScanError, ScanRun},
+    model::{
+        AccessContext, EffectivePermission, MembershipDetail, NormalizedPath, RiskFinding,
+        ScanError, ScanRun,
+    },
     traits::{
         AnalysisResult, ExportTarget, Exporter, PermissionEvaluationInput, PermissionEvaluator,
         RiskContext,
@@ -1288,6 +1291,7 @@ async fn run_analyze(
         resolution: engine_flags,
         selective_authentication: selective_authentication.clone(),
         dfs: dfs.clone(),
+        membership_detail: Default::default(),
     };
     let mut result = DefaultPermissionEngine
         .evaluate(input)
@@ -1712,6 +1716,10 @@ async fn run_scan(
 
     let scan_engine_flags = resolved.resolution.engine_flags();
 
+    // ADR 0087: the first row lists the account's memberships in full, every
+    // other row only those an ACE of its object (or the share) names.
+    let mut first_row_path: Option<String> = None;
+
     let (tx, mut rx) = tokio::sync::mpsc::channel::<fs_scanner::WalkItem>(256);
     let walk_task = {
         let scan_path = path.clone();
@@ -1760,6 +1768,14 @@ async fn run_scan(
                     fso.path = NormalizedPath(requested);
                     Some(own)
                 });
+                // The reference is set once the row with the full list is
+                // written (below).
+                let row_detail = match &first_row_path {
+                    None => MembershipDetail::All,
+                    Some(at) => MembershipDetail::NamedOnly {
+                        full_list_at: at.clone(),
+                    },
+                };
 
                 // Resolve this object's trustee SIDs into the lazy cache,
                 // then snapshot the map for this object's evaluation and
@@ -1812,6 +1828,7 @@ async fn run_scan(
                     resolution: scan_engine_flags.clone(),
                     selective_authentication: scan_selective_authentication.clone(),
                     dfs: row_dfs.clone(),
+                    membership_detail: row_detail.clone(),
                 };
                 let mut result = DefaultPermissionEngine.evaluate(input).map_err(|e| {
                     anyhow::anyhow!("Permission evaluation failed for '{path_display}': {e}")
@@ -1850,6 +1867,9 @@ async fn run_scan(
                 if let Some(csv) = csv_rows.as_mut() {
                     csv.write(&result)
                         .map_err(|e| anyhow::anyhow!("CSV export failed: {e}"))?;
+                }
+                if first_row_path.is_none() {
+                    first_row_path = Some(path_display.clone());
                 }
                 let result = risks.add(result);
                 if keep_all {
