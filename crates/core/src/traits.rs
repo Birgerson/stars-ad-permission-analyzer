@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use crate::error::CoreError;
 use crate::model::{
     AccessContext, AceOutcome, DfsEvaluation, EffectivePermission, FileSystemObject,
-    GroupMembership, Identity, LocalGroupEvalStatus, PathTrustees, RemoteUacFiltering, RiskFinding,
-    ScanError, ShareMaskStatus, Sid,
+    GroupMembership, Identity, LocalGroupEvalStatus, MembershipDetail, PathTrustees,
+    RemoteUacFiltering, RiskFinding, ScanError, ShareMaskStatus, Sid,
 };
 
 pub struct ScanRequest {
@@ -197,6 +197,9 @@ pub struct PermissionEvaluationInput {
     /// folder target this machine is referred to. `None` — the default —
     /// for every path outside DFS.
     pub dfs: Option<DfsEvaluation>,
+    /// ADR 0087: how many memberships the explanation lists. `All` — the
+    /// default — for a single analysis; a scan lists them in full once.
+    pub membership_detail: MembershipDetail,
     /// Access context (local interactive / remote SMB / unspecified).
     /// Controls which well-known SIDs are added to the token implicitly
     /// (e.g. `NETWORK` for SMB, `INTERACTIVE` for local). The default

@@ -21,10 +21,10 @@ use adpa_core::{
     model::{
         format_also_via, AccessContext, AccessMask, AceEffect, AceEntry, AceKind, AceOutcome,
         ContributingAce, EffectivePermission, GroupMembership, Identity, LocalGroupDescriptor,
-        LocalGroupEntry, LocalGroupExpansion, MembershipHop, MembershipPathSource,
-        PermissionDiagnostic, PermissionPath, PermissionTrace, PolicyDword, RemoteUacFiltering,
-        ShareEvalStatus, ShareMaskStatus, Sid, SynchronizeGap, TraceGroup, TraceGroupState,
-        TraceLayer, UncertainLayer, Uncertainty,
+        LocalGroupEntry, LocalGroupExpansion, MembershipDetail, MembershipHop,
+        MembershipPathSource, PermissionDiagnostic, PermissionPath, PermissionTrace, PolicyDword,
+        RemoteUacFiltering, ShareEvalStatus, ShareMaskStatus, Sid, SynchronizeGap, TraceGroup,
+        TraceGroupState, TraceLayer, UncertainLayer, Uncertainty,
     },
     traits::{PermissionEvaluationInput, PermissionEvaluator, SelectiveAuthenticationCheck},
 };
@@ -480,7 +480,24 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         // determinability as the result lines, derived from the finished
         // result (statuses and every marker) — the two cannot disagree.
         let uncertainty = result.uncertainty();
+        // ADR 0087: which groups can change this row is known only when every
+        // ACE was evaluated (an object, callback or conditional ACE can name —
+        // or test in its condition — any group), the share DACL was read, and
+        // no Selective Authentication check decides the logon through the
+        // groups of the target computer's object. Otherwise the row lists
+        // every membership.
+        let every_membership = MembershipDetail::All;
+        let membership_detail = if input.file_system_object.unsupported_aces.is_empty()
+            && input.unsupported_share_ace_count == 0
+            && !matches!(result.share_status, ShareEvalStatus::ReadFailed(_))
+            && input.selective_authentication.is_none()
+        {
+            &input.membership_detail
+        } else {
+            &every_membership
+        };
         let (path_explanation, trace) = build_explanation(ExplanationInput {
+            membership_detail,
             identity: &result.identity,
             memberships: &input.group_memberships,
             dacl: &input.file_system_object.dacl,
@@ -1784,6 +1801,8 @@ pub fn access_context_step_with(
 /// Bundles the inputs for [`build_explanation`] — replaces the previous
 /// 9-argument signature with named fields (engine review 2026-06-09).
 struct ExplanationInput<'a> {
+    /// ADR 0087: every membership, or only those named on this object.
+    membership_detail: &'a MembershipDetail,
     identity: &'a Identity,
     memberships: &'a [GroupMembership],
     dacl: &'a [AceEntry],
@@ -1849,6 +1868,7 @@ struct ExplanationInput<'a> {
 /// Creates an explainable permission path.
 fn build_explanation(input: ExplanationInput<'_>) -> (PermissionPath, PermissionTrace) {
     let ExplanationInput {
+        membership_detail,
         identity,
         memberships,
         dacl,
@@ -1937,7 +1957,42 @@ fn build_explanation(input: ExplanationInput<'_>) -> (PermissionPath, Permission
         .map(|(_, ace)| ace.sid.0.as_str())
         .collect();
     let mut seen_membership_steps: HashSet<String> = HashSet::new();
+    // ADR 0087: the SIDs an ACE of this object or of its share names, and the
+    // owner — a group that owns the object grants the owner rights without
+    // any ACE.
+    let named: HashSet<&str> = dacl
+        .iter()
+        .map(|a| a.sid.0.as_str())
+        .chain(share_trace.iter().map(|o| o.sid.0.as_str()))
+        .chain(owner_sid.map(|s| s.0.as_str()))
+        .collect();
+    // A group is named through its own SID or one of its historical SIDs
+    // (ADR 0059) — an ACE for the old SID matches it as well.
+    let is_named = |gm: &GroupMembership| {
+        named.contains(gm.group_sid.0.as_str())
+            || gm
+                .group_sid_history
+                .iter()
+                .any(|s| named.contains(s.0.as_str()))
+    };
+    let mut not_listed = 0usize;
     for gm in &merged {
+        // ADR 0087: decided before the step text is built — for an account in
+        // hundreds of groups the texts of the unlisted ones were most of the
+        // work. Exactly the steps the rule below would drop: no ACE names the
+        // group (so it is not decisive either), no deny-only, no uncertain
+        // and no unknown-chain marker.
+        if matches!(membership_detail, MembershipDetail::NamedOnly { .. }) {
+            let group = gm.group_sid.0.as_str();
+            if !is_named(gm)
+                && !deny_only_sids.contains(group)
+                && !uncertain_sids.contains(group)
+                && !gm.path.as_ref().is_some_and(|p| !p.complete)
+            {
+                not_listed += 1;
+                continue;
+            }
+        }
         let mut step = format_membership_step(gm, sid_names);
         if decisive.contains(gm.group_sid.0.as_str()) {
             step.push_str(" [decisive — an ACE for this group decides bits of this result]");
@@ -1958,8 +2013,26 @@ fn build_explanation(input: ExplanationInput<'_>) -> (PermissionPath, Permission
         } else if uncertain_sids.contains(group) {
             step.push_str(" [uncertain — present in the token only for certain logons]");
         }
+        if let MembershipDetail::NamedOnly { .. } = membership_detail {
+            // A membership no ACE here names, without a warning, cannot
+            // change this result — counted, not listed.
+            if !is_named(gm) && is_collapsible_membership_step(&step) {
+                not_listed += 1;
+                continue;
+            }
+        }
         if seen_membership_steps.insert(step.clone()) {
             steps.push(step);
+        }
+    }
+    if let MembershipDetail::NamedOnly { full_list_at } = membership_detail {
+        if not_listed > 0 {
+            steps.push(format!(
+                "Not listed: {not_listed} further group membership(s) of this account — no ACE \
+                 on this object or its share names these groups and none of them owns the \
+                 object, so they cannot change this result; the full list is in the result for \
+                 {full_list_at}"
+            ));
         }
     }
 
@@ -2389,6 +2462,9 @@ fn build_explanation(input: ExplanationInput<'_>) -> (PermissionPath, Permission
     outcomes.extend(share_trace.iter().cloned());
     let trace = trace_groups(
         outcomes,
+        // ADR 0087: a compact scan row keeps the count of the other
+        // memberships, not their names and routes.
+        matches!(membership_detail, MembershipDetail::All),
         &identity.sid.0,
         &merged,
         &decisive,
@@ -2415,6 +2491,7 @@ fn trustee_with_sid(sid: &Sid, sid_names: &std::collections::BTreeMap<String, St
 #[allow(clippy::too_many_arguments)]
 fn trace_groups(
     aces: Vec<AceOutcome>,
+    list_other: bool,
     user_sid: &str,
     merged: &[GroupMembership],
     decisive: &HashSet<&str>,
@@ -2427,6 +2504,9 @@ fn trace_groups(
     let mut groups: Vec<TraceGroup> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut memberships_used = 0usize;
+    // One lookup per ACE instead of a scan of every membership.
+    let by_sid: std::collections::HashMap<&str, &GroupMembership> =
+        merged.iter().map(|m| (m.group_sid.0.as_str(), m)).collect();
     for ace in &aces {
         let sid = ace.sid.0.as_str();
         if sid == user_sid || !seen.insert(sid.to_owned()) {
@@ -2441,7 +2521,7 @@ fn trace_groups(
                 TraceGroupState::Member
             }
         };
-        let group = if let Some(gm) = merged.iter().find(|m| m.group_sid.0 == sid) {
+        let group = if let Some(gm) = by_sid.get(sid).copied() {
             memberships_used += 1;
             TraceGroup {
                 sid: gm.group_sid.clone(),
@@ -2479,6 +2559,7 @@ fn trace_groups(
     // The memberships no ACE names — named, so the graph can list them.
     let other: Vec<TraceGroup> = merged
         .iter()
+        .filter(|_| list_other)
         .filter(|m| !seen.contains(&m.group_sid.0))
         .map(|gm| {
             let sid = gm.group_sid.0.as_str();
@@ -2701,6 +2782,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap()
     }
@@ -2731,6 +2813,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap()
     }
@@ -2761,6 +2844,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap()
     }
@@ -2791,6 +2875,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap()
     }
@@ -3676,6 +3761,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         assert_eq!(
@@ -3710,6 +3796,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         assert!(NormalizedRights::new(p.effective_mask.0).is_read());
@@ -3740,6 +3827,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         assert_eq!(
@@ -4372,6 +4460,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         assert!(
@@ -4405,6 +4494,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         assert!(
@@ -4471,6 +4561,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         let member_step = p
@@ -4513,6 +4604,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         let ace_step = p
@@ -5257,6 +5349,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .expect("evaluate");
         let step = result
@@ -5415,6 +5508,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         assert!(
@@ -5455,6 +5549,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         assert!(
@@ -5491,6 +5586,7 @@ mod tests {
             share_trace: Default::default(),
             selective_authentication: Default::default(),
             dfs: None,
+            membership_detail: Default::default(),
         }
     }
 
@@ -6285,6 +6381,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         let found = result
@@ -6330,6 +6427,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         let found = result
@@ -6372,6 +6470,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         let reasons: Vec<&str> = result
@@ -6410,6 +6509,7 @@ mod tests {
                     share_trace: Default::default(),
                     selective_authentication: Default::default(),
                     dfs: None,
+                    membership_detail: Default::default(),
                 })
                 .unwrap()
         };
@@ -6472,6 +6572,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         assert!(
@@ -6510,6 +6611,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         assert!(
@@ -6583,6 +6685,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
 
@@ -6649,6 +6752,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
 
@@ -6701,6 +6805,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
 
@@ -6756,6 +6861,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
 
@@ -6802,6 +6908,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         assert_eq!(
@@ -6836,6 +6943,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         assert_eq!(
@@ -7018,6 +7126,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         let (sids, min, max) = logon_marker(&p).expect("bounded");
@@ -7053,6 +7162,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap()
     }
@@ -7218,6 +7328,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         assert_eq!(p.ntfs_mask.0, 0);
@@ -7833,6 +7944,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap();
         let steps = &p.path_explanation.steps;
@@ -7995,6 +8107,234 @@ mod tests {
     }
 
     // --- Review CR-12: which membership mattered ---
+
+    #[test]
+    fn membership_detail_lists_only_the_named_groups_and_counts_the_rest() {
+        // ADR 0087 (lab 2026-10-25: 874 groups, 132 KB per scan row).
+        const DECIDES: &str = "S-1-5-21-1000-1000-1000-3001";
+        const NAMED_IDLE: &str = "S-1-5-21-1000-1000-1000-3002";
+        const UNNAMED: &str = "S-1-5-21-1000-1000-1000-3003";
+        const UNNAMED_2: &str = "S-1-5-21-1000-1000-1000-3004";
+        const FILTERED: &str = "S-1-5-21-1000-1000-1000-3005";
+        let run = |detail: MembershipDetail| {
+            let mut input = base_input(
+                user(USER),
+                fso(
+                    None,
+                    vec![
+                        allow_ace(DECIDES, MASK_MODIFY, false),
+                        // Named, matches, decides nothing (bits already decided).
+                        allow_ace(NAMED_IDLE, MASK_READ, false),
+                    ],
+                ),
+            );
+            input.group_memberships = vec![
+                membership(USER, DECIDES),
+                membership(USER, NAMED_IDLE),
+                membership(USER, UNNAMED),
+                membership(USER, UNNAMED_2),
+                membership(USER, FILTERED),
+            ];
+            // A deny-only (UAC-filtered) group keeps its warning even unnamed.
+            input.uac_filtered_group_sids = vec![Sid(FILTERED.to_owned())];
+            input.access_context = AccessContext::LocalInteractive;
+            input.membership_detail = detail;
+            DefaultPermissionEngine.evaluate(input).unwrap()
+        };
+        let full = run(MembershipDetail::All);
+        let compact = run(MembershipDetail::NamedOnly {
+            full_list_at: r"C:\data".to_owned(),
+        });
+        let lists = |p: &EffectivePermission, sid: &str| {
+            p.path_explanation
+                .steps
+                .iter()
+                .any(|s| s.starts_with("Member of") && s.contains(sid))
+        };
+        for sid in [DECIDES, NAMED_IDLE, UNNAMED, UNNAMED_2, FILTERED] {
+            assert!(lists(&full, sid), "All lists {sid}");
+        }
+        assert!(lists(&compact, DECIDES) && lists(&compact, NAMED_IDLE));
+        assert!(lists(&compact, FILTERED), "a warning is always listed");
+        assert!(!lists(&compact, UNNAMED) && !lists(&compact, UNNAMED_2));
+        let note = compact
+            .path_explanation
+            .steps
+            .iter()
+            .find(|s| s.starts_with("Not listed: "))
+            .expect("the counted step");
+        assert!(
+            note.contains("Not listed: 2 further group membership(s)"),
+            "{note}"
+        );
+        assert!(
+            note.contains(r"the full list is in the result for C:\data"),
+            "{note}"
+        );
+        assert!(!full
+            .path_explanation
+            .steps
+            .iter()
+            .any(|s| s.starts_with("Not listed: ")));
+        // Only the explanation differs: every value is the same.
+        assert_eq!(full.ntfs_mask, compact.ntfs_mask);
+        assert_eq!(full.effective_mask, compact.effective_mask);
+        assert_eq!(full.share_mask, compact.share_mask);
+        assert_eq!(full.diagnostics, compact.diagnostics);
+        assert_eq!(
+            full.contributing_sids.len(),
+            compact.contributing_sids.len()
+        );
+        assert_eq!(full.uncertainty(), compact.uncertainty());
+        // The trace keeps the count of the other memberships, not their list.
+        assert_eq!(full.trace.other_groups, compact.trace.other_groups);
+        assert!(!full.trace.other.is_empty() && compact.trace.other.is_empty());
+        assert_eq!(full.trace.groups.len(), compact.trace.groups.len());
+        // Every listed step of the compact form appears in the full form, in order.
+        let mut it = full.path_explanation.steps.iter();
+        for step in compact
+            .path_explanation
+            .steps
+            .iter()
+            .filter(|s| !s.starts_with("Not listed: "))
+        {
+            assert!(it.any(|f| f == step), "{step} missing from the full form");
+        }
+    }
+
+    /// With nothing to leave out, the compact form adds no counted step.
+    #[test]
+    fn membership_detail_without_unnamed_groups_adds_nothing() {
+        const NAMED: &str = "S-1-5-21-1000-1000-1000-3001";
+        let mut input = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(NAMED, MASK_READ, false)]),
+        );
+        input.group_memberships = vec![membership(USER, NAMED)];
+        input.membership_detail = MembershipDetail::NamedOnly {
+            full_list_at: "x".to_owned(),
+        };
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert!(!p
+            .path_explanation
+            .steps
+            .iter()
+            .any(|s| s.starts_with("Not listed: ")));
+    }
+
+    /// ADR 0087: a group can change a result without an ACE naming its SID —
+    /// as the owner (implicit READ_CONTROL + WRITE_DAC) or through a
+    /// historical SID an ACE names (ADR 0059). Both stay listed.
+    #[test]
+    fn membership_detail_keeps_the_owner_group_and_a_group_named_by_its_old_sid() {
+        const OWNER_GROUP: &str = "S-1-5-21-1000-1000-1000-3101";
+        const MIGRATED: &str = "S-1-5-21-1000-1000-1000-3102";
+        const MIGRATED_OLD: &str = "S-1-5-21-2000-2000-2000-1102";
+        const UNNAMED: &str = "S-1-5-21-1000-1000-1000-3103";
+        let run = |detail: MembershipDetail| {
+            let mut input = base_input(
+                user(USER),
+                fso(
+                    Some(OWNER_GROUP),
+                    vec![allow_ace(MIGRATED_OLD, MASK_READ, false)],
+                ),
+            );
+            input.group_memberships = vec![
+                membership(USER, OWNER_GROUP),
+                membership_with_history(USER, MIGRATED, &[MIGRATED_OLD]),
+                membership(USER, UNNAMED),
+            ];
+            input.membership_detail = detail;
+            DefaultPermissionEngine.evaluate(input).unwrap()
+        };
+        let full = run(MembershipDetail::All);
+        let compact = run(MembershipDetail::NamedOnly {
+            full_list_at: r"C:\data".to_owned(),
+        });
+        let lists = |p: &EffectivePermission, sid: &str| {
+            p.path_explanation
+                .steps
+                .iter()
+                .any(|s| s.starts_with("Member of") && s.contains(sid))
+        };
+        // The owner group grants bits no ACE explains; the migrated group
+        // matches the ACE for its old SID.
+        assert_eq!(
+            compact.ntfs_mask.0 & (FILE_READ_CONTROL | FILE_WRITE_DAC),
+            FILE_READ_CONTROL | FILE_WRITE_DAC
+        );
+        assert_ne!(compact.ntfs_mask.0 & MASK_READ, 0);
+        assert!(lists(&compact, OWNER_GROUP), "the owner group stays listed");
+        assert!(
+            lists(&compact, MIGRATED),
+            "a group named by its old SID stays"
+        );
+        assert!(!lists(&compact, UNNAMED));
+        assert!(compact.path_explanation.steps.iter().any(|s| s
+            .starts_with("Not listed: 1 further group membership(s)")
+            && s.contains("none of them owns the object")));
+        assert_eq!(full.ntfs_mask, compact.ntfs_mask);
+        assert_eq!(full.effective_mask, compact.effective_mask);
+    }
+
+    /// ADR 0087: when the groups that can change a row are not known — an ACE
+    /// Stars cannot evaluate, an unread share DACL, a Selective Authentication
+    /// check — the compact form is refused and every membership is listed.
+    #[test]
+    fn membership_detail_lists_every_membership_when_the_deciding_groups_are_unknown() {
+        use adpa_core::model::UnsupportedAce;
+        use adpa_core::traits::SelectiveAuthenticationCheck;
+        const NAMED: &str = "S-1-5-21-1000-1000-1000-3201";
+        const UNNAMED: &str = "S-1-5-21-1000-1000-1000-3202";
+        type Case = (&'static str, fn(&mut PermissionEvaluationInput));
+        let cases: [Case; 4] = [
+            ("an unsupported NTFS ACE", |i| {
+                // A callback ACE: its condition can test any group.
+                i.file_system_object.unsupported_aces = vec![UnsupportedAce {
+                    ace_type: 9,
+                    flags: 0,
+                    mask: MASK_READ,
+                }];
+            }),
+            ("an unsupported share ACE", |i| {
+                i.unsupported_share_ace_count = 1;
+            }),
+            ("an unread share DACL", |i| {
+                i.access_context = AccessContext::RemoteSmb;
+                i.share_status = ShareMaskStatus::ReadFailed("access denied".to_owned());
+            }),
+            ("a Selective Authentication check", |i| {
+                i.selective_authentication = Some(SelectiveAuthenticationCheck::Allowed {
+                    server: "FS-01".into(),
+                    via: format!("GG_Allowed ({UNNAMED})"),
+                });
+            }),
+        ];
+        for (case, apply) in cases {
+            let mut input = base_input(
+                user(USER),
+                fso(None, vec![allow_ace(NAMED, MASK_READ, false)]),
+            );
+            input.group_memberships = vec![membership(USER, NAMED), membership(USER, UNNAMED)];
+            input.membership_detail = MembershipDetail::NamedOnly {
+                full_list_at: "x".to_owned(),
+            };
+            apply(&mut input);
+            let p = DefaultPermissionEngine.evaluate(input).unwrap();
+            let steps = &p.path_explanation.steps;
+            assert!(
+                steps
+                    .iter()
+                    .any(|s| s.starts_with("Member of") && s.contains(UNNAMED)),
+                "{case}: every membership is listed — {steps:#?}"
+            );
+            assert!(
+                !steps.iter().any(|s| s.starts_with("Not listed: ")),
+                "{case}: no counted step"
+            );
+            assert_eq!(p.trace.other.len(), 1, "{case}: the graph keeps the names");
+        }
+    }
 
     #[test]
     fn decisive_memberships_are_marked() {
@@ -8205,6 +8545,7 @@ mod tests {
                 share_trace: Default::default(),
                 selective_authentication: Default::default(),
                 dfs: None,
+                membership_detail: Default::default(),
             })
             .unwrap()
     }

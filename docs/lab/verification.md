@@ -1789,3 +1789,59 @@ Release regression of this fix against the step 5a binary: 25,841 rows, 0 differ
 Integrity of the whole-tree output (`mass_integrity.py`, 166 s): the CSV and the database hold the same 1,511,721 rows with the same set of paths. The run is committed with its finish time, with 0 scan errors.
 
 Extrapolated, the old code would have needed about 40 GB for the whole tree. A machine with 16 GB would have failed at about half a million paths.
+
+**Regression before the merge (main 9ab4edd).** The release regression sets were run with the streaming build and with a fresh baseline of main 1ca851b (`regcmp.py`). The sets were DC-01's data share (37 identities, 25,493 rows), the group types (78), MS-01 with LDAP (135), MS-01 local (135) and the ext.test trust (65). Result: 0 differing rows in every column. A first comparison against an older baseline differed in the explanation column only. Between the two baselines, the enterprise fixture (Block W) had added domain-local groups that nest the legacy groups, and that is the whole difference. CI on the merge: all checks green.
+
+## Block V — Scan rows list the memberships that can change their result (ADR 0087, 2026-10-25)
+
+**Why.** In the enterprise tree (Block W), an account in 874 groups made every scan row 132 KB. The membership list was repeated on every row, and building its text took most of the scan time.
+
+**Build under test.** Branch `compact-scan-rows` (release), against main 9ab4edd (release), both over SMB from the workstation, on the same day.
+
+**Size and time.**
+
+| Run | Paths | Explanation per row (avg) | CSV | Database | Wall / scan |
+| --- | --- | --- | --- | --- | --- |
+| `ent_std` (79 membership steps), `Enterprise\Finance\P00_Archive`, main | 11,579 | 13,022 | 154.0 MB | 159.0 MB | 45 s / 20.5 s |
+| the same, compact | 11,579 | **1,285** | **18.2 MB** | **23.3 MB** | 50 s / 21.2 s |
+| `ent_heavy` (875 steps), the same tree, main | 11,579 | 131,597 | 1,505.2 MB | 1,508.5 MB | 135 s / 116.7 s |
+| the same, compact | 11,579 | **1,303** | **18.4 MB** | **23.7 MB** | **50 s / 27.5 s** |
+| `u00030` (107 steps), `MassData\Finance`, main | 75,586 | 19,442 | 1,521.2 MB | 1,529.2 MB | 165 s / 139.1 s |
+| the same, compact | 75,586 | **1,553** | **145.7 MB** | **168.0 MB** | 160 s / 130.4 s |
+
+The longest compact row in each run is its first row, which lists every membership. The `u00030` rows are longer than in Block U because the enterprise fixture added domain-local groups that nest the legacy groups.
+
+**Strict comparison** (`compactcmp.py`). Every row of the compact output was checked against the full output of main:
+
+- every column but the explanation is identical;
+- the first row of each file is identical in full;
+- in every other row, the kept steps appear in the full explanation in the same order;
+- every removed step is a membership step without a marker (decisive, deny-only, uncertain, chain unknown);
+- the count step names exactly the number removed;
+- no removed group appears in an ACE, owner or share step, among the matched ACEs or the contributing SIDs, or as the owner.
+
+| Set | Rows | Compacted | Removed membership steps | Violations |
+| --- | --- | --- | --- | --- |
+| DC-01 data share, 37 identities | 25,493 | 25,419 | 3,377,048 | 0 |
+| group types | 78 | 75 | 302 | 0 |
+| MS-01 with LDAP | 135 | 130 | 3,696 | 0 |
+| MS-01 local accounts | 135 | 130 | 1,162 | 0 |
+| ext.test trust | 65 | 60 | 348 | 0 |
+| `ent_std`, `P00_Archive` | 11,579 | 11,578 | 914,413 | 0 |
+| `ent_heavy`, `P00_Archive` | 11,579 | 11,578 | 10,130,219 | 0 |
+| `u00030`, `MassData\Finance` | 75,586 | 75,585 | 8,014,733 | 0 |
+
+The regression sets were compared with the fresh main 1ca851b baseline of Block U, whose values equal 9ab4edd.
+
+**Further checks.**
+
+- **Console output** (`logcmp.py`, with the stderr note compared on its own because it lands anywhere between the stdout lines): identical, including every row label, the summary and every risk finding. That is 37,722 lines for the DC-01 set, and 11,634 findings in the department run, the same as in Block U.
+- **Databases** (`dbcmp.py`, explanation excluded): permissions and scan errors are identical, by digest, in all three mass runs.
+- **The exceptions that list every membership** are each covered by an engine test. A mutation check was run for each one: the fix was removed, the build ran, and the matching test failed.
+  - owner group
+  - group named through a historical SID
+  - unsupported NTFS ACE
+  - unsupported share ACE
+  - unread share DACL
+  - Selective Authentication
+- **Engine tests:** 219 pass. Windows conformance: 10 of 10 (`--ignored`).

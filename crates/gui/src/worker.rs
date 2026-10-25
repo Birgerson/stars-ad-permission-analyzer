@@ -1225,6 +1225,7 @@ async fn handle_analyze(
             resolution: engine_flags,
             selective_authentication: selective_authentication.clone(),
             dfs: dfs.clone(),
+            membership_detail: Default::default(),
         })
         .map(|mut result| {
             // Review CR-7: the share side explained ACE by ACE.
@@ -1717,6 +1718,9 @@ async fn handle_scan(
     // Collects the raw path-centric trustee lists for the HTML exporter.
     let mut path_trustees: Vec<adpa_core::model::PathTrustees> = Vec::new();
 
+    // ADR 0087: the first row lists the account's memberships in full, every
+    // other row only those an ACE of its object (or the share) names.
+    let mut first_row_path: Option<String> = None;
     for mut fso in walk.objects {
         // ADR 0085: the row keeps the requested form, its marker names the
         // target path.
@@ -1725,6 +1729,14 @@ async fn handle_scan(
             fso.path = NormalizedPath(requested);
             Some(own)
         });
+        // The reference is set only once a row with the full list exists —
+        // an evaluation error leaves the next row to list them.
+        let row_detail = match &first_row_path {
+            None => adpa_core::model::MembershipDetail::All,
+            Some(at) => adpa_core::model::MembershipDetail::NamedOnly {
+                full_list_at: at.clone(),
+            },
+        };
         let path = fso.path.0.clone();
         // Per-path trustees — NTFS from FSO, share from the pre-read
         // overlay (single read per share). Round-10 finding 2: the
@@ -1755,6 +1767,7 @@ async fn handle_scan(
             resolution: engine_flags.clone(),
             selective_authentication: scan_selective_authentication.clone(),
             dfs: row_dfs.clone(),
+            membership_detail: row_detail.clone(),
         }) {
             Ok(mut perm) => {
                 // Review CR-7: the share side explained ACE by ACE.
@@ -1789,6 +1802,9 @@ async fn handle_scan(
                     row_severity: row_severity(&perm),
                     trustees: trustees_for_row,
                 }));
+                if first_row_path.is_none() {
+                    first_row_path = Some(path.clone());
+                }
                 permissions.push(perm);
             }
             Err(e) => {

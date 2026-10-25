@@ -315,6 +315,7 @@ fn stars_multigroup_mask(fixture: &[MultiAce], user_sid: &str, owner: Principal)
             share_trace: Default::default(),
             selective_authentication: Default::default(),
             dfs: None,
+            membership_detail: Default::default(),
         })
         .expect("engine evaluation must succeed");
     result.ntfs_mask.0
@@ -492,6 +493,7 @@ fn stars_effective_mask(fixture: &[FixtureAce], sid_str: &str) -> u32 {
             share_trace: Default::default(),
             selective_authentication: Default::default(),
             dfs: None,
+            membership_detail: Default::default(),
         })
         .expect("engine evaluation must succeed");
     result.ntfs_mask.0

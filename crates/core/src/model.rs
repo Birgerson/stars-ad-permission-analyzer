@@ -599,6 +599,14 @@ pub fn merged_memberships_per_group(memberships: &[GroupMembership]) -> Vec<Grou
         .into_iter()
         .cloned()
         .collect();
+    // The entries of each group, in input order — built once. Lab
+    // 2026-10-25: scanning every membership for every kept group made this
+    // O(n²) per result; with 874 groups that was most of a scan's time.
+    let mut by_group: std::collections::HashMap<&str, Vec<&GroupMembership>> =
+        std::collections::HashMap::new();
+    for m in memberships {
+        by_group.entry(m.group_sid.0.as_str()).or_default().push(m);
+    }
     for kept in merged.iter_mut() {
         let Some(path) = kept.path.as_mut() else {
             continue;
@@ -610,7 +618,12 @@ pub fn merged_memberships_per_group(memberships: &[GroupMembership]) -> Vec<Grou
             .and_then(|i| path.nodes.get(i))
             .cloned();
         let mut extra: Vec<MembershipHop> = Vec::new();
-        for other in memberships.iter().filter(|m| m.group_sid == kept.group_sid) {
+        for other in by_group
+            .get(kept.group_sid.0.as_str())
+            .into_iter()
+            .flatten()
+            .copied()
+        {
             let Some(other_path) = other.path.as_ref() else {
                 continue;
             };
@@ -1318,6 +1331,23 @@ impl EffectivePermission {
         // Never below the shown value, whatever a damaged record holds.
         upper | self.effective_mask.0
     }
+}
+
+/// ADR 0087: how many of the account's group memberships a result's
+/// explanation lists.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum MembershipDetail {
+    /// Every membership of the token — a single-path analysis, and the
+    /// first row of a scan.
+    #[default]
+    All,
+    /// The memberships whose group an ACE of this object or of its share
+    /// names, and every membership with a warning (deny-only, uncertain, an
+    /// unknown chain); the others — they cannot change this result — are one
+    /// counted step that points at `full_list_at`, the row with the full
+    /// list (lab 2026-10-25: an account in 874 groups made every row of a
+    /// scan 132 KB).
+    NamedOnly { full_list_at: String },
 }
 
 /// ADR 0085: a path of a DFS namespace, evaluated on the folder target this
