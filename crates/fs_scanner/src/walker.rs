@@ -216,6 +216,46 @@ impl<'a> DuplicateRoute<'a> {
 /// The diagnostic for a second route to a directory already enumerated in
 /// this scan under `first_path` (ADR 0058). Pure, so every wording is
 /// unit-testable.
+/// What an unresolvable junction or symbolic link means, from the Windows
+/// error of resolving it. Pure.
+fn unresolved_reparse_error(os_error: Option<i32>) -> CoreError {
+    const TAIL: &str = "Recursion stopped at this junction/link. The object itself is in the \
+                        result with its DACL; objects behind the link were not enumerated.";
+    match os_error {
+        // ERROR_SYMLINK_CLASS_DISABLED — lab 2026-10-24, a symbolic link
+        // over SMB with Windows' default policy.
+        Some(1463) => CoreError::ReparseNotFollowed(format!(
+            "this machine's symbolic link evaluation policy does not allow following this link \
+             type (Windows error 1463 — e.g. a link on a share that points to a local path of the \
+             server, \"remote to local\", which Windows disables by default; see `fsutil \
+             behavior query SymlinkEvaluation`). A client with the same policy cannot follow it \
+             either. {TAIL}"
+        )),
+        Some(5) => CoreError::AccessDenied(format!(
+            "the target of this junction/link could not be opened (Windows error 5, access \
+             denied). {TAIL}"
+        )),
+        Some(2) | Some(3) => CoreError::PathNotFound(format!(
+            "the target of this junction/link does not exist (Windows error {}) — a broken \
+             link. {TAIL}",
+            os_error.unwrap_or_default()
+        )),
+        // ERROR_CANT_RESOLVE_FILENAME — more reparse traversals than Windows
+        // allows (a loop, known limitation L14).
+        Some(1921) => CoreError::ReparseNotFollowed(format!(
+            "Windows stopped resolving this link after too many reparse points (Windows error \
+             1921 — a loop of links). {TAIL}"
+        )),
+        Some(code) => CoreError::ReparseNotFollowed(format!(
+            "the target of this junction/link could not be resolved (Windows error {code}). \
+             {TAIL}"
+        )),
+        None => CoreError::ReparseNotFollowed(format!(
+            "the target of this junction/link could not be resolved. {TAIL}"
+        )),
+    }
+}
+
 /// ADR 0085: the reader-facing reason when a directory is served from
 /// another share than the scan root, `None` when it is the same share (or
 /// either side is unknown — no claim without evidence). Pure.
@@ -475,18 +515,19 @@ fn walk_dir(
                 }
                 on_item(WalkItem::Object(fso));
 
-                // An unresolvable reparse target (broken link, no access) stops
-                // here for files and directories alike — visible, not silent.
-                if is_reparse && canonicalize_path(&path).is_none() {
-                    warn!(path, "Reparse point target could not be resolved");
-                    on_item(WalkItem::Error(WalkError {
-                        path: path.clone(),
-                        error: CoreError::AccessDenied(
-                            "Reparse point target could not be resolved — recursion stopped at this junction/link. The object itself is in the result with its DACL; objects behind the link were not enumerated."
-                                .to_owned(),
-                        ),
-                    }));
-                    continue;
+                // An unresolvable reparse target stops here for files and
+                // directories alike — visible, not silent, with the reason
+                // Windows gives (not every failure is missing access).
+                if is_reparse {
+                    let api_path = validation::path::to_windows_api_path(&path);
+                    if let Err(e) = std::fs::canonicalize(&api_path) {
+                        warn!(path, error = %e, "Reparse point target could not be resolved");
+                        on_item(WalkItem::Error(WalkError {
+                            path: path.clone(),
+                            error: unresolved_reparse_error(e.raw_os_error()),
+                        }));
+                        continue;
+                    }
                 }
 
                 // Only directories recurse, so only directories need the cycle /
@@ -1259,6 +1300,46 @@ mod tests {
         // Unknown on either side: no claim.
         assert_eq!(other_share_message(None, Some(r"\\FS-01\DfsProj")), None);
         assert_eq!(other_share_message(Some(&root), None), None);
+    }
+
+    /// Lab 2026-10-24: a symbolic link over SMB failed with error 1463 and
+    /// was reported as "Access denied". Each Windows reason keeps its kind.
+    #[test]
+    fn an_unresolved_link_names_the_windows_reason() {
+        use super::unresolved_reparse_error;
+        use adpa_core::error::CoreError;
+        let e = unresolved_reparse_error(Some(1463));
+        assert!(
+            matches!(&e, CoreError::ReparseNotFollowed(m) if m.contains("1463") && m.contains("SymlinkEvaluation")),
+            "{e}"
+        );
+        assert!(matches!(
+            unresolved_reparse_error(Some(5)),
+            CoreError::AccessDenied(_)
+        ));
+        assert!(matches!(
+            unresolved_reparse_error(Some(2)),
+            CoreError::PathNotFound(_)
+        ));
+        assert!(matches!(
+            unresolved_reparse_error(Some(3)),
+            CoreError::PathNotFound(_)
+        ));
+        assert!(
+            matches!(&unresolved_reparse_error(Some(1921)), CoreError::ReparseNotFollowed(m) if m.contains("loop"))
+        );
+        assert!(
+            matches!(&unresolved_reparse_error(Some(87)), CoreError::ReparseNotFollowed(m) if m.contains("error 87"))
+        );
+        assert!(matches!(
+            unresolved_reparse_error(None),
+            CoreError::ReparseNotFollowed(_)
+        ));
+        for code in [Some(1463), Some(5), Some(2), None] {
+            assert!(unresolved_reparse_error(code)
+                .to_string()
+                .contains("not enumerated"));
+        }
     }
 
     #[test]

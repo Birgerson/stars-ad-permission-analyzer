@@ -1659,7 +1659,9 @@ async fn handle_scan(
             .as_ref()
             .and_then(|d| analysis::dfs::for_scanned_object(&err.path, d))
             .map(|(requested, _)| requested)
-            .unwrap_or_else(|| err.path.clone());
+            // The same path form as the rows (the walker reports some paths
+            // in the long-path form `\\?\UNC\…`).
+            .unwrap_or_else(|| validation::path::strip_long_path_prefix(&err.path));
         let _ = evt_tx.send(WorkerEvent::ScanError {
             path: shown.clone(),
             message: err.error.to_string(),

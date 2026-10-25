@@ -12,6 +12,20 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **"Access denied" for a link that only the symbolic link policy blocks.**
+  Over SMB, Windows does not follow a symbolic link on a share that points
+  to a local path of the server (error 1463: remote-to-local evaluation is
+  disabled by default). Stars reported it as "Access denied: Reparse point
+  target could not be resolved", which suggested a missing permission. The
+  scan error now names the Windows reason:
+  - "Link not followed" for error 1463 and for a loop of links (1921)
+  - "Access denied" only for error 5
+  - "Path not found" for a broken link
+
+  Scan error paths are now shown in the same form as the rows
+  (`\\server\share\…`, not `\\?\UNC\…`). The message was measured on
+  FS-01 (Server 2025 en-us) and FS-02 (Server 2022 de) and is the same on
+  both.
 - **DFS paths were evaluated with the namespace server's share permissions
   (ADR 0085).** For a path through a DFS namespace, the NTFS permissions
   came from the folder target, but the share permissions, local groups and

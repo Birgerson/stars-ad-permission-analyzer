@@ -1678,12 +1678,15 @@ async fn run_scan(
     while let Some(item) = rx.recv().await {
         match item {
             fs_scanner::WalkItem::Error(mut walk_err) => {
-                if let Some((requested, _)) = scan_dfs
+                // The same path form as the rows (the walker reports some
+                // paths in the long-path form `\\?\UNC\…`).
+                walk_err.path = match scan_dfs
                     .as_ref()
                     .and_then(|d| analysis::dfs::for_scanned_object(&walk_err.path, d))
                 {
-                    walk_err.path = requested;
-                }
+                    Some((requested, _)) => requested,
+                    None => validation::path::strip_long_path_prefix(&walk_err.path),
+                };
                 walk_error_count += 1;
                 println!("  [Error]         {}: {}", walk_err.path, walk_err.error);
                 scan_errors_for_db.push(ScanError {

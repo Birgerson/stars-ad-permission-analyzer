@@ -62,4 +62,11 @@ pub enum CoreError {
     /// context and its content is not enumerated.
     #[error("Served from another share: {0}")]
     OtherShare(String),
+
+    /// A junction or symbolic link that this machine cannot follow, for a
+    /// reason other than missing access — the text names the Windows reason
+    /// (lab 2026-10-24: a symbolic link over SMB, error 1463, the symbolic
+    /// link evaluation policy). Before, every such case read "Access denied".
+    #[error("Link not followed: {0}")]
+    ReparseNotFollowed(String),
 }

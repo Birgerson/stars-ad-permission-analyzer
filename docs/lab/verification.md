@@ -1730,3 +1730,33 @@ Kerberos crossed the forest trust for the Signed LDAP connection to DC-04: the b
 - Every 5th project breaks inheritance with explicit group ACEs; every 7th folder adds Modify for a group; every 50th folder adds a Deny Write.
 - One long path (> 260 characters), Unicode names and credential-like file names per department.
 - Share `MassData`.
+
+## Block T — Locale comparison FS-01 (en-us) / FS-02 (de) and the link-not-followed reason (2026-10-24)
+
+**Fixture.** `locale-fixture.ps1` builds the same tree `C:\LocTest` (share `LocTest`, Everyone Full) on FS-01 (Server 2025, en-US) and on FS-02 (Server 2022, de-DE). Every principal is given by SID. The folders:
+
+- BUILTIN\Users Modify
+- a local group `LocGroup` (∋ `CORP\rt_gt01`) Modify
+- Domain Users Modify with a Deny Write for Authenticated Users
+- CREATOR OWNER and OWNER RIGHTS
+- BUILTIN\Remote Desktop Users (∋ `CORP\rt_gt02`)
+- inheritance broken (Administrators only)
+- a file ACE for `rt_gt02`
+- INTERACTIVE Modify and NETWORK RX
+- a root file
+- a junction to the first folder
+- a directory symbolic link to the local-group folder
+
+**Result.** Stars over SMB for `rt_gt01`, `rt_gt02`, `u00030` and `Administrator`, keyed by the path below the share (`loccmp.py`). **52 rows, 0 differences** between the two servers in NTFS, share and effective mask, determinability, share and local-group status, and marker kinds. The scan errors are the same on both:
+
+| Folder | Error |
+| --- | --- |
+| Deny-Write folder | "Cannot enumerate" — correct: the denied Write includes SYNCHRONIZE (ADR 0080) |
+| Junction | duplicate target (file ID) |
+| Symbolic link | not followed |
+
+**Finding, fixed.** For the symbolic link, Windows returns **error 1463** (`ERROR_SYMLINK_CLASS_DISABLED`). `fsutil behavior query SymlinkEvaluation` shows remote-to-local disabled, which is the default. Stars reported it as "Access denied: Reparse point target could not be resolved". It now reads "Link not followed: this machine's symbolic link evaluation policy does not allow following this link type (Windows error 1463 …)". Access denied stays only for error 5, and "Path not found" is used for a broken link.
+
+Scan error paths are shown like the rows (`\192.168.11.161\LocTest\…`, not `\?\UNC\…`). Before and after, with the step 5a binary as baseline: all 104 rows of both servers are unchanged.
+
+Release regression of this fix against the step 5a binary: 25,841 rows, 0 differing. The DC-01 data share has five scan errors in both versions. One of them, the symbolic link fixture `Spezial\Verknuepfung_readme.txt`, changed from "Access denied" to "Link not followed … (Windows error 1463 …)". The four others are unchanged: two access denied, one duplicate target, one cycle.
