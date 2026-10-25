@@ -29,6 +29,29 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **A symbolic link to a drive path of the server was called "a broken
+  link".** Over SMB, Windows follows a symbolic link on the client. A link
+  on the share to `T:\…`, a path of the server's own disk, is therefore
+  resolved on the scanning machine. Where that machine has no drive `T:`,
+  Windows answers "not found" (error 3), and Stars reported "the target of
+  this junction/link does not exist — a broken link" for a folder that
+  exists on the server. Stars now reads what the link stores
+  (`FSCTL_GET_REPARSE_POINT`, every value checked) and names the target.
+  The message says who resolved it: "this symbolic link points to T:\…, a
+  path on the server's own disk … this machine resolved T:\… on itself:
+  that path does not exist here". A junction, which the server resolves,
+  is still called broken when its target is missing on the server. Found
+  in the enterprise campaign on FS-01, one link per department.
+- **A symbolic link that the scanning machine resolved on itself was walked
+  as part of the share.** Remote-to-local evaluation is off by default, but
+  if it is enabled on the scanning machine, Windows resolves a share's link
+  to `C:\Data` to that machine's own `C:\Data`. Stars then listed that local
+  folder, its files and their DACLs as part of the server's share. In the
+  lab (MS-01 with R2L enabled, scanning FS-02), a file that exists only on
+  MS-01 appeared in the scan of FS-02 with Read & Execute. Stars now stops
+  at such a link and says so: "this link … resolves to C:\… on this
+  machine, not on the server". The link object itself stays in the
+  result.
 - **Large CLI scans no longer hold every result in memory (ADR 0086).** A
   scan kept all results until the end, about 26 KB each for an account in
   about 70 groups: 2 GB for 75,000 paths, about 40 GB for the lab's 1.5

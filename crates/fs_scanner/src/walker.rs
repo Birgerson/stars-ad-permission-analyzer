@@ -32,6 +32,7 @@ use tracing::{debug, info, warn};
 
 use crate::acl::read_file_system_object_cached;
 use crate::cancel::CancellationToken;
+use crate::file_id::{LinkKind, LinkTarget};
 
 /// Configuration for the walker.
 pub struct WalkConfig {
@@ -213,14 +214,73 @@ impl<'a> DuplicateRoute<'a> {
     }
 }
 
-/// The diagnostic for a second route to a directory already enumerated in
-/// this scan under `first_path` (ADR 0058). Pure, so every wording is
-/// unit-testable.
 /// What an unresolvable junction or symbolic link means, from the Windows
-/// error of resolving it. Pure.
-fn unresolved_reparse_error(os_error: Option<i32>) -> CoreError {
+/// error of resolving it and — when it could be read — what the link
+/// stores. Pure.
+fn unresolved_reparse_error(
+    os_error: Option<i32>,
+    link: Option<&LinkTarget>,
+    remote: bool,
+) -> CoreError {
     const TAIL: &str = "Recursion stopped at this junction/link. The object itself is in the \
                         result with its DACL; objects behind the link were not enumerated.";
+    // Lab 2026-10-25: over SMB, Windows follows a symbolic link on the
+    // client. An absolute target — a path of the server's own disk — is
+    // resolved on this machine: error 1463 where this machine has the drive
+    // (remote-to-local evaluation is disabled by default), error 3 where it
+    // has not. Neither says anything about the server's folder.
+    if let Some(l) = link.filter(|l| {
+        remote && l.kind == LinkKind::SymbolicLink && !l.relative && is_drive_path(&l.target)
+    }) {
+        let why = match os_error {
+            Some(1463) => "its symbolic link evaluation policy does not allow that (Windows \
+                           error 1463: \"remote to local\", disabled by default; see `fsutil \
+                           behavior query SymlinkEvaluation`)"
+                .to_owned(),
+            Some(code @ (2 | 3)) => format!("that path does not exist here (Windows error {code})"),
+            Some(code) => format!("that failed (Windows error {code})"),
+            None => "that failed".to_owned(),
+        };
+        return CoreError::ReparseNotFollowed(format!(
+            "this symbolic link points to {target}, a path on the server's own disk. Over SMB, \
+             Windows follows a symbolic link on the client, so this machine resolved {target} on \
+             itself: {why}. No SMB client reaches the server's folder through this link, and \
+             whether that folder exists on the server cannot be seen over SMB. {TAIL}",
+            target = l.target
+        ));
+    }
+    // "this junction (→ X)" where the target is known.
+    let what = match link {
+        Some(l) if l.kind == LinkKind::Junction => format!("this junction (→ {})", l.target),
+        Some(l) => format!("this symbolic link (→ {})", l.target),
+        None => "this junction/link".to_owned(),
+    };
+    if let Some(l) = link {
+        match os_error {
+            Some(1463) => {
+                return CoreError::ReparseNotFollowed(format!(
+                    "this machine's symbolic link evaluation policy does not allow following \
+                     {what} (Windows error 1463; see `fsutil behavior query SymlinkEvaluation`). \
+                     A client with the same policy cannot follow it either. {TAIL}"
+                ))
+            }
+            Some(code @ (2 | 3)) => {
+                // A junction is resolved by the computer that holds it, a
+                // relative symbolic link on the share itself: the target is
+                // missing there.
+                let place = if l.kind == LinkKind::Junction && remote {
+                    " on the server"
+                } else {
+                    ""
+                };
+                return CoreError::PathNotFound(format!(
+                    "the target of {what} does not exist{place} (Windows error {code}) — a broken \
+                     link. {TAIL}"
+                ));
+            }
+            _ => {}
+        }
+    }
     match os_error {
         // ERROR_SYMLINK_CLASS_DISABLED — lab 2026-10-24, a symbolic link
         // over SMB with Windows' default policy.
@@ -232,13 +292,18 @@ fn unresolved_reparse_error(os_error: Option<i32>) -> CoreError {
              either. {TAIL}"
         )),
         Some(5) => CoreError::AccessDenied(format!(
-            "the target of this junction/link could not be opened (Windows error 5, access \
-             denied). {TAIL}"
+            "the target of {what} could not be opened (Windows error 5, access denied). {TAIL}"
         )),
-        Some(2) | Some(3) => CoreError::PathNotFound(format!(
-            "the target of this junction/link does not exist (Windows error {}) — a broken \
-             link. {TAIL}",
-            os_error.unwrap_or_default()
+        // The link itself could not be read: over SMB, "not found" does not
+        // tell a broken link from a symbolic link to the server's own disk.
+        Some(code @ (2 | 3)) if remote => CoreError::PathNotFound(format!(
+            "the target of this junction/link was not found (Windows error {code}): the link is \
+             broken, or it is a symbolic link to a path on the server's own disk, which Windows \
+             resolves on this machine over SMB. The link could not be read to tell which. {TAIL}"
+        )),
+        Some(code @ (2 | 3)) => CoreError::PathNotFound(format!(
+            "the target of this junction/link does not exist (Windows error {code}) — a broken \
+             link. {TAIL}"
         )),
         // ERROR_CANT_RESOLVE_FILENAME — more reparse traversals than Windows
         // allows (a loop, known limitation L14).
@@ -247,13 +312,38 @@ fn unresolved_reparse_error(os_error: Option<i32>) -> CoreError {
              1921 — a loop of links). {TAIL}"
         )),
         Some(code) => CoreError::ReparseNotFollowed(format!(
-            "the target of this junction/link could not be resolved (Windows error {code}). \
-             {TAIL}"
+            "the target of {what} could not be resolved (Windows error {code}). {TAIL}"
         )),
         None => CoreError::ReparseNotFollowed(format!(
-            "the target of this junction/link could not be resolved. {TAIL}"
+            "the target of {what} could not be resolved. {TAIL}"
         )),
     }
+}
+
+/// A link of a share that Windows resolved to a path of this machine (lab
+/// 2026-10-25). Over SMB, a symbolic link is followed by the client; with
+/// remote-to-local evaluation enabled here, an absolute target such as
+/// `C:\Data` reaches this computer's own folder. Its content is not on the
+/// server, so it is not enumerated. Pure.
+fn local_resolution_error(resolved: &str, link: Option<&LinkTarget>) -> CoreError {
+    let stored = link.map_or(String::new(), |l| format!(" (it stores {})", l.target));
+    CoreError::ReparseNotFollowed(format!(
+        "this link{stored} resolves to {resolved} on this machine, not on the server: over SMB, \
+         Windows follows a symbolic link on the client, and this machine's symbolic link \
+         evaluation policy allows \"remote to local\" (see `fsutil behavior query \
+         SymlinkEvaluation`). What it reaches is this computer's own folder, so it was not \
+         enumerated as part of the share. The link object itself is in the result with its \
+         DACL. Which folder the link reaches on the server cannot be seen over SMB."
+    ))
+}
+
+/// `C:\…` — a path on a drive of the computer that resolves it. Pure.
+fn is_drive_path(path: &str) -> bool {
+    let mut chars = path.chars();
+    matches!(
+        (chars.next(), chars.next(), chars.next()),
+        (Some(d), Some(':'), Some('\\')) if d.is_ascii_alphabetic()
+    )
 }
 
 /// ADR 0085: the reader-facing reason when a directory is served from
@@ -278,6 +368,9 @@ fn other_share_message(
     ))
 }
 
+/// The diagnostic for a second route to a directory already enumerated in
+/// this scan under `first_path` (ADR 0058). Pure, so every wording is
+/// unit-testable.
 fn duplicate_route_message(first_path: &str, route: DuplicateRoute<'_>) -> String {
     let first = validation::path::strip_long_path_prefix(first_path);
     match route {
@@ -520,13 +613,40 @@ fn walk_dir(
                 // Windows gives (not every failure is missing access).
                 if is_reparse {
                     let api_path = validation::path::to_windows_api_path(&path);
-                    if let Err(e) = std::fs::canonicalize(&api_path) {
-                        warn!(path, error = %e, "Reparse point target could not be resolved");
-                        on_item(WalkItem::Error(WalkError {
-                            path: path.clone(),
-                            error: unresolved_reparse_error(e.raw_os_error()),
-                        }));
-                        continue;
+                    match std::fs::canonicalize(&api_path) {
+                        Err(e) => {
+                            warn!(path, error = %e, "Reparse point target could not be resolved");
+                            // What the link stores tells who resolves it (lab
+                            // 2026-10-25: "broken" for a symbolic link the
+                            // client resolved on itself).
+                            let link = crate::file_id::link_target(&path);
+                            on_item(WalkItem::Error(WalkError {
+                                path: path.clone(),
+                                error: unresolved_reparse_error(
+                                    e.raw_os_error(),
+                                    link.as_ref(),
+                                    remote,
+                                ),
+                            }));
+                            continue;
+                        }
+                        // A link of the share that reaches a folder of this
+                        // machine: not part of the share.
+                        Ok(resolved) if remote => {
+                            let resolved = validation::path::strip_long_path_prefix(
+                                &resolved.to_string_lossy(),
+                            );
+                            if validation::path::parse_unc_components(&resolved).is_none() {
+                                warn!(path, resolved, "Link of the share resolves to this machine");
+                                let link = crate::file_id::link_target(&path);
+                                on_item(WalkItem::Error(WalkError {
+                                    path: path.clone(),
+                                    error: local_resolution_error(&resolved, link.as_ref()),
+                                }));
+                                continue;
+                            }
+                        }
+                        Ok(_) => {}
                     }
                 }
 
@@ -1308,37 +1428,168 @@ mod tests {
     fn an_unresolved_link_names_the_windows_reason() {
         use super::unresolved_reparse_error;
         use adpa_core::error::CoreError;
-        let e = unresolved_reparse_error(Some(1463));
+        let e = unresolved_reparse_error(Some(1463), None, true);
         assert!(
             matches!(&e, CoreError::ReparseNotFollowed(m) if m.contains("1463") && m.contains("SymlinkEvaluation")),
             "{e}"
         );
         assert!(matches!(
-            unresolved_reparse_error(Some(5)),
+            unresolved_reparse_error(Some(5), None, true),
             CoreError::AccessDenied(_)
         ));
-        assert!(matches!(
-            unresolved_reparse_error(Some(2)),
-            CoreError::PathNotFound(_)
-        ));
-        assert!(matches!(
-            unresolved_reparse_error(Some(3)),
-            CoreError::PathNotFound(_)
-        ));
+        for remote in [true, false] {
+            assert!(matches!(
+                unresolved_reparse_error(Some(2), None, remote),
+                CoreError::PathNotFound(_)
+            ));
+            assert!(matches!(
+                unresolved_reparse_error(Some(3), None, remote),
+                CoreError::PathNotFound(_)
+            ));
+        }
         assert!(
-            matches!(&unresolved_reparse_error(Some(1921)), CoreError::ReparseNotFollowed(m) if m.contains("loop"))
+            matches!(&unresolved_reparse_error(Some(1921), None, true), CoreError::ReparseNotFollowed(m) if m.contains("loop"))
         );
         assert!(
-            matches!(&unresolved_reparse_error(Some(87)), CoreError::ReparseNotFollowed(m) if m.contains("error 87"))
+            matches!(&unresolved_reparse_error(Some(87), None, true), CoreError::ReparseNotFollowed(m) if m.contains("error 87"))
         );
         assert!(matches!(
-            unresolved_reparse_error(None),
+            unresolved_reparse_error(None, None, true),
             CoreError::ReparseNotFollowed(_)
         ));
         for code in [Some(1463), Some(5), Some(2), None] {
-            assert!(unresolved_reparse_error(code)
+            assert!(unresolved_reparse_error(code, None, true)
                 .to_string()
                 .contains("not enumerated"));
+        }
+    }
+
+    /// Lab 2026-10-25: a symbolic link to `T:\…` on a share gave Windows
+    /// error 3 on a client without a drive T: — reported as "a broken
+    /// link", although the client had resolved the target on itself. What
+    /// the link stores now decides the wording.
+    #[test]
+    fn an_unresolved_link_is_explained_by_what_it_stores() {
+        use super::unresolved_reparse_error;
+        use crate::file_id::{LinkKind, LinkTarget};
+        use adpa_core::error::CoreError;
+        let link = |kind, target: &str, relative| LinkTarget {
+            kind,
+            target: target.to_owned(),
+            relative,
+        };
+        let absolute = link(
+            LinkKind::SymbolicLink,
+            r"T:\Enterprise\Finance\P02_2021",
+            false,
+        );
+        // Over SMB: resolved on this machine, not "broken".
+        for code in [3, 2] {
+            let e = unresolved_reparse_error(Some(code), Some(&absolute), true);
+            let m = match &e {
+                CoreError::ReparseNotFollowed(m) => m.clone(),
+                other => panic!("{other}"),
+            };
+            assert!(
+                m.contains(r"points to T:\Enterprise\Finance\P02_2021"),
+                "{m}"
+            );
+            assert!(
+                m.contains("server's own disk") && m.contains("on itself"),
+                "{m}"
+            );
+            assert!(
+                m.contains("does not exist here") && !m.contains("broken"),
+                "{m}"
+            );
+            assert!(m.contains("cannot be seen over SMB"), "{m}");
+        }
+        let policy = unresolved_reparse_error(Some(1463), Some(&absolute), true).to_string();
+        assert!(
+            policy.contains("1463") && policy.contains("SymlinkEvaluation"),
+            "{policy}"
+        );
+        assert!(
+            policy.contains(r"T:\Enterprise\Finance\P02_2021"),
+            "{policy}"
+        );
+        // Scanned locally, the same link with a missing target is broken.
+        assert!(matches!(
+            unresolved_reparse_error(Some(3), Some(&absolute), false),
+            CoreError::PathNotFound(m) if m.contains("broken") && m.contains(r"→ T:\Enterprise")
+        ));
+        // A junction is resolved by the server: missing there means broken.
+        let junction = link(LinkKind::Junction, r"T:\gone", false);
+        assert!(matches!(
+            unresolved_reparse_error(Some(3), Some(&junction), true),
+            CoreError::PathNotFound(m) if m.contains("does not exist on the server") && m.contains(r"→ T:\gone")
+        ));
+        // A relative symbolic link is resolved on the share: broken.
+        let relative = link(LinkKind::SymbolicLink, r"..\P02", true);
+        assert!(matches!(
+            unresolved_reparse_error(Some(3), Some(&relative), true),
+            CoreError::PathNotFound(m) if m.contains("broken") && m.contains(r"→ ..\P02")
+        ));
+        // A link that could not be read, over SMB: both readings are named.
+        let unknown = unresolved_reparse_error(Some(3), None, true).to_string();
+        assert!(
+            unknown.contains("broken") && unknown.contains("server's own disk"),
+            "{unknown}"
+        );
+        // Access denied names the target where it is known.
+        assert!(matches!(
+            unresolved_reparse_error(Some(5), Some(&junction), true),
+            CoreError::AccessDenied(m) if m.contains(r"→ T:\gone")
+        ));
+    }
+
+    /// A symbolic link of the share that this machine resolves on itself
+    /// (remote-to-local enabled) reaches a local folder: named, not walked.
+    #[test]
+    fn a_link_that_reaches_this_machine_is_named_not_walked() {
+        use super::local_resolution_error;
+        use crate::file_id::{LinkKind, LinkTarget};
+        use adpa_core::error::CoreError;
+        let link = LinkTarget {
+            kind: LinkKind::SymbolicLink,
+            target: r"C:\Data".into(),
+            relative: false,
+        };
+        let e = local_resolution_error(r"C:\Data", Some(&link));
+        let m = match &e {
+            CoreError::ReparseNotFollowed(m) => m.clone(),
+            other => panic!("{other}"),
+        };
+        assert!(
+            m.contains(r"(it stores C:\Data) resolves to C:\Data on this machine"),
+            "{m}"
+        );
+        assert!(
+            m.contains("remote to local") && m.contains("not enumerated"),
+            "{m}"
+        );
+        assert!(m.contains("link object itself is in the result"), "{m}");
+        // Without the stored target, the resolved path alone.
+        let e = local_resolution_error(r"D:\x", None).to_string();
+        assert!(
+            e.contains(r"this link resolves to D:\x") && !e.contains("it stores"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn drive_paths_are_recognised() {
+        use super::is_drive_path;
+        assert!(is_drive_path(r"T:\Enterprise") && is_drive_path(r"c:\"));
+        for p in [
+            r"\\server\share",
+            r"..\P02",
+            "T:",
+            "TT:\\x",
+            r"\??\T:\x",
+            "",
+        ] {
+            assert!(!is_drive_path(p), "{p}");
         }
     }
 

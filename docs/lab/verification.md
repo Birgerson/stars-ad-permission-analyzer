@@ -1845,3 +1845,43 @@ The regression sets were compared with the fresh main 1ca851b baseline of Block 
   - unread share DACL
   - Selective Authentication
 - **Engine tests:** 219 pass. Windows conformance: 10 of 10 (`--ignored`).
+
+## Block X — Links: what the link stores, and links that reach the scanning machine (2026-10-25)
+
+**Finding 1 — "a broken link" for a folder that exists.** In the enterprise tree (Block W), each department holds a directory symbolic link to a sibling project, stored as an absolute path (`T:\Enterprise\Finance\P02_2021`). Over SMB, Windows follows a symbolic link on the client, so the scanning machine resolves `T:\…` on itself. The workstation has no drive `T:` and answers error 3 (path not found). In Block T the target was on `C:`, which the client has, and the answer was 1463. `fsutil behavior query SymlinkEvaluation` on the workstation shows remote-to-local disabled, the default. Stars reported "the target of this junction/link does not exist — a broken link". On the server, the folder exists.
+
+**Fix 1.** Stars reads what the link stores: `FSCTL_GET_REPARSE_POINT` on the link itself, which works over SMB (measured against FS-01). Every offset and length is checked, and control characters are rejected. The message then depends on the link type:
+
+| Link | Windows answer | Message |
+| --- | --- | --- |
+| symbolic link to a drive path, over SMB | 3 / 2 | "points to T:\…, a path on the server's own disk … this machine resolved T:\… on itself: that path does not exist here … whether that folder exists on the server cannot be seen over SMB" |
+| the same | 1463 | the same, with the policy reason |
+| junction, over SMB | 3 / 2 | "the target of this junction (→ …) does not exist on the server … — a broken link" (the server resolves junctions) |
+| relative symbolic link | 3 / 2 | broken, with the stored target |
+| the link itself cannot be read, over SMB | 3 / 2 | names both readings: broken, or a symbolic link to the server's own disk |
+
+Measured on FS-01: `Finance\P01_Projektordner\Symlink_to_P02_2021` now reads "Link not followed: this symbolic link points to T:\Enterprise\Finance\P02_2021, a path on the server's own disk …".
+
+**Finding 2 — a folder of the scanning machine walked as part of the share.** If remote-to-local evaluation is enabled on the scanning machine, the same kind of link reaches that machine's own folder. Stars then listed the folder's content, with its local DACLs, as part of the server's share.
+
+**Lab proof** (`r2l-test.ps1`, on MS-01 as SYSTEM). MS-01 had R2L enabled for the test. The marker file `C:\LocTest\L02_local_group\ms01-local-only.txt` existed only on MS-01. Both builds scanned `\FS-02\LocTest` as `rt_gt01`; Block T's link `L11_symlink_to_L02` points to `C:\LocTest\L02_local_group`.
+
+| Build | Rows | Rows below the link |
+| --- | --- | --- |
+| main a74a70a | 14 | 1: `…\L11_symlink_to_L02\ms01-local-only.txt` with **Read & Execute**, a file that does not exist on FS-02 |
+| fix | 13 | 0. The scan error reads "this link (it stores C:\LocTest\L02_local_group) resolves to C:\LocTest\L02_local_group on this machine, not on the server … not enumerated as part of the share" |
+
+MS-01's policy was restored afterwards (R2L disabled) and the marker folder removed. Both checks are in the script's output.
+
+**Fix 2.** For a scan over SMB, a link whose canonical path is not a UNC path is not walked. The link object itself stays in the result with its own DACL.
+
+**Tests.**
+
+- the reparse-data parser: junction, absolute and relative symbolic link, a missing print name;
+- eight malformed buffers;
+- a real junction read with `mklink /J`;
+- the message matrix above;
+- the local-resolution message;
+- drive-path recognition.
+
+`fs_scanner`: 62 tests pass.
