@@ -10,6 +10,26 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+## [1.19.0] — 2026-10-25
+
+**Tested against Windows itself on 1.65 million objects, row by row,
+and faster and leaner on large trees and heavy accounts.**
+
+An enterprise test campaign compared every row of 20 scans (7.1 million
+rows) over a file server built the AGDLP way with Windows' own access
+checks: the Authz API on the server, the NTFS kernel with a real logon,
+and real SMB opens from a Windows 11 client. Every exact row matched bit
+for bit (`docs/testing/enterprise-test-campaign.md`). The campaign found five
+things, and this release fixes four of them: link rows and messages say what
+a link stores and who resolves it, a link that the scanning machine
+resolves on itself is no longer walked, and a folder is no longer listed
+twice when its identity cannot be read (ADR 0088). Large scans stream
+their results (ADR 0086), and scan rows list only the memberships that can
+change them (ADR 0087): for an account in 874 groups, 1.5 GB of CSV became
+18 MB. Accounts of a trusted forest's other domains (ADR 0084) and DFS paths
+(ADR 0085) are evaluated as Windows does. Minor by the rule of v1.9.2: new
+markers, the Trusts tab lists forest domains, and scan rows read differently.
+
 ### Changed
 
 - **Scan rows list the memberships that can change their result (ADR
@@ -26,6 +46,22 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   a Selective Authentication check. The values, diagnostics and risk
   findings do not change. A single analysis is unchanged. Two quadratic
   code paths in the membership handling are gone as well.
+
+- **Trust inventory (`adpa trusts`, GUI Trusts tab).** A forest trust lists
+  the domains of the trusted forest, or why they could not be read. The
+  closing note now says what Stars models of a trust and what not; it no
+  longer claims that no runtime effect is modelled.
+- **Quarantine on a forest trust** (not measured) no longer removes the
+  other SIDs; it reports them as not modelled.
+
+- **One analysis pipeline for CLI and GUI, first part (ADR 0082 step 5a).**
+  The account's local groups on the target server (with the UAC and
+  anonymous-Everyone handling) and the share-mask adapter existed once in
+  the CLI and once in the GUI; both now call the one implementation in the
+  new library crate `analysis`. A fix there reaches both frontends. No
+  result changes: the release regression scans agree with v1.18.0 in every
+  column (25,841 rows), and the GUI's functional check per tab is
+  identical.
 
 ### Fixed
 
@@ -133,24 +169,6 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   connection cannot read its domain SID, the error is now part of the
   result instead of only the debug log. Example: a Server 2025 DC refuses
   a simple bind without signing.
-
-### Changed
-
-- **Trust inventory (`adpa trusts`, GUI Trusts tab).** A forest trust lists
-  the domains of the trusted forest, or why they could not be read. The
-  closing note now says what Stars models of a trust and what not; it no
-  longer claims that no runtime effect is modelled.
-- **Quarantine on a forest trust** (not measured) no longer removes the
-  other SIDs; it reports them as not modelled.
-
-- **One analysis pipeline for CLI and GUI, first part (ADR 0082 step 5a).**
-  The account's local groups on the target server (with the UAC and
-  anonymous-Everyone handling) and the share-mask adapter existed once in
-  the CLI and once in the GUI; both now call the one implementation in the
-  new library crate `analysis`. A fix there reaches both frontends. No
-  result changes: the release regression scans agree with v1.18.0 in every
-  column (25,841 rows), and the GUI's functional check per tab is
-  identical.
 
 ## [1.18.0] — 2026-10-24
 
