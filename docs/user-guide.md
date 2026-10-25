@@ -92,6 +92,12 @@ To answer them, Stars reads:
     itself. Stars does not walk it: "this link … resolves to C:\… on this
     machine, not on the server". Versions before this fix listed that
     local folder as part of the share.
+  - **The row of a link** shows the rights on the link object itself, which
+    is also what Windows' own security dialog shows for it. Opening the
+    path reaches the target, and the target's own permissions decide. The
+    row says so with the marker `LinkObject` and a last explanation step
+    that names the target (ADR 0088). The objects listed *below* a link
+    path are the target's objects with their own rights.
 - **Long paths** (`\\?\…`, UNC long-path form `\\?\UNC\…`).
 
 For each finding Stars builds **structured diagnostic markers** when
@@ -1342,6 +1348,8 @@ exact wording, lives in
 | `UacFilteredGroups { groups }` | medium | no (the bounds it causes are) | The token holds groups User Account Control filters (Administrators, Domain Admins, Backup Operators, …): on a local path for every account while the session is not elevated; for a local account also over the network unless `LocalAccountTokenFilterPolicy` = 1 on the server (built-in Administrator: only with `FilterAdministratorToken` = 1). Stars cannot see elevation or these settings — Deny ACEs for the groups apply, Allow ACEs give a range from the non-elevated to the elevated session. |
 | `RemoteUacPolicy { filtered, reason }` | info | no | Stars read the target's UAC policies (remote registry, read-only) and so knows whether User Account Control filters this local account's network token — the result is exact, the reason names the values read (ADR 0076). |
 | `DfsTargetEvaluated { requested, target, folder, other_targets, other_targets_known }` | info / high | no / **yes** | The path lies in a DFS namespace and was evaluated on `target`, the folder target this machine is referred to (its share permissions, local groups and policies). With **further targets** (or unknown targets) the result is not determinable, because another target may grant differently. Scan each target's share directly (ADR 0085). |
+| `LinkObject { link_kind, target }` | medium | no | The object is a junction or symbolic link to `target` (ADR 0088). The values are the exact rights on the link object itself: who can delete it or change its permissions. Opening the path reaches the target, and the target's own permissions decide what an account can do there. In the lab, an account with Modify on a junction got access denied on its target. The explanation ends with the same sentence. |
+| `DirectoryIdentityUnknown { reason }` | medium | no | Over SMB, the volume serial and file ID of this folder could not be read, even after two retries (`reason`). A second route to it through a link is then not recognized, so its content may appear twice in the scan. The values are exact. |
 | `NonSecurityGroupsExcluded { groups }` | info | no | Distribution groups, and groups reached only through one, are not in a Windows token; Stars left them out and lists them here. |
 | `LogonDependentTrustees { sids, min_mask, max_mask }` | medium | **yes** | ACEs for SIDs whose presence depends on how the user logs on (This Organization, NTLM authentication, console logon, …) decide bits of this result. The NTFS right lies between `min_mask` and `max_mask`. |
 

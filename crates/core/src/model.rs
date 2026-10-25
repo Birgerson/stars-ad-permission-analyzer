@@ -918,6 +918,38 @@ pub struct FileSystemObject {
     /// `#[serde(default)]` keeps older cache entries readable.
     #[serde(default)]
     pub sd_hash: Option<u64>,
+    /// ADR 0088: what a junction or symbolic link stores, read from the
+    /// link itself. `None` for any other object, or when it could not be
+    /// read. The DACL above is the link object's own.
+    #[serde(default)]
+    pub link: Option<LinkInfo>,
+    /// ADR 0088: scan over SMB — the volume serial and file ID of this
+    /// directory could not be read (the reason), so a second route to it
+    /// through a link is not recognized. `None` when it was read, or for a
+    /// local scan and for files.
+    #[serde(default)]
+    pub identity_unknown: Option<String>,
+}
+
+/// ADR 0088: the target a junction or symbolic link stores.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkInfo {
+    pub kind: LinkKind,
+    /// The stored target: its print name, else its substitute name without
+    /// the `\??\` prefix.
+    pub target: String,
+    /// A symbolic link whose target is relative to the link's folder.
+    #[serde(default)]
+    pub relative: bool,
+}
+
+/// Who resolves a link — which decides what opening its path reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LinkKind {
+    /// Resolved by the computer that holds it — over SMB, the server.
+    Junction,
+    /// Resolved by the computer that opens it — over SMB, the client.
+    SymbolicLink,
 }
 
 /// SMB share
@@ -1818,6 +1850,20 @@ pub enum PermissionDiagnostic {
         other_targets_known: bool,
     },
 
+    /// ADR 0088 (lab 2026-10-25): the object is a junction or symbolic
+    /// link. The values are the permissions on the link object itself —
+    /// they decide who can delete it or change its permissions. Opening the
+    /// path reaches `target`, and the target's own permissions decide what
+    /// an account can do there (a real logon of an account with Modify on
+    /// the link got access denied on the target). The result is exact.
+    LinkObject { link_kind: LinkKind, target: String },
+
+    /// ADR 0088 (lab 2026-10-25): scan over SMB — the volume serial and file
+    /// ID of this directory could not be read (`reason`). A second route to
+    /// it through a link is then not recognized, so its content may be
+    /// listed twice. The values are exact.
+    DirectoryIdentityUnknown { reason: String },
+
     /// The SID belongs to the configured domain, the configured base covers
     /// that whole domain, and the directory has no object for it: the
     /// account no longer exists (orphaned / deleted). Nobody can log on with
@@ -2135,6 +2181,23 @@ impl PermissionDiagnostic {
                  to {server} is not determinable ({reason}) — the permissions grant nothing here, \
                  so the effective right is No access either way."
             ),
+            PermissionDiagnostic::LinkObject { link_kind, target } => {
+                let what = match link_kind {
+                    LinkKind::Junction => "a junction",
+                    LinkKind::SymbolicLink => "a symbolic link",
+                };
+                format!(
+                    "This object is {what} to {target}: the rights shown are those on the link \
+                     itself (who can delete it or change its permissions). Opening this path \
+                     reaches the target, and the target's own permissions decide what an account \
+                     can do there."
+                )
+            }
+            PermissionDiagnostic::DirectoryIdentityUnknown { reason } => format!(
+                "The volume serial and file ID of this folder could not be read over SMB \
+                 ({reason}), so a second route to it through a link in this scan is not \
+                 recognized — its content may be listed twice. The values are exact."
+            ),
             PermissionDiagnostic::DfsTargetEvaluated {
                 requested,
                 target,
@@ -2294,6 +2357,8 @@ impl PermissionDiagnostic {
             } => (!other_targets.is_empty() || !other_targets_known).then_some(UncertainLayer::Target),
             // Informational — the result itself is exact.
             PermissionDiagnostic::NonCanonicalDaclOrder { .. }
+            | PermissionDiagnostic::LinkObject { .. }
+            | PermissionDiagnostic::DirectoryIdentityUnknown { .. }
             | PermissionDiagnostic::TrustedDomainAccountResolved { .. }
             | PermissionDiagnostic::SelectiveAuthenticationAllowed { .. }
             | PermissionDiagnostic::SelectiveAuthenticationDenied { .. }
@@ -2362,7 +2427,11 @@ impl PermissionDiagnostic {
             | PermissionDiagnostic::UacFilteredGroups { .. }
             | PermissionDiagnostic::GuestOrAnonymousToken { .. }
             | PermissionDiagnostic::SelectiveAuthenticationDenied { .. }
-            | PermissionDiagnostic::SynchronizeNotGranted { .. } => DiagnosticSeverity::Notice,
+            | PermissionDiagnostic::SynchronizeNotGranted { .. }
+            // ADR 0088: exact, but easy to misread (a link) or possibly
+            // listed twice (an unidentifiable folder).
+            | PermissionDiagnostic::LinkObject { .. }
+            | PermissionDiagnostic::DirectoryIdentityUnknown { .. } => DiagnosticSeverity::Notice,
             // Likely a real gap — under-report or a hard resolution failure.
             PermissionDiagnostic::SidHistoryPresent { .. }
             | PermissionDiagnostic::GroupSidHistoryPresent { .. }

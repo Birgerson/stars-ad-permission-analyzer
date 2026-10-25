@@ -411,6 +411,19 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         if let Some(dfs) = &input.dfs {
             diagnostics.push(dfs.marker());
         }
+        // ADR 0088: a link's values are those of the link object itself; a
+        // folder the scan could not identify over SMB may be listed twice.
+        if let Some(link) = &input.file_system_object.link {
+            diagnostics.push(PermissionDiagnostic::LinkObject {
+                link_kind: link.kind,
+                target: link.target.clone(),
+            });
+        }
+        if let Some(reason) = &input.file_system_object.identity_unknown {
+            diagnostics.push(PermissionDiagnostic::DirectoryIdentityUnknown {
+                reason: reason.clone(),
+            });
+        }
         // ADR 0079 (L4): Selective Authentication decides whether the account
         // may log on to the target at all.
         let mut logon_refused = false;
@@ -530,6 +543,16 @@ impl PermissionEvaluator for DefaultPermissionEngine {
         });
         result.path_explanation = path_explanation;
         result.trace = trace;
+        // ADR 0088: last, after the values it qualifies — the marker's own
+        // wording, so the explanation and the diagnostics cannot disagree.
+        if let Some(link) = result
+            .diagnostics
+            .iter()
+            .find(|d| matches!(d, PermissionDiagnostic::LinkObject { .. }))
+        {
+            let step = format!("Link: {}", link.summary());
+            result.path_explanation.steps.push(step);
+        }
         // ADR 0080 (lab 2026-10-18): SYNCHRONIZE missing from the effective
         // right. The rights stay the exact AccessCheck result — each was
         // measured exercisable without SYNCHRONIZE, locally and over SMB — but
@@ -2740,6 +2763,8 @@ mod tests {
             unsupported_aces: vec![],
             null_dacl: false,
             sd_hash: None,
+            link: None,
+            identity_unknown: None,
         }
     }
 
@@ -2754,6 +2779,8 @@ mod tests {
             unsupported_aces: vec![],
             null_dacl: true,
             sd_hash: None,
+            link: None,
+            identity_unknown: None,
         }
     }
 
@@ -5247,6 +5274,8 @@ mod tests {
             unsupported_aces: vec![],
             null_dacl: false,
             sd_hash: None,
+            link: None,
+            identity_unknown: None,
         }
     }
 
@@ -8334,6 +8363,104 @@ mod tests {
             );
             assert_eq!(p.trace.other.len(), 1, "{case}: the graph keeps the names");
         }
+    }
+
+    /// ADR 0088 (lab 2026-10-25): a real logon of an account with Modify on a
+    /// junction got access denied on its target. The row keeps the link
+    /// object's own exact values and says what opening the path reaches.
+    #[test]
+    fn a_link_row_keeps_its_values_and_names_the_target() {
+        use adpa_core::model::{LinkInfo, LinkKind};
+        let plain = || {
+            let mut input = base_input(
+                user(USER),
+                fso(None, vec![allow_ace(USER, MASK_MODIFY, true)]),
+            );
+            input.file_system_object.is_reparse_point = true;
+            input
+        };
+        let without = DefaultPermissionEngine.evaluate(plain()).unwrap();
+        let mut input = plain();
+        input.file_system_object.link = Some(LinkInfo {
+            kind: LinkKind::Junction,
+            target: r"T:\Enterprise\Archive\P01_Shared".into(),
+            relative: false,
+        });
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert_eq!(p.ntfs_mask, without.ntfs_mask);
+        assert_eq!(p.effective_mask, without.effective_mask);
+        assert!(p.uncertainty().is_empty() && p.effective_determinable());
+        let marker = p
+            .diagnostics
+            .iter()
+            .find(|d| matches!(d, PermissionDiagnostic::LinkObject { .. }))
+            .expect("the link marker");
+        assert_eq!(
+            marker.severity(),
+            adpa_core::model::DiagnosticSeverity::Notice
+        );
+        let summary = marker.summary();
+        assert!(
+            summary.contains(r"a junction to T:\Enterprise\Archive\P01_Shared"),
+            "{summary}"
+        );
+        assert!(summary.contains("those on the link itself"), "{summary}");
+        assert!(
+            summary.contains("the target's own permissions decide"),
+            "{summary}"
+        );
+        // The explanation ends with the same wording, after the values.
+        let last = p.path_explanation.steps.last().unwrap();
+        assert_eq!(last, &format!("Link: {summary}"));
+        // A symbolic link says so.
+        let mut input = plain();
+        input.file_system_object.link = Some(LinkInfo {
+            kind: LinkKind::SymbolicLink,
+            target: r"C:\Data".into(),
+            relative: false,
+        });
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert!(p
+            .path_explanation
+            .steps
+            .last()
+            .unwrap()
+            .contains(r"a symbolic link to C:\Data"));
+        // An object that is no link gets neither.
+        assert!(!without
+            .diagnostics
+            .iter()
+            .any(|d| matches!(d, PermissionDiagnostic::LinkObject { .. })));
+        assert!(!without
+            .path_explanation
+            .steps
+            .iter()
+            .any(|s| s.starts_with("Link: ")));
+    }
+
+    /// ADR 0088 (lab 2026-10-25): a folder whose identity could not be read
+    /// over SMB was listed twice. Its row says so; the values stay exact.
+    #[test]
+    fn a_folder_without_identity_says_it_may_be_listed_twice() {
+        let mut input = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(USER, MASK_READ, false)]),
+        );
+        input.file_system_object.identity_unknown =
+            Some("the folder could not be opened, Windows error 64".into());
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert!(p.effective_determinable() && p.uncertainty().is_empty());
+        let d = p
+            .diagnostics
+            .iter()
+            .find(|d| matches!(d, PermissionDiagnostic::DirectoryIdentityUnknown { .. }))
+            .expect("the identity marker");
+        let s = d.summary();
+        assert!(
+            s.contains("Windows error 64") && s.contains("listed twice"),
+            "{s}"
+        );
+        assert_eq!(d.severity(), adpa_core::model::DiagnosticSeverity::Notice);
     }
 
     #[test]

@@ -1891,3 +1891,17 @@ MS-01's policy was restored afterwards (R2L disabled) and the marker folder remo
 - **CSV:** 0 differing rows.
 - **Console output:** identical except the random scan id and one line per identity. That line is DC-01's symbolic link fixture `Spezial\Verknuepfung_readme.txt`, which used to read "this machine's symbolic link evaluation policy does not allow following this link type (Windows error 1463 …)". It now names what the link stores: "this symbolic link points to C:\LabShare\readme.txt, a path on the server's own disk. Over SMB, Windows follows a symbolic link on the client, so this machine resolved C:\LabShare\readme.txt on itself: its symbolic link evaluation policy does not allow that (Windows error 1463 …)".
 - **Other scan errors:** the junction duplicate, the cycle and the two access-denied folders are unchanged.
+
+## Block Y — Link rows name their target; folders without identity say so (ADR 0088, 2026-10-25)
+
+**Finding 1, the link row.** In the full enterprise scan, the exhaustive comparison matched Stars and Windows on every link object. Both read the link's own security descriptor: `GetNamedSecurityInfoW` does not follow the link. A real network logon of `ent_std` on FS-01 (`LogonUser` type 3, impersonated, `MAXIMUM_ALLOWED`, `nulldacl-kernel.ps1`) opened `Archive\P00_Media\Link_to_P01_Shared`. Its row shows Modify, inherited by the link object. The open was refused (error 5), exactly as for the target `Archive\P01_Shared` itself. Over SMB from WIN11-01 (`ent-smbprobe.ps1`), opening each of 22 sampled junction paths gave exactly the Stars row of its target. In three of them the link's own row differed from that.
+
+**Finding 2, the double listing.** The walker failed to recognize a second route to a folder in 3 of the 6 archive scans. They ran four at a time; during the first four, the oracle also read the same server.
+
+| Run | Rows (expected 243,262) | What the walker reported |
+| --- | --- | --- |
+| `u00001` | 243,345 | `Archive\P01_Shared\Media_0` as a duplicate, one level too deep: the 83 objects directly in `P01_Shared` listed twice |
+| `ext_partner01` | 243,345 | the same |
+| `pt_user01` | 243,289 | the cycle `P02_Contracts\Link_to_dept` not recognized: 218,733 rows listed under the cycle's path, the 27 direct subfolders of the archive reported as "duplicate routes" |
+
+The values of every row were exact in all three runs: equal to Windows, bit for bit. The cause is that the directory's identity is read with one open over SMB. When that open failed, the walker silently keyed the directory by its path, which no other route shares.

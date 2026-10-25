@@ -226,6 +226,8 @@ struct FileSystemObject {
     is_reparse_point: bool,
     unsupported_aces: Vec<UnsupportedAce>,
     null_dacl: bool,                   // NULL DACL ≠ empty DACL!
+    link: Option<LinkInfo>,            // ADR 0088: what a junction / symbolic link stores
+    identity_unknown: Option<String>,  // ADR 0088: why a remote folder has no file ID
 }
 
 struct AceEntry {
@@ -247,6 +249,20 @@ Important:
 - `unsupported_aces` collects object / callback / conditional /
   vendor-specific ACEs the parser does not understand — counted for
   the `UnsupportedShareAces` marker.
+- `link` (ADR 0088) holds the kind, stored target and relative flag of a
+  junction or symbolic link. `fs_scanner::file_id::link_target` reads them
+  with `FSCTL_GET_REPARSE_POINT` on the link itself, every offset and
+  length checked. `acl.rs` fills `link` when the attributes say the object
+  is a reparse point. The walker also fills it when the parent's directory
+  listing does (`DirEntry::file_type().is_symlink()`, which on Windows
+  includes junctions); over SMB, an open follows the link and loses the
+  attribute (ADR 0062). The DACL is the link object's own. The engine turns
+  `link` into the `LinkObject` marker and a last explanation step.
+- `identity_unknown` (ADR 0088) is set by the walker when, for a scan over
+  SMB, `probe_directory` found no volume serial and file ID, even after two
+  retries (50 ms, 250 ms). The engine turns it into the
+  `DirectoryIdentityUnknown` marker: the loop detector then keys the folder
+  by its path, so a second route to it through a link is not recognized.
 
 ### Permission result
 

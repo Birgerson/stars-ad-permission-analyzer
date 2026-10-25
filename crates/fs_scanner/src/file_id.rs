@@ -14,7 +14,9 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use adpa_core::model::{LinkInfo, LinkKind};
+
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FileIdInfo, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
     FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
@@ -72,20 +74,59 @@ pub(crate) fn directory_identity(path: &str) -> Option<String> {
 /// (ADR 0085).
 pub(crate) struct DirectoryProbe {
     pub(crate) identity: Option<String>,
+    /// Why `identity` is `None` (ADR 0088): the open or the query failed,
+    /// or the server reports no file ID.
+    pub(crate) identity_error: Option<String>,
     /// `\\server\share\…` the redirector opened, or `None`.
     pub(crate) final_path: Option<String>,
 }
 
-/// Opens `path` once and reads both its identity and its final path.
+/// Opens `path` and reads both its identity and its final path. ADR 0088
+/// (lab 2026-10-25): one failed open during a busy scan made a directory
+/// already enumerated through a junction look new, so its content was
+/// listed twice — a failure is retried twice (after 50 ms and 250 ms)
+/// before it stands.
 pub(crate) fn probe_directory(path: &str) -> DirectoryProbe {
-    let Some(guard) = open_for_attributes(path) else {
-        return DirectoryProbe {
-            identity: None,
-            final_path: None,
-        };
+    let mut probe = probe_directory_once(path);
+    for (retry, pause) in [50, 250].into_iter().enumerate() {
+        if probe.identity.is_some() {
+            break;
+        }
+        let first = probe.identity_error.clone().unwrap_or_default();
+        std::thread::sleep(std::time::Duration::from_millis(pause));
+        probe = probe_directory_once(path);
+        if probe.identity.is_some() {
+            tracing::info!(
+                path,
+                retry = retry + 1,
+                first_error = first,
+                "Directory identity read on retry"
+            );
+        }
+    }
+    probe
+}
+
+fn probe_directory_once(path: &str) -> DirectoryProbe {
+    let guard = match open_for_attributes(path) {
+        Ok(guard) => guard,
+        Err(code) => {
+            return DirectoryProbe {
+                identity: None,
+                identity_error: Some(format!(
+                    "the folder could not be opened, Windows error {code}"
+                )),
+                final_path: None,
+            }
+        }
+    };
+    let (identity, identity_error) = match identity_of(&guard) {
+        Ok(id) => (Some(id), None),
+        Err(reason) => (None, Some(reason)),
     };
     DirectoryProbe {
-        identity: identity_of(&guard),
+        identity,
+        identity_error,
         final_path: final_path_of(&guard),
     }
 }
@@ -100,38 +141,20 @@ pub(crate) fn probe_directory(path: &str) -> DirectoryProbe {
 /// Over SMB the components *below* the share are not reliable for a
 /// server-side junction (ADR 0062); callers use only server and share.
 pub fn final_unc_path(path: &str) -> Option<String> {
-    let guard = open_for_attributes(path)?;
+    let guard = open_for_attributes(path).ok()?;
     final_path_of(&guard)
-}
-
-/// What a junction or symbolic link points to, as the link itself stores it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LinkTarget {
-    pub(crate) kind: LinkKind,
-    /// The stored target: its print name, else its substitute name without
-    /// the `\??\` prefix.
-    pub(crate) target: String,
-    /// A symbolic link whose target is relative to the link's folder.
-    pub(crate) relative: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LinkKind {
-    /// Resolved by the computer that holds it — over SMB, the server.
-    Junction,
-    /// Resolved by the computer that opens it — over SMB, the client.
-    SymbolicLink,
 }
 
 /// Reads the target the junction or symbolic link at `path` stores
 /// (`FSCTL_GET_REPARSE_POINT` on the link itself, not its target). `None`
 /// when the link cannot be opened or read, is neither a junction nor a
 /// symbolic link, or its data fails validation.
-pub(crate) fn link_target(path: &str) -> Option<LinkTarget> {
+pub(crate) fn link_target(path: &str) -> Option<LinkInfo> {
     let guard = open_handle(
         path,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-    )?;
+    )
+    .ok()?;
     let mut buf = vec![0u8; MAX_REPARSE_DATA];
     let mut returned: u32 = 0;
     // SAFETY: `guard.0` is a valid open handle; there is no input buffer;
@@ -159,7 +182,7 @@ pub(crate) fn link_target(path: &str) -> Option<LinkTarget> {
 /// length and offset Windows (or an SMB server) returned is checked before
 /// use; anything out of bounds, odd-sized, empty or with control characters
 /// gives `None`. Pure.
-fn parse_reparse_data(data: &[u8]) -> Option<LinkTarget> {
+fn parse_reparse_data(data: &[u8]) -> Option<LinkInfo> {
     let u16_at = |b: &[u8], o: usize| b.get(o..o + 2).map(|x| u16::from_le_bytes([x[0], x[1]]));
     let tag = data
         .get(0..4)
@@ -207,19 +230,20 @@ fn parse_reparse_data(data: &[u8]) -> Option<LinkTarget> {
     if target.is_empty() || target.len() > 32_767 || target.chars().any(char::is_control) {
         return None;
     }
-    Some(LinkTarget {
+    Some(LinkInfo {
         kind,
         target,
         relative,
     })
 }
 
-fn open_for_attributes(path: &str) -> Option<HandleGuard> {
+fn open_for_attributes(path: &str) -> Result<HandleGuard, u32> {
     open_handle(path, FILE_FLAG_BACKUP_SEMANTICS)
 }
 
-/// Opens `path` for its attributes with the given flags.
-fn open_handle(path: &str, flags: FILE_FLAGS_AND_ATTRIBUTES) -> Option<HandleGuard> {
+/// Opens `path` for its attributes with the given flags; the Windows error
+/// when the open fails.
+fn open_handle(path: &str, flags: FILE_FLAGS_AND_ATTRIBUTES) -> Result<HandleGuard, u32> {
     let api_path = validation::path::to_windows_api_path(path);
     let wide: Vec<u16> = OsStr::new(&api_path)
         .encode_wide()
@@ -242,9 +266,11 @@ fn open_handle(path: &str, flags: FILE_FLAGS_AND_ATTRIBUTES) -> Option<HandleGua
         )
     };
     if handle == INVALID_HANDLE_VALUE || handle.is_null() {
-        return None;
+        // SAFETY: reads the calling thread's last-error value, set by the
+        // failed CreateFileW call above.
+        return Err(unsafe { GetLastError() });
     }
-    Some(HandleGuard(handle))
+    Ok(HandleGuard(handle))
 }
 
 /// `\\server\share\…` of an open handle, `None` unless it is a UNC path.
@@ -283,7 +309,8 @@ fn unc_form(raw: &str) -> Option<String> {
     validation::path::parse_unc_components(&unc).map(|_| unc)
 }
 
-fn identity_of(guard: &HandleGuard) -> Option<String> {
+/// The identity of an open handle, or why there is none.
+fn identity_of(guard: &HandleGuard) -> Result<String, String> {
     let mut info = FILE_ID_INFO {
         VolumeSerialNumber: 0,
         FileId: windows_sys::Win32::Storage::FileSystem::FILE_ID_128 {
@@ -302,9 +329,16 @@ fn identity_of(guard: &HandleGuard) -> Option<String> {
         )
     };
     if ok == 0 {
-        return None;
+        // SAFETY: reads the last-error value of the failed call above.
+        let code = unsafe { GetLastError() };
+        return Err(format!(
+            "the server did not return its file ID, Windows error {code}"
+        ));
     }
-    identity_key(info.VolumeSerialNumber, info.FileId.Identifier)
+    identity_key(info.VolumeSerialNumber, info.FileId.Identifier).ok_or_else(|| {
+        "the server reports a volume serial or file ID of 0 (some non-Windows SMB servers do)"
+            .to_owned()
+    })
 }
 
 /// Formats a volume serial + 128-bit file ID as the loop-detection key.
@@ -425,6 +459,22 @@ mod tests {
         );
     }
 
+    /// ADR 0088: a probe that fails (after its retries) says why.
+    #[test]
+    fn a_failed_probe_says_why() {
+        let p = probe_directory(r"C:\adpa-definitely-missing-dir-7f3a");
+        assert!(p.identity.is_none() && p.final_path.is_none());
+        let why = p.identity_error.expect("a reason");
+        assert!(
+            why.contains("could not be opened")
+                && (why.ends_with("error 2") || why.ends_with("error 3")),
+            "{why}"
+        );
+        // A readable directory has an identity and no reason.
+        let ok = probe_directory(&std::env::temp_dir().to_string_lossy());
+        assert!(ok.identity.is_some() && ok.identity_error.is_none());
+    }
+
     /// A `REPARSE_DATA_BUFFER` as Windows returns it: header, the four name
     /// offsets/lengths, the flags for a symbolic link, then both names.
     fn reparse_buffer(tag: u32, flags: Option<u32>, substitute: &str, print: &str) -> Vec<u8> {
@@ -462,7 +512,7 @@ mod tests {
         );
         assert_eq!(
             parse_reparse_data(&junction),
-            Some(LinkTarget {
+            Some(LinkInfo {
                 kind: LinkKind::Junction,
                 target: r"T:\Enterprise\Finance\P01".into(),
                 relative: false,
