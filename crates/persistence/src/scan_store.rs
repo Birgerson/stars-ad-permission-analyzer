@@ -19,6 +19,51 @@ pub struct ScanStore<'a> {
     conn: &'a Connection,
 }
 
+/// One scan run being written in a single transaction (ADR 0086), from
+/// [`ScanStore::begin_scan`].
+pub struct ScanWriter<'a> {
+    store: ScanStore<'a>,
+    run_id: Uuid,
+    /// The transaction is still open (neither committed nor rolled back).
+    open: bool,
+}
+
+impl ScanWriter<'_> {
+    /// Adds one result row of the run.
+    pub fn add_permission(&self, perm: &EffectivePermission) -> Result<(), CoreError> {
+        self.store.insert_permission(&self.run_id, perm)
+    }
+
+    /// Adds one scan error of the run.
+    pub fn add_error(&self, error: &ScanError) -> Result<(), CoreError> {
+        self.store.insert_error(&self.run_id, error)
+    }
+
+    /// Sets the finish time (when given) and commits the whole run.
+    pub fn commit(mut self, finished_at: Option<DateTime<Utc>>) -> Result<(), CoreError> {
+        if let Some(at) = finished_at {
+            self.store.finish_scan_run(&self.run_id, at)?;
+        }
+        self.store
+            .conn
+            .execute_batch("COMMIT")
+            .map_err(|e| CoreError::Database(format!("scan transaction COMMIT failed: {e}")))?;
+        self.open = false;
+        Ok(())
+    }
+}
+
+impl Drop for ScanWriter<'_> {
+    fn drop(&mut self) {
+        if self.open {
+            // Not committed: nothing of the run is kept. A secondary
+            // rollback error cannot be reported from a drop; the caller
+            // already has the original error.
+            let _ = self.store.conn.execute_batch("ROLLBACK");
+        }
+    }
+}
+
 impl<'a> ScanStore<'a> {
     pub fn new(conn: &'a Connection) -> Self {
         Self { conn }
@@ -217,35 +262,33 @@ impl<'a> ScanStore<'a> {
         permissions: &[EffectivePermission],
         errors: &[ScanError],
     ) -> Result<(), CoreError> {
+        let writer = self.begin_scan(run)?;
+        for perm in permissions {
+            writer.add_permission(perm)?;
+        }
+        for error in errors {
+            writer.add_error(error)?;
+        }
+        writer.commit(None)
+    }
+
+    /// ADR 0086: the streaming form of [`Self::persist_scan_atomic`] — one
+    /// transaction for the whole run, rows added as the scan produces them,
+    /// so a large scan does not hold every result in memory. Nothing is
+    /// visible to readers before [`ScanWriter::commit`]; a writer dropped
+    /// without a commit (an error, a panic, an early return) rolls back, so
+    /// the history is never silently partial.
+    pub fn begin_scan(&self, run: &ScanRun) -> Result<ScanWriter<'a>, CoreError> {
         self.conn
             .execute_batch("BEGIN IMMEDIATE")
-            .map_err(|e| CoreError::Database(format!("persist_scan_atomic BEGIN failed: {e}")))?;
-
-        let body = (|| -> Result<(), CoreError> {
-            self.insert_scan_run(run)?;
-            for perm in permissions {
-                self.insert_permission(&run.id, perm)?;
-            }
-            for error in errors {
-                self.insert_error(&run.id, error)?;
-            }
-            Ok(())
-        })();
-
-        match body {
-            Ok(()) => {
-                self.conn.execute_batch("COMMIT").map_err(|e| {
-                    CoreError::Database(format!("persist_scan_atomic COMMIT failed: {e}"))
-                })?;
-                Ok(())
-            }
-            Err(e) => {
-                // Explicit rollback; the original cause matters more than a
-                // secondary rollback error.
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(e)
-            }
-        }
+            .map_err(|e| CoreError::Database(format!("scan transaction BEGIN failed: {e}")))?;
+        let writer = ScanWriter {
+            store: ScanStore { conn: self.conn },
+            run_id: run.id,
+            open: true,
+        };
+        writer.store.insert_scan_run(run)?;
+        Ok(writer)
     }
 
     /// Stores a scan error.
@@ -764,6 +807,56 @@ mod tests {
 
         assert_eq!(store.list_scan_runs().unwrap().len(), 1);
         assert_eq!(store.get_permissions(&run.id).unwrap().len(), 2);
+        assert_eq!(store.list_errors_for(&run.id).unwrap().len(), 1);
+    }
+
+    /// ADR 0086: the streaming writer keeps the all-or-nothing rule — a
+    /// writer dropped without commit leaves no trace; a committed one holds
+    /// every row and the finish time.
+    #[test]
+    fn the_scan_writer_commits_everything_or_nothing() {
+        let conn = setup();
+        let store = ScanStore::new(&conn);
+        let aborted = make_run(r"C:\stream-aborted");
+        {
+            let w = store.begin_scan(&aborted).unwrap();
+            w.add_permission(&make_perm(
+                "S-1-5-21-1-2-3-1000",
+                r"C:\stream-aborted\a",
+                1,
+                None,
+                1,
+            ))
+            .unwrap();
+        }
+        assert!(
+            store.list_scan_runs().unwrap().is_empty(),
+            "dropped without commit"
+        );
+        assert!(store.get_permissions(&aborted.id).unwrap().is_empty());
+
+        let run = make_run(r"C:\stream");
+        let w = store.begin_scan(&run).unwrap();
+        for i in 0..3 {
+            w.add_permission(&make_perm(
+                "S-1-5-21-1-2-3-1000",
+                &format!(r"C:\stream\{i}"),
+                1,
+                None,
+                1,
+            ))
+            .unwrap();
+        }
+        w.add_error(&ScanError {
+            path: None,
+            message: "Scan cancelled by user — results are partial".to_owned(),
+        })
+        .unwrap();
+        w.commit(Some(Utc::now())).unwrap();
+        let runs = store.list_scan_runs().unwrap();
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].finished_at.is_some());
+        assert_eq!(store.get_permissions(&run.id).unwrap().len(), 3);
         assert_eq!(store.list_errors_for(&run.id).unwrap().len(), 1);
     }
 

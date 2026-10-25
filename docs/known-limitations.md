@@ -914,6 +914,25 @@ another share" and does not enumerate it. Scan the folder path itself.
 
 ---
 
+## L19 — The GUI's Scan Tree keeps the whole tree in memory
+
+**Priority:** Medium — found by the mass test 2026-10-25 (ADR 0086).
+
+The CLI `scan` streams its results into the database and the CSV export:
+about 30 MB of memory whatever the size of the tree. The GUI's Scan Tree
+does not:
+
+- It reads the whole walk first.
+- It keeps every result for the list, the Delta tab and the history, at
+  about 26 KB per result for an account in about 70 groups.
+- Its list is not virtualized, so streamed rows make the GUI catch up for
+  seconds even with hundreds of rows.
+
+For trees with more than a few tens of thousands of paths, use the CLI
+with `--db` and a `.csv` export.
+
+---
+
 ## Status overview
 
 | Limit | Priority | Marker present? | Resolvable? |
@@ -936,6 +955,7 @@ another share" and does not enumerate it. Scan the folder path itself.
 | L16 — UAC policies / session elevation not visible | Low | **yes** (UacFilteredGroups, RemoteUacPolicy) | **network case closed 2026-10-13** (ADR 0076); local session elevation stays bounded |
 | L17 — Guest / anonymous tokens | Low | **yes** (GuestOrAnonymousToken) | **closed 2026-10-14** — Guest, Authenticated Users and anonymous Everyone exact (policy read); bounded only when the policy is unreadable |
 | L18 — DFS folders with several targets | Medium | **yes** (DfsTargetEvaluated; OtherShare scan error) | partial (ADR 0085): evaluated on the referred target, exact with one target; several targets → not determinable, scan each target |
+| L19 — GUI Scan Tree keeps the whole tree | Medium | n/a (documented) | the CLI streams (ADR 0086); the GUI's walk, result list and history still to be streamed / virtualized |
 
 ## Contribution policy
 

@@ -451,9 +451,11 @@ nesting (the full member tree) is planned.
   are partial", so a partial run is never mistaken for a complete one.
 - **Large trees:** the result list shows every row (it is not paged).
   With several hundred rows the GUI needs a few seconds while the rows
-  arrive (689 rows in the lab); for trees with thousands of paths the
-  CLI with `--output` is the faster way, and the file can be filtered
-  in any tool.
+  arrive (689 rows in the lab). It also keeps every result in memory
+  (known limitation L19). For trees with thousands of paths, the CLI with
+  `--db` and a `.csv` export is the way. It streams its results and needs
+  about 30 MB of memory even for millions of paths (ADR 0086). The file
+  can be filtered in any tool.
 
 **Result:** a table of all paths, their effective rights, a per-path
 trustee table, and a **risk findings section** with the rules that
@@ -1805,7 +1807,22 @@ Common causes:
   hash, but very wide trees with many unique ACLs take time.
 - **Many rows in the GUI's Scan Tree**: the list is not paged, so with
   hundreds of rows the GUI catches up for a few seconds after the scan.
-  For large trees use the CLI with `--output` (CSV / JSON / HTML).
+  The GUI also keeps every result in memory (known limitation L19).
+- **Large trees (tens of thousands to millions of paths)**: use the CLI
+  with `--db` and a **`.csv`** export. The CLI streams the results into the
+  database (one transaction, committed at the end) and into the CSV file.
+  The CSV goes to `<file>.partial` and is renamed when the scan ends, so it
+  never holds all results in memory. Lab: about 30 MB of memory for
+  75,000 paths, and the same for the whole 1.5-million-file tree
+  (ADR 0086). Plan the **disk space**: about 12 KB per row each for the
+  CSV and the database for an account in about 70 groups, which is
+  mostly the explanation path. A `.json` or `.html` report needs every
+  result in memory at the end, so keep it for smaller trees.
+- **The export file is checked before the scan starts.** An existing file
+  without `--force` stops the run at once, not after the scan. If the
+  scan fails, no partial export is left behind. A scan cancelled with
+  Ctrl-C keeps its rows in the file and in the database, marked "Scan
+  cancelled by user — results are partial".
 
 Stars has **no** background scans, **no** auto-refresh, **no**
 writes — when it takes long, it really is reading.

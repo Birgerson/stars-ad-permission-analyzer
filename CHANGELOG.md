@@ -12,6 +12,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ### Fixed
 
+- **Large CLI scans no longer hold every result in memory (ADR 0086).** A
+  scan kept all results until the end, about 26 KB each for an account in
+  about 70 groups: 2 GB for 75,000 paths, about 40 GB for the lab's 1.5
+  million files. Now the results go row by row into the database (one
+  transaction, committed at the end) and into the CSV export (written as
+  `<file>.partial` and renamed at the end). In the lab, the same 75,000
+  paths took 29 MB instead of 2 GB and ran faster, with a byte-identical
+  CSV and an identical database. The export target is checked before the
+  scan. A failed scan leaves no partial export, and a cancelled one keeps
+  its rows marked as partial. JSON and HTML reports still need every
+  result at the end. The GUI's Scan Tree still keeps every result (known
+  limitation L19).
 - **"Access denied" for a link that only the symbolic link policy blocks.**
   Over SMB, Windows does not follow a symbolic link on a share that points
   to a local path of the server (error 1463: remote-to-local evaluation is

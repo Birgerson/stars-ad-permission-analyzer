@@ -1618,6 +1618,58 @@ async fn run_scan(
         None
     };
 
+    // ADR 0086 (lab 2026-10-25, 1.5 million files): results are streamed —
+    // into one database transaction and, for a CSV export, into the file —
+    // instead of being held until the end (≈ 27 KB per result in memory,
+    // 2 GB for 75,000 paths). The export target is checked before the scan,
+    // not after it. Only a JSON or HTML report needs every result at the end.
+    let export = match output.as_deref() {
+        Some(out_path) => {
+            let status = validate_export_path(out_path)
+                .map_err(|e| anyhow::anyhow!("Invalid export path: {e}"))?;
+            check_overwrite_policy(&status, force)?;
+            Some((out_path.to_owned(), status.path().0.clone()))
+        }
+        None => None,
+    };
+    let export_is_csv = export.as_ref().is_some_and(|(_, p)| {
+        !matches!(
+            p.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .as_deref(),
+            Some("html") | Some("json")
+        )
+    });
+    let keep_all = export.is_some() && !export_is_csv;
+    let mut csv_rows = match &export {
+        Some((_, p)) if export_is_csv => Some(
+            exporter::CsvFileWriter::create(if force {
+                ExportTarget::FileOverwrite(p.clone())
+            } else {
+                ExportTarget::File(p.clone())
+            })
+            .map_err(|e| anyhow::anyhow!("CSV export failed: {e}"))?,
+        ),
+        _ => None,
+    };
+    let scan_writer = match &db {
+        Some(db) => Some(
+            db.scan_store()
+                .begin_scan(&ScanRun {
+                    id: run_id,
+                    started_at,
+                    finished_at: None,
+                    target: requested_path.clone(),
+                    errors: vec![],
+                })
+                .map_err(|e| anyhow::anyhow!("Failed to persist scan: {e}"))?,
+        ),
+        None => None,
+    };
+    let risk_registry = RuleRegistry::with_defaults();
+    let mut risks = risk_registry.accumulator();
+
     let mut all_permissions: Vec<EffectivePermission> = Vec::new();
     let mut all_path_trustees: Vec<adpa_core::model::PathTrustees> = Vec::new();
     let mut scan_errors_for_db: Vec<ScanError> = Vec::new();
@@ -1689,10 +1741,15 @@ async fn run_scan(
                 };
                 walk_error_count += 1;
                 println!("  [Error]         {}: {}", walk_err.path, walk_err.error);
-                scan_errors_for_db.push(ScanError {
+                let error = ScanError {
                     path: Some(NormalizedPath(walk_err.path.clone())),
                     message: walk_err.error.to_string(),
-                });
+                };
+                if let Some(w) = &scan_writer {
+                    w.add_error(&error)
+                        .map_err(|e| anyhow::anyhow!("Failed to persist scan: {e}"))?;
+                }
+                scan_errors_for_db.push(error);
             }
             fs_scanner::WalkItem::Object(mut fso) => {
                 object_count += 1;
@@ -1720,15 +1777,18 @@ async fn run_scan(
 
                 // Trustees and the printed path borrow the object before it
                 // is moved into the engine input below.
-                let trustees = exporter::build_path_trustees_with_share_and_names(
-                    &fso,
-                    scan_share_overlay.as_ref(),
-                    &sid_names,
-                );
-                all_path_trustees.push(adpa_core::model::PathTrustees {
-                    path: fso.path.clone(),
-                    trustees,
-                });
+                // The path-centric trustees feed only the JSON / HTML report.
+                if keep_all {
+                    let trustees = exporter::build_path_trustees_with_share_and_names(
+                        &fso,
+                        scan_share_overlay.as_ref(),
+                        &sid_names,
+                    );
+                    all_path_trustees.push(adpa_core::model::PathTrustees {
+                        path: fso.path.clone(),
+                        trustees,
+                    });
+                }
                 let path_display = fso.path.0.clone();
 
                 let input = PermissionEvaluationInput {
@@ -1783,7 +1843,18 @@ async fn run_scan(
                     println!("  {:14}  {}", label, path_display);
                 }
 
-                all_permissions.push(result);
+                if let Some(w) = &scan_writer {
+                    w.add_permission(&result)
+                        .map_err(|e| anyhow::anyhow!("Failed to persist scan: {e}"))?;
+                }
+                if let Some(csv) = csv_rows.as_mut() {
+                    csv.write(&result)
+                        .map_err(|e| anyhow::anyhow!("CSV export failed: {e}"))?;
+                }
+                let result = risks.add(result);
+                if keep_all {
+                    all_permissions.push(result);
+                }
             }
         }
     }
@@ -1797,24 +1868,25 @@ async fn run_scan(
     if cancelled {
         println!();
         println!("  [Aborted] Scan cancelled by user — results are partial.");
-        scan_errors_for_db.push(ScanError {
+        let error = ScanError {
             path: None,
             message: "Scan cancelled by user — results are partial".to_owned(),
-        });
+        };
+        if let Some(w) = &scan_writer {
+            w.add_error(&error)
+                .map_err(|e| anyhow::anyhow!("Failed to persist scan: {e}"))?;
+        }
+        scan_errors_for_db.push(error);
     }
 
-    // 7. Persist the complete run in a single transaction.
-    if let Some(ref db) = db {
-        let run = ScanRun {
-            id: run_id,
-            started_at,
-            finished_at: Some(Utc::now()),
-            target: requested_path.clone(),
-            errors: vec![],
-        };
-        db.scan_store()
-            .persist_scan_atomic(&run, &all_permissions, &scan_errors_for_db)
+    // 7. Commit the run — one transaction, written while scanning.
+    if let Some(w) = scan_writer {
+        w.commit(Some(Utc::now()))
             .map_err(|e| anyhow::anyhow!("Failed to persist scan: {e}"))?;
+    }
+    if let Some(csv) = csv_rows {
+        csv.finish()
+            .map_err(|e| anyhow::anyhow!("CSV export failed: {e}"))?;
     }
 
     // 8. Summary.
@@ -1829,21 +1901,30 @@ async fn run_scan(
         &run_id,
     );
 
-    // 8b. Run the risk rules in the CLI scan path too.
-    let risk_findings = compute_risk_findings(&all_permissions);
+    // 8b. The risk rules, evaluated result by result during the scan.
+    let risk_findings = risks.finish();
     output::print_risk_findings(&risk_findings);
 
-    // 9. Optional export.
-    if let Some(out_path) = output {
-        let status = validate_export_path(&out_path)
-            .map_err(|e| anyhow::anyhow!("Invalid export path: {e}"))?;
-        check_overwrite_policy(&status, force)?;
-        let analysis = AnalysisResult {
-            permissions: all_permissions,
-            risk_findings,
-            path_trustees: all_path_trustees,
-        };
-        export_analysis(&status.path().0, &analysis, force)?;
+    // 9. Optional export: the CSV is already written; a JSON / HTML report
+    // is built from the kept results.
+    if let Some((out_path, target_path)) = export {
+        if export_is_csv {
+            if !risk_findings.is_empty() {
+                eprintln!(
+                    "[Note] CSV export does not include risk findings — \
+                     use a .html target for a readable report or .json for \
+                     a full structured report (risks, matched ACEs, \
+                     contributing SIDs with nested detail)."
+                );
+            }
+        } else {
+            let analysis = AnalysisResult {
+                permissions: all_permissions,
+                risk_findings,
+                path_trustees: all_path_trustees,
+            };
+            export_analysis(&target_path, &analysis, force)?;
+        }
         println!("  Results exported to: {out_path}");
     }
 
