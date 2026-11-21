@@ -165,14 +165,14 @@ directed — higher layers depend on lower ones, never the reverse:
 | `validation` | Typed wrappers for every user input (`ValidatedSid`, `ValidatedDn`, `ValidatedServerName`, …), path/UNC handling, and the central RFC-4515 LDAP filter escaper | `sid.rs`, `net.rs`, `path.rs`, `numbers.rs`, `ldap.rs`, `export_path.rs`, `db_path.rs`, `update_source.rs` |
 | `win_safe` | RAII guards so native allocations are always released (`NetApiBuffer`, `LocalFreeGuard`) plus the shared guard-based SID→string conversion | `netapi.rs`, `localalloc.rs`, `sid.rs` |
 | `ad_resolver` | AD / LSA / SAM access; **central Principal pipeline** lives here; read-only trust inventory | `principal.rs`, `resolver.rs`, `ldap_client.rs`, `sam.rs`, `local_groups.rs`, `enumerate.rs`, `trusts.rs`, `forest_trust_info.rs` (forest trust information parser, ADR 0084), `trusted.rs`, `sid_util.rs`, `config.rs` |
-| `fs_scanner` | NTFS DACL read + walker with reparse cycle/duplicate detection, cancellation, per-scan SD cache; the final (redirected) UNC path of a handle and the "served from another share" check of remote scans (ADR 0085) | `acl.rs`, `walker.rs`, `file_id.rs`, `cancel.rs`, `scanner.rs` (dormant `Scanner` seam) |
+| `fs_scanner` | NTFS DACL read + walker with reparse cycle/duplicate detection (only a listed directory counts, by the depth it had left; identities keep the stored case — review CR-25/26), cancellation, per-scan SD cache; the final (redirected) UNC path of a handle and the "served from another share" check of remote scans (ADR 0085), also for a local link into a share (CR-21); network drives (CR-22); the check that an output lies outside the audited tree, by path and folder identity (CR-17) | `acl.rs`, `walker.rs`, `file_id.rs`, `drive.rs`, `output_guard.rs`, `cancel.rs`, `scanner.rs` (dormant `Scanner` seam) |
 | `share_scanner` | SMB share enumeration + share DACL read via Windows API; the shared CLI/GUI share-mask orchestration; the DFS client's folder and targets for a path (`NetDfsGetClientInfo`, ADR 0085) | `scanner.rs`, `dfs.rs` |
 | `permission_engine` | AccessCheck reproduction, token SID assembly, permission path generation, mask normalization | `engine.rs`, `mask.rs` |
 | `risk_engine` | Six risk rules + `is_incomplete()` delegation; `RiskAccumulator` evaluates result by result in the order of `evaluate_all` (ADR 0086) | `rules.rs` |
-| `persistence` | SQLite schema + migrations (v1–v8) + `ScanStore` (with `ScanWriter`: one scan run streamed in one transaction, ADR 0086), delta comparison | `scan_store.rs`, `migrations.rs`, `delta.rs`, `db.rs` |
-| `exporter` | CSV / JSON / HTML renderers + the shared path-centric trustee view; `CsvFileWriter` writes a CSV row by row into `<target>.partial` and renames it at the end (ADR 0086) | `csv.rs`, `json.rs`, `html.rs`, `trustees.rs` |
+| `persistence` | SQLite schema + migrations (v1–v9) + `ScanStore` (with `ScanWriter`: one scan run streamed in one transaction, ADR 0086), delta comparison with coverage (CR-19), read-only open for the history commands (CR-30) | `scan_store.rs`, `migrations.rs`, `delta.rs`, `db.rs` |
+| `exporter` | CSV / JSON / HTML renderers + the shared path-centric trustee view; every scan report carries its coverage (CR-28); `CsvFileWriter` writes a CSV row by row into a private staging file (`<target>.<pid>-<n>.partial`, created exclusively) and moves it into place, refusing an existing target atomically without overwrite consent (ADR 0086, CR-18) | `csv.rs`, `json.rs`, `html.rs`, `trustees.rs` |
 | `viz` | Permission graph (ADR 0077, layout v2 ADR 0081): column layout of one `EffectivePermission` from its `trace` — NTFS and share bands, layer results, logon node — rendered as SVG (HTML report, saved graph) or as text-free shapes plus native texts (GUI), light or dark; presentation only, no permission logic | `lib.rs` |
-| `analysis` | The analysis steps the CLI and the GUI both run, implemented once (ADR 0082 step 5): the account's local groups on the target server with UAC and anonymous-Everyone handling, the share mask of an SMB path for the account's token; where a DFS path is evaluated (ADR 0085); orchestration only, the permission logic stays in `permission_engine` | `local_groups.rs`, `share.rs`, `dfs.rs` |
+| `analysis` | The analysis steps the CLI and the GUI both run, implemented once (ADR 0082 step 5): the account's local groups on the target server with UAC and anonymous-Everyone handling, the share mask of an SMB path for the account's token; where a DFS path is evaluated (ADR 0085), with targets compared by their full path (CR-27); a local-looking path that a mapped drive or a link leads to a share, evaluated as its UNC path (CR-21/22); orchestration only, the permission logic stays in `permission_engine` | `local_groups.rs`, `share.rs`, `dfs.rs`, `network_drive.rs` |
 | `update_manager` | Fail-closed seam for signature-checked updates (L12) + the manual read-only update check (ADR 0061) | `checker.rs`, `manager.rs`, `manifest.rs`, `verifier.rs`, `version.rs` |
 | `cli` | Command-line front-end (`adpa.exe`): `analyze`, `scan`, `groups`, `members`, `shares`, `runs`, `errors`, `check-update`, `trusts` | `main.rs`, `output.rs` |
 | `gui` | Slint-based GUI (`adpa-gui.exe`) with eight tabs (Analyze, Graph, Groups, Scan Tree, Delta, Trusts, Shares, Info); the UI lives in `ui/*.slint` (design tokens, components, one file per tab — ADR 0082, carried out in steps) and is compiled by the `slint!` macro in `main.rs`; the Rust side of each tab is its own module in `src/tabs/`, `main.rs` only starts the GUI and routes the worker's events | `ui/app.slint`, `main.rs`, `src/tabs/`, `identity_input.rs`, `worker.rs` |
@@ -1562,38 +1562,46 @@ LSA lookup for `sid_names` is cached globally).
 **Source:** [`crates/persistence/src/scan_store.rs`](../crates/persistence/src/scan_store.rs)
 and [`crates/persistence/src/migrations.rs`](../crates/persistence/src/migrations.rs).
 
-Schema (simplified):
+Schema (schema v9, abridged — `effective_permissions` carries more
+evidence columns, see `schema*.sql`):
 
 ```sql
 CREATE TABLE scan_runs (
-    run_id TEXT PRIMARY KEY,         -- UUID
-    timestamp TEXT NOT NULL,
-    root_path TEXT NOT NULL,
-    cancelled INTEGER NOT NULL
+    id          TEXT PRIMARY KEY,   -- UUID
+    started_at  TEXT NOT NULL,
+    finished_at TEXT,
+    target      TEXT NOT NULL,      -- the scan root or analyzed path
+    scope       TEXT,               -- v9: 'scan' / 'analyze'; NULL = before v9
+    max_depth   INTEGER             -- v9: NULL = unlimited (when scope is set)
 );
 
-CREATE TABLE scan_permissions (
-    run_id TEXT NOT NULL,
-    path TEXT NOT NULL,
-    identity_sid TEXT NOT NULL,
+CREATE TABLE effective_permissions (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_run_id    TEXT NOT NULL REFERENCES scan_runs(id),
+    sid            TEXT NOT NULL,
+    path           TEXT NOT NULL,
+    ntfs_mask      INTEGER NOT NULL,
+    share_mask     INTEGER,
     effective_mask INTEGER NOT NULL,
-    ntfs_mask INTEGER NOT NULL,
-    share_mask INTEGER,
-    diagnostics_json TEXT NOT NULL,  -- variant-tagged JSON
-    FOREIGN KEY (run_id) REFERENCES scan_runs(run_id)
+    explanation    TEXT NOT NULL,   -- JSON list of steps
+    -- share/local-group status, matched ACEs, contributing SIDs,
+    -- diagnostics (variant-tagged JSON), identity snapshot (v2–v7)
 );
 
 CREATE TABLE scan_errors (
-    run_id TEXT NOT NULL,
-    path TEXT,
-    message TEXT NOT NULL,
-    FOREIGN KEY (run_id) REFERENCES scan_runs(run_id)
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_run_id TEXT NOT NULL REFERENCES scan_runs(id),
+    path        TEXT,               -- NULL: the cancel marker
+    message     TEXT NOT NULL
 );
 ```
 
-Migrations are versioned and transactional. At every start
-`Database::open` checks the schema version and runs the necessary
-migration steps.
+Migrations are versioned (`PRAGMA user_version`) and each runs in one
+transaction. `Database::open` applies the pending ones. The history
+commands `adpa runs` / `adpa errors` use `Database::open_read_only`
+instead: SQLite's read-only mode, no migration, queries on schema-v1
+columns only, refusing a file without a Stars schema or of a newer Stars
+(review CR-30).
 
 ### 12.2 Delta comparison
 
@@ -1605,26 +1613,45 @@ local-group status, unsupported-ACE count, diagnostics). Each entry
 carries both stored results, so the GUI states every right with its
 determinability (`rights_label_compact`, review CR-9, ADR 0065).
 
+Review CR-19: `check_comparable` also refuses a scan against a
+single-path analysis and two depth limits (runs stored before v9 are
+compared with a note in `DeltaReport::notes`), and `apply_coverage` turns
+an addition or removal into `NotObserved { in_old, reason }` when the run
+without the path did not cover it — cancelled (its stored cancel marker),
+or a stored error at the path or one of its parents.
+
 ### 12.3 Export formats
 
-**CSV** (`crates/exporter/src/csv.rs`):
-- Path per row.
-- Diagnostic markers as comma-separated variant names
-  (`"IdentityDisabled,IdentityLookupFailed"`).
-- Designed for Excel / pivot.
+Every scan report carries the scan's coverage (`AnalysisResult::coverage`,
+`ScanCoverage`: root, depth limit, cancelled, every path left out with its
+reason; `None` for a single-path analysis — review CR-28).
 
-**JSON** (`crates/exporter/src/json.rs`):
-- Full variant-tagged output.
-- `reason` texts preserved.
+**CSV** (`crates/exporter/src/csv.rs`):
+- 23 columns, one result per row; formula-leading cells neutralized.
+- Diagnostic markers as a JSON list (`diagnostics_json`); `determinable`
+  and `not_determinable_reasons` carry the verdict.
+- Last column `row_kind`: `permission` for a result; a scan export ends
+  with one `scan_error` row per path left out and one `scan_status` row.
+- Designed for Excel / pivot (filter on `row_kind = permission`).
+
+**JSON** (`crates/exporter/src/json.rs`, schema v5):
+- Full variant-tagged output, derived `determinable`, `uncertainty` and
+  `account_status` per permission (v4).
+- `scan`: `root`, `max_depth`, `complete`, `cancelled`, `summary`,
+  `errors` — `null` for an analysis (v5).
 - Designed for SIEM, scripts, custom tooling.
 
 **HTML** (`crates/exporter/src/html.rs`):
-- Fully formatted report with tabs:
-  - Risk findings (sorted by severity).
-  - Trustee table per path (NTFS + Share separated).
-  - Scan errors in their own section.
-- Diagnostic markers as coloured badges (`badge-high`,
-  `badge-medium`, `badge-info`) with tooltip text.
+- At the top: scan complete / incomplete / cancelled.
+- Risk findings (sorted by severity), the permissions with their badges
+  and graphs, the trustee table per path (NTFS + Share separated), and
+  "Paths not covered" with every path the scan left out.
+- Diagnostic markers as coloured badges with the model's wording as
+  tooltip.
+
+Destinations: an export or database inside the scanned or analyzed folder
+is refused before anything is written (`fs_scanner::output_guard`, by path
+and by folder identity — review CR-17).
 
 ### 12.4 Path-centric trustees — `exporter::trustees`
 
