@@ -463,17 +463,16 @@ pub use adpa_core::traits::ResolutionProvenance as EngineFlags;
 #[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait IdentityBackend: Send + Sync {
-    /// als `Err` propagiert.
-    /// SID → Identity inside the configured LDAP base.
+    /// SID → Identity inside the configured LDAP base. A lookup failure is
+    /// propagated as `Err`, a miss is `Ok(None)`.
     async fn lookup_identity_by_sid(&self, sid: &Sid) -> Result<Option<Identity>, CoreError>;
 
-    /// UPN → (SID, Identity).
-    /// UPN → (SID, Identity).
-    async fn lookup_identity_by_upn(&self, upn: &str)
-        -> Result<Option<(Sid, Identity)>, CoreError>;
+    /// UPN → every matching (SID, Identity); the caller refuses more than
+    /// one (review CR-23).
+    async fn lookup_identities_by_upn(&self, upn: &str) -> Result<Vec<(Sid, Identity)>, CoreError>;
 
-    /// [`PrincipalResolver::resolve`]).
-    /// `sAMAccountName` → all matching identities (caller dedupes).
+    /// `sAMAccountName` → all matching identities; the caller refuses more
+    /// than one.
     async fn lookup_identities_by_sam(&self, sam: &str) -> Result<Vec<(Sid, Identity)>, CoreError>;
 
     /// Recursive group resolution.
@@ -630,11 +629,8 @@ impl IdentityBackend for LdapIdentityBackend {
         }
     }
 
-    async fn lookup_identity_by_upn(
-        &self,
-        upn: &str,
-    ) -> Result<Option<(Sid, Identity)>, CoreError> {
-        self.inner.lookup_by_upn_raw(upn).await
+    async fn lookup_identities_by_upn(&self, upn: &str) -> Result<Vec<(Sid, Identity)>, CoreError> {
+        self.inner.lookup_all_by_upn_raw(upn).await
     }
 
     async fn lookup_identities_by_sam(&self, sam: &str) -> Result<Vec<(Sid, Identity)>, CoreError> {
@@ -779,7 +775,21 @@ where
     /// [`IdentityScopeStatus::LookupFailed`] marker with a clear reason.
     /// UPN path. No LSA cross-check possible — miss → `LookupFailed`.
     async fn resolve_by_upn(&self, upn: &str) -> Result<PrincipalResolution, CoreError> {
-        match self.identity_backend.lookup_identity_by_upn(upn).await? {
+        let entries = self.identity_backend.lookup_identities_by_upn(upn).await?;
+        // Review CR-23: Windows refuses a UPN two accounts carry (lab
+        // 2026-11-21: the LSA lookup and the logon fail) — so does Stars,
+        // instead of reporting whichever account the DC returned first.
+        if entries.len() > 1 {
+            let sids: Vec<&str> = entries.iter().map(|(s, _)| s.0.as_str()).collect();
+            warn!(upn, matches = entries.len(), "Ambiguous UPN refused");
+            return Err(CoreError::Validation(format!(
+                "Ambiguous UPN '{upn}' — {} accounts carry it ({}). Windows refuses a logon \
+                 with such a name. Use the SID of the account you mean.",
+                entries.len(),
+                sids.join(", ")
+            )));
+        }
+        match entries.into_iter().next() {
             Some((sid, identity)) => {
                 let (memberships, group_status, group_gaps, excluded_groups) =
                     self.resolve_groups(&sid).await;
@@ -1340,7 +1350,7 @@ mod tests {
     /// In-memory LDAP fake.
     struct FakeLdapBackend {
         by_sid: HashMap<String, Identity>,
-        by_upn: HashMap<String, (Sid, Identity)>,
+        by_upn: HashMap<String, Vec<(Sid, Identity)>>,
         by_sam: HashMap<String, Vec<(Sid, Identity)>>,
         memberships: HashMap<String, Vec<GroupMembership>>,
         force_error: Mutex<Option<CoreError>>,
@@ -1378,11 +1388,11 @@ mod tests {
             Ok(self.by_sid.get(&sid.0).cloned())
         }
 
-        async fn lookup_identity_by_upn(
+        async fn lookup_identities_by_upn(
             &self,
             upn: &str,
-        ) -> Result<Option<(Sid, Identity)>, CoreError> {
-            Ok(self.by_upn.get(upn).cloned())
+        ) -> Result<Vec<(Sid, Identity)>, CoreError> {
+            Ok(self.by_upn.get(upn).cloned().unwrap_or_default())
         }
 
         async fn lookup_identities_by_sam(
@@ -2110,11 +2120,11 @@ mod tests {
             ) -> Result<Option<Identity>, CoreError> {
                 Ok((sid.0 == self.sid.0).then(|| self.identity.clone()))
             }
-            async fn lookup_identity_by_upn(
+            async fn lookup_identities_by_upn(
                 &self,
                 _upn: &str,
-            ) -> Result<Option<(Sid, Identity)>, CoreError> {
-                Ok(None)
+            ) -> Result<Vec<(Sid, Identity)>, CoreError> {
+                Ok(Vec::new())
             }
             async fn lookup_identities_by_sam(
                 &self,
@@ -2180,11 +2190,11 @@ mod tests {
                     Ok(None)
                 }
             }
-            async fn lookup_identity_by_upn(
+            async fn lookup_identities_by_upn(
                 &self,
                 _upn: &str,
-            ) -> Result<Option<(Sid, Identity)>, CoreError> {
-                Ok(None)
+            ) -> Result<Vec<(Sid, Identity)>, CoreError> {
+                Ok(Vec::new())
             }
             async fn lookup_identities_by_sam(
                 &self,
@@ -2278,6 +2288,58 @@ mod tests {
             .await
             .expect_err("ambiguous SAM must error");
         assert!(err.to_string().contains("Ambiguous"));
+    }
+
+    /// Review CR-23: two accounts with one UPN (measured in the lab) are
+    /// refused, naming both SIDs — never the first one the DC returned.
+    #[tokio::test]
+    async fn ambiguous_upn_is_refused_with_both_sids() {
+        let mut ldap = FakeLdapBackend::new();
+        let id_a = mk_identity(
+            "S-1-5-21-1-1-1-1101",
+            "rt_dup01",
+            "CORP",
+            IdentityKind::User,
+        );
+        let id_b = mk_identity(
+            "S-1-5-21-1-1-1-1102",
+            "rt_dup02",
+            "CORP",
+            IdentityKind::User,
+        );
+        ldap.by_upn.insert(
+            "rt_dup@corp.test".to_owned(),
+            vec![
+                (Sid("S-1-5-21-1-1-1-1101".to_owned()), id_a),
+                (Sid("S-1-5-21-1-1-1-1102".to_owned()), id_b),
+            ],
+        );
+        let resolver = PrincipalResolver::new(ldap, Some(FakeLsaBackend::new()));
+        let err = resolver
+            .resolve(PrincipalInput::Auto("rt_dup@corp.test".to_owned()))
+            .await
+            .expect_err("an ambiguous UPN must be refused");
+        let text = err.to_string();
+        assert!(text.contains("Ambiguous UPN"), "{text}");
+        assert!(text.contains("S-1-5-21-1-1-1-1101"), "{text}");
+        assert!(text.contains("S-1-5-21-1-1-1-1102"), "{text}");
+    }
+
+    /// One account with the UPN resolves as before.
+    #[tokio::test]
+    async fn unique_upn_resolves_to_its_account() {
+        let mut ldap = FakeLdapBackend::new();
+        let id = mk_identity("S-1-5-21-1-1-1-1103", "alice", "CORP", IdentityKind::User);
+        ldap.by_upn.insert(
+            "alice@corp.test".to_owned(),
+            vec![(Sid("S-1-5-21-1-1-1-1103".to_owned()), id)],
+        );
+        let resolver = PrincipalResolver::new(ldap, Some(FakeLsaBackend::new()));
+        let res = resolver
+            .resolve(PrincipalInput::Auto("alice@corp.test".to_owned()))
+            .await
+            .expect("a unique UPN resolves");
+        assert_eq!(res.sid.0, "S-1-5-21-1-1-1-1103");
     }
 
     /// `Auto` classification + trim.
@@ -2448,11 +2510,11 @@ mod tests {
         async fn lookup_identity_by_sid(&self, sid: &Sid) -> Result<Option<Identity>, CoreError> {
             self.0.lookup_identity_by_sid(sid).await
         }
-        async fn lookup_identity_by_upn(
+        async fn lookup_identities_by_upn(
             &self,
             upn: &str,
-        ) -> Result<Option<(Sid, Identity)>, CoreError> {
-            self.0.lookup_identity_by_upn(upn).await
+        ) -> Result<Vec<(Sid, Identity)>, CoreError> {
+            self.0.lookup_identities_by_upn(upn).await
         }
         async fn lookup_identities_by_sam(
             &self,
