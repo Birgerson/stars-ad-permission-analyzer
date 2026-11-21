@@ -1084,6 +1084,24 @@ tabs once a mode other than Off is selected (range 1–600, default 10).
   same administrative access to the server that reading its shares and
   local groups already requires.
 
+**Paths on a mapped network drive** (`Z:\Data` with `Z:` mapped to
+`\\fs01\Data`):
+
+- They look local, but every object below them lives on the file server.
+  Stars asks Windows for the UNC path the drive maps to and evaluates that
+  path like any UNC path: share DACL ∩ NTFS DACL, the server's local
+  groups and policies. The report names the UNC path, and the step
+  "Network drive: Z:\Data is on a mapped network drive and was evaluated
+  as \\fs01\Data\…" says where it came from.
+- A drive is mapped per logon session. Run Stars in the session that has
+  the mapping; an elevated session does not see the mappings of the
+  non-elevated one. If Windows reports a network drive but not its UNC
+  path, Stars stops with an error and asks for the UNC path — it never
+  falls back to a local evaluation.
+- Up to v1.19.0 such a path was evaluated as a local path: the server's
+  NTFS rights were shown as exact, without the share permission (review
+  CR-22).
+
 **DFS paths** (`\\corp.local\dfs\Projects\…`, a domain-based or
 standalone DFS namespace):
 

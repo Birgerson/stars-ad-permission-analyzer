@@ -1109,6 +1109,14 @@ async fn handle_analyze(
     let normalized_path = validate_path(path)
         .map_err(|e| format!("Invalid path: {e}"))?
         .0;
+    // Review CR-22: a path on a mapped network drive is evaluated as the UNC
+    // path it maps to — over SMB, with that server's share and groups.
+    let mapped_drive = analysis::network_drive::resolve_mapped_drive(&normalized_path)
+        .map_err(|e| format!("Invalid path: {e}"))?;
+    let normalized_path = match &mapped_drive {
+        Some(m) => m.unc.clone(),
+        None => normalized_path,
+    };
     // ADR 0085: a path of a DFS namespace is evaluated where Windows serves
     // it — on the folder target this machine is referred to.
     let analysis::dfs::EvaluationTarget {
@@ -1235,6 +1243,9 @@ async fn handle_analyze(
             );
             if let Some(d) = &dfs {
                 analysis::dfs::attach_step(&mut result.path_explanation, d);
+            }
+            if let Some(m) = &mapped_drive {
+                analysis::network_drive::attach_step(&mut result.path_explanation, m);
             }
             result
         })
@@ -1525,6 +1536,22 @@ async fn handle_scan(
         Ok(p) => p.0,
         Err(e) => return make_early_summary(format!("Invalid path: {e}")),
     };
+    // Review CR-22: a root on a mapped network drive is scanned as the UNC
+    // path it maps to; rows name the UNC paths, the note says why.
+    let scan_mapped_drive = match analysis::network_drive::resolve_mapped_drive(&normalized_root) {
+        Ok(m) => m,
+        Err(e) => return make_early_summary(format!("Invalid path: {e}")),
+    };
+    let normalized_root = match &scan_mapped_drive {
+        Some(m) => {
+            let _ = evt_tx.send(WorkerEvent::ScanError {
+                path: m.requested.clone(),
+                message: m.note(),
+            });
+            m.unc.clone()
+        }
+        None => normalized_root,
+    };
     // ADR 0085: a scan root of a DFS namespace is scanned on the folder
     // target this machine is referred to; rows keep the requested form.
     let analysis::dfs::EvaluationTarget {
@@ -1777,6 +1804,9 @@ async fn handle_scan(
                 );
                 if let Some(d) = &row_dfs {
                     analysis::dfs::attach_step(&mut perm.path_explanation, d);
+                }
+                if let Some(m) = &scan_mapped_drive {
+                    analysis::network_drive::attach_step(&mut perm.path_explanation, m);
                 }
                 // ADR 0065: an undeterminable row says so instead of
                 // showing the computed value as a fact.
