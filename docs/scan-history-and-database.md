@@ -63,7 +63,7 @@ Since review CR-19 the comparison also checks **what each run covered**:
 Every run's stored error list answers the question "**what could this scan not read?**" — those paths are missing from the run's results, so the list is part of the audit evidence:
 
 - **GUI:** the Delta tab's run list shows the true error count per run and an **Errors (n)** button that opens the run's error list (path + reason per entry).
-- **CLI:** `adpa runs --db <DB>` lists the stored runs with their path/error counts; `adpa errors --db <DB> --run-id <ID>` prints one run's error list. Both are strictly read-only and refuse to *create* a database file that does not exist.
+- **CLI:** `adpa runs --db <DB>` lists the stored runs with their path/error counts; `adpa errors --db <DB> --run-id <ID>` prints one run's error list. Both are strictly read-only: they open the file in SQLite's read-only mode, apply no migration and write nothing — an audit database of an older Stars version is read as it is, and stays byte for byte unchanged (review CR-30; up to v1.19.0 the open migrated it). They refuse to *create* a database file that does not exist, a file without a Stars schema, and a database written by a newer Stars.
 
 ### Removing a run
 

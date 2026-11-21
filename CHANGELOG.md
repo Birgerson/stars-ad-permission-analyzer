@@ -38,6 +38,13 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   and the GUI, now resolve the drive to its UNC path first and evaluate
   that; the explanation names the drive. A network drive whose UNC path
   Windows does not return is an error, never a local evaluation.
+- **`adpa runs` and `adpa errors` no longer change the database (review
+  CR-30).** They are documented as strictly read-only, but after the
+  existence check they used the normal open, which applies pending
+  migrations — inspecting an older audit database changed its schema. They
+  now open it in SQLite's read-only mode without migration (their queries
+  use only the first schema's columns), and refuse a file without a Stars
+  schema or of a newer Stars.
 - **The delta comparison no longer reports unobserved paths as added or
   removed (review CR-19).** It compared rows by identity and path only. A
   full scan followed by a cancelled one, one with a lower depth limit, one
