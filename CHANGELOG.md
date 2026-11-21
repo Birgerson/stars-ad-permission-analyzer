@@ -38,6 +38,12 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   and the GUI, now resolve the drive to its UNC path first and evaluate
   that; the explanation names the drive. A network drive whose UNC path
   Windows does not return is an error, never a local evaluation.
+- **An ACL with entries Stars cannot evaluate is never called empty
+  (review CR-24).** An NTFS DACL holding only unsupported entries was
+  explained as "Empty DACL — nobody is granted anything", and the share
+  side said "Share DACL has no entries" or "No share ACE applies" from the
+  evaluated part alone, while the result was correctly marked not
+  determinable. Both sides now name the unevaluated entries instead.
 - **The walker no longer skips a directory it never listed (review CR-25,
   ADR 0058 addendum).** A directory was marked as enumerated when a route
   reached it, before the depth limit or the listing. A junction met at the

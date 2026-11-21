@@ -1244,7 +1244,11 @@ async fn handle_analyze(
             // Review CR-7: the share side explained ACE by ACE.
             permission_engine::engine::attach_share_provenance(
                 &mut result.path_explanation,
-                share_scanner::share_decision_steps(&share_decisions, &share_names),
+                share_scanner::share_decision_steps(
+                    &share_decisions,
+                    &share_names,
+                    unsupported_share_ace_count,
+                ),
             );
             if let Some(d) = &dfs {
                 analysis::dfs::attach_step(&mut result.path_explanation, d);
@@ -1812,7 +1816,11 @@ async fn handle_scan(
                 // Review CR-7: the share side explained ACE by ACE.
                 permission_engine::engine::attach_share_provenance(
                     &mut perm.path_explanation,
-                    share_scanner::share_decision_steps(&scan_share_decisions, &scan_sid_names),
+                    share_scanner::share_decision_steps(
+                        &scan_share_decisions,
+                        &scan_sid_names,
+                        scan_unsupported_share_ace_count,
+                    ),
                 );
                 if let Some(d) = &row_dfs {
                     analysis::dfs::attach_step(&mut perm.path_explanation, d);

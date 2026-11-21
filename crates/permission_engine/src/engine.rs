@@ -2269,17 +2269,30 @@ fn build_explanation(input: ExplanationInput<'_>) -> (PermissionPath, Permission
              to everyone (Full Control)"
                 .to_string(),
         );
-    } else if dacl.is_empty() {
+    } else if dacl.is_empty() && unsupported_ntfs_count == 0 {
         steps.push(
             "Empty DACL — the object's access control list has no entries: nobody is granted \
              anything through it (only the owner rule below can apply)"
                 .to_string(),
         );
-    } else if matched_ace_steps == 0 && uncertain_ace_steps == 0 {
+    // Review CR-24: "empty" and "no ACE applies" are claims about the whole
+    // DACL; with entries Stars could not evaluate they hold only for the
+    // evaluated part, and say so.
+    } else if dacl.is_empty() {
+        steps.push(format!(
+            "{NOT_DETERMINABLE} — the DACL holds only {unsupported_ntfs_count} ACE(s) Stars \
+             cannot evaluate; whether they grant or deny anything to this token is not known"
+        ));
+    } else if matched_ace_steps == 0 && uncertain_ace_steps == 0 && unsupported_ntfs_count == 0 {
         steps.push(
             "No ACE in the DACL applies to this token — nothing is granted or denied through it"
                 .to_string(),
         );
+    } else if matched_ace_steps == 0 && uncertain_ace_steps == 0 {
+        steps.push(format!(
+            "No evaluated ACE in the DACL applies to this token — {unsupported_ntfs_count} \
+             ACE(s) could not be evaluated and may grant or deny"
+        ));
     } else if matched_ace_steps == 0 {
         steps.push(
             "No ACE in the DACL certainly applies to this token — only the UNCERTAIN ACE(s) \
@@ -8018,6 +8031,53 @@ mod tests {
             .any(|s| s.starts_with("No ACE")
                 || s.starts_with("Empty DACL")
                 || s.starts_with("NULL DACL")));
+    }
+
+    /// Review CR-24: a DACL whose entries Stars cannot evaluate is never
+    /// called empty, and "no ACE applies" names the unevaluated part.
+    #[test]
+    fn an_unevaluated_dacl_is_never_called_empty() {
+        use adpa_core::model::UnsupportedAce;
+        let unsupported = || UnsupportedAce {
+            ace_type: 9,
+            flags: 0,
+            mask: 0x001F_01FF,
+        };
+        let mut only_unsupported = fso(None, vec![]);
+        only_unsupported.unsupported_aces = vec![unsupported()];
+        let p = eval(user(USER), vec![], only_unsupported, None);
+        let steps = &p.path_explanation.steps;
+        assert!(
+            !steps.iter().any(|s| s.starts_with("Empty DACL")),
+            "{steps:#?}"
+        );
+        assert!(
+            steps.iter().any(|s| s.starts_with(NOT_DETERMINABLE)
+                && s.contains("holds only 1 ACE(s) Stars cannot evaluate")),
+            "{steps:#?}"
+        );
+        assert!(!p.ntfs_determinable());
+
+        let mut other_and_unsupported = fso(
+            None,
+            vec![allow_ace("S-1-5-21-9-9-9-999", MASK_FULL_CONTROL, false)],
+        );
+        other_and_unsupported.unsupported_aces = vec![unsupported()];
+        let p = eval(user(USER), vec![], other_and_unsupported, None);
+        let steps = &p.path_explanation.steps;
+        assert!(
+            !steps
+                .iter()
+                .any(|s| s.starts_with("No ACE in the DACL applies")),
+            "{steps:#?}"
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|s| s.starts_with("No evaluated ACE in the DACL applies")
+                    && s.contains("1 ACE(s) could not be evaluated")),
+            "{steps:#?}"
+        );
     }
 
     // --- Review CR-3: bounded results are traceable ---

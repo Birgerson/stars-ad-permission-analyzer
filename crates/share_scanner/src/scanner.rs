@@ -828,9 +828,13 @@ pub fn share_ace_decisions(
 /// The share ACE steps of the explanation path (review CR-7): every share
 /// ACE that applies to the token or may apply, with what it decided. ACEs
 /// whose trustee is not in the token are left out, like on the NTFS side.
+/// `unevaluated` is the number of share ACEs that could not be evaluated
+/// (review CR-24): "no entries" and "no ACE applies" are then claims about
+/// the evaluated part only, and say so.
 pub fn share_decision_steps(
     decisions: &[ShareAceDecision],
     sid_names: &std::collections::BTreeMap<String, String>,
+    unevaluated: usize,
 ) -> Vec<String> {
     use permission_engine::NormalizedRights;
     let mut steps = Vec::new();
@@ -867,10 +871,20 @@ pub fn share_decision_steps(
         ));
     }
     if steps.is_empty() {
-        steps.push(if decisions.is_empty() {
-            "Share DACL has no entries — the share grants nobody access".to_owned()
-        } else {
-            "No share ACE applies to this token — the share grants nothing".to_owned()
+        use permission_engine::NOT_DETERMINABLE;
+        steps.push(match (decisions.is_empty(), unevaluated) {
+            (true, 0) => "Share DACL has no entries — the share grants nobody access".to_owned(),
+            (true, n) => format!(
+                "{NOT_DETERMINABLE} — the share DACL holds only {n} ACE(s) Stars could not \
+                 evaluate; whether they grant or deny anything to this token is not known"
+            ),
+            (false, 0) => {
+                "No share ACE applies to this token — the share grants nothing".to_owned()
+            }
+            (false, n) => format!(
+                "No evaluated share ACE applies to this token — {n} share ACE(s) could not be \
+                 evaluated and may grant or deny"
+            ),
         });
     }
     steps
@@ -2138,7 +2152,7 @@ mod tests {
 
         let names =
             std::collections::BTreeMap::from([("S-1-1-0".to_owned(), "Everyone".to_owned())]);
-        let steps = share_decision_steps(&decisions, &names);
+        let steps = share_decision_steps(&decisions, &names, 0);
         assert_eq!(
             steps.len(),
             3,
@@ -2170,6 +2184,7 @@ mod tests {
         let steps = share_decision_steps(
             &share_ace_decisions(&dacl, &token, AccessContext::RemoteSmb),
             &Default::default(),
+            0,
         );
         assert_eq!(
             steps,
@@ -2178,8 +2193,30 @@ mod tests {
         let steps = share_decision_steps(
             &share_ace_decisions(&ShareDacl::Acl(vec![]), &token, AccessContext::RemoteSmb),
             &Default::default(),
+            0,
         );
         assert!(steps[0].starts_with("Share DACL has no entries"));
+
+        // Review CR-24: with share ACEs Stars could not evaluate, neither
+        // claim is made for the whole DACL.
+        let steps = share_decision_steps(
+            &share_ace_decisions(&ShareDacl::Acl(vec![]), &token, AccessContext::RemoteSmb),
+            &Default::default(),
+            2,
+        );
+        assert!(
+            steps[0].starts_with("NOT DETERMINABLE — the share DACL holds only 2 ACE(s)"),
+            "{steps:?}"
+        );
+        let steps = share_decision_steps(
+            &share_ace_decisions(&dacl, &token, AccessContext::RemoteSmb),
+            &Default::default(),
+            1,
+        );
+        assert!(
+            steps[0].starts_with("No evaluated share ACE applies to this token — 1 share ACE(s)"),
+            "{steps:?}"
+        );
     }
 
     // --- Review CR-15: no security descriptor is not "unrestricted" ---
