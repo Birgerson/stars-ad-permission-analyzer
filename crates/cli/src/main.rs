@@ -1313,7 +1313,11 @@ async fn run_analyze(
     // Review CR-7: the share side explained ACE by ACE.
     permission_engine::engine::attach_share_provenance(
         &mut result.path_explanation,
-        share_scanner::share_decision_steps(&share_decisions, &report_sid_names),
+        share_scanner::share_decision_steps(
+            &share_decisions,
+            &report_sid_names,
+            unsupported_share_ace_count,
+        ),
     );
 
     output::print_report(
@@ -1862,7 +1866,11 @@ async fn run_scan(
                 #[cfg(windows)]
                 permission_engine::engine::attach_share_provenance(
                     &mut result.path_explanation,
-                    share_scanner::share_decision_steps(&scan_share_decisions, sid_resolver.map()),
+                    share_scanner::share_decision_steps(
+                        &scan_share_decisions,
+                        sid_resolver.map(),
+                        scan_unsupported_share_ace_count,
+                    ),
                 );
 
                 // ADR 0065: a row whose result cannot be determined says so
