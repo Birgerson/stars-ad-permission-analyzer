@@ -250,6 +250,13 @@ DE_WORDS = [
     # main.rs, all reported clean by the gate.
     "landet", "Persistierung", "Schaltflaeche", "klickbare",
     "Pflichtangaben", "gelesenen",
+    # review 2026-11-21 (CR-35): German fragments and test messages in
+    # ad_resolver, permission_engine, validation and Cargo.toml, all
+    # reported clean by the gate.
+    "fehlt", "vorhandene", "direkt", "transitiv", "bitgenau", "identisch",
+    "einsteht", "Serialisierung", "Tabelle", "bewusst", "immer",
+    "Schnittmenge", "uebergeben", "sichtbare", "Wegwerfen", "statt",
+    "erscheint",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -508,6 +515,21 @@ def selftest() -> int:
         "// klickbare Schaltflaeche.",
         "// Tab: Info / Pflichtangaben",
         "// vorab gelesenen Overlay (Single Read pro Share). Round-10",
+        # review 2026-11-21 CR-35: the exact lines the gate reported as
+        # clean. NOTE: "// leer" is guarded by nothing ("leer" is an
+        # English word); deleted at the source.
+        "# Serialisierung / Serialization",
+        '"Well-Known-Tabelle fehlt: {required}"',
+        "// einsteht.",
+        "// bitgenau identisch.",
+        '"GRP_Development (direkt) fehlt — vorhandene Gruppen: {group_names:?}"',
+        '"GRP_FullAccess_FS (transitiv) fehlt"',
+        "// sichtbare Annotation statt stillem Wegwerfen.",
+        "//!   R  = Revision (immer 1)",
+        "// Schnittmenge nach Expansion.",
+        "/// statt nur `Allow ACE for S-1-5-32-544 → Modify` erscheint.",
+        "/// uebergeben statt `None`.",
+        "let ldap = FakeLdapBackend::new(); // bewusst leer",
     ]
     must_pass = [
         "Risk Findings",

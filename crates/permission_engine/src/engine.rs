@@ -2929,7 +2929,7 @@ mod tests {
         }
     }
 
-    // --- Direkte Rechte / direct rights ---
+    // --- Direct rights ---
 
     #[test]
     fn direct_allow_read() {
@@ -4250,7 +4250,6 @@ mod tests {
 
     #[test]
     fn generic_all_intersects_with_share_correctly() {
-        // Schnittmenge nach Expansion.
         // Previously: GENERIC_ALL & share_mask was 0. Expected: correct
         // intersection after expansion.
         let p = eval(
@@ -4619,7 +4618,6 @@ mod tests {
     }
 
     /// `Allow ACE for BUILTIN\Administrators (S-1-5-32-544) → Modify`
-    /// statt nur `Allow ACE for S-1-5-32-544 → Modify` erscheint.
     /// `Allow ACE for BUILTIN\Administrators (S-1-5-32-544) → Modify`
     /// appears instead of just `Allow ACE for S-1-5-32-544 → Modify`.
     #[test]

@@ -618,7 +618,6 @@ impl LdapIdentityBackend {
 impl IdentityBackend for LdapIdentityBackend {
     async fn lookup_identity_by_sid(&self, sid: &Sid) -> Result<Option<Identity>, CoreError> {
         use adpa_core::traits::IdentityResolver;
-        // einsteht.
         // `resolve_identity` returns an `Orphaned` identity on miss;
         // here we translate that to `None`.
         let identity = self.inner.resolve_identity(sid).await?;
@@ -764,7 +763,6 @@ where
             )
         })?;
         let sid = lsa.lookup_sid_for_name(name)?;
-        // bitgenau identisch.
         // Then we run the same path as for direct SIDs — that contains
         // the LDAP / LSA cross-check. Behavior between
         // "DOMAIN\user given" and "name → LSA-SID → analysis" stays
@@ -1517,7 +1515,7 @@ mod tests {
     #[tokio::test]
     async fn domain_user_ldap_miss_with_lsa_hit_is_outside_base() {
         let sid = Sid("S-1-5-21-9-9-9-1001".to_owned());
-        let ldap = FakeLdapBackend::new(); // bewusst leer
+        let ldap = FakeLdapBackend::new(); // deliberately empty
         let mut lsa = FakeLsaBackend::new();
         lsa.name_to_sid
             .insert("TRUSTED\\alice".to_owned(), sid.clone());
@@ -2249,7 +2247,7 @@ mod tests {
     #[tokio::test]
     async fn outside_base_with_skipped_groups_yields_group_failure_reason() {
         let sid = Sid("S-1-5-21-9-9-9-1009".to_owned());
-        let ldap = FakeLdapBackend::new(); // leer
+        let ldap = FakeLdapBackend::new(); // empty
         let mut lsa = FakeLsaBackend::new();
         lsa.sid_to_account
             .insert(sid.0.clone(), mk_lsa("bob", "TRUSTED", IdentityKind::User));

@@ -577,7 +577,6 @@ pub fn resolve_local_group_chains(
         let members = match get_local_group_members(server, &lg.name) {
             Ok(m) => m,
             Err(e) => {
-                // sichtbare Annotation statt stillem Wegwerfen.
                 // If we cannot read the members, the membership stays
                 // confirmed (NetUserGetLocalGroups gave it to us) but
                 // without a concrete path — a visible annotation rather

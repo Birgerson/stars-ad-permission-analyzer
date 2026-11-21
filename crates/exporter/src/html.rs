@@ -689,18 +689,15 @@ fn write_permissions_table(
                         escape_html(reason)
                     ));
                 }
+                // Review CR-34: the reason is the model's own wording, like
+                // the CLI and GUI — it names User Account Control too.
                 PermissionDiagnostic::LogonDependentTrustees {
-                    sids,
-                    min_mask,
-                    max_mask,
+                    min_mask, max_mask, ..
                 } => {
                     diag_parts.push(format!(
-                        "<span class=\"badge badge-medium\" \
-                         title=\"ACE(s) for {} apply only for certain logons \
-                         (authentication type, organization, logon type), which Stars \
-                         does not model.\">[!] logon-dependent ACE(s) — NTFS between {} \
-                         and {}</span>",
-                        escape_html(&sids.join(", ")),
+                        "<span class=\"badge badge-medium\" title=\"{}\">[!] logon-dependent \
+                         ACE(s) — NTFS between {} and {}</span>",
+                        escape_html(&d.summary()),
                         escape_html(&NormalizedRights::new(*min_mask).display_name()),
                         escape_html(&NormalizedRights::new(*max_mask).display_name()),
                     ));
@@ -975,6 +972,23 @@ mod tests {
             diagnostics: vec![],
             trace: Default::default(),
         }
+    }
+
+    /// Review CR-34: the logon-dependent badge gives the model's reason,
+    /// which names User Account Control — not a shorter list of its own.
+    #[test]
+    fn logon_dependent_badge_uses_the_model_wording() {
+        let mut p = perm();
+        let d = PermissionDiagnostic::LogonDependentTrustees {
+            sids: vec!["S-1-5-32-544".into()],
+            min_mask: 0x0012_0089,
+            max_mask: 0x001F_01FF,
+        };
+        p.diagnostics = vec![d.clone()];
+        let mut s = String::new();
+        write_permissions_table(&mut s, &[p]).unwrap();
+        assert!(s.contains("User Account Control"), "{s}");
+        assert!(s.contains(&super::escape_html(&d.summary())), "{s}");
     }
 
     /// ADR 0077: a result with a trace carries its permission graph; one

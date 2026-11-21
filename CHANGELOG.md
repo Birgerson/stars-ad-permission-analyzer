@@ -30,6 +30,20 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   counts a group the resolution may have missed as certainly absent: with a
   gap in the group resolution the logon is "not determinable", never
   refused.
+- **The HTML badge for logon-dependent ACEs gives the model's reason
+  (review CR-34).** Its tooltip had its own, older list of reasons without
+  User Account Control; it now shows the same text as the CLI and GUI.
+
+### Documentation
+
+- **Anonymous Everyone (review CR-33).** The audit criteria and the marker
+  table still said `EveryoneIncludesAnonymous` is not read. Stars reads it
+  from the target since v1.12; Everyone is bounded only when the policy
+  cannot be read.
+- **German leftovers removed (review CR-35).** Comments, test messages and
+  the workspace manifest still held German fragments the language gate did
+  not know. They are removed or translated, and the gate now knows their
+  words.
 
 ## [1.19.0] — 2026-10-25
 
