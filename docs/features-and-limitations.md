@@ -182,7 +182,8 @@ that applies.
   reuse, so it can never change a computed result, only the parsing speed
   of a large scan.
 - **Scan history** in SQLite (local, `persistence` crate) — see
-  ADR 0026. Since schema v8 run-scoped reads/deletes are indexed.
+  ADR 0026. Since schema v8 run-scoped reads/deletes are indexed;
+  since schema v9 a run records its scope and depth limit (review CR-19).
 - **Per-run error evidence is reviewable** (persistence review
   2026-07-26): `adpa runs` lists stored runs with true path/error
   counts, `adpa errors --run-id <ID>` prints the paths a run could not

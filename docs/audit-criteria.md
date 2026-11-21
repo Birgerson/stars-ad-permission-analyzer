@@ -315,7 +315,7 @@ Stars classifies every finding into one of five levels (`adpa_core::model::RiskS
 
 Every `RiskFinding` carries a boolean `incomplete` field. It marks findings whose underlying **permission evaluation** had gaps and which should therefore be read **cautiously**.
 
-`incomplete = true` is set when the underlying evaluation has at least one of the gaps listed below. **Authoritative source:** `EffectivePermission::is_incomplete()` together with `PermissionDiagnostic::is_incompleteness_trigger()` in `crates/core/src/model.rs` — `rules.rs::is_incomplete()` is a thin delegate to it. The list here must stay in sync with the code (last verified 2026-10-25 for v1.19.0 against `uncertain_layer()`; since v1.18.0 `crates/core` gained `DfsTargetEvaluated`, `LinkObject` and `DirectoryIdentityUnknown`).
+`incomplete = true` is set when the underlying evaluation has at least one of the gaps listed below. **Authoritative source:** `EffectivePermission::is_incomplete()` together with `PermissionDiagnostic::is_incompleteness_trigger()` in `crates/core/src/model.rs` — `rules.rs::is_incomplete()` is a thin delegate to it. The list here must stay in sync with the code (last verified 2026-11-21 for v1.19.1 against `uncertain_layer()` — v1.19.1 added no marker; a certainly refused logon now makes the effective right exact although a layer stays open, see `logon_certainly_refused()`; since v1.18.0 `crates/core` gained `DfsTargetEvaluated`, `LinkObject` and `DirectoryIdentityUnknown`).
 
 **Direct evaluation gaps:**
 
@@ -669,6 +669,11 @@ If `%APPDATA%` is not set, Stars falls back to the directory next to the EXE —
 | HTML export | `crates/exporter/src/html.rs` |
 | Persistence (SQLite, schema, migrations) | `crates/persistence/src/` |
 | Delta comparison of two scan runs | `crates/persistence/src/delta.rs::compare_scans` |
+| Delta coverage (`NotObserved`, comparable scope and depth) | `crates/persistence/src/delta.rs::{check_comparable, apply_coverage}` |
+| Scan coverage in every export | `adpa_core::traits::ScanCoverage`, `crates/exporter/src/{csv,json,html}.rs` |
+| Mapped drives and local links into a share | `crates/analysis/src/network_drive.rs`, `crates/fs_scanner/src/drive.rs` |
+| Output never inside the audited tree | `crates/fs_scanner/src/output_guard.rs::check_outside_tree` |
+| Refused logon (Selective Authentication) | `adpa_core::model::EffectivePermission::logon_certainly_refused`, `crates/ad_resolver/src/selective_auth.rs` |
 | Database default path | `crates/gui/src/worker.rs::default_db_path` |
 | Identity enumeration for the GUI live search | `crates/ad_resolver/src/enumerate.rs::enumerate_all` |
 | Name → SID (LSA, GUI button and live search) | `crates/ad_resolver/src/sam.rs::lookup_sid_for_account` |
