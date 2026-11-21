@@ -34,15 +34,23 @@ const MAX_TARGETS: u32 = 1024;
 pub struct DfsTarget {
     pub server: String,
     pub share: String,
+    /// The path below the share the target points to (`Projects\2026`),
+    /// empty for the share itself. Review CR-27, lab 2026-11-21: the client
+    /// reports such a target as `ShareName = "DfsTeam\Sub"`.
+    pub path: String,
     /// The target this client uses.
     pub active: bool,
     pub online: bool,
 }
 
 impl DfsTarget {
-    /// `\\server\share`.
+    /// `\\server\share` or `\\server\share\path` — the full target path.
     pub fn unc(&self) -> String {
-        format!(r"\\{}\{}", self.server, self.share)
+        if self.path.is_empty() {
+            format!(r"\\{}\{}", self.server, self.share)
+        } else {
+            format!(r"\\{}\{}\{}", self.server, self.share, self.path)
+        }
     }
 }
 
@@ -145,16 +153,26 @@ fn build_link(entry: &str, raw_targets: Vec<(String, String, u32)>) -> Result<Df
         ));
     }
     let mut targets = Vec::with_capacity(raw_targets.len());
-    for (server, share, state) in raw_targets {
+    for (server, share_field, state) in raw_targets {
+        // Review CR-27: the share field may carry a path below the share.
+        let (share, path) = match share_field.split_once('\\') {
+            Some((share, path)) => (share.to_owned(), path.trim_end_matches('\\').to_owned()),
+            None => (share_field.clone(), String::new()),
+        };
         let ok = |s: &str| !s.is_empty() && !s.chars().any(|c| c.is_control() || c == '\\');
-        if !ok(&server) || !ok(&share) {
+        let path_ok = path.is_empty()
+            || path.split('\\').all(|c| {
+                ok(c) && c != "." && c != ".." && !c.chars().any(|ch| "/:*?\"<>|".contains(ch))
+            });
+        if !ok(&server) || !ok(&share) || !path_ok {
             return Err(format!(
-                "the DFS client reported the target '{server}\\{share}' for {entry_path}"
+                "the DFS client reported the target '{server}\\{share_field}' for {entry_path}"
             ));
         }
         targets.push(DfsTarget {
             server,
             share,
+            path,
             active: state & DFS_STORAGE_STATE_ACTIVE != 0,
             online: state & DFS_STORAGE_STATE_ONLINE != 0,
         });
@@ -207,7 +225,43 @@ mod tests {
         assert!(build_link(r"\corp.test\dfs\Projects", vec![]).is_err());
         assert!(build_link("", vec![raw("FS-01", "DfsProj", 0x6)]).is_err());
         assert!(build_link(r"\corp.test\dfs", vec![raw("", "DfsProj", 0x6)]).is_err());
-        assert!(build_link(r"\corp.test\dfs", vec![raw("FS-01", r"a\b", 0x6)]).is_err());
+        for bad in [
+            r"\Sub",
+            r"DfsProj\\Sub",
+            r"DfsProj\..\x",
+            r"DfsProj\a:b",
+            "DfsProj\\\u{7}",
+        ] {
+            assert!(
+                build_link(r"\corp.test\dfs", vec![raw("FS-01", bad, 0x6)]).is_err(),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// Review CR-27, lab 2026-11-21: `\\corp.test\dfs\Deep` targets
+    /// `\\FS-02.corp.test\DfsTeam\Sub`; the client reports the share field
+    /// as `DfsTeam\Sub`. The target keeps its full path.
+    #[test]
+    fn a_target_below_the_share_keeps_its_path() {
+        let link = build_link(
+            r"\corp.test\dfs\Deep3",
+            vec![
+                raw("FS-02.corp.test", r"DfsProj\Sub", 0x6),
+                raw("FS-02.corp.test", "DfsProj", 0x2),
+            ],
+        )
+        .unwrap();
+        assert_eq!(link.targets[0].share, "DfsProj");
+        assert_eq!(link.targets[0].path, "Sub");
+        assert_eq!(link.targets[0].unc(), r"\\FS-02.corp.test\DfsProj\Sub");
+        assert_eq!(link.targets[1].unc(), r"\\FS-02.corp.test\DfsProj");
+        let deep = build_link(
+            r"\corp.test\dfs\Deep",
+            vec![raw("FS-02", r"DfsTeam\A\B\", 0x6)],
+        )
+        .unwrap();
+        assert_eq!(deep.targets[0].unc(), r"\\FS-02\DfsTeam\A\B");
     }
 
     #[test]

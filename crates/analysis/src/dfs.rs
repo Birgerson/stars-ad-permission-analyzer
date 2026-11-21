@@ -87,13 +87,25 @@ pub fn decide(requested: &str, final_path: Option<&str>, lookup: &DfsLookup) -> 
         }
         let (folder, other_targets, known) = match link {
             Some(l) => {
-                let active: Vec<_> = l.targets.iter().filter(|t| t.active).collect();
-                let consistent = active.len() == 1 && same_share(&active[0].unc(), fp);
+                // Review CR-27: targets are told apart by their full path —
+                // two targets can share server and share (`\\FS-02\DfsProj`
+                // and `\\FS-02\DfsProj\Sub`, measured) and differ below it.
+                let active: Vec<usize> = (0..l.targets.len())
+                    .filter(|&i| l.targets[i].active)
+                    .collect();
+                let consistent = active.len() == 1 && within(fp, &l.targets[active[0]].unc());
                 let others: Vec<String> = l
                     .targets
                     .iter()
-                    .filter(|t| !same_share(&t.unc(), fp))
-                    .map(|t| t.unc())
+                    .enumerate()
+                    .filter(|(i, t)| {
+                        if consistent {
+                            *i != active[0]
+                        } else {
+                            !within(fp, &t.unc())
+                        }
+                    })
+                    .map(|(_, t)| t.unc())
                     .collect();
                 (Some(l.entry_path.clone()), others, consistent)
             }
@@ -165,6 +177,12 @@ pub fn attach_step(path: &mut PermissionPath, d: &DfsEvaluation) {
     path.steps.insert(at, step);
 }
 
+/// `path` is `target` or lies below it (ASCII case ignored, at a path
+/// component boundary). Pure.
+fn within(path: &str, target: &str) -> bool {
+    strip_prefix_ignore_case(path, target).is_some()
+}
+
 /// `path` without the leading `prefix` (ASCII case ignored), only at a
 /// path-component boundary; `None` when `path` does not start with it.
 fn strip_prefix_ignore_case<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
@@ -201,12 +219,62 @@ mod tests {
     use share_scanner::dfs::{DfsLink, DfsTarget};
 
     fn target(server: &str, share: &str, active: bool) -> DfsTarget {
+        target_at(server, share, "", active)
+    }
+
+    fn target_at(server: &str, share: &str, path: &str, active: bool) -> DfsTarget {
         DfsTarget {
             server: server.to_owned(),
             share: share.to_owned(),
+            path: path.to_owned(),
             active,
             online: true,
         }
+    }
+
+    /// Review CR-27 (lab 2026-11-21): a single target below the share is
+    /// exact — before, the client's answer was discarded and the result
+    /// open; two targets on one share with different paths are two targets.
+    #[test]
+    fn targets_below_the_share_are_compared_by_their_full_path() {
+        let deep = DfsLookup::Link(DfsLink {
+            entry_path: r"\\corp.test\dfs\Deep".to_owned(),
+            targets: vec![target_at("FS-02.corp.test", "DfsTeam", "Sub", true)],
+        });
+        let d = decide(
+            r"\\corp.test\dfs\Deep",
+            Some(r"\\FS-02.corp.test\DfsTeam\Sub"),
+            &deep,
+        )
+        .dfs
+        .unwrap();
+        assert!(d.other_targets.is_empty() && d.other_targets_known, "{d:?}");
+        assert!(!d.marker().is_incompleteness_trigger());
+
+        let deep3 = DfsLookup::Link(DfsLink {
+            entry_path: r"\\corp.test\dfs\Deep3".to_owned(),
+            targets: vec![
+                target_at("FS-02.corp.test", "DfsProj", "Sub", true),
+                target("FS-02.corp.test", "DfsProj", false),
+            ],
+        });
+        let d = decide(
+            r"\\corp.test\dfs\Deep3",
+            Some(r"\\FS-02.corp.test\DfsProj\Sub"),
+            &deep3,
+        )
+        .dfs
+        .unwrap();
+        assert_eq!(d.other_targets, [r"\\FS-02.corp.test\DfsProj"]);
+        assert!(d.other_targets_known);
+        assert!(d.marker().is_incompleteness_trigger(), "two targets: open");
+
+        // Without an open: the active target's full path plus the rest.
+        let t = decide(r"\\corp.test\dfs\Deep\x.txt", None, &deep);
+        assert_eq!(t.evaluated_path, r"\\FS-02.corp.test\DfsTeam\Sub\x.txt");
+        // A component boundary: `Sub2` is not below `Sub`.
+        assert!(!within(r"\\FS-02\DfsTeam\Sub2", r"\\FS-02\DfsTeam\Sub"));
+        assert!(within(r"\\fs-02\dfsteam\SUB\a", r"\\FS-02\DfsTeam\Sub"));
     }
 
     /// The lab answer for `\\corp.test\dfs\Projects\Sub` (2026-10-24).

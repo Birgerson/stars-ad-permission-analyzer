@@ -56,3 +56,27 @@ problem the project rules forbid.
 - Cost: one extra open per analysis root. In remote scans there is no extra open, only one extra local call per directory.
 - Not covered (L18): evaluating every target of a multi-target folder in one run. The admin scans each target share directly; the marker names them. A client referred to a different target than this machine (site costing) is covered by the same rule: more than one target means not determinable.
 - Read-only: an open with `FILE_READ_ATTRIBUTES` and a query of the client's referral cache.
+
+## Addendum 2026-11-21 (review CR-27): targets below the share
+
+A folder target can point to a path below a share
+(`\\FS-02\DfsTeam\Sub`). Measured on MS-01: `NetDfsGetClientInfo` reports
+it as `ServerName = FS-02.corp.test`, `ShareName = DfsTeam\Sub`. The
+parser refused any backslash in the share field, so the whole answer was
+discarded: a folder with one such target was reported NOT DETERMINABLE
+("whether the folder has further targets could not be read"), while the
+same folder pointing to the share root was exact.
+
+- `DfsTarget` keeps the path below the share (`path`), each component
+  validated (no empty, `.`/`..`, control or reserved characters); `unc()`
+  is the full target path.
+- `decide()` tells targets apart by their full path: the evaluated path
+  must lie at or below the active target's path, and the other targets
+  are every target but that one. Windows accepts two targets on one share
+  with different paths (`\\FS-02\DfsProj` and `\\FS-02\DfsProj\Sub`,
+  measured); they are two targets, and the result stays open.
+
+Lab after the fix: `\\corp.test\dfs\Deep` (one target `DfsTeam\Sub`)
+exact Modify; `Deep2` (FS-01 and FS-02 `DfsProj\Sub`) and `Deep3`
+(`DfsProj\Sub` and `DfsProj`) NOT DETERMINABLE, each naming the other
+target by its full path.

@@ -38,6 +38,13 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   and the GUI, now resolve the drive to its UNC path first and evaluate
   that; the explanation names the drive. A network drive whose UNC path
   Windows does not return is an error, never a local evaluation.
+- **DFS targets below a share are understood (review CR-27, ADR 0085
+  addendum).** The DFS client reports a target such as
+  `\\FS-02\DfsTeam\Sub` with the share field `DfsTeam\Sub`; Stars discarded
+  the whole answer, so a folder with one such target was NOT DETERMINABLE
+  instead of exact. Targets now keep their path below the share and are
+  told apart by their full path — two targets on one share with different
+  paths are two targets.
 - **A manual SMB context can no longer mix two servers (review CR-20).**
   For a DFS path Stars read the NTFS DACL on the referred target, but an
   explicit `--smb-server` / `--share-name` (or the GUI fields) still decided
