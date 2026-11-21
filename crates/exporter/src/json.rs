@@ -15,7 +15,7 @@
 use adpa_core::{
     error::CoreError,
     model::{AccountStatus, EffectivePermission, PathTrustees, RiskFinding, Uncertainty},
-    traits::{AnalysisResult, ExportTarget, Exporter},
+    traits::{AnalysisResult, ExportTarget, Exporter, ScanCoverage},
 };
 use serde::Serialize;
 
@@ -30,14 +30,27 @@ use serde::Serialize;
 ///   `determinable` object (`ntfs`/`share`/`effective`), the `uncertainty`
 ///   list (`layer` + `reason`) and `account_status`, so a pipeline never has
 ///   to re-derive whether a mask is a fact.
-pub const JSON_SCHEMA_VERSION: u32 = 4;
+/// * v5 (review CR-28): a scan report carries `scan` — root, depth limit,
+///   `complete`, `cancelled`, `summary` and every path left out with its
+///   reason (`errors`). `null` for a single-path analysis.
+pub const JSON_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Serialize)]
 struct JsonReport<'a> {
     version: u32,
+    scan: Option<JsonScan<'a>>,
     permissions: Vec<JsonPermission<'a>>,
     risk_findings: &'a [RiskFinding],
     path_trustees: &'a [PathTrustees],
+}
+
+/// Review CR-28: the scan's coverage plus the derived statements.
+#[derive(Serialize)]
+struct JsonScan<'a> {
+    #[serde(flatten)]
+    coverage: &'a ScanCoverage,
+    complete: bool,
+    summary: String,
 }
 
 /// One permission plus the derived statements a reader needs (ADR 0065).
@@ -85,6 +98,11 @@ impl Exporter for JsonExporter {
     fn export(&self, result: &AnalysisResult, target: ExportTarget) -> Result<(), CoreError> {
         let report = JsonReport {
             version: JSON_SCHEMA_VERSION,
+            scan: result.coverage.as_ref().map(|coverage| JsonScan {
+                coverage,
+                complete: coverage.complete(),
+                summary: coverage.summary(),
+            }),
             permissions: result.permissions.iter().map(JsonPermission::new).collect(),
             risk_findings: &result.risk_findings,
             path_trustees: &result.path_trustees,
@@ -154,6 +172,41 @@ mod tests {
             affected_identity: Some(Sid("S-1-5-21-1-2-3-1000".to_owned())),
             incomplete,
         }
+    }
+
+    /// Review CR-28: a scan report states its coverage; an analysis has
+    /// `scan: null`.
+    #[test]
+    fn a_scan_report_carries_its_coverage() {
+        use adpa_core::{model::ScanError, traits::ScanCoverage};
+        let result = AnalysisResult {
+            permissions: vec![sample_permission(false)],
+            coverage: Some(ScanCoverage {
+                root: r"\\fs01\Data".into(),
+                max_depth: Some(3),
+                cancelled: false,
+                errors: vec![ScanError {
+                    path: Some(NormalizedPath(r"\\fs01\Data\locked".into())),
+                    message: "Access denied".into(),
+                }],
+            }),
+            ..Default::default()
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&render(&result)).unwrap();
+        assert_eq!(parsed["version"], 5);
+        let scan = &parsed["scan"];
+        assert_eq!(scan["complete"], false);
+        assert_eq!(scan["cancelled"], false);
+        assert_eq!(scan["max_depth"], 3);
+        assert_eq!(scan["root"], r"\\fs01\Data");
+        assert_eq!(scan["errors"][0]["path"], r"\\fs01\Data\locked");
+        assert!(scan["summary"].as_str().unwrap().contains("incomplete"));
+        let analysis = AnalysisResult {
+            permissions: vec![sample_permission(false)],
+            ..Default::default()
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&render(&analysis)).unwrap();
+        assert!(parsed["scan"].is_null());
     }
 
     fn render(result: &AnalysisResult) -> String {
@@ -300,12 +353,13 @@ mod tests {
                     ),
                 ],
             }],
+            coverage: None,
         };
         let body = render(&result);
         let parsed: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
         assert_eq!(
-            parsed["version"], 4,
-            "schema v4 carries the derived determinability fields (ADR 0065)"
+            parsed["version"], 5,
+            "schema v5 carries the scan coverage (review CR-28)"
         );
         let trustees = parsed["path_trustees"]
             .as_array()

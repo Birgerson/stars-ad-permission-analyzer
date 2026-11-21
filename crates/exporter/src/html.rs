@@ -12,7 +12,7 @@ use adpa_core::{
         AceKind, LocalGroupEvalStatus, PathTrusteeEntry, PathTrustees, PermissionDiagnostic,
         RiskFinding, RiskSeverity, ShareEvalStatus, TrusteeCategory,
     },
-    traits::{AnalysisResult, ExportTarget, Exporter},
+    traits::{AnalysisResult, ExportTarget, Exporter, ScanCoverage},
 };
 use permission_engine::NormalizedRights;
 
@@ -63,6 +63,9 @@ pub fn render_html(result: &AnalysisResult) -> Result<String, CoreError> {
         .count();
 
     write_html_head(&mut s, now.to_string().as_str());
+    if let Some(coverage) = &result.coverage {
+        write_coverage(&mut s, coverage);
+    }
     write_summary(
         &mut s,
         total,
@@ -76,6 +79,9 @@ pub fn render_html(result: &AnalysisResult) -> Result<String, CoreError> {
     write_permissions_table(&mut s, &result.permissions)?;
     if !result.path_trustees.is_empty() {
         write_trustees_table(&mut s, &result.path_trustees)?;
+    }
+    if let Some(coverage) = result.coverage.as_ref().filter(|c| !c.errors.is_empty()) {
+        write_coverage_errors(&mut s, coverage);
     }
     write_html_foot(&mut s);
 
@@ -130,12 +136,59 @@ details[open] summary{margin-bottom:4px}
 .graph-scroll{overflow-x:auto;max-width:100%;margin-top:6px;border-radius:6px}
 .graph-scroll svg{display:block}
 .memberships>summary{cursor:pointer;color:#90caf9;font-size:11px;padding:2px 0}
+.coverage{margin-bottom:16px;font-size:13px}
+.coverage a{color:#64b5f6}
 </style>
 </head>
 <body>
 <h1>Stars — AD Permission Analyzer</h1>
 "#);
     let _ = writeln!(s, "<p class=\"subtitle\">Report generated: {timestamp}</p>");
+}
+
+/// Review CR-28: the scan's coverage at the top of the report — a partial
+/// scan is never presented like a complete one.
+fn write_coverage(s: &mut String, coverage: &ScanCoverage) {
+    let (class, label) = if coverage.complete() {
+        ("badge-low", "[i] scan complete")
+    } else if coverage.cancelled {
+        ("badge-critical", "[!] scan cancelled — partial results")
+    } else {
+        ("badge-high", "[!] scan incomplete")
+    };
+    let _ = writeln!(
+        s,
+        "<p class=\"coverage\"><span class=\"badge {class}\">{label}</span> {}{}</p>",
+        escape_html(&coverage.summary()),
+        if coverage.errors.is_empty() {
+            String::new()
+        } else {
+            " The paths are listed under <a href=\"#scan-errors\">Paths not covered</a>.".to_owned()
+        }
+    );
+}
+
+/// Review CR-28: every path the scan left out, with the reason.
+fn write_coverage_errors(s: &mut String, coverage: &ScanCoverage) {
+    let _ = writeln!(
+        s,
+        "<h2 id=\"scan-errors\">Paths not covered ({})</h2>",
+        coverage.errors.len()
+    );
+    s.push_str("<table><thead><tr><th>Path</th><th>Reason</th></tr></thead><tbody>\n");
+    for e in &coverage.errors {
+        let path = e
+            .path
+            .as_ref()
+            .map_or(coverage.root.as_str(), |p| p.0.as_str());
+        let _ = writeln!(
+            s,
+            "<tr><td class=\"path\">{}</td><td>{}</td></tr>",
+            escape_html(path),
+            escape_html(&e.message)
+        );
+    }
+    s.push_str("</tbody></table>\n");
 }
 
 fn write_summary(
@@ -1252,6 +1305,46 @@ mod tests {
             html.contains("non-canonical DACL"),
             "informational marker must still render as a row badge"
         );
+    }
+
+    /// Review CR-28: a partial scan says so at the top and lists the paths
+    /// it left out; a complete one says complete; an analysis says neither.
+    #[test]
+    fn the_report_states_the_scan_coverage() {
+        use adpa_core::model::ScanError;
+        use adpa_core::traits::{AnalysisResult, ScanCoverage};
+        let coverage = |cancelled: bool, errors: Vec<ScanError>| ScanCoverage {
+            root: r"C:\D".into(),
+            max_depth: None,
+            cancelled,
+            errors,
+        };
+        let html = |c: Option<ScanCoverage>| {
+            super::render_html(&AnalysisResult {
+                permissions: vec![perm()],
+                coverage: c,
+                ..Default::default()
+            })
+            .unwrap()
+        };
+        let partial = html(Some(coverage(
+            true,
+            vec![ScanError {
+                path: Some(NormalizedPath(r"C:\D\<x>".into())),
+                message: "Access denied".into(),
+            }],
+        )));
+        assert!(
+            partial.contains("[!] scan cancelled — partial results"),
+            "{partial}"
+        );
+        assert!(partial.contains("Paths not covered (1)"));
+        assert!(partial.contains(r"C:\D\&lt;x&gt;"), "escaped path");
+        let complete = html(Some(coverage(false, vec![])));
+        assert!(complete.contains("[i] scan complete"));
+        assert!(!complete.contains("Paths not covered"));
+        let analysis = html(None);
+        assert!(!analysis.contains("class=\"coverage\""));
     }
 
     /// Follow-up finding 2: dedicated test for the share diagnostic badge.

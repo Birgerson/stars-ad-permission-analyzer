@@ -255,6 +255,57 @@ pub struct AnalysisResult {
     /// any access?" per path. Empty when the caller does not need it —
     /// does not break existing constructions.
     pub path_trustees: Vec<PathTrustees>,
+    /// Review CR-28: for a scan, what it covered — every report carries
+    /// whether the scan completed and which paths it could not read, so a
+    /// recipient can tell a complete scan from a partial one. `None` for a
+    /// single-path analysis.
+    pub coverage: Option<ScanCoverage>,
+}
+
+/// Review CR-28: the coverage of a scan, part of every scan report.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ScanCoverage {
+    /// The scan root as the results name it.
+    pub root: String,
+    /// The depth limit (`None` = unlimited).
+    pub max_depth: Option<u32>,
+    /// The user cancelled the scan; the results are partial.
+    pub cancelled: bool,
+    /// Every path the scan could not read or did not enumerate, with the
+    /// reason — those paths are missing from the results.
+    pub errors: Vec<ScanError>,
+}
+
+impl ScanCoverage {
+    /// Nothing is missing: not cancelled and no path left out.
+    pub fn complete(&self) -> bool {
+        !self.cancelled && self.errors.is_empty()
+    }
+
+    /// One line for a report: complete, or why not.
+    pub fn summary(&self) -> String {
+        let depth = self
+            .max_depth
+            .map(|d| format!(", depth limit {d}"))
+            .unwrap_or_default();
+        match (self.cancelled, self.errors.len()) {
+            (false, 0) => format!("Scan of {} complete{depth}.", self.root),
+            (true, 0) => format!(
+                "Scan of {} cancelled by the user{depth} — the results are partial.",
+                self.root
+            ),
+            (false, n) => format!(
+                "Scan of {} incomplete{depth}: {n} path(s) could not be read or were not \
+                 enumerated — they are missing from the results.",
+                self.root
+            ),
+            (true, n) => format!(
+                "Scan of {} cancelled by the user{depth} — the results are partial, and {n} \
+                 path(s) could not be read or were not enumerated.",
+                self.root
+            ),
+        }
+    }
 }
 
 /// Reads and analyzes file system objects or shares.

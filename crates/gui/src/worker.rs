@@ -728,6 +728,8 @@ pub fn spawn_worker(
         // Path-centric trustee listing from the last scan — exported with
         // the report so the HTML carries both audit views.
         let mut last_path_trustees: Vec<adpa_core::model::PathTrustees> = Vec::new();
+        // Review CR-28: what the last scan covered, for the export.
+        let mut last_coverage: Option<adpa_core::traits::ScanCoverage> = None;
 
         while let Ok(req) = req_rx.recv() {
             match req {
@@ -835,6 +837,12 @@ pub fn spawn_worker(
                         cancelled: scan_result.cancelled,
                     });
 
+                    last_coverage = Some(adpa_core::traits::ScanCoverage {
+                        root: root.clone(),
+                        max_depth,
+                        cancelled: scan_result.cancelled,
+                        errors: scan_result.errors,
+                    });
                     last_permissions = scan_result.permissions;
                     last_path_trustees = scan_result.path_trustees;
                     last_risk_findings = risks;
@@ -850,6 +858,7 @@ pub fn spawn_worker(
                         &last_permissions,
                         &last_risk_findings,
                         &last_path_trustees,
+                        last_coverage.as_ref(),
                         &output_path,
                     );
                     let _ = evt_tx.send(WorkerEvent::ExportDone(result));
@@ -2044,6 +2053,7 @@ fn export_report(
     permissions: &[EffectivePermission],
     risk_findings: &[RiskFinding],
     path_trustees: &[adpa_core::model::PathTrustees],
+    coverage: Option<&adpa_core::traits::ScanCoverage>,
     output_path: &str,
 ) -> Result<(), String> {
     let status =
@@ -2065,6 +2075,7 @@ fn export_report(
         permissions: permissions.to_vec(),
         risk_findings: risk_findings.to_vec(),
         path_trustees: path_trustees.to_vec(),
+        coverage: coverage.cloned(),
     };
     // `ExportTarget::File` (not FileOverwrite): the exporter refuses an
     // existing file itself, which also covers a file created between the
@@ -3561,7 +3572,13 @@ mod tests {
                 .expect("write sentinel");
         }
 
-        let result = export_report(&[], &[], &[], path.to_str().expect("valid utf-8 path"));
+        let result = export_report(
+            &[],
+            &[],
+            &[],
+            None,
+            path.to_str().expect("valid utf-8 path"),
+        );
 
         // Cleanup BEFORE asserting so a failure does not leak the file.
         let sentinel_before_cleanup = std::fs::read(&path).ok();

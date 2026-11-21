@@ -1363,6 +1363,7 @@ async fn run_analyze(
                 path: fso.path.clone(),
                 trustees,
             }],
+            coverage: None,
         };
         export_analysis(&status.path().0, &analysis, force)?;
         println!("Results exported to: {out_path}");
@@ -1913,6 +1914,15 @@ async fn run_scan(
         .await
         .map_err(|e| anyhow::anyhow!("Scan task failed: {e}"))?;
 
+    // Review CR-28: every export carries what the scan covered — the paths
+    // it left out and whether it was cancelled.
+    let coverage = adpa_core::traits::ScanCoverage {
+        root: requested_path.clone(),
+        max_depth,
+        cancelled,
+        errors: scan_errors_for_db.clone(),
+    };
+
     // 6b. Handle cancellation — mark the partial run as aborted, both on
     // screen and as a recorded scan error.
     if cancelled {
@@ -1934,7 +1944,9 @@ async fn run_scan(
         w.commit(Some(Utc::now()))
             .map_err(|e| anyhow::anyhow!("Failed to persist scan: {e}"))?;
     }
-    if let Some(csv) = csv_rows {
+    if let Some(mut csv) = csv_rows {
+        csv.write_coverage(&coverage)
+            .map_err(|e| anyhow::anyhow!("CSV export failed: {e}"))?;
         csv.finish()
             .map_err(|e| anyhow::anyhow!("CSV export failed: {e}"))?;
     }
@@ -1972,6 +1984,7 @@ async fn run_scan(
                 permissions: all_permissions,
                 risk_findings,
                 path_trustees: all_path_trustees,
+                coverage: Some(coverage),
             };
             export_analysis(&target_path, &analysis, force)?;
         }
