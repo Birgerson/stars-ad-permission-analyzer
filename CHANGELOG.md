@@ -30,6 +30,14 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   counts a group the resolution may have missed as certainly absent: with a
   gap in the group resolution the logon is "not determinable", never
   refused.
+- **A path on a mapped network drive is evaluated over SMB (review
+  CR-22).** `Z:\Data` passed as a local path: Stars read the server's NTFS
+  DACL through the mapping and reported exact local rights, without the
+  share permission or the server's local groups (lab: exact Modify through
+  `Z:`, Read & Execute through the UNC path). Analyze and Scan, in the CLI
+  and the GUI, now resolve the drive to its UNC path first and evaluate
+  that; the explanation names the drive. A network drive whose UNC path
+  Windows does not return is an error, never a local evaluation.
 - **The HTML badge for logon-dependent ACEs gives the model's reason
   (review CR-34).** Its tooltip had its own, older list of reasons without
   User Account Control; it now shows the same text as the CLI and GUI.

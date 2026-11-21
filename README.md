@@ -246,6 +246,7 @@ Stars takes share permissions into account when computing effective access:
 - NULL DACL (everyone has full access) vs. empty DACL (nobody has access) — Stars distinguishes both cases correctly; a share that reports **no security descriptor** (`C$`, `ADMIN$`) is never shown as unrestricted — its built-in default is not visible, so it reads NOT DETERMINABLE
 - Combined NTFS + share rights: `effective = NTFS ∩ Share` — each share ACE is listed with what it granted or denied, and the path names the side that limits the result
 - Share trustees by name, also a member server's own accounts and groups (resolved on that server)
+- A path on a **mapped network drive** (`Z:\Data`) is evaluated as the UNC path it maps to, with the share and the server's groups — never as a local path
 
 #### User Account Control, Guest and anonymous
 

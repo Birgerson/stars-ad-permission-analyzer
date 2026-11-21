@@ -1098,6 +1098,9 @@ async fn run_analyze(
     let requested_path = validate_path(&path)
         .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
         .0;
+    // Review CR-22: a path on a mapped network drive is evaluated as the UNC
+    // path it maps to — over SMB, with that server's share and groups.
+    let (requested_path, mapped_drive) = mapped_drive_target(requested_path)?;
     // ADR 0085: a path of a DFS namespace is evaluated where Windows serves
     // it — on the folder target this machine is referred to.
     let analysis::dfs::EvaluationTarget {
@@ -1299,6 +1302,9 @@ async fn run_analyze(
     if let Some(d) = &dfs {
         analysis::dfs::attach_step(&mut result.path_explanation, d);
     }
+    if let Some(m) = &mapped_drive {
+        analysis::network_drive::attach_step(&mut result.path_explanation, m);
+    }
     // Review CR-7: the share side explained ACE by ACE.
     permission_engine::engine::attach_share_provenance(
         &mut result.path_explanation,
@@ -1401,6 +1407,9 @@ async fn run_scan(
     let requested_path = validate_path(&path)
         .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
         .0;
+    // Review CR-22: a root on a mapped network drive is scanned as the UNC
+    // path it maps to; rows name the UNC paths.
+    let (requested_path, scan_mapped_drive) = mapped_drive_target(requested_path)?;
     // ADR 0085: a scan root of a DFS namespace is scanned on the folder
     // target this machine is referred to; rows keep the requested form.
     let analysis::dfs::EvaluationTarget {
@@ -1836,6 +1845,9 @@ async fn run_scan(
                 if let Some(d) = &row_dfs {
                     analysis::dfs::attach_step(&mut result.path_explanation, d);
                 }
+                if let Some(m) = &scan_mapped_drive {
+                    analysis::network_drive::attach_step(&mut result.path_explanation, m);
+                }
                 // Review CR-7: the share side explained ACE by ACE.
                 #[cfg(windows)]
                 permission_engine::engine::attach_share_provenance(
@@ -1949,6 +1961,27 @@ async fn run_scan(
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Network drives (review CR-22)
+// ---------------------------------------------------------------------------
+
+/// `path` on a mapped network drive → the UNC path it maps to, and the
+/// mapping for the explanation; any other path unchanged. Prints the note
+/// once. A network drive whose UNC path cannot be read is an error.
+fn mapped_drive_target(
+    path: String,
+) -> anyhow::Result<(String, Option<analysis::network_drive::MappedDrive>)> {
+    match analysis::network_drive::resolve_mapped_drive(&path)
+        .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
+    {
+        Some(m) => {
+            println!("  [i] {}", m.note());
+            Ok((m.unc.clone(), Some(m)))
+        }
+        None => Ok((path, None)),
+    }
 }
 
 // ---------------------------------------------------------------------------

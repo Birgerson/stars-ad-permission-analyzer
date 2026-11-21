@@ -14,8 +14,11 @@
 //!
 //! - [`local_groups`] — the account's local groups on the analysis target
 //!   (ADR 0068, UAC ADR 0070/0071/0076, Everyone for anonymous L17).
+//! - [`network_drive`] — a path on a mapped network drive is evaluated as its
+//!   UNC path (review CR-22).
 //! - [`share`] — the share mask of an SMB path for the account's token.
 
 pub mod dfs;
 pub mod local_groups;
+pub mod network_drive;
 pub mod share;
