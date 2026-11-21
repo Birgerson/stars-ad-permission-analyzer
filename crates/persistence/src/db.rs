@@ -7,7 +7,7 @@ use adpa_core::{error::CoreError, model::ScanRun};
 use rusqlite::Connection;
 use uuid::Uuid;
 
-use crate::{delta::DeltaEntry, migrations::run_migrations, scan_store::ScanStore};
+use crate::{delta::DeltaReport, migrations::run_migrations, scan_store::ScanStore};
 
 pub struct Database {
     conn: Connection,
@@ -55,11 +55,7 @@ impl Database {
     }
 
     /// Compares two scan runs and returns all changes.
-    pub fn compare_scans(
-        &self,
-        old_id: &Uuid,
-        new_id: &Uuid,
-    ) -> Result<Vec<DeltaEntry>, CoreError> {
+    pub fn compare_scans(&self, old_id: &Uuid, new_id: &Uuid) -> Result<DeltaReport, CoreError> {
         crate::delta::compare_scans(&self.conn, old_id, new_id)
     }
 }

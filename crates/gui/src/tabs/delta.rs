@@ -9,7 +9,7 @@ use std::sync::mpsc::Sender;
 
 use slint::ComponentHandle;
 
-use crate::worker::{DeltaRow, RunErrorRow, ScanRunSummary, WorkerRequest};
+use crate::worker::{DeltaOutcome, RunErrorRow, ScanRunSummary, WorkerRequest};
 use crate::{DeltaRowVm, DeltaState, MainWindow, RunErrorVm, ScanRunVm};
 
 /// Backing store for the Delta tab. Slint properties hold the view; the
@@ -325,13 +325,14 @@ pub fn handle_run_errors_loaded(ui: &MainWindow, result: Result<Vec<RunErrorRow>
     }
 }
 
-pub fn handle_computed(ui: &MainWindow, result: Result<Vec<DeltaRow>, String>) {
+pub fn handle_computed(ui: &MainWindow, result: Result<DeltaOutcome, String>) {
     ui.global::<DeltaState>().set_is_loading(false);
     match result {
-        Ok(rows) => {
+        Ok(DeltaOutcome { rows, notes }) => {
             let mut added = 0;
             let mut removed = 0;
             let mut changed = 0;
+            let mut not_observed = 0;
             let vms: Vec<DeltaRowVm> = rows
                 .into_iter()
                 .map(|r| {
@@ -343,6 +344,11 @@ pub fn handle_computed(ui: &MainWindow, result: Result<Vec<DeltaRow>, String>) {
                         "Removed" => {
                             removed += 1;
                             slint::Color::from_rgb_u8(0xc0, 0x39, 0x2b)
+                        }
+                        // Review CR-19: neither added nor removed.
+                        "Not observed" => {
+                            not_observed += 1;
+                            slint::Color::from_rgb_u8(0x6b, 0x72, 0x80)
                         }
                         _ => {
                             changed += 1;
@@ -365,7 +371,7 @@ pub fn handle_computed(ui: &MainWindow, result: Result<Vec<DeltaRow>, String>) {
                 .set_rows(slint::ModelRc::new(slint::VecModel::from(vms)));
             ui.global::<DeltaState>().set_has_result(true);
             ui.global::<DeltaState>()
-                .set_status("Comparison complete.".into());
+                .set_status(comparison_status(not_observed, &notes).into());
             ui.global::<DeltaState>().set_status_is_error(false);
         }
         Err(e) => {
@@ -375,4 +381,22 @@ pub fn handle_computed(ui: &MainWindow, result: Result<Vec<DeltaRow>, String>) {
             ui.global::<DeltaState>().set_status_is_error(true);
         }
     }
+}
+
+/// Review CR-19: the status line of a comparison — how many paths only one
+/// run has without the other having covered them, and the notes. Pure.
+fn comparison_status(not_observed: usize, notes: &[String]) -> String {
+    let mut s = "Comparison complete.".to_owned();
+    if not_observed > 0 {
+        s.push_str(&format!(
+            " {not_observed} path(s) not observed: they are in one run only, and the other run \
+             did not cover them (cancelled, or a folder it could not read) — neither added nor \
+             removed."
+        ));
+    }
+    for n in notes {
+        s.push(' ');
+        s.push_str(n);
+    }
+    s
 }

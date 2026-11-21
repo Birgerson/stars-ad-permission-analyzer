@@ -73,13 +73,15 @@ impl<'a> ScanStore<'a> {
     pub fn insert_scan_run(&self, run: &ScanRun) -> Result<(), CoreError> {
         self.conn
             .execute(
-                "INSERT INTO scan_runs (id, started_at, finished_at, target)
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO scan_runs (id, started_at, finished_at, target, scope, max_depth)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     run.id.to_string(),
                     run.started_at.to_rfc3339(),
                     run.finished_at.as_ref().map(|dt| dt.to_rfc3339()),
                     run.target,
+                    run.scope.map(|s| s.as_str()),
+                    run.max_depth.map(i64::from),
                 ],
             )
             .map_err(|e| CoreError::Database(format!("insert_scan_run failed: {e}")))?;
@@ -400,12 +402,16 @@ impl<'a> ScanStore<'a> {
                         .map_err(|e| CoreError::Database(format!("Invalid timestamp: {e}")))
                 })
                 .transpose()?;
+            // Review CR-30: the listing reads only the v1 columns, so it
+            // also serves a database of an older schema opened read-only.
             result.push(ScanRun {
                 id,
                 started_at,
                 finished_at,
                 target,
                 errors: vec![],
+                scope: None,
+                max_depth: None,
             });
         }
         Ok(result)
@@ -727,6 +733,8 @@ mod tests {
             finished_at: None,
             target: target.to_owned(),
             errors: vec![],
+            scope: Some(adpa_core::model::RunScope::Scan),
+            max_depth: None,
         }
     }
 

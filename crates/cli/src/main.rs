@@ -1690,6 +1690,10 @@ async fn run_scan(
                     finished_at: None,
                     target: requested_path.clone(),
                     errors: vec![],
+                    // Review CR-19: the delta compares only runs of the same
+                    // scope and depth limit.
+                    scope: Some(adpa_core::model::RunScope::Scan),
+                    max_depth,
                 })
                 .map_err(|e| anyhow::anyhow!("Failed to persist scan: {e}"))?,
         ),
@@ -1930,7 +1934,7 @@ async fn run_scan(
         println!("  [Aborted] Scan cancelled by user — results are partial.");
         let error = ScanError {
             path: None,
-            message: "Scan cancelled by user — results are partial".to_owned(),
+            message: adpa_core::model::SCAN_CANCELLED_MESSAGE.to_owned(),
         };
         if let Some(w) = &scan_writer {
             w.add_error(&error)

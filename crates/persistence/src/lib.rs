@@ -10,7 +10,8 @@ pub mod scan_store;
 
 pub use db::Database;
 pub use delta::{
-    compare_scans, diff_permission_lists, DeltaEntry, DeltaKind, DeltaReason, LocalGroupStatusTag,
-    PermissionSignature, ShareStatusTag,
+    apply_coverage, check_comparable, compare_scans, diff_permission_lists, DeltaEntry, DeltaKind,
+    DeltaReason, DeltaReport, LocalGroupStatusTag, PermissionSignature, RunCoverage,
+    ShareStatusTag,
 };
 pub use scan_store::ScanStore;
