@@ -1098,9 +1098,10 @@ async fn run_analyze(
     let requested_path = validate_path(&path)
         .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
         .0;
-    // Review CR-22: a path on a mapped network drive is evaluated as the UNC
-    // path it maps to — over SMB, with that server's share and groups.
-    let (requested_path, mapped_drive) = mapped_drive_target(requested_path)?;
+    // Review CR-21/CR-22: a path on a mapped network drive or behind a link
+    // to a share is evaluated as the UNC path it reaches — over SMB, with
+    // that server's share and groups.
+    let (requested_path, network_target) = network_target_of(requested_path)?;
     // ADR 0085: a path of a DFS namespace is evaluated where Windows serves
     // it — on the folder target this machine is referred to.
     let analysis::dfs::EvaluationTarget {
@@ -1302,7 +1303,7 @@ async fn run_analyze(
     if let Some(d) = &dfs {
         analysis::dfs::attach_step(&mut result.path_explanation, d);
     }
-    if let Some(m) = &mapped_drive {
+    if let Some(m) = &network_target {
         analysis::network_drive::attach_step(&mut result.path_explanation, m);
     }
     // Review CR-7: the share side explained ACE by ACE.
@@ -1407,9 +1408,10 @@ async fn run_scan(
     let requested_path = validate_path(&path)
         .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
         .0;
-    // Review CR-22: a root on a mapped network drive is scanned as the UNC
-    // path it maps to; rows name the UNC paths.
-    let (requested_path, scan_mapped_drive) = mapped_drive_target(requested_path)?;
+    // Review CR-21/CR-22: a root on a mapped network drive or behind a link
+    // to a share is scanned as the UNC path it reaches; rows name the UNC
+    // paths.
+    let (requested_path, scan_network_target) = network_target_of(requested_path)?;
     // ADR 0085: a scan root of a DFS namespace is scanned on the folder
     // target this machine is referred to; rows keep the requested form.
     let analysis::dfs::EvaluationTarget {
@@ -1845,7 +1847,7 @@ async fn run_scan(
                 if let Some(d) = &row_dfs {
                     analysis::dfs::attach_step(&mut result.path_explanation, d);
                 }
-                if let Some(m) = &scan_mapped_drive {
+                if let Some(m) = &scan_network_target {
                     analysis::network_drive::attach_step(&mut result.path_explanation, m);
                 }
                 // Review CR-7: the share side explained ACE by ACE.
@@ -1964,16 +1966,17 @@ async fn run_scan(
 }
 
 // ---------------------------------------------------------------------------
-// Network drives (review CR-22)
+// Local-looking paths reached over SMB (review CR-21, CR-22)
 // ---------------------------------------------------------------------------
 
-/// `path` on a mapped network drive → the UNC path it maps to, and the
-/// mapping for the explanation; any other path unchanged. Prints the note
-/// once. A network drive whose UNC path cannot be read is an error.
-fn mapped_drive_target(
+/// `path` on a mapped network drive or behind a link to a share → the UNC
+/// path it reaches, and how, for the explanation; any other path unchanged.
+/// Prints the note once. A network drive whose UNC path cannot be read is
+/// an error.
+fn network_target_of(
     path: String,
-) -> anyhow::Result<(String, Option<analysis::network_drive::MappedDrive>)> {
-    match analysis::network_drive::resolve_mapped_drive(&path)
+) -> anyhow::Result<(String, Option<analysis::network_drive::NetworkTarget>)> {
+    match analysis::network_drive::resolve_network_target(&path)
         .map_err(|e| anyhow::anyhow!("Invalid path: {e}"))?
     {
         Some(m) => {

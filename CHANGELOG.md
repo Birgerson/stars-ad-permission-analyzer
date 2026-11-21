@@ -38,6 +38,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   and the GUI, now resolve the drive to its UNC path first and evaluate
   that; the explanation names the drive. A network drive whose UNC path
   Windows does not return is an error, never a local evaluation.
+- **A local scan no longer walks a link into a share (review CR-21).** A
+  directory symbolic link below a local scan root that leads to a share
+  (Windows follows "local to remote" links by default) was walked, and the
+  share's content was listed as exact local rights, with this machine's
+  groups and without the share (lab: `C:\CR21\remote\Sub` exact Modify
+  instead of Read & Execute). The link's own row stays; its content is
+  reported as "Served from another share … scan it on its own". A path or
+  scan root given through such a link is evaluated over SMB as the UNC
+  path Windows opened, like a mapped drive.
 - **The HTML badge for logon-dependent ACEs gives the model's reason
   (review CR-34).** Its tooltip had its own, older list of reasons without
   User Account Control; it now shows the same text as the CLI and GUI.

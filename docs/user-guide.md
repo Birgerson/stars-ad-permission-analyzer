@@ -1102,6 +1102,22 @@ tabs once a mode other than Off is selected (range 1–600, default 10).
   NTFS rights were shown as exact, without the share permission (review
   CR-22).
 
+**Local paths that a link leads to a share** (`C:\Links\Data` is a
+directory symbolic link to `\\fs01\Data`; Windows follows such a
+"local to remote" link by default):
+
+- **Analyze, or a scan root, through the link** (`C:\Links\Data\Sub`):
+  Stars evaluates the UNC path Windows opened (`\\fs01\Data\Sub`) over
+  SMB, like a mapped drive. The step "Link to a share: … is reached
+  through a link that leads to a network share and was evaluated as …"
+  says so.
+- **A link below a local scan root**: the link's own row stays (its own
+  DACL), but its content is not walked. The error "Served from another
+  share: this link (it stores \\fs01\Data) leads to the network share …
+  Scan \\fs01\Data on its own" names the share. Up to v1.19.0 the content
+  was listed with this machine's groups and without the share (review
+  CR-21).
+
 **DFS paths** (`\\corp.local\dfs\Projects\…`, a domain-based or
 standalone DFS namespace):
 

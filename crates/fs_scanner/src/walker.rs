@@ -339,6 +339,19 @@ fn local_resolution_error(resolved: &str, link: Option<&LinkInfo>) -> CoreError 
     ))
 }
 
+/// Review CR-21: the reason when a directory link below a local scan root
+/// leads to a share. Pure.
+fn link_to_share_error(resolved: &str, link: Option<&LinkInfo>) -> CoreError {
+    let stored = link.map_or(String::new(), |l| format!(" (it stores {})", l.target));
+    CoreError::OtherShare(format!(
+        "this link{stored} leads to the network share {resolved}. What it reaches lives on that \
+         server and is opened over SMB: the share permissions, local groups and policies of \
+         that server apply, not those of this machine, so it was not evaluated in this local \
+         scan and its content was not enumerated. The link object itself is in the result \
+         with its DACL. Scan {resolved} on its own."
+    ))
+}
+
 /// `C:\…` — a path on a drive of the computer that resolves it. Pure.
 fn is_drive_path(path: &str) -> bool {
     let mut chars = path.chars();
@@ -678,6 +691,25 @@ fn walk_dir(
                                 on_item(WalkItem::Error(WalkError {
                                     path: path.clone(),
                                     error: local_resolution_error(&resolved, link.as_ref()),
+                                }));
+                                continue;
+                            }
+                        }
+                        // Review CR-21: a directory link below a local root
+                        // that leads to a share. What it reaches is the
+                        // server's object; evaluated with this machine's
+                        // groups and without the share it would be shown as
+                        // exact local rights (lab 2026-11-21) — not walked.
+                        Ok(resolved) if is_dir => {
+                            let resolved = validation::path::strip_long_path_prefix(
+                                &resolved.to_string_lossy(),
+                            );
+                            if validation::path::parse_unc_components(&resolved).is_some() {
+                                warn!(path, resolved, "Link of a local scan leads to a share");
+                                emit_object!(false);
+                                on_item(WalkItem::Error(WalkError {
+                                    path: path.clone(),
+                                    error: link_to_share_error(&resolved, link.as_ref()),
                                 }));
                                 continue;
                             }
@@ -1649,6 +1681,37 @@ mod tests {
         assert!(
             e.contains(r"this link resolves to D:\x") && !e.contains("it stores"),
             "{e}"
+        );
+    }
+
+    /// Review CR-21: a link of a local scan that leads to a share is named
+    /// with its share, never walked as local.
+    #[test]
+    fn a_local_link_to_a_share_is_named_not_walked() {
+        use super::link_to_share_error;
+        use adpa_core::error::CoreError;
+        use adpa_core::model::{LinkInfo, LinkKind};
+        let link = LinkInfo {
+            kind: LinkKind::SymbolicLink,
+            target: r"\\FS-02.corp.test\DfsProj".into(),
+            relative: false,
+        };
+        let e = link_to_share_error(r"\\FS-02.corp.test\DfsProj", Some(&link));
+        let m = match &e {
+            CoreError::OtherShare(m) => m.clone(),
+            other => panic!("{other}"),
+        };
+        assert!(
+            m.contains(r"(it stores \\FS-02.corp.test\DfsProj) leads to the network share"),
+            "{m}"
+        );
+        assert!(
+            m.contains("not those of this machine") && m.contains("not enumerated"),
+            "{m}"
+        );
+        assert!(
+            m.contains(r"Scan \\FS-02.corp.test\DfsProj on its own"),
+            "{m}"
         );
     }
 
