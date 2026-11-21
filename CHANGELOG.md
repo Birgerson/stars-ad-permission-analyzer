@@ -10,6 +10,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+### Fixed
+
+- **A UPN that two accounts carry is refused (review CR-23).** The UPN
+  lookup took the first account the domain controller returned, and the
+  report looked exact for whichever SID that was. Active Directory does not
+  always enforce UPN uniqueness; the lab created two accounts with one UPN.
+  Windows refuses a logon with such a name, and Stars now refuses it too,
+  naming both SIDs.
+
 ## [1.19.0] — 2026-10-25
 
 **Tested against Windows itself on 1.65 million objects, row by row,

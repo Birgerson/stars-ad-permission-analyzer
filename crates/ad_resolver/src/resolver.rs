@@ -58,30 +58,39 @@ impl LdapResolver {
         }
     }
 
-    /// Raw LDAP UPN lookup. Consumed by [`crate::principal`].
-    pub async fn lookup_by_upn_raw(&self, upn: &str) -> Result<Option<(Sid, Identity)>, CoreError> {
+    /// Raw LDAP UPN lookup: every account that carries the UPN (review
+    /// CR-23 — the caller refuses more than one). Consumed by
+    /// [`crate::principal`]. An entry without a readable `objectSid` is an
+    /// error, never skipped: it could be the account that was meant.
+    pub async fn lookup_all_by_upn_raw(
+        &self,
+        upn: &str,
+    ) -> Result<Vec<(Sid, Identity)>, CoreError> {
         ldap_client::with_timeout(
-            "lookup_by_upn_raw",
+            "lookup_all_by_upn_raw",
             ldap_client::ldap_timeout(&self.config),
             async {
                 let mut ldap = ldap_client::connect(&self.config).await?;
-                let result = ldap_client::search_by_upn(&mut ldap, &self.config.base_dn, upn).await;
+                let result =
+                    ldap_client::search_all_by_upn(&mut ldap, &self.config.base_dn, upn).await;
                 ldap_client::disconnect(ldap).await;
 
-                match result? {
-                    None => Ok(None),
-                    Some(entry) => {
-                        let sid = extract_sid_from_entry(&entry).ok_or_else(|| {
-                            CoreError::SidResolution(format!("No objectSid for UPN: {upn}"))
-                        })?;
-                        let identity = parse_identity_from_entry(&entry, &sid);
-                        self.identity_cache
-                            .lock()
-                            .await
-                            .insert(sid.0.clone(), identity.clone());
-                        Ok(Some((sid, identity)))
-                    }
+                let mut out = Vec::new();
+                for entry in result? {
+                    let sid = extract_sid_from_entry(&entry).ok_or_else(|| {
+                        CoreError::SidResolution(format!(
+                            "No readable objectSid on {} (UPN {upn})",
+                            entry.dn
+                        ))
+                    })?;
+                    let identity = parse_identity_from_entry(&entry, &sid);
+                    self.identity_cache
+                        .lock()
+                        .await
+                        .insert(sid.0.clone(), identity.clone());
+                    out.push((sid, identity));
                 }
+                Ok(out)
             },
         )
         .await

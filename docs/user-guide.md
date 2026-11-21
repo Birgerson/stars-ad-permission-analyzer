@@ -672,7 +672,7 @@ Stars accepts **five input forms** and routes all of them through the
 | Form | Example | When useful? |
 | --- | --- | --- |
 | `DOMAIN\user` | `CORP\alice` | Domain explicit, unambiguous, also in multi-domain. |
-| UPN | `alice@corp.local` | Standard for modern AD environments. |
+| UPN | `alice@corp.local` | Standard for modern AD environments; errors when two accounts carry the UPN. |
 | `sAMAccountName` | `alice` | Quick; errors on ambiguity (two `alice` in different domains). |
 | SID | `S-1-5-21-…-1001` | Direct path, works offline too. |
 | Display name (GUI only) | "Alice Beispiel" | The GUI identity picker suggests; Stars resolves to the SID. |
@@ -682,6 +682,13 @@ Stars accepts **five input forms** and routes all of them through the
 **Ambiguous `sAMAccountName` input** returns a clear error — Stars
 asks you to use `DOMAIN\user` or UPN instead of silently picking the
 first match.
+
+**A UPN that two accounts carry** returns a clear error naming both
+SIDs. A UPN should be unique, but Active Directory does not always
+enforce that: an older domain controller, a changed `dsHeuristics`, or
+two accounts created on two DCs at the same moment can leave two
+accounts with one UPN. Windows then refuses a logon with that name, and
+Stars refuses to pick one. Enter the SID of the account you mean.
 
 **UPN outside the configured LDAP base** returns a clear error
 pointing at the Global Catalog binding workaround (port 3268) or

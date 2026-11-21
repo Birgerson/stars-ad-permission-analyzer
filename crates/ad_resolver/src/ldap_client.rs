@@ -428,16 +428,17 @@ pub async fn search_all_by_samaccount(
     Ok(rs.into_iter().map(RawEntry::from_search_entry).collect())
 }
 
-/// (review finding 3).
-/// Searches for an AD object by its `userPrincipalName` (UPN, form
-/// `user@domain.tld`). UPNs are unique forest-wide — prevents the
-/// ambiguity `sAMAccountName` exhibits in multi-domain forests (review
-/// finding 3).
-pub async fn search_by_upn(
+/// Searches for **all** AD objects with a given `userPrincipalName` (form
+/// `user@domain.tld`). A UPN is meant to be unique, but AD does not always
+/// enforce it (a DC before 2012 R2, dsHeuristics, replication of objects
+/// created on two DCs at once — lab 2026-11-21 measured two accounts with
+/// one UPN). The caller treats more than one match as ambiguous (review
+/// CR-23), as Windows does: the logon and the LSA lookup of such a name fail.
+pub async fn search_all_by_upn(
     ldap: &mut Ldap,
     base_dn: &str,
     upn: &str,
-) -> Result<Option<RawEntry>, CoreError> {
+) -> Result<Vec<RawEntry>, CoreError> {
     let filter = format!("(userPrincipalName={})", escape_filter_value(upn));
 
     debug!("LDAP search by UPN: {upn}");
@@ -449,7 +450,7 @@ pub async fn search_by_upn(
         .success()
         .map_err(|e| CoreError::LdapQuery(format!("UPN search result error: {e}")))?;
 
-    Ok(rs.into_iter().next().map(RawEntry::from_search_entry))
+    Ok(rs.into_iter().map(RawEntry::from_search_entry).collect())
 }
 
 /// Searches users and groups by a partial name substring (max 50 results).
