@@ -692,6 +692,24 @@ mod tests {
         }
     }
 
+    /// Review CR-16: NTFS Full Control, an unreadable share DACL and a
+    /// certainly refused logon — the account has no access, so no rule may
+    /// say it "may have Full Control".
+    #[test]
+    fn a_refused_logon_raises_no_access_finding() {
+        let mut p = perm(USER_SID, MASK_FULL_CONTROL, r"C:\data\a", vec![]);
+        p.effective_mask = AccessMask(0);
+        p.share_status = adpa_core::model::ShareEvalStatus::ReadFailed("access denied".into());
+        p.diagnostics = vec![
+            adpa_core::model::PermissionDiagnostic::SelectiveAuthenticationDenied {
+                server: "FS-01".into(),
+            },
+        ];
+        assert!(p.effective_determinable());
+        let findings = RuleRegistry::with_defaults().evaluate_all(&ctx(vec![p]));
+        assert!(findings.is_empty(), "{findings:#?}");
+    }
+
     /// ADR 0086: result by result gives exactly the findings, in exactly
     /// the order, of the evaluation over all results at once.
     #[test]

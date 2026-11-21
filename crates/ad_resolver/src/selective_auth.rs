@@ -214,11 +214,19 @@ pub fn certainly_absent_in_check(sid: &str) -> bool {
 /// group SID (`S-1-5-21-…`), not in `certain` and not
 /// [`certainly_absent_in_check`] — logon-type well-knowns,
 /// authentication-assertion SIDs. A domain SID outside `certain` is
-/// certainly absent: the account's domain groups are all known.
-fn is_uncertain(sid: &str, certain: &HashSet<String>, uncertain: &HashSet<String>) -> bool {
+/// certainly absent while the account's domain groups are all known
+/// (`domain_groups_complete`); with a gap in the group resolution it may be
+/// one of the missing groups, so it is uncertain too (review CR-16).
+fn is_uncertain(
+    sid: &str,
+    certain: &HashSet<String>,
+    uncertain: &HashSet<String>,
+    domain_groups_complete: bool,
+) -> bool {
     !certain.contains(sid)
         && (uncertain.contains(sid)
-            || (!sid.starts_with("S-1-5-21-") && !certainly_absent_in_check(sid)))
+            || (!sid.starts_with("S-1-5-21-") && !certainly_absent_in_check(sid))
+            || (!domain_groups_complete && sid.starts_with("S-1-5-21-")))
 }
 
 /// Evaluates "Allowed to authenticate" in the self-relative security
@@ -231,6 +239,22 @@ pub fn allowed_to_authenticate(
     certain: &HashSet<String>,
     uncertain: &HashSet<String>,
 ) -> AllowedToAuthenticate {
+    allowed_to_authenticate_for_token(sd, certain, uncertain, true)
+}
+
+/// [`allowed_to_authenticate`] for a token whose domain groups may be
+/// incomplete (`domain_groups_complete == false`, review CR-16): then every
+/// domain SID outside `certain` may be in the token, and "denied" holds only
+/// when no such SID could be granted the right. A refusal Stars reports as
+/// certain makes the effective right exact No access, so it must not rest on
+/// groups the resolution did not see.
+pub fn allowed_to_authenticate_for_token(
+    sd: &[u8],
+    certain: &HashSet<String>,
+    uncertain: &HashSet<String>,
+    domain_groups_complete: bool,
+) -> AllowedToAuthenticate {
+    let maybe_in_token = |s: &str| is_uncertain(s, certain, uncertain, domain_groups_complete);
     let aces = match parse_dacl(sd) {
         Ok(Some(aces)) => aces,
         // A NULL DACL restricts nothing.
@@ -246,9 +270,7 @@ pub fn allowed_to_authenticate(
         }
     };
     let decide = |with_uncertain: bool| {
-        let in_token = |s: &str| {
-            certain.contains(s) || (with_uncertain && is_uncertain(s, certain, uncertain))
-        };
+        let in_token = |s: &str| certain.contains(s) || (with_uncertain && maybe_in_token(s));
         match first_decision(&aces, &in_token) {
             Some(a) if a.allow => AllowedToAuthenticate::Allowed { via: a.sid.clone() },
             _ => AllowedToAuthenticate::Denied,
@@ -264,7 +286,7 @@ pub fn allowed_to_authenticate(
         _ => {
             let sids: Vec<&str> = aces
                 .iter()
-                .filter(|a| !a.inherit_only && a.covers && is_uncertain(&a.sid, certain, uncertain))
+                .filter(|a| !a.inherit_only && a.covers && maybe_in_token(&a.sid))
                 .map(|a| a.sid.as_str())
                 .collect();
             AllowedToAuthenticate::Unknown {
@@ -375,8 +397,14 @@ pub async fn check_for_target(
             None => sid.to_owned(),
         }
     };
+    // Review CR-16: a refusal is reported as certain — the effective right is
+    // then exact No access — so it may only rest on a complete group set.
+    let gap = incomplete_group_set(resolution);
+    if let Some(g) = &gap {
+        tracing::info!(server = %name, gap = %g, "Selective Authentication check on an incomplete token");
+    }
     Some(
-        match allowed_to_authenticate(&sd, &certain, &HashSet::new()) {
+        match allowed_to_authenticate_for_token(&sd, &certain, &HashSet::new(), gap.is_none()) {
             AllowedToAuthenticate::Allowed { via } => Check::Allowed {
                 server: name,
                 via: if via.starts_with("S-") {
@@ -388,10 +416,43 @@ pub async fn check_for_target(
             AllowedToAuthenticate::Denied => Check::Denied { server: name },
             AllowedToAuthenticate::Unknown { reason } => Check::Unknown {
                 server: name,
-                reason,
+                reason: match gap {
+                    Some(g) => format!("{reason} ({g})"),
+                    None => reason,
+                },
             },
         },
     )
+}
+
+/// Review CR-16: why the account's domain groups may be incomplete for the
+/// Selective Authentication check, or `None` when every group is known.
+pub fn incomplete_group_set(resolution: &crate::principal::PrincipalResolution) -> Option<String> {
+    use crate::principal::GroupResolutionStatus as S;
+    match &resolution.group_resolution_status {
+        S::LdapRecursive | S::LocalAccount => {}
+        S::SamFlat => {
+            return Some(
+                "the account's groups were read without LDAP, so nested groups are not known"
+                    .to_owned(),
+            )
+        }
+        S::Failed { reason } => {
+            return Some(format!("the account's group resolution failed: {reason}"))
+        }
+        S::NotAttempted => return Some("the account's groups were not resolved".to_owned()),
+    }
+    if resolution.resolved_via_global_catalog {
+        return Some(
+            "the account's groups come from a Global Catalog, which holds only universal \
+             memberships completely"
+                .to_owned(),
+        );
+    }
+    resolution
+        .group_resolution_gaps
+        .first()
+        .map(|g| format!("the account's group resolution is incomplete: {g}"))
 }
 
 #[cfg(test)]
@@ -593,6 +654,44 @@ mod tests {
         assert_eq!(
             allowed_to_authenticate(&d3, &set(&[USER, au]), &set(&[])),
             AllowedToAuthenticate::Allowed { via: au.to_owned() }
+        );
+    }
+
+    /// Review CR-16: with a gap in the account's group resolution, an ACE
+    /// for a domain group outside the known token may be one of the missing
+    /// groups — the answer is unknown, never a certain refusal. The ACE
+    /// that decides for a known SID still decides.
+    #[test]
+    fn an_incomplete_token_never_makes_a_certain_refusal() {
+        let missing_group = "S-1-5-21-9-9-9-1200";
+        let d = sd(vec![ace(
+            5,
+            0,
+            0x100,
+            Some(ALLOWED_TO_AUTHENTICATE),
+            missing_group,
+        )]);
+        assert_eq!(
+            allowed_to_authenticate_for_token(&d, &set(&[USER]), &set(&[]), true),
+            AllowedToAuthenticate::Denied,
+            "complete token: the group is certainly absent"
+        );
+        match allowed_to_authenticate_for_token(&d, &set(&[USER]), &set(&[]), false) {
+            AllowedToAuthenticate::Unknown { reason } => {
+                assert!(reason.contains(missing_group), "{reason}")
+            }
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+        let allowed = sd(vec![ace(5, 0, 0x100, Some(ALLOWED_TO_AUTHENTICATE), USER)]);
+        assert!(matches!(
+            allowed_to_authenticate_for_token(&allowed, &set(&[USER]), &set(&[]), false),
+            AllowedToAuthenticate::Allowed { .. }
+        ));
+        // Builtin groups stay certainly absent even then (measured).
+        let builtin = sd(vec![ace(0, 0, 0x100, None, "S-1-5-32-544")]);
+        assert_eq!(
+            allowed_to_authenticate_for_token(&builtin, &set(&[USER]), &set(&[]), false),
+            AllowedToAuthenticate::Denied
         );
     }
 
