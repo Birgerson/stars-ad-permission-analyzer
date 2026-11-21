@@ -1337,6 +1337,9 @@ async fn run_analyze(
     if let Some(out_path) = output {
         let status = validate_export_path(&out_path)
             .map_err(|e| anyhow::anyhow!("Invalid export path: {e}"))?;
+        // Review CR-17: never into the audited tree (an analyzed folder).
+        fs_scanner::output_guard::check_outside_tree(&status.path().0, &path)
+            .map_err(|e| anyhow::anyhow!("Invalid export path: {e}"))?;
         check_overwrite_policy(&status, force)?;
         // Round-9 finding 1: CLI exports must carry the path-centric
         // trustee list.
@@ -1460,7 +1463,12 @@ async fn run_scan(
     validation::path::check_smb_override(&path, smb_server.as_deref(), share_name.as_deref())
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     if let Some(ref db) = db_path {
-        validate_db_path(db).map_err(|e| anyhow::anyhow!("Invalid database path: {e}"))?;
+        let valid =
+            validate_db_path(db).map_err(|e| anyhow::anyhow!("Invalid database path: {e}"))?;
+        // Review CR-17: the database (and its journal) never in the tree the
+        // scan walks.
+        fs_scanner::output_guard::check_outside_tree(&valid.0, &path)
+            .map_err(|e| anyhow::anyhow!("Invalid database path: {e}"))?;
     }
 
     // AGENTS.md DoD 11: validate the explicit LDAP timeout (1–600s) before it
@@ -1654,6 +1662,10 @@ async fn run_scan(
     let export = match output.as_deref() {
         Some(out_path) => {
             let status = validate_export_path(out_path)
+                .map_err(|e| anyhow::anyhow!("Invalid export path: {e}"))?;
+            // Review CR-17: the report and its staging file never in the
+            // tree the scan walks.
+            fs_scanner::output_guard::check_outside_tree(&status.path().0, &path)
                 .map_err(|e| anyhow::anyhow!("Invalid export path: {e}"))?;
             check_overwrite_policy(&status, force)?;
             Some((out_path.to_owned(), status.path().0.clone()))

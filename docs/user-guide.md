@@ -1477,7 +1477,19 @@ that lied about its content to every downstream consumer. An unknown
 extension is refused with a clear message instead of being guessed.
 
 Existing export files are **not overwritten** without `--force` (CLI)
-or explicit confirmation (GUI).
+or explicit confirmation (GUI). A streamed CSV is written to a staging
+file of its own (`<name>.<process>-<n>.partial`, never an existing file)
+and moved into place at the end; without `--force` the move refuses a
+file that appeared meanwhile, atomically.
+
+**Reports and the database never go into the audited tree.** A target
+inside the scanned folder (or the analyzed folder) is refused before
+anything is written: the file would change the target system and could
+become part of the scan. Stars compares the destination's folders with
+the tree both by path and by folder identity (volume serial and file ID),
+so the same folder reached through a link, a mapped drive, another server
+name or an administrative share (`\\fs01\C$\Data` for `\\fs01\Data`) is
+caught too. Write reports to a folder outside the tree.
 
 ### Two audit questions, two report blocks
 
@@ -1590,7 +1602,8 @@ no password at all.
 | `shares`, `trusts`, `runs`, `errors`, `check-update` | console only | |
 
 An existing file is never overwritten silently: add `--force`. The export
-directory must exist. Exports contain paths and identities — treat them as
+directory must exist and must lie outside the scanned tree (also for
+`--db`). Exports contain paths and identities — treat them as
 confidential.
 
 **Exit codes.** `0` — the command ran (a `NOT DETERMINABLE` result is a

@@ -149,9 +149,15 @@ impl<W: Write> CsvRowWriter<W> {
 }
 
 /// ADR 0086: a CSV export file written row by row during a scan. The rows
-/// go to `<target>.partial`; [`Self::finish`] renames it to the target. A
-/// writer dropped without `finish` (the scan failed) removes the partial
-/// file, so no half-written export can be taken for a complete one.
+/// go to a staging file next to the target; [`Self::finish`] moves it to the
+/// target. A writer dropped without `finish` (the scan failed) removes its
+/// staging file, so no half-written export can be taken for a complete one.
+///
+/// Review CR-18: the staging file has a name of its own
+/// (`<target>.<pid>-<n>.partial`) and is created exclusively, so it never
+/// truncates an existing file and two writers to one target never share it.
+/// Without overwrite consent the move refuses an existing target
+/// atomically — no check-then-rename race.
 pub struct CsvFileWriter {
     rows: Option<CsvRowWriter<std::fs::File>>,
     partial: std::path::PathBuf,
@@ -173,10 +179,7 @@ impl CsvFileWriter {
                 target.display()
             )));
         }
-        let mut name = target.clone().into_os_string();
-        name.push(".partial");
-        let partial = std::path::PathBuf::from(name);
-        let file = crate::open_export_file(ExportTarget::FileOverwrite(partial.clone()))?;
+        let (partial, file) = create_staging_file(&target)?;
         let rows = CsvRowWriter::new(file)
             .map_err(|e| CoreError::Export(format!("CSV write error: {e}")))?;
         Ok(Self {
@@ -219,17 +222,19 @@ impl CsvFileWriter {
         file.sync_all()
             .map_err(|e| CoreError::Export(format!("CSV write error: {e}")))?;
         drop(file);
-        if !self.overwrite && self.target.exists() {
-            return Err(CoreError::Export(format!(
-                "Cannot create export file '{}': it was created by someone else during the scan",
-                self.target.display()
-            )));
-        }
-        std::fs::rename(&self.partial, &self.target).map_err(|e| {
-            CoreError::Export(format!(
-                "Cannot move the export to '{}': {e}",
-                self.target.display()
-            ))
+        crate::publish_file(&self.partial, &self.target, self.overwrite).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                CoreError::Export(format!(
+                    "Cannot create export file '{}': it was created by someone else during the \
+                     scan",
+                    self.target.display()
+                ))
+            } else {
+                CoreError::Export(format!(
+                    "Cannot move the export to '{}': {e}",
+                    self.target.display()
+                ))
+            }
         })?;
         Ok(())
     }
@@ -243,6 +248,40 @@ impl Drop for CsvFileWriter {
             let _ = std::fs::remove_file(&self.partial);
         }
     }
+}
+
+/// Review CR-18: creates a staging file next to `target` that belongs to
+/// this writer alone — a unique name, created exclusively (`create_new`).
+fn create_staging_file(
+    target: &std::path::Path,
+) -> Result<(std::path::PathBuf, std::fs::File), CoreError> {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let mut last = None;
+    for _ in 0..16 {
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut name = target.as_os_str().to_owned();
+        name.push(format!(".{}-{n}.partial", std::process::id()));
+        let staging = std::path::PathBuf::from(name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staging)
+        {
+            Ok(file) => return Ok((staging, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => {
+                return Err(CoreError::Export(format!(
+                    "Cannot create the staging file '{}': {e}",
+                    staging.display()
+                )))
+            }
+        }
+    }
+    Err(CoreError::Export(format!(
+        "Cannot create a staging file next to '{}': {}",
+        target.display(),
+        last.map_or_else(String::new, |e| e.to_string())
+    )))
 }
 
 /// Converts a `serde_json` serialization failure into a `csv::Error` so it
@@ -561,7 +600,7 @@ mod tests {
         let mut batch = Vec::new();
         write_csv(&mut batch, &perms).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), batch);
-        assert!(!dir.join("result.csv.partial").exists());
+        assert!(staging_files(&dir).is_empty(), "{:?}", staging_files(&dir));
 
         assert!(CsvFileWriter::create(ExportTarget::File(target.clone())).is_err());
 
@@ -570,7 +609,66 @@ mod tests {
             let mut w = CsvFileWriter::create(ExportTarget::File(other.clone())).unwrap();
             w.write(&perms[0]).unwrap();
         }
-        assert!(!other.exists() && !dir.join("aborted.csv.partial").exists());
+        assert!(!other.exists() && staging_files(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn staging_files(dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".partial"))
+            .collect()
+    }
+
+    /// Review CR-18: an existing `<target>.partial` (someone else's file) is
+    /// never touched; two writers to one target never share a staging file;
+    /// without overwrite consent the later one refuses atomically and the
+    /// first export stays; with consent it replaces.
+    #[test]
+    fn staging_is_private_and_publication_keeps_the_policy() {
+        let dir = std::env::temp_dir().join(format!("adpa-cr18-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("report.csv");
+        let foreign = dir.join("report.csv.partial");
+        std::fs::write(&foreign, b"someone else's file").unwrap();
+        let row = |name: &str| {
+            make_perm(
+                r"C:\d",
+                "S-1-5-21-1-2-3-1001",
+                name,
+                0x1200A9,
+                None,
+                0x1200A9,
+                vec![],
+            )
+        };
+
+        let mut first = CsvFileWriter::create(ExportTarget::File(target.clone())).unwrap();
+        let mut second = CsvFileWriter::create(ExportTarget::File(target.clone())).unwrap();
+        first.write(&row("first")).unwrap();
+        second.write(&row("second")).unwrap();
+        first.finish().unwrap();
+        let err = second.finish().unwrap_err().to_string();
+        assert!(err.contains("created by someone else"), "{err}");
+        let published = std::fs::read_to_string(&target).unwrap();
+        assert!(
+            published.contains("first") && !published.contains("second"),
+            "{published}"
+        );
+        assert_eq!(std::fs::read(&foreign).unwrap(), b"someone else's file");
+        assert_eq!(
+            staging_files(&dir),
+            vec!["report.csv.partial".to_owned()],
+            "only the foreign file"
+        );
+
+        let mut third = CsvFileWriter::create(ExportTarget::FileOverwrite(target.clone())).unwrap();
+        third.write(&row("third")).unwrap();
+        third.finish().unwrap();
+        assert!(std::fs::read_to_string(&target).unwrap().contains("third"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

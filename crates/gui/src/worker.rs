@@ -2079,6 +2079,11 @@ fn export_report(
         ));
     }
     let validated_path = status.path().0.clone();
+    // Review CR-17: never into the tree the scan audited.
+    if let Some(c) = coverage {
+        fs_scanner::output_guard::check_outside_tree(&validated_path, &c.root)
+            .map_err(|e| format!("Invalid export path: {e}"))?;
+    }
     let format = ReportFormat::from_path(&validated_path)?;
     let result = AnalysisResult {
         permissions: permissions.to_vec(),

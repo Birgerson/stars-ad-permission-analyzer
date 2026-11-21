@@ -107,6 +107,13 @@ pub(crate) fn probe_directory(path: &str) -> DirectoryProbe {
     probe
 }
 
+/// The identity of the directory `path` resolves to, read once (no retry),
+/// or `None` — for the output guard (review CR-17), which compares many
+/// ancestors and must not wait on each one that cannot be opened.
+pub(crate) fn directory_identity_once(path: &str) -> Option<String> {
+    probe_directory_once(path).identity
+}
+
 fn probe_directory_once(path: &str) -> DirectoryProbe {
     let guard = match open_for_attributes(path) {
         Ok(guard) => guard,

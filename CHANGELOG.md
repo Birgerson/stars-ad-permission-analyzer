@@ -38,6 +38,23 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   and the GUI, now resolve the drive to its UNC path first and evaluate
   that; the explanation names the drive. A network drive whose UNC path
   Windows does not return is an error, never a local evaluation.
+- **Reports and the database are never written into the audited tree
+  (review CR-17).** The output validators checked names and the parent
+  folder only, so a report, its staging file or the scan database could be
+  created inside the scanned tree — on the target system, and possibly
+  part of the walk; `--force` could even replace a file of the tree. CLI
+  (`--output`, `--db`) and GUI exports now refuse a destination inside the
+  scanned or analyzed folder, compared by path and by folder identity, so
+  a link, mapped drive, other server name or administrative share to the
+  same folder is caught (lab: `\\WIN-MONCCCT07FT\C$\Daten` for a scan of
+  `\\192.168.11.147\Daten$`).
+- **The streamed CSV no longer touches a file it does not own (review
+  CR-18).** It always opened `<target>.partial` with truncation, also
+  without overwrite consent, so an existing file of that name was lost,
+  and two writers to one target shared and removed each other's staging
+  file; the final existence check and rename left a race. The staging file
+  now has a unique name and is created exclusively, and without `--force`
+  the move refuses an existing target atomically.
 - **`adpa runs` and `adpa errors` no longer change the database (review
   CR-30).** They are documented as strictly read-only, but after the
   existence check they used the normal open, which applies pending
