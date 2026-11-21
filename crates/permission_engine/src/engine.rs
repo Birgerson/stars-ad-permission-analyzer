@@ -537,7 +537,10 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             anonymous_everyone: input.anonymous_everyone,
             ntfs_determinable: result.ntfs_determinable(),
             share_determinable: result.share_determinable(),
-            effective_determinable: result.effective_determinable(),
+            // The lines above the logon step state what the permissions grant
+            // (ADR 0079); a refused logon closes the path only in its own step
+            // (review CR-16), so the permissions' view keeps its uncertainty.
+            effective_determinable: uncertainty.is_empty(),
             uncertainty: &uncertainty,
             share_trace: &input.share_trace,
         });
@@ -583,9 +586,21 @@ impl PermissionEvaluator for DefaultPermissionEngine {
             )
         }) {
             let step = match d {
+                PermissionDiagnostic::SelectiveAuthenticationDenied { .. }
+                    if result.logon_certainly_refused() =>
+                {
+                    format!(
+                        "Logon refused — {} Effective: No access (0x00000000), exact whatever \
+                         the lines above leave open; they show what the permissions grant once \
+                         the account may authenticate.",
+                        d.summary()
+                    )
+                }
+                // Review CR-16: another DFS target is another server with its
+                // own logon decision.
                 PermissionDiagnostic::SelectiveAuthenticationDenied { .. } => format!(
-                    "Logon refused — {} Effective: No access (0x00000000); the lines above show \
-                     what the permissions grant once the account may authenticate.",
+                    "{NOT_DETERMINABLE} — logon refused on this target — {} A client referred \
+                     to another target of the DFS folder may be allowed to log on there.",
                     d.summary()
                 ),
                 PermissionDiagnostic::SelectiveAuthenticationUnknown {
@@ -6122,6 +6137,68 @@ mod tests {
                 .iter()
                 .any(|d| matches!(d, PermissionDiagnostic::SynchronizeNotGranted { .. })));
         }
+    }
+
+    /// Review CR-16: a refused logon stays exact No access when a permission
+    /// layer is open — an unreadable share DACL no longer lets the upper
+    /// bound (and the risk rules) climb back to the NTFS right. The layer
+    /// keeps its own uncertainty.
+    #[test]
+    fn a_refused_logon_is_exact_even_with_an_unreadable_share() {
+        use adpa_core::traits::SelectiveAuthenticationCheck;
+        let mut input = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(USER, 0x001F_01FF, false)]),
+        );
+        input.share_status = ShareMaskStatus::ReadFailed("access denied".to_owned());
+        input.selective_authentication = Some(SelectiveAuthenticationCheck::Denied {
+            server: "FS-01".into(),
+        });
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert_eq!(p.ntfs_mask.0, 0x001F_01FF, "the DACL view is kept");
+        assert_eq!(p.effective_mask.0, 0);
+        assert!(p.effective_determinable(), "Windows refuses the logon");
+        assert_eq!(p.effective_upper_bound(), 0);
+        assert!(!p.share_determinable(), "the share layer stays open");
+        let last = p.path_explanation.steps.last().unwrap();
+        assert!(
+            last.starts_with("Logon refused") && last.contains("exact"),
+            "{last}"
+        );
+    }
+
+    /// Review CR-16: another DFS target is another server with its own logon
+    /// decision — a refusal on this one leaves the result open.
+    #[test]
+    fn a_refused_logon_on_one_dfs_target_stays_open() {
+        use adpa_core::traits::SelectiveAuthenticationCheck;
+        let mut input = base_input(
+            user(USER),
+            fso(None, vec![allow_ace(USER, MASK_MODIFY, false)]),
+        );
+        input.selective_authentication = Some(SelectiveAuthenticationCheck::Denied {
+            server: "FS-01".into(),
+        });
+        input.dfs = Some(adpa_core::model::DfsEvaluation {
+            requested: r"\\corp.test\dfs\Projects".into(),
+            target: r"\\FS-01.corp.test\DfsProj".into(),
+            folder: Some(r"\\corp.test\dfs\Projects".into()),
+            other_targets: vec![r"\\FS-02.corp.test\DfsProj".into()],
+            other_targets_known: true,
+        });
+        let p = DefaultPermissionEngine.evaluate(input).unwrap();
+        assert_eq!(p.effective_mask.0, 0);
+        assert!(!p.effective_determinable());
+        assert_eq!(
+            p.effective_upper_bound(),
+            MASK_MODIFY,
+            "FS-02 may let it in"
+        );
+        let last = p.path_explanation.steps.last().unwrap();
+        assert!(
+            last.starts_with(NOT_DETERMINABLE) && last.contains("another target"),
+            "{last}"
+        );
     }
 
     /// A refused logon (ADR 0079) is No access — no SYNCHRONIZE note then.

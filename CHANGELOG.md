@@ -18,6 +18,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   always enforce UPN uniqueness; the lab created two accounts with one UPN.
   Windows refuses a logon with such a name, and Stars now refuses it too,
   naming both SIDs.
+- **A refused logon stays No access, and rests on a complete token (review
+  CR-16, ADR 0079 addendum).** When Selective Authentication refused the
+  logon but another layer was open (for example an unreadable share DACL),
+  the upper bound climbed back to the NTFS right, and the risk report said
+  the account "may have Full Control" while the explanation said the server
+  refuses the logon. The refusal now makes the effective right exact No
+  access with an upper bound of 0; NTFS and share keep their own
+  uncertainty. A DFS folder with further targets keeps the result open,
+  because each target decides its own logon. The check also no longer
+  counts a group the resolution may have missed as certainly absent: with a
+  gap in the group resolution the logon is "not determinable", never
+  refused.
 
 ## [1.19.0] — 2026-10-25
 

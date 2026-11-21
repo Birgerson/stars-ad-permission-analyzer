@@ -193,3 +193,31 @@ SMB logon of both accounts in that state: refused (1935) — No access, inside
 both statements. Regression without the trust options, every column: DC
 data share 37 identities (25,493 rows), group-type fixture (78), MS-01 with
 and without LDAP (270) — 0 differing rows.
+
+## Addendum 2026-11-21 (review CR-16): a refusal stays exact, and rests on a complete token
+
+Two faults made a refusal and its consequences disagree.
+
+1. **An open permission layer undid the refusal.** The effective mask was
+   set to 0, but `effective_upper_bound()` still rebuilt the NTFS right
+   when another layer was uncertain, for example an unreadable share DACL.
+   The risk rules judge that upper bound, so an account whose logon the
+   server refuses could be reported as "may have Full Control". Now
+   `EffectivePermission::logon_certainly_refused()` decides: with
+   `SelectiveAuthenticationDenied` and no `Target` uncertainty, the
+   effective right is exact No access and its upper bound is 0. NTFS and
+   share keep their own determinability, and the explanation lines above
+   the logon step keep the permissions' view. A `Target` uncertainty (a DFS
+   folder with further targets) keeps the result open: another target is
+   another server with its own logon decision. The closing step then reads
+   "NOT DETERMINABLE — logon refused on this target …".
+2. **A refusal could rest on groups the resolution did not see.** The check
+   counted every domain SID outside the resolved token as certainly absent.
+   With a gap in the group resolution (`group_resolution_gaps`, a failed or
+   flat resolution, a Global Catalog bind) a missing group may be exactly
+   the one with "Allowed to authenticate". `incomplete_group_set()` names
+   such a gap; `allowed_to_authenticate_for_token(…, false)` then treats
+   every unknown domain SID as uncertain, so the answer is `Unknown` (with
+   the gap in its reason) unless no such SID could be granted the right.
+   Builtin groups and the other SIDs measured as certainly absent stay
+   absent.

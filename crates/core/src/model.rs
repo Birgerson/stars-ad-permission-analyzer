@@ -1310,8 +1310,30 @@ impl EffectivePermission {
     }
 
     /// The effective right is exactly what Windows would compute.
+    ///
+    /// Review CR-16: a certainly refused logon (`SelectiveAuthenticationDenied`,
+    /// ADR 0079) makes it exact No access whatever the permission layers
+    /// leave open — Windows never evaluates a DACL for a refused logon. The
+    /// layers keep their own uncertainty (`ntfs_determinable`,
+    /// `share_determinable`). Another DFS target is another server with its
+    /// own logon decision, so a `Target` uncertainty keeps the result open.
     pub fn effective_determinable(&self) -> bool {
-        self.uncertainty().is_empty()
+        self.logon_certainly_refused() || self.uncertainty().is_empty()
+    }
+
+    /// ADR 0079 / review CR-16: the logon to the evaluated server is
+    /// certainly refused, and no other DFS target could be the one a client
+    /// is referred to.
+    pub fn logon_certainly_refused(&self) -> bool {
+        self.diagnostics.iter().any(|d| {
+            matches!(
+                d,
+                PermissionDiagnostic::SelectiveAuthenticationDenied { .. }
+            )
+        }) && !self
+            .uncertainty()
+            .iter()
+            .any(|u| matches!(u.layer, UncertainLayer::Target))
     }
 
     /// ADR 0080: the short addition to the effective-rights line when
@@ -1341,6 +1363,12 @@ impl EffectivePermission {
     /// With a token gap or un-evaluated NTFS ACEs no upper bound is known at
     /// all; the known data is used and `is_incomplete()` says so.
     pub fn effective_upper_bound(&self) -> u32 {
+        // Review CR-16: a refused logon leaves nothing open — whatever an
+        // unreadable share or an unevaluated ACE might grant, Windows never
+        // gets that far.
+        if self.logon_certainly_refused() {
+            return self.effective_mask.0;
+        }
         let uncertainty = self.uncertainty();
         if uncertainty.is_empty() {
             return self.effective_mask.0;
