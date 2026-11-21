@@ -1973,3 +1973,52 @@ The values of every row were exact in all three runs: equal to Windows, bit for 
 - Only the 73 link rows of DC-01's data share (its junctions and the symbolic link fixture) gained the marker and the one last step.
 - No other column, diagnostic or step differs.
 - The console output is identical.
+
+## Block Z — Review CR-16 … CR-35: measured, fixed, regressed (2026-11-21)
+
+An external code review of v1.19.0 listed twenty findings (CR-16 to CR-35).
+Each was checked against the code; the ones that can be reproduced were
+measured in the lab before and after the fix. Runs on MS-01 (domain member,
+as SYSTEM) against DC-01, FS-01 and FS-02; CR-25, CR-26 and CR-29 on the
+workstation. Lab scripts: `lab-steuerung\cr*.ps1`, `review-regress.ps1`,
+`review-compare*.ps1` (not in the repository).
+
+New fixtures: DFS folders `\\corp.test\dfs\Deep` (→ `\\FS-02\DfsTeam\Sub`),
+`Deep2` (FS-01 and FS-02 `DfsProj\Sub`) and `Deep3` (FS-02 `DfsProj` and
+`DfsProj\Sub`); the disabled accounts `rt_dup01` and `rt_dup02` with the one
+UPN `rt_dup@corp.test` (created with dsHeuristics position 21 = 1, which was
+then restored to its empty default).
+
+| Finding | Before (v1.19.0) | After |
+| --- | --- | --- |
+| CR-21 local link into a share | scan of `C:\CR21` (directory symlink to `\\FS-02\DfsProj`): `remote\Sub` and `target.txt` exact Modify, share not applicable | the link's own row and the error "Served from another share … scan it on its own"; analyze through the link: Read & Execute, share applied |
+| CR-22 mapped drive | `Z:\Sub`: exact Modify, "no SMB context" | evaluated as `\\FS-02.corp.test\DfsProj\Sub`: Read & Execute, share applied; a scan of `Z:\` gives 3 rows, all with the share applied |
+| CR-23 duplicate UPN | `rt_dup01` in 3 of 3 runs, no marker (Windows: LSA translation and S4U logon refused) | "Ambiguous UPN … 2 accounts carry it (SID, SID)" |
+| CR-25 depth limit | `--max-depth 3`, junction `A\B\J → Z` at the limit: `Z\child` and its file missing, "already enumerated" | listed; walker test on the real file system |
+| CR-26 case-sensitive folder | `data` skipped as a duplicate of `Data` ("reached there through a reparse point") | both listed; walker test with `fsutil file setCaseSensitiveInfo` |
+| CR-27 DFS target below a share | client answer `ShareName = DfsTeam\Sub` discarded; `Deep` NOT DETERMINABLE | `Deep` exact Modify; `Deep2` / `Deep3` open, naming the other target by its full path |
+| CR-20 manual SMB context | not measured before | `\\corp.test\dfs\Team` with `FS-01/DfsProj`: refused; with `FS-02/DfsTeam`: evaluated |
+| CR-17 report inside the tree | not measured before | a scan of DC-01's data share refuses `--output` inside the share, and `--output` / `--db` through the administrative share `\\WIN-MONCCCT07FT.corp.test\C$` to the same folder (by folder identity); nothing written into the tree |
+| CR-28 export coverage | exports without cancellation or errors | the same scan (5 errors): CSV 689 permission + 5 `scan_error` + 1 `scan_status` rows; JSON v5 `complete=false`, 5 errors; HTML "scan incomplete", "Paths not covered (5)" |
+| CR-29 GUI scan | 30,301 paths: 74.9 s to "Scan complete" | 16.6 s (3,031 paths: 2.1 s / 2.3 s); Cancel after the walk: "Scan cancelled during evaluation evaluated=12170 total=30301", 12,170 rows with the cancel marker |
+| CR-30 history read-only | `adpa runs` migrated a v1.19.0 database | the same database keeps `user_version` 8, hash unchanged |
+| CR-31 ranged `tokenGroups` | refuted: 5,000 direct groups (6,476 transitive) → `memberOf;range=0-1499`, but `tokenGroups` (3,051) and `tokenGroupsGlobalAndUniversal` (2,049) whole, silently truncated | a ranged answer would be an error; the cross-check runs for ordinary accounts (debug log) |
+
+CR-16, CR-18, CR-19, CR-24, CR-32, CR-33, CR-34 and CR-35 are covered by
+unit and database tests (the refused logon with an unreadable share, the
+private staging file with two writers, the delta with a cancelled run and an
+unreadable folder, the unevaluated ACL wording, the failing trusted-domain
+connection, the badge text, the language gate).
+
+**Regression against v1.19.0** (`f811a84`, release builds, every row's
+path, NTFS, share and effective mask, determinability and share status,
+plus the error paths):
+
+- MS-01 over SMB: DC-01's data share for `u00001` and `u00042`
+  (689 rows, 5 errors each) and `\\FS-02.corp.test\DfsProj` for `rt_gt02`
+  (3 rows) — **0 differing rows, 0 differing error paths**.
+- DC-01 locally: the share's folder for `u00001` and `u00042` (689 rows, 4 errors
+  each) — **0 differing rows, 0 differing error paths**. The walker changes
+  (CR-25, CR-26) change nothing where nothing was missing.
+- The new CSV rows (`scan_error`, `scan_status`) are excluded from this
+  comparison by their `row_kind`.
