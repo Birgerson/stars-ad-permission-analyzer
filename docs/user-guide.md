@@ -1133,7 +1133,8 @@ standalone DFS namespace):
 - Stars uses the target **this machine** is referred to, the one Explorer
   on this machine would use. Run Stars where the users' DFS referrals
   resolve as yours do (same site).
-- **One target:** the result is exact.
+- **One target:** the result is exact — also for a target that points to
+  a folder below a share (`\\fs01\Data\Projects`).
 - **Several targets** (for example two servers kept in sync by DFS-R): the
   result is shown for the referred target and marked **NOT
   DETERMINABLE**, because DFS-R copies the NTFS permissions but not the
