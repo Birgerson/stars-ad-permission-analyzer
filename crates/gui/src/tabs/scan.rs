@@ -6,11 +6,12 @@
 //! the report export.
 
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::mpsc::Sender;
 
 use adpa_core::model::{RiskFinding, RiskSeverity};
 use fs_scanner::CancellationToken;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 
 use crate::identity_input::{
     empty_suggestion_model, filter_suggestions_model, resolve_name_to_sid,
@@ -29,6 +30,35 @@ struct ScanUiState {
     all_rows: Vec<ScanRowVm>,
     all_errors: Vec<ScanErrorVm>,
     all_risks: Vec<RiskItemVm>,
+    /// Review CR-29: the model the table shows (the rows matching the
+    /// filter). A streamed row is appended to it — O(1) — instead of the
+    /// whole table being rebuilt for every row, which made a scan quadratic.
+    /// Rebuilt only when the filter changes or a scan starts.
+    visible: Option<Rc<slint::VecModel<ScanRowVm>>>,
+    /// The filter `visible` was built for (trimmed, lowercased).
+    visible_filter: String,
+}
+
+/// `true` when a row matches the (trimmed, lowercased) filter. Pure.
+fn row_matches(row: &ScanRowVm, filter: &str) -> bool {
+    filter.is_empty() || row.path.to_lowercase().contains(filter)
+}
+
+/// Review CR-29: records a streamed row and, when the shown model exists,
+/// appends it there if it matches the model's filter. `false` when there is
+/// no shown model yet (the caller builds it once).
+fn append_row(state: &mut ScanUiState, vm: ScanRowVm) -> bool {
+    let appended = match state.visible.clone() {
+        Some(model) => {
+            if row_matches(&vm, &state.visible_filter) {
+                model.push(vm.clone());
+            }
+            true
+        }
+        None => false,
+    };
+    state.all_rows.push(vm);
+    appended
 }
 
 thread_local! {
@@ -153,6 +183,7 @@ pub fn wire(ui: &MainWindow, req_tx: &Sender<WorkerRequest>, cancel: Cancellatio
                 s.all_rows.clear();
                 s.all_errors.clear();
                 s.all_risks.clear();
+                s.visible = None;
             });
             cancel.reset();
 
@@ -166,7 +197,7 @@ pub fn wire(ui: &MainWindow, req_tx: &Sender<WorkerRequest>, cancel: Cancellatio
             ui.global::<ScanState>().set_scan_run_id("".into());
             ui.global::<ScanState>().set_export_message("".into());
             ui.global::<ScanState>().set_export_is_error(false);
-            ui.global::<ScanState>().set_rows(empty_row_model());
+            refresh_rows(&ui);
             ui.global::<ScanState>().set_errors(empty_error_model());
             ui.global::<ScanState>().set_risks(empty_risk_model());
 
@@ -202,13 +233,21 @@ pub fn wire(ui: &MainWindow, req_tx: &Sender<WorkerRequest>, cancel: Cancellatio
         ui.global::<ScanState>().on_row_toggle(move |index| {
             let Some(ui) = weak.upgrade() else { return };
             let filter = ui.global::<ScanState>().get_filter().to_string();
-            SCAN_STATE.with(|s| {
+            // Review CR-29: only the toggled row changes in the model.
+            let updated = SCAN_STATE.with(|s| {
                 let mut s = s.borrow_mut();
-                if let Some(real_index) = nth_matching_index(&s.all_rows, &filter, index as usize) {
-                    s.all_rows[real_index].expanded = !s.all_rows[real_index].expanded;
-                }
+                let real_index = nth_matching_index(&s.all_rows, &filter, index as usize)?;
+                s.all_rows[real_index].expanded = !s.all_rows[real_index].expanded;
+                let row = s.all_rows[real_index].clone();
+                let model = s.visible.clone()?;
+                Some((model, row))
             });
-            refresh_rows(&ui);
+            match updated {
+                Some((model, row)) if (index as usize) < model.row_count() => {
+                    model.set_row_data(index as usize, row)
+                }
+                _ => refresh_rows(&ui),
+            }
         });
     }
 
@@ -281,20 +320,21 @@ fn refresh_rows(ui: &MainWindow) {
         .to_string()
         .trim()
         .to_lowercase();
-    let filtered: Vec<ScanRowVm> = SCAN_STATE.with(|s| {
-        let s = s.borrow();
-        if filter.is_empty() {
-            s.all_rows.clone()
-        } else {
-            s.all_rows
-                .iter()
-                .filter(|r| r.path.to_lowercase().contains(&filter))
-                .cloned()
-                .collect()
-        }
+    let model = SCAN_STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        let filtered: Vec<ScanRowVm> = s
+            .all_rows
+            .iter()
+            .filter(|r| row_matches(r, &filter))
+            .cloned()
+            .collect();
+        let model = Rc::new(slint::VecModel::from(filtered));
+        s.visible = Some(model.clone());
+        s.visible_filter = filter;
+        model
     });
     ui.global::<ScanState>()
-        .set_rows(slint::ModelRc::new(slint::VecModel::from(filtered)));
+        .set_rows(slint::ModelRc::from(model));
 }
 
 pub fn handle_item(ui: &MainWindow, row: ScanRow) {
@@ -325,10 +365,17 @@ pub fn handle_item(ui: &MainWindow, row: ScanRow) {
                 .collect::<Vec<_>>(),
         )),
     };
-    SCAN_STATE.with(|s| s.borrow_mut().all_rows.push(vm));
-    let total = SCAN_STATE.with(|s| s.borrow().all_rows.len()) as i32;
+    // Review CR-29: append to the shown model when the row matches its
+    // filter — no rebuild of the whole table per row.
+    let (total, appended) = SCAN_STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        let appended = append_row(&mut s, vm);
+        (s.all_rows.len() as i32, appended)
+    });
     ui.global::<ScanState>().set_total(total);
-    refresh_rows(ui);
+    if !appended {
+        refresh_rows(ui);
+    }
 }
 
 pub fn handle_error(ui: &MainWindow, path: String, message: String) {
@@ -423,10 +470,6 @@ fn severity_visual(severity: &RiskSeverity) -> (&'static str, slint::Color) {
     }
 }
 
-fn empty_row_model() -> slint::ModelRc<ScanRowVm> {
-    slint::ModelRc::new(slint::VecModel::<ScanRowVm>::from(Vec::<ScanRowVm>::new()))
-}
-
 fn empty_error_model() -> slint::ModelRc<ScanErrorVm> {
     slint::ModelRc::new(slint::VecModel::<ScanErrorVm>::from(
         Vec::<ScanErrorVm>::new(),
@@ -456,5 +499,53 @@ mod tests {
         .map(|s| severity_visual(s).0)
         .collect();
         assert_eq!(labels, ["Info", "Low", "Medium", "High", "Critical"]);
+    }
+}
+
+#[cfg(test)]
+mod row_model_tests {
+    use super::*;
+
+    fn row(path: &str) -> ScanRowVm {
+        ScanRowVm {
+            path: path.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Review CR-29: streamed rows go into the one shown model — no rebuild
+    /// per row — and only those that match its filter.
+    #[test]
+    fn streamed_rows_are_appended_to_the_shown_model() {
+        let mut state = ScanUiState::default();
+        assert!(!append_row(&mut state, row(r"C:\d\first")), "no model yet");
+        let model = Rc::new(slint::VecModel::from(state.all_rows.clone()));
+        state.visible = Some(model.clone());
+        for i in 0..1000 {
+            assert!(append_row(&mut state, row(&format!(r"C:\d\r{i}"))));
+        }
+        assert_eq!(state.all_rows.len(), 1001);
+        assert_eq!(model.row_count(), 1001);
+        assert!(
+            Rc::ptr_eq(state.visible.as_ref().unwrap(), &model),
+            "the same model"
+        );
+
+        state.visible_filter = "keep".into();
+        let filtered = Rc::new(slint::VecModel::<ScanRowVm>::from(Vec::new()));
+        state.visible = Some(filtered.clone());
+        append_row(&mut state, row(r"C:\d\Keep\a"));
+        append_row(&mut state, row(r"C:\d\drop\b"));
+        assert_eq!(filtered.row_count(), 1);
+        assert_eq!(
+            state.all_rows.len(),
+            1003,
+            "every row is kept for a later filter"
+        );
+        assert_eq!(
+            nth_matching_index(&state.all_rows, "keep", 0),
+            Some(1001),
+            "the shown index maps back to the master list"
+        );
     }
 }

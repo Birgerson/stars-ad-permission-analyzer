@@ -927,8 +927,11 @@ does not:
   about 26 KB per result for an account in about 70 groups, measured
   before ADR 0087 made the rows of a scan shorter. The memory still grows
   with the tree.
-- Its list is not virtualized, so streamed rows make the GUI catch up for
-  seconds even with hundreds of rows.
+- Until review CR-29 every streamed row rebuilt the whole table (a copy of
+  every row so far), so a scan made the GUI catch up for seconds even with
+  hundreds of rows. Since then a row is appended to the shown list, and the
+  list is rebuilt only when the filter changes. Cancel is also observed
+  while the rows are evaluated, not only during the walk.
 
 For trees with more than a few tens of thousands of paths, use the CLI
 with `--db` and a `.csv` export.
@@ -971,7 +974,7 @@ On those 64, the rights shown cannot be used over SMB. Stars does not yet say so
 | L16 — UAC policies / session elevation not visible | Low | **yes** (UacFilteredGroups, RemoteUacPolicy) | **network case closed 2026-10-13** (ADR 0076); local session elevation stays bounded |
 | L17 — Guest / anonymous tokens | Low | **yes** (GuestOrAnonymousToken) | **closed 2026-10-14** — Guest, Authenticated Users and anonymous Everyone exact (policy read); bounded only when the policy is unreadable |
 | L18 — DFS folders with several targets | Medium | **yes** (DfsTargetEvaluated; OtherShare scan error) | partial (ADR 0085): evaluated on the referred target, exact with one target; several targets → not determinable, scan each target |
-| L19 — GUI Scan Tree keeps the whole tree | Medium | n/a (documented) | the CLI streams (ADR 0086); the GUI's walk, result list and history still to be streamed / virtualized |
+| L19 — GUI Scan Tree keeps the whole tree | Medium | n/a (documented) | the CLI streams (ADR 0086); the GUI appends rows instead of rebuilding the table (review CR-29), but its walk, result list and history still hold the whole tree |
 | L20 — SMB open needs read-attributes | Low | partly (`SynchronizeNotGranted`) | documented; a note on the row needs the parent's right |
 
 ## Contribution policy
