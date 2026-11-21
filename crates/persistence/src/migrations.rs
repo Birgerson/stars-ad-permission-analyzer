@@ -30,6 +30,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (6, include_str!("schema_v6.sql")),
     (7, include_str!("schema_v7.sql")),
     (8, include_str!("schema_v8.sql")),
+    (9, include_str!("schema_v9.sql")),
 ];
 
 /// Applies all pending migrations in ascending order.
@@ -69,7 +70,7 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 8);
+        assert_eq!(v, 9);
     }
 
     /// PS-3 (persistence review 2026-07-26): both run-scoped indexes must
@@ -144,7 +145,7 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 8);
+        assert_eq!(v, 9);
     }
 
     /// Step-wise migration: v1 data survives the upgrade to the latest
@@ -191,7 +192,7 @@ mod tests {
         let v: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v, 8, "migration must end at the latest version");
+        assert_eq!(v, 9, "migration must end at the latest version");
 
         // Step 4: v1 values survive unchanged.
         let v1_row: (String, String, i64, i64) = conn

@@ -581,7 +581,7 @@ pub enum WorkerEvent {
     /// Identity snapshot for the live search in the name field.
     IdentitiesLoaded(Result<Vec<IdentitySuggestion>, String>),
     /// Delta between two scan runs, ready for display.
-    DeltaComputed(Result<Vec<DeltaRow>, String>),
+    DeltaComputed(Result<DeltaOutcome, String>),
     /// Result of a scan-run deletion. Contains the ID of the removed run
     /// alongside the success/error status so the GUI can both update its
     /// status text and clear local selection.
@@ -759,6 +759,8 @@ pub fn spawn_worker(
                                 match persist_scan(
                                     d,
                                     &path,
+                                    adpa_core::model::RunScope::Analyze,
+                                    None,
                                     std::slice::from_ref(perm),
                                     &[],
                                     false,
@@ -814,6 +816,8 @@ pub fn spawn_worker(
                         Some(d) => persist_scan(
                             d,
                             &root,
+                            adpa_core::model::RunScope::Scan,
+                            max_depth,
                             &scan_result.permissions,
                             &scan_result.errors,
                             scan_result.cancelled,
@@ -1996,9 +2000,12 @@ async fn handle_search(
 /// scans the same audit trail as CLI scans. When `cancelled`, an
 /// additional pathless diagnostic note is appended so the partial state
 /// is explicit.
+#[allow(clippy::too_many_arguments)]
 fn persist_scan(
     db: &Database,
     target: &str,
+    scope: adpa_core::model::RunScope,
+    max_depth: Option<u32>,
     permissions: &[EffectivePermission],
     errors: &[ScanError],
     cancelled: bool,
@@ -2014,6 +2021,8 @@ fn persist_scan(
         finished_at: Some(Utc::now()),
         target: target.to_string(),
         errors: vec![],
+        scope: Some(scope),
+        max_depth,
     };
 
     // Engine review 2026-06-12 finding 1: persist the whole run in one
@@ -2023,7 +2032,7 @@ fn persist_scan(
     if cancelled {
         all_errors.push(ScanError {
             path: None,
-            message: "Scan cancelled by user — results are partial".to_owned(),
+            message: adpa_core::model::SCAN_CANCELLED_MESSAGE.to_owned(),
         });
     }
 
@@ -2429,16 +2438,26 @@ fn compute_delta(
     db: &Database,
     old_run_id: &str,
     new_run_id: &str,
-) -> Result<Vec<DeltaRow>, String> {
+) -> Result<DeltaOutcome, String> {
     let old_id =
         Uuid::parse_str(old_run_id).map_err(|e| format!("Invalid old scan-run ID: {e}"))?;
     let new_id =
         Uuid::parse_str(new_run_id).map_err(|e| format!("Invalid new scan-run ID: {e}"))?;
-    let entries = db
+    let report = db
         .compare_scans(&old_id, &new_id)
         .map_err(|e| format!("comparison failed: {e}"))?;
 
-    Ok(entries.into_iter().map(delta_row).collect())
+    Ok(DeltaOutcome {
+        rows: report.entries.into_iter().map(delta_row).collect(),
+        notes: report.notes,
+    })
+}
+
+/// Review CR-19: the rows of a comparison and the notes that qualify them.
+#[derive(Clone)]
+pub struct DeltaOutcome {
+    pub rows: Vec<DeltaRow>,
+    pub notes: Vec<String>,
 }
 
 /// One delta entry as a display row. Pure, so the wording is testable
@@ -2466,6 +2485,26 @@ fn delta_row(entry: persistence::DeltaEntry) -> DeltaRow {
                 .unwrap_or_default(),
             new_rights: String::new(),
         },
+        // Review CR-19: in one run only, and the other did not cover it —
+        // the reason stands where that run's value would.
+        DeltaKind::NotObserved { in_old, reason } => {
+            let shown =
+                |p: &Option<EffectivePermission>| p.as_ref().map(format_rights).unwrap_or_default();
+            DeltaRow {
+                path: entry.path.0,
+                kind_label: "Not observed".into(),
+                old_rights: if in_old {
+                    shown(&entry.old_perm)
+                } else {
+                    reason.clone()
+                },
+                new_rights: if in_old {
+                    reason
+                } else {
+                    shown(&entry.new_perm)
+                },
+            }
+        }
         DeltaKind::Changed {
             old_mask,
             new_mask,
@@ -3294,8 +3333,17 @@ mod tests {
             },
         ];
 
-        let run_id_str = persist_scan(&db, r"C:\Root", &[], &errors, false, Utc::now())
-            .expect("persist_scan should succeed");
+        let run_id_str = persist_scan(
+            &db,
+            r"C:\Root",
+            adpa_core::model::RunScope::Scan,
+            None,
+            &[],
+            &errors,
+            false,
+            Utc::now(),
+        )
+        .expect("persist_scan should succeed");
         let run_id = Uuid::parse_str(&run_id_str).expect("valid UUID");
 
         let persisted = db
@@ -3326,8 +3374,17 @@ mod tests {
             message: "Access denied".to_owned(),
         }];
 
-        let run_id_str = persist_scan(&db, r"C:\Root", &[], &errors, true, Utc::now())
-            .expect("persist_scan should succeed");
+        let run_id_str = persist_scan(
+            &db,
+            r"C:\Root",
+            adpa_core::model::RunScope::Scan,
+            None,
+            &[],
+            &errors,
+            true,
+            Utc::now(),
+        )
+        .expect("persist_scan should succeed");
         let run_id = Uuid::parse_str(&run_id_str).unwrap();
 
         let persisted = db.scan_store().list_errors_for(&run_id).unwrap();
@@ -3340,7 +3397,17 @@ mod tests {
     #[test]
     fn persist_scan_with_no_errors_yields_empty_scan_errors_when_not_cancelled() {
         let db = Database::open_in_memory().expect("in-memory DB");
-        let run_id_str = persist_scan(&db, r"C:\Root", &[], &[], false, Utc::now()).unwrap();
+        let run_id_str = persist_scan(
+            &db,
+            r"C:\Root",
+            adpa_core::model::RunScope::Scan,
+            None,
+            &[],
+            &[],
+            false,
+            Utc::now(),
+        )
+        .unwrap();
         let run_id = Uuid::parse_str(&run_id_str).unwrap();
         let persisted = db.scan_store().list_errors_for(&run_id).unwrap();
         assert!(
@@ -3356,7 +3423,17 @@ mod tests {
     fn persist_scan_stores_real_started_at() {
         let db = Database::open_in_memory().expect("in-memory DB");
         let begun = Utc::now() - chrono::Duration::seconds(42);
-        let run_id_str = persist_scan(&db, r"C:\Root", &[], &[], false, begun).unwrap();
+        let run_id_str = persist_scan(
+            &db,
+            r"C:\Root",
+            adpa_core::model::RunScope::Scan,
+            None,
+            &[],
+            &[],
+            false,
+            begun,
+        )
+        .unwrap();
         let run_id = Uuid::parse_str(&run_id_str).unwrap();
         let runs = db.scan_store().list_scan_runs().unwrap();
         let run = runs.iter().find(|r| r.id == run_id).expect("run stored");
@@ -3637,8 +3714,17 @@ mod tests {
         };
 
         let db = Database::open_in_memory().expect("in-memory DB");
-        let run_id_str = persist_scan(&db, r"C:\Root", &[perm], &[], false, Utc::now())
-            .expect("persist_scan should succeed");
+        let run_id_str = persist_scan(
+            &db,
+            r"C:\Root",
+            adpa_core::model::RunScope::Scan,
+            None,
+            &[perm],
+            &[],
+            false,
+            Utc::now(),
+        )
+        .expect("persist_scan should succeed");
         let run_id = Uuid::parse_str(&run_id_str).expect("valid UUID");
 
         let loaded = db
@@ -4098,6 +4184,8 @@ mod tests {
         let old = persist_scan(
             &db,
             r"C:\Root",
+            adpa_core::model::RunScope::Scan,
+            None,
             &[perm(r"C:\Root\Same", gap()), perm(r"C:\Root\Gone", gap())],
             &[],
             false,
@@ -4107,6 +4195,8 @@ mod tests {
         let new = persist_scan(
             &db,
             r"C:\Root",
+            adpa_core::model::RunScope::Scan,
+            None,
             &[perm(r"C:\Root\Same", vec![]), perm(r"C:\Root\New", gap())],
             &[],
             false,
@@ -4114,7 +4204,7 @@ mod tests {
         )
         .expect("new run");
         let rows = compute_delta(&db, &old, &new).expect("delta");
-        let row = |path: &str| rows.iter().find(|r| r.path == path).expect(path);
+        let row = |path: &str| rows.rows.iter().find(|r| r.path == path).expect(path);
 
         let undeterminable = |s: &str| {
             s.starts_with(&format!("{NOT_DETERMINABLE} (known data: "))

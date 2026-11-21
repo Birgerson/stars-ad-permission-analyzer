@@ -7,7 +7,7 @@ use adpa_core::{
     error::CoreError,
     model::{
         AccessMask, EffectivePermission, LocalGroupEvalStatus, NormalizedPath,
-        PermissionDiagnostic, ShareEvalStatus,
+        PermissionDiagnostic, RunScope, ShareEvalStatus, SCAN_CANCELLED_MESSAGE,
     },
 };
 use rusqlite::Connection;
@@ -170,6 +170,112 @@ pub enum DeltaKind {
         new_mask: AccessMask,
         reasons: Vec<DeltaReason>,
     },
+    /// Review CR-19: the path is in one run only, and the other run did not
+    /// cover it — it was cancelled, or could not read or enumerate the path
+    /// or one of its parents. Neither added nor removed can be claimed.
+    /// `in_old`: the path is in the old run (it would have read "Removed").
+    NotObserved { in_old: bool, reason: String },
+}
+
+/// Review CR-19: the result of a comparison — the entries and the notes a
+/// reader needs to judge them.
+#[derive(Debug, Clone, Default)]
+pub struct DeltaReport {
+    pub entries: Vec<DeltaEntry>,
+    pub notes: Vec<String>,
+}
+
+/// Review CR-19: what one stored run covered, as far as it was recorded.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunCoverage {
+    /// `None` for a run stored before schema v9.
+    pub scope: Option<RunScope>,
+    /// The depth limit (`None` = unlimited when `scope` is known).
+    pub max_depth: Option<u32>,
+    pub cancelled: bool,
+    /// The paths the run could not read or did not enumerate.
+    pub error_paths: Vec<String>,
+}
+
+impl RunCoverage {
+    /// Why this run cannot say whether `path` exists — `None` when it
+    /// covered the path. Pure.
+    fn unobserved_reason(&self, path: &str) -> Option<String> {
+        if self.cancelled {
+            return Some("the run was cancelled before it finished".to_owned());
+        }
+        self.error_paths
+            .iter()
+            .find(|e| path_is_at_or_below(path, e))
+            .map(|e| format!("the run could not read or enumerate {e}"))
+    }
+}
+
+/// `path` is `parent` or lies below it (ASCII case ignored, at a component
+/// boundary). Pure.
+fn path_is_at_or_below(path: &str, parent: &str) -> bool {
+    let parent = parent.trim_end_matches('\\');
+    match path.get(..parent.len()) {
+        Some(head) if head.eq_ignore_ascii_case(parent) => {
+            path.len() == parent.len() || path[parent.len()..].starts_with('\\')
+        }
+        _ => false,
+    }
+}
+
+/// Review CR-19: refuses runs that did not look at the same tree — a scan
+/// and a single-path analysis, or two depth limits. Runs stored before v9
+/// have no recorded scope; they are compared, with a note. Pure.
+pub fn check_comparable(old: &RunCoverage, new: &RunCoverage) -> Result<Vec<String>, CoreError> {
+    let describe = |c: &RunCoverage| match (c.scope, c.max_depth) {
+        (Some(RunScope::Analyze), _) => "a single-path analysis".to_owned(),
+        (Some(RunScope::Scan), None) => "a scan without a depth limit".to_owned(),
+        (Some(RunScope::Scan), Some(d)) => format!("a scan to depth {d}"),
+        (None, _) => "a run of unknown scope".to_owned(),
+    };
+    match (old.scope, new.scope) {
+        (Some(a), Some(b)) if a != b || old.max_depth != new.max_depth => {
+            Err(CoreError::Validation(format!(
+                "scan runs are not comparable: the old run is {}, the new run {} — paths one \
+                 of them never looked at would read as added or removed",
+                describe(old),
+                describe(new)
+            )))
+        }
+        (Some(_), Some(_)) => Ok(Vec::new()),
+        _ => Ok(vec![
+            "One of the runs was stored before Stars recorded what a run covers (scope and \
+             depth limit). Additions and removals assume both runs covered the same tree."
+                .to_owned(),
+        ]),
+    }
+}
+
+/// Review CR-19: an addition or removal the other run could not have seen
+/// becomes `NotObserved`. Pure.
+pub fn apply_coverage(
+    entries: Vec<DeltaEntry>,
+    old: &RunCoverage,
+    new: &RunCoverage,
+) -> Vec<DeltaEntry> {
+    entries
+        .into_iter()
+        .map(|mut e| {
+            let unobserved = match e.kind {
+                DeltaKind::Removed => new
+                    .unobserved_reason(&e.path.0)
+                    .map(|r| (true, format!("not in the new run, but {r}"))),
+                DeltaKind::Added => old
+                    .unobserved_reason(&e.path.0)
+                    .map(|r| (false, format!("not in the old run, but {r}"))),
+                _ => None,
+            };
+            if let Some((in_old, reason)) = unobserved {
+                e.kind = DeltaKind::NotObserved { in_old, reason };
+            }
+            e
+        })
+        .collect()
 }
 
 /// A single change row in the delta report.
@@ -199,6 +305,44 @@ fn run_target(conn: &Connection, run_id: &Uuid) -> Result<String, CoreError> {
     })
 }
 
+/// Review CR-19: what a stored run covered — scope and depth limit (schema
+/// v9), cancellation and the paths it left out (its stored errors).
+fn run_coverage(conn: &Connection, run_id: &Uuid) -> Result<RunCoverage, CoreError> {
+    let (scope, max_depth): (Option<String>, Option<i64>) = conn
+        .query_row(
+            "SELECT scope, max_depth FROM scan_runs WHERE id = ?1",
+            [run_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| CoreError::Database(format!("reading scan run '{run_id}': {e}")))?;
+    // Validated like any stored value: an unknown scope or an impossible
+    // depth is a damaged record, not a guess.
+    let scope = match scope.as_deref() {
+        None => None,
+        Some(s) => Some(RunScope::parse(s).ok_or_else(|| {
+            CoreError::Database(format!("scan run '{run_id}' has the unknown scope '{s}'"))
+        })?),
+    };
+    let max_depth = match max_depth {
+        None => None,
+        Some(d) => Some(u32::try_from(d).map_err(|_| {
+            CoreError::Database(format!("scan run '{run_id}' has the depth limit {d}"))
+        })?),
+    };
+    let errors = crate::scan_store::ScanStore::new(conn).list_errors_for(run_id)?;
+    Ok(RunCoverage {
+        scope,
+        max_depth,
+        cancelled: errors
+            .iter()
+            .any(|e| e.path.is_none() && e.message == SCAN_CANCELLED_MESSAGE),
+        error_paths: errors
+            .into_iter()
+            .filter_map(|e| e.path.map(|p| p.0))
+            .collect(),
+    })
+}
+
 /// Compares two scan runs and returns all changes.
 ///
 /// Persistence review 2026-07-26, PS-4: refuses semantically incomparable
@@ -206,11 +350,16 @@ fn run_target(conn: &Connection, run_id: &Uuid) -> Result<String, CoreError> {
 /// meaningless report ("everything changed"), so the mismatch is a
 /// `Validation` error naming both targets instead of a silent nonsense
 /// delta.
+///
+/// Review CR-19: also refuses a scan against a single-path analysis and two
+/// depth limits, and reports a path that only one run has as `NotObserved`
+/// when the other run did not cover it (cancelled, or a parent it could not
+/// read or enumerate).
 pub fn compare_scans(
     conn: &Connection,
     old_run_id: &Uuid,
     new_run_id: &Uuid,
-) -> Result<Vec<DeltaEntry>, CoreError> {
+) -> Result<DeltaReport, CoreError> {
     let old_target = run_target(conn, old_run_id)?;
     let new_target = run_target(conn, new_run_id)?;
     if old_target != new_target {
@@ -219,11 +368,19 @@ pub fn compare_scans(
              the new run scanned '{new_target}'"
         )));
     }
+    let old_coverage = run_coverage(conn, old_run_id)?;
+    let new_coverage = run_coverage(conn, new_run_id)?;
+    let notes = check_comparable(&old_coverage, &new_coverage)?;
 
     let old_perms = load_permissions_for_run(conn, old_run_id)?;
     let new_perms = load_permissions_for_run(conn, new_run_id)?;
 
-    Ok(diff_permission_lists(old_perms, new_perms))
+    let entries = apply_coverage(
+        diff_permission_lists(old_perms, new_perms),
+        &old_coverage,
+        &new_coverage,
+    );
+    Ok(DeltaReport { entries, notes })
 }
 
 /// Pure diff logic on two permission lists — for tests without a DB.
@@ -578,6 +735,8 @@ mod tests {
             finished_at: Some(Utc::now()),
             target: r"C:\alpha".into(),
             errors: vec![],
+            scope: Some(RunScope::Scan),
+            max_depth: None,
         };
         let run_b = ScanRun {
             id: Uuid::new_v4(),
@@ -585,6 +744,8 @@ mod tests {
             finished_at: Some(Utc::now()),
             target: r"C:\beta".into(),
             errors: vec![],
+            scope: Some(RunScope::Scan),
+            max_depth: None,
         };
         store.insert_scan_run(&run_a).unwrap();
         store.insert_scan_run(&run_b).unwrap();
@@ -596,6 +757,160 @@ mod tests {
             msg.contains(r"C:\alpha") && msg.contains(r"C:\beta"),
             "error must name both targets; got: {msg}"
         );
+    }
+
+    fn cov(scope: Option<RunScope>, depth: Option<u32>) -> RunCoverage {
+        RunCoverage {
+            scope,
+            max_depth: depth,
+            ..Default::default()
+        }
+    }
+
+    /// Review CR-19: a scan and an analysis, or two depth limits, are not
+    /// comparable; runs stored before v9 are compared with a note.
+    #[test]
+    fn runs_of_another_scope_or_depth_are_refused() {
+        let scan = cov(Some(RunScope::Scan), None);
+        let shallow = cov(Some(RunScope::Scan), Some(2));
+        let analysis = cov(Some(RunScope::Analyze), None);
+        assert!(check_comparable(&scan, &scan).unwrap().is_empty());
+        let err = check_comparable(&scan, &shallow).unwrap_err().to_string();
+        assert!(
+            err.contains("a scan without a depth limit") && err.contains("a scan to depth 2"),
+            "{err}"
+        );
+        let err = check_comparable(&analysis, &scan).unwrap_err().to_string();
+        assert!(err.contains("a single-path analysis"), "{err}");
+        let legacy = cov(None, None);
+        let notes = check_comparable(&legacy, &scan).unwrap();
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("before Stars recorded"), "{notes:?}");
+    }
+
+    /// Review CR-19: a full run followed by an interrupted run, or by one
+    /// that could not read a folder, does not report the unobserved paths
+    /// as removed — nor, the other way, as added.
+    #[test]
+    fn paths_the_other_run_did_not_cover_are_not_observed() {
+        let full = vec![
+            mk_perm(r"C:\data\a", MASK_READ),
+            mk_perm(r"C:\data\locked\x", MASK_READ),
+            mk_perm(r"C:\data\lockedtwin\y", MASK_READ),
+        ];
+        let partial = vec![mk_perm(r"C:\data\a", MASK_READ)];
+        let scan = cov(Some(RunScope::Scan), None);
+
+        // The new run could not read C:\data\locked.
+        let blocked = RunCoverage {
+            error_paths: vec![r"C:\data\Locked".into()],
+            ..scan.clone()
+        };
+        let entries = apply_coverage(
+            diff_permission_lists(full.clone(), partial.clone()),
+            &scan,
+            &blocked,
+        );
+        let kind_of = |p: &str| {
+            entries
+                .iter()
+                .find(|e| e.path.0 == p)
+                .map(|e| e.kind.clone())
+        };
+        assert!(
+            matches!(kind_of(r"C:\data\locked\x"), Some(DeltaKind::NotObserved { in_old: true, reason }) if reason.contains(r"C:\data\Locked"))
+        );
+        assert_eq!(
+            kind_of(r"C:\data\lockedtwin\y"),
+            Some(DeltaKind::Removed),
+            "a sibling with a longer name is not below the error path"
+        );
+
+        // The new run was cancelled: nothing it lacks was removed.
+        let cancelled = RunCoverage {
+            cancelled: true,
+            ..scan.clone()
+        };
+        let entries = apply_coverage(
+            diff_permission_lists(full.clone(), partial.clone()),
+            &scan,
+            &cancelled,
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|e| matches!(e.kind, DeltaKind::NotObserved { in_old: true, .. })),
+            "{entries:#?}"
+        );
+
+        // The other way: the old run was cancelled, the new one complete.
+        let entries = apply_coverage(diff_permission_lists(partial, full), &cancelled, &scan);
+        assert!(
+            entries
+                .iter()
+                .all(|e| matches!(e.kind, DeltaKind::NotObserved { in_old: false, .. })),
+            "{entries:#?}"
+        );
+        assert!(path_is_at_or_below(r"C:\data\locked", r"C:\data\locked\"));
+    }
+
+    /// Review CR-19 through the database: the stored cancel marker and the
+    /// stored error paths decide, and a v9 run records its scope.
+    #[test]
+    fn compare_scans_reads_scope_cancellation_and_errors_from_the_database() {
+        use crate::scan_store::ScanStore;
+        use adpa_core::model::{ScanError, ScanRun};
+        use chrono::Utc;
+        use uuid::Uuid;
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::migrations::run_migrations(&conn).unwrap();
+        let store = ScanStore::new(&conn);
+        let run = |depth: Option<u32>| ScanRun {
+            id: Uuid::new_v4(),
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            target: r"C:\data".into(),
+            errors: vec![],
+            scope: Some(RunScope::Scan),
+            max_depth: depth,
+        };
+        let (old, new, other_depth) = (run(None), run(None), run(Some(1)));
+        store
+            .persist_scan_atomic(
+                &old,
+                &[
+                    mk_perm(r"C:\data\a", MASK_READ),
+                    mk_perm(r"C:\data\b", MASK_READ),
+                ],
+                &[],
+            )
+            .unwrap();
+        store
+            .persist_scan_atomic(
+                &new,
+                &[mk_perm(r"C:\data\a", MASK_READ)],
+                &[ScanError {
+                    path: None,
+                    message: SCAN_CANCELLED_MESSAGE.to_owned(),
+                }],
+            )
+            .unwrap();
+        store.persist_scan_atomic(&other_depth, &[], &[]).unwrap();
+        let report = compare_scans(&conn, &old.id, &new.id).unwrap();
+        assert!(report.notes.is_empty());
+        assert!(
+            matches!(
+                &report.entries[..],
+                [DeltaEntry {
+                    kind: DeltaKind::NotObserved { in_old: true, .. },
+                    ..
+                }]
+            ),
+            "{:#?}",
+            report.entries
+        );
+        let err = compare_scans(&conn, &old.id, &other_depth.id).unwrap_err();
+        assert!(err.to_string().contains("a scan to depth 1"), "{err}");
     }
 
     /// PS-4: an unknown run id is a Validation error — before the guard it

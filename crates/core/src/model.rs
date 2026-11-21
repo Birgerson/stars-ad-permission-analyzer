@@ -2491,7 +2491,48 @@ pub struct ScanRun {
     pub finished_at: Option<DateTime<Utc>>,
     pub target: String,
     pub errors: Vec<ScanError>,
+    /// Review CR-19: what the run covered — a recursive scan or a
+    /// single-path analysis. `None` for a run stored before schema v9: its
+    /// scope and depth limit are unknown.
+    #[serde(default)]
+    pub scope: Option<RunScope>,
+    /// The depth limit of a scan: `None` = unlimited when `scope` is known,
+    /// unknown otherwise.
+    #[serde(default)]
+    pub max_depth: Option<u32>,
 }
+
+/// Review CR-19: what a stored run covered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RunScope {
+    /// A recursive scan of a tree.
+    Scan,
+    /// A single-path analysis.
+    Analyze,
+}
+
+impl RunScope {
+    /// The stored form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Scan => "scan",
+            Self::Analyze => "analyze",
+        }
+    }
+
+    /// The stored form back; `None` for anything else.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "scan" => Some(Self::Scan),
+            "analyze" => Some(Self::Analyze),
+            _ => None,
+        }
+    }
+}
+
+/// The stored scan error that marks a cancelled run — the same text in the
+/// CLI and the GUI (review CR-19 reads it back).
+pub const SCAN_CANCELLED_MESSAGE: &str = "Scan cancelled by user — results are partial";
 
 /// Error during a scan
 #[derive(Debug, Clone, Serialize, Deserialize)]

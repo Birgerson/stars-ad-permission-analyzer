@@ -38,6 +38,16 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   and the GUI, now resolve the drive to its UNC path first and evaluate
   that; the explanation names the drive. A network drive whose UNC path
   Windows does not return is an error, never a local evaluation.
+- **The delta comparison no longer reports unobserved paths as added or
+  removed (review CR-19).** It compared rows by identity and path only. A
+  full scan followed by a cancelled one, one with a lower depth limit, one
+  that could not read a folder, or a single-path analysis of the same
+  target marked every path the second run never looked at as Removed. Runs
+  now record their scope and depth limit (schema v9), and the comparison
+  refuses a scan against an analysis or two depth limits. A path that only
+  one run has while the other did not cover it (cancelled, or a parent it
+  could not read or enumerate) is `Not observed`, with the reason, instead
+  of Added or Removed. Runs stored before v9 are compared with a note.
 - **Scan reports say whether the scan is complete (review CR-28).** The
   CLI recorded a cancellation on the console and in the scan history, and
   the GUI built its reports from the results alone. A report recipient could
