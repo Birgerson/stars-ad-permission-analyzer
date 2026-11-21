@@ -2312,7 +2312,8 @@ fn open_existing_db(path: &str) -> anyhow::Result<Database> {
              existing databases (created by `adpa scan --db` or by the GUI)."
         ));
     }
-    Database::open(path).map_err(|e| anyhow::anyhow!("Cannot open database: {e}"))
+    // Review CR-30: read-only mode — no migration, nothing written.
+    Database::open_read_only(path).map_err(|e| anyhow::anyhow!("Cannot open database: {e}"))
 }
 
 /// `runs` command: list the stored scan runs with per-run path and error

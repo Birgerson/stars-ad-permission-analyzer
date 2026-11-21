@@ -33,6 +33,11 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (9, include_str!("schema_v9.sql")),
 ];
 
+/// The schema version a fully migrated database has.
+pub fn latest_schema_version() -> u32 {
+    MIGRATIONS.last().map_or(0, |(v, _)| *v)
+}
+
 /// Applies all pending migrations in ascending order.
 pub fn run_migrations(conn: &Connection) -> Result<(), CoreError> {
     let current: u32 = conn
