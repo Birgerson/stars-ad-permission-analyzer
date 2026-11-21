@@ -10,6 +10,8 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 
 ## [Unreleased]
 
+## [1.19.1] — 2026-11-21
+
 **The twenty findings of the review of v1.19.0 (CR-16 to CR-35).** Each
 was checked against the code, and every reproducible one measured in the
 lab before and after its fix (verification Block Z). Nineteen are fixed;
@@ -17,6 +19,9 @@ one (CR-31) was refuted by measurement and got a guard. A scan of the lab's
 data share, over SMB and locally, gives every row exactly as v1.19.0 did.
 The database schema moves to v9 (run scope and depth limit), the JSON
 report to schema v5 (`scan`), and the CSV gains the last column `row_kind`.
+Released as a patch on the owner's decision: every format change is
+additive — the new JSON field and CSV column come last, the new database
+columns may be empty, and v1.19.0 still opens a v9 database.
 
 ### Fixed
 

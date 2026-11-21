@@ -1,6 +1,6 @@
 # Stars — Known Limitations and Roadmap (v1.6+)
 
-**Status:** v1.19.0
+**Status:** v1.19.1
 **Purpose:** Honest enumeration of the places where Stars **structurally
 cannot guarantee** to deliver a complete picture.
 
