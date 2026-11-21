@@ -246,8 +246,6 @@ pub fn print_report(
         }
     }
 
-    // --- Strukturierte Diagnose-Marker (ADR 0021 + 0024) ---
-    //
     // Structured diagnostic markers (ADR 0021 + 0024). Previously these
     // were only visible in JSON/CSV/HTML/GUI; the CLI output omitted them.
     // To give a CLI auditor the same information as the export formats we

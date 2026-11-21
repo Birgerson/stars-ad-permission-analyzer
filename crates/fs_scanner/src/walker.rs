@@ -1112,7 +1112,6 @@ mod tests {
     fn walk_reaches_paths_longer_than_max_path() {
         use std::path::PathBuf;
 
-        // kollidieren.
         // 12 × 30 = 360 chars of segment depth + TEMP prefix ⇒ clearly > 260.
         let stamp = format!(
             "{}-{}",

@@ -257,6 +257,9 @@ DE_WORDS = [
     "einsteht", "Serialisierung", "Tabelle", "bewusst", "immer",
     "Schnittmenge", "uebergeben", "sichtbare", "Wegwerfen", "statt",
     "erscheint",
+    # review 2026-11-21 (CR-35, second sweep): orphaned fragments.
+    "verwandeln", "Strukturierte", "kollidieren", "Herkunft", "produzieren",
+    "Kette", "Unvollstaendigkeit",
 ]
 
 DE_WORDS_RE = re.compile(
@@ -530,6 +533,12 @@ def selftest() -> int:
         "/// statt nur `Allow ACE for S-1-5-32-544 → Modify` erscheint.",
         "/// uebergeben statt `None`.",
         "let ldap = FakeLdapBackend::new(); // bewusst leer",
+        "// `Orphaned` verwandeln. ScopeStatus =",
+        "// --- Strukturierte Diagnose-Marker (ADR 0021 + 0024) ---",
+        "// kollidieren.",
+        '// alte Schema „[direct]" / „[transitive]" produzieren.',
+        "// Kette enthalten.",
+        "/// Unvollstaendigkeit sieht.",
     ]
     must_pass = [
         "Risk Findings",

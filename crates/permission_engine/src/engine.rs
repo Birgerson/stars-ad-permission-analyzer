@@ -3731,7 +3731,7 @@ mod tests {
         assert_eq!(p.unsupported_ace_count, 0);
     }
 
-    // --- Strukturierte ACE-Herkunft / structured ACE origin ---
+    // --- Structured ACE origin ---
 
     #[test]
     fn matched_aces_capture_user_and_group_aces() {
@@ -5504,7 +5504,6 @@ mod tests {
 
     #[test]
     fn explanation_falls_back_to_legacy_format_when_path_missing() {
-        // alte Schema „[direct]" / „[transitive]" produzieren.
         // Cache reads return path=None; the engine must then fall back
         // to the legacy "[direct]" / "[transitive]" format.
         let identity = user(USER);
@@ -6515,9 +6514,9 @@ mod tests {
         );
     }
 
-    /// Review 2026-06-04 round 4 finding 1: a failed
-    /// `GroupResolutionFailed { reason }`-Marker.
-    /// Round 4 finding 1: failed group resolution after identity hit.
+    /// Review 2026-06-04 round 4 finding 1: a failed group resolution
+    /// after an identity hit yields the `GroupResolutionFailed { reason }`
+    /// marker.
     #[test]
     fn engine_pushes_group_resolution_failed_diagnostic_with_reason() {
         let result = DefaultPermissionEngine
@@ -6808,7 +6807,6 @@ mod tests {
 
         assert_eq!(result.effective_mask.0, MASK_MODIFY);
 
-        // Kette enthalten.
         let local_step = result
             .path_explanation
             .steps
@@ -6826,7 +6824,6 @@ mod tests {
         );
     }
 
-    /// Unvollstaendigkeit sieht.
     /// Round 6 finding 1: `complete: false` paths must render as
     /// "exact chain unknown" so the auditor sees the incompleteness.
     #[test]
