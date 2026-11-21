@@ -1109,11 +1109,12 @@ async fn handle_analyze(
     let normalized_path = validate_path(path)
         .map_err(|e| format!("Invalid path: {e}"))?
         .0;
-    // Review CR-22: a path on a mapped network drive is evaluated as the UNC
-    // path it maps to — over SMB, with that server's share and groups.
-    let mapped_drive = analysis::network_drive::resolve_mapped_drive(&normalized_path)
+    // Review CR-21/CR-22: a path on a mapped network drive or behind a link
+    // to a share is evaluated as the UNC path it reaches — over SMB, with
+    // that server's share and groups.
+    let network_target = analysis::network_drive::resolve_network_target(&normalized_path)
         .map_err(|e| format!("Invalid path: {e}"))?;
-    let normalized_path = match &mapped_drive {
+    let normalized_path = match &network_target {
         Some(m) => m.unc.clone(),
         None => normalized_path,
     };
@@ -1244,7 +1245,7 @@ async fn handle_analyze(
             if let Some(d) = &dfs {
                 analysis::dfs::attach_step(&mut result.path_explanation, d);
             }
-            if let Some(m) = &mapped_drive {
+            if let Some(m) = &network_target {
                 analysis::network_drive::attach_step(&mut result.path_explanation, m);
             }
             result
@@ -1536,13 +1537,15 @@ async fn handle_scan(
         Ok(p) => p.0,
         Err(e) => return make_early_summary(format!("Invalid path: {e}")),
     };
-    // Review CR-22: a root on a mapped network drive is scanned as the UNC
-    // path it maps to; rows name the UNC paths, the note says why.
-    let scan_mapped_drive = match analysis::network_drive::resolve_mapped_drive(&normalized_root) {
-        Ok(m) => m,
-        Err(e) => return make_early_summary(format!("Invalid path: {e}")),
-    };
-    let normalized_root = match &scan_mapped_drive {
+    // Review CR-21/CR-22: a root on a mapped network drive or behind a link
+    // to a share is scanned as the UNC path it reaches; rows name the UNC
+    // paths, the note says why.
+    let scan_network_target =
+        match analysis::network_drive::resolve_network_target(&normalized_root) {
+            Ok(m) => m,
+            Err(e) => return make_early_summary(format!("Invalid path: {e}")),
+        };
+    let normalized_root = match &scan_network_target {
         Some(m) => {
             let _ = evt_tx.send(WorkerEvent::ScanError {
                 path: m.requested.clone(),
@@ -1805,7 +1808,7 @@ async fn handle_scan(
                 if let Some(d) = &row_dfs {
                     analysis::dfs::attach_step(&mut perm.path_explanation, d);
                 }
-                if let Some(m) = &scan_mapped_drive {
+                if let Some(m) = &scan_network_target {
                     analysis::network_drive::attach_step(&mut perm.path_explanation, m);
                 }
                 // ADR 0065: an undeterminable row says so instead of
