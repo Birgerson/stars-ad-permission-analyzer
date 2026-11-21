@@ -38,6 +38,19 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   and the GUI, now resolve the drive to its UNC path first and evaluate
   that; the explanation names the drive. A network drive whose UNC path
   Windows does not return is an error, never a local evaluation.
+- **The walker no longer skips a directory it never listed (review CR-25,
+  ADR 0058 addendum).** A directory was marked as enumerated when a route
+  reached it, before the depth limit or the listing. A junction met at the
+  `--max-depth` limit then hid a shallower route to the same folder, and
+  its content was missing (reproduced: `Z\child` and its file); a failed
+  listing did the same. Now only a successful listing counts, with the
+  depth it had left, and a later route with more depth left lists the
+  folder again.
+- **Case-sensitive directories are walked completely (review CR-26).**
+  Directory identities were lowercased, so in a case-sensitive directory
+  `data` was skipped as a duplicate of `Data`, with a message about a
+  reparse point that did not exist. Identities now keep the case Windows
+  stores.
 - **DFS targets below a share are understood (review CR-27, ADR 0085
   addendum).** The DFS client reports a target such as
   `\\FS-02\DfsTeam\Sub` with the share field `DfsTeam\Sub`; Stars discarded
