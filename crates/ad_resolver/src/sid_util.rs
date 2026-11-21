@@ -3,8 +3,8 @@
 
 //! SID conversion logic between Windows SID string and binary LDAP format.
 //!
-//! Windows SID-Format: S-R-I-S1-S2-...-Sn
-//!   R  = Revision (immer 1)
+//! Windows SID format: S-R-I-S1-S2-...-Sn
+//!   R  = Revision (always 1)
 //!   Sn = Sub-Authorities (32-bit little-endian)
 //!
 //! Binary layout:

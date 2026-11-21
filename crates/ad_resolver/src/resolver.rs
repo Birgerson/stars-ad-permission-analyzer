@@ -2851,18 +2851,17 @@ mod tests {
         );
         assert!(
             group_names.contains(&"GRP_Development".to_string()),
-            "GRP_Development (direkt) fehlt — vorhandene Gruppen: {group_names:?}"
+            "GRP_Development (direct) missing — present groups: {group_names:?}"
         );
         assert!(
             group_names.contains(&"GRP_FullAccess_FS".to_string()),
-            "GRP_FullAccess_FS (transitiv) fehlt — vorhandene Gruppen: {group_names:?}"
+            "GRP_FullAccess_FS (transitive) missing — present groups: {group_names:?}"
         );
         assert!(
             group_names.contains(&"GRP_ShareAccess_SMB".to_string()),
-            "GRP_ShareAccess_SMB (transitiv) fehlt — vorhandene Gruppen: {group_names:?}"
+            "GRP_ShareAccess_SMB (transitive) missing — present groups: {group_names:?}"
         );
 
-        // GRP_ShareAccess_SMB als direct=false.
         // Verify direct flag: GRP_IT_Admins and GRP_Development must be
         // direct=true, while GRP_FullAccess_FS and GRP_ShareAccess_SMB must
         // be direct=false.

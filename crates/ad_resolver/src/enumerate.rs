@@ -453,7 +453,7 @@ mod tests {
         ] {
             assert!(
                 names.contains(&required),
-                "Well-Known-Tabelle fehlt: {required}"
+                "well-known table lacks {required}"
             );
         }
     }

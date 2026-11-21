@@ -830,7 +830,6 @@ mod tests {
         assert_eq!(ctx.share, "data");
     }
 
-    /// uebergeben statt `None`.
     /// Empty string flags count as "not set" — defence against CLI
     /// frontends that always hand over `Some("")` instead of `None`.
     #[test]
