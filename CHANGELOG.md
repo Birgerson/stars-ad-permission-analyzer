@@ -38,6 +38,14 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   and the GUI, now resolve the drive to its UNC path first and evaluate
   that; the explanation names the drive. A network drive whose UNC path
   Windows does not return is an error, never a local evaluation.
+- **The GUI scan no longer rebuilds its table for every row, and Cancel
+  works after the walk (review CR-29).** Each streamed result rebuilt a
+  copy of every row so far, so a scan did quadratic work in the table; and
+  once the walk was done, Cancel was no longer observed while the trustees
+  were gathered and the rows evaluated. Rows are now appended to the shown
+  list (rebuilt only when the filter changes, one row replaced when it is
+  expanded), and Cancel stops the evaluation; the scan then reports
+  partial results as cancelled.
 - **A ranged `tokenGroups` answer would be an error, not "absent" (review
   CR-31).** The review suspected that AD could return `tokenGroups` in
   ranges, which Stars would read as empty. Measured in the lab: with

@@ -1702,7 +1702,9 @@ async fn handle_scan(
 
     let walk = walk_tree(root, &WalkConfig { max_depth }, cancel);
     let total = walk.objects.len();
-    let cancelled = walk.cancelled;
+    // Review CR-29: cancellation is also observed after the walk, while the
+    // trustees are gathered and the rows are evaluated.
+    let mut cancelled = walk.cancelled;
 
     if let Some(d) = &scan_dfs {
         // The scan-wide DFS note, once — every row carries its own marker.
@@ -1752,21 +1754,29 @@ async fn handle_scan(
         let mut seen: HashSet<String> = HashSet::new();
         let mut trustees: Vec<String> = Vec::new();
         for fso in &walk.objects {
+            if cancel.is_cancelled() {
+                break;
+            }
             for sid in exporter::collect_ace_sids_for_resolution(fso, share_overlay.as_ref()) {
                 if seen.insert(sid.clone()) {
                     trustees.push(sid);
                 }
             }
         }
-        // Review CR-4: identity and local groups named, unknown SIDs looked
-        // up on the target server.
-        trustees.extend(scan_share_decisions.iter().map(|d| d.sid.0.clone()));
-        ad_resolver::build_sid_name_map_for_target(
-            &identity,
-            &combined_memberships,
-            trustees,
-            account_server.as_deref(),
-        )
+        if cancel.is_cancelled() {
+            // No row is evaluated after a cancel — no name lookups either.
+            std::collections::BTreeMap::new()
+        } else {
+            // Review CR-4: identity and local groups named, unknown SIDs
+            // looked up on the target server.
+            trustees.extend(scan_share_decisions.iter().map(|d| d.sid.0.clone()));
+            ad_resolver::build_sid_name_map_for_target(
+                &identity,
+                &combined_memberships,
+                trustees,
+                account_server.as_deref(),
+            )
+        }
     };
     #[cfg(not(windows))]
     let scan_sid_names = std::collections::BTreeMap::new();
@@ -1778,6 +1788,16 @@ async fn handle_scan(
     // other row only those an ACE of its object (or the share) names.
     let mut first_row_path: Option<String> = None;
     for mut fso in walk.objects {
+        if cancel.is_cancelled() {
+            if !cancelled {
+                info!(
+                    evaluated = permissions.len(),
+                    total, "Scan cancelled during evaluation"
+                );
+            }
+            cancelled = true;
+            break;
+        }
         // ADR 0085: the row keeps the requested form, its marker names the
         // target path.
         let row_dfs = scan_dfs.as_ref().and_then(|d| {
