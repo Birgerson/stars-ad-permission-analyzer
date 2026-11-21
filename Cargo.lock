@@ -1226,6 +1226,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "viz",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
