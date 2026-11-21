@@ -162,11 +162,17 @@ pub fn walk_tree_streaming(
 /// Windows). For a reparse point this returns the *target* — exactly what we
 /// need for loop detection. Returns `None` if resolution fails (e.g. broken
 /// link).
+///
+/// Review CR-26: the case is kept. Windows returns the case stored on disk
+/// both here and in a directory listing, so the identities of two routes to
+/// one directory agree without lowercasing — and in a case-sensitive
+/// directory `Data` and `data` are two directories, which lowercasing
+/// merged into one (lab 2026-11-21: `data` skipped as a duplicate).
 fn canonicalize_path(path: &str) -> Option<String> {
     let api_path = validation::path::to_windows_api_path(path);
     std::fs::canonicalize(&api_path)
         .ok()
-        .map(|p| p.to_string_lossy().to_string().to_ascii_lowercase())
+        .map(|p| p.to_string_lossy().to_string())
 }
 
 /// `true` when `path` is reached over SMB (a UNC path, with or without the
@@ -439,44 +445,78 @@ enum DescendDecision {
 /// - `chain`: canonical identities of the directories on the **active**
 ///   recursion path. Membership means a descent would re-enter an
 ///   ancestor — the only true cycle condition.
-/// - `seen_first_path`: canonical identity → first namespace path that
-///   enumerated it, scan-wide. A later hit is a duplicate route; the
-///   stored path makes the diagnostic explainable ("already enumerated
-///   under …").
+/// - `listed`: canonical identity → the namespace path that **listed** it
+///   and the depth that was left there, scan-wide. A later route is a
+///   duplicate only when that listing covered at least as much depth as
+///   the later route has (review CR-25): a directory reached first at the
+///   depth limit, or whose listing failed, was not enumerated, and a later
+///   route with more depth left must enumerate it. The stored path makes
+///   the diagnostic explainable ("already enumerated under …").
 struct LoopDetector {
     /// `(identity, namespace path)` of each directory on the active chain.
     chain: Vec<(String, String)>,
-    seen_first_path: HashMap<String, String>,
+    /// identity → (namespace path, depth left — `None` = unlimited).
+    listed: HashMap<String, (String, Option<u32>)>,
+}
+
+/// `true` when a listing with `have` depth left covers a route with `need`
+/// depth left (`None` = unlimited). Pure.
+fn depth_covers(have: Option<u32>, need: Option<u32>) -> bool {
+    match (have, need) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(h), Some(n)) => h >= n,
+    }
 }
 
 impl LoopDetector {
     fn new() -> Self {
         Self {
             chain: Vec::new(),
-            seen_first_path: HashMap::new(),
+            listed: HashMap::new(),
         }
     }
 
     /// Decides whether the walk may descend into the directory with the
-    /// given canonical identity, reached via `namespace_path`. Records the
-    /// entry when `Fresh` — the caller must call [`Self::leave`] after the
-    /// subtree completes (and only then).
-    fn enter(&mut self, identity: &str, namespace_path: &str) -> DescendDecision {
+    /// given canonical identity, reached via `namespace_path` with
+    /// `remaining` depth left. Pushes it onto the active chain when
+    /// `Fresh` — the caller must call [`Self::leave`] after the subtree
+    /// completes (and only then), and [`Self::listed`] once its listing
+    /// succeeded.
+    fn enter(
+        &mut self,
+        identity: &str,
+        namespace_path: &str,
+        remaining: Option<u32>,
+    ) -> DescendDecision {
         if let Some((_, ancestor)) = self.chain.iter().find(|(id, _)| id == identity) {
             return DescendDecision::Cycle {
                 ancestor_path: ancestor.clone(),
             };
         }
-        if let Some(first) = self.seen_first_path.get(identity) {
-            return DescendDecision::DuplicateTarget {
-                first_path: first.clone(),
-            };
+        if let Some((first, have)) = self.listed.get(identity) {
+            if depth_covers(*have, remaining) {
+                return DescendDecision::DuplicateTarget {
+                    first_path: first.clone(),
+                };
+            }
         }
-        self.seen_first_path
-            .insert(identity.to_owned(), namespace_path.to_owned());
         self.chain
             .push((identity.to_owned(), namespace_path.to_owned()));
         DescendDecision::Fresh
+    }
+
+    /// Records that the directory was listed through `namespace_path` with
+    /// `remaining` depth left. Keeps the listing that covered the most depth.
+    fn listed(&mut self, identity: &str, namespace_path: &str, remaining: Option<u32>) {
+        let keep = self
+            .listed
+            .get(identity)
+            .is_some_and(|(_, have)| depth_covers(*have, remaining));
+        if !keep {
+            self.listed
+                .insert(identity.to_owned(), (namespace_path.to_owned(), remaining));
+        }
     }
 
     /// Pops the innermost chain entry — pairs with a `Fresh` result of
@@ -728,25 +768,25 @@ fn walk_dir(
                 // Canonical identity of this directory. Reparse points and the
                 // root resolve via the filesystem (the reparse *target* is the
                 // identity); plain children derive from the parent — same
-                // lowercased, prefix-consistent form without a syscall per
-                // directory.
+                // stored-case, prefix-consistent form without a syscall per
+                // directory (review CR-26: never lowercased).
                 let canonical = if is_reparse || parent_canonical.is_none() {
                     match canonicalize_path(&path) {
                         Some(c) => c,
                         // Root that cannot be canonicalized (rare: virtual FS):
                         // best-effort identity so the walk still runs.
-                        None => path.to_ascii_lowercase(),
+                        None => path.clone(),
                     }
                 } else {
                     let component = std::path::Path::new(&path)
                         .file_name()
-                        .map(|n| n.to_string_lossy().to_ascii_lowercase());
+                        .map(|n| n.to_string_lossy().into_owned());
                     match (parent_canonical.as_deref(), component) {
                         (Some(parent), Some(name)) => {
                             format!("{parent}{}{name}", std::path::MAIN_SEPARATOR)
                         }
                         // No derivable component — fall back to the filesystem.
-                        _ => canonicalize_path(&path).unwrap_or_else(|| path.to_ascii_lowercase()),
+                        _ => canonicalize_path(&path).unwrap_or_else(|| path.clone()),
                     }
                 };
 
@@ -758,7 +798,12 @@ fn walk_dir(
                 let loop_key = select_loop_key(remote, file_identity, &canonical);
                 debug!(path, canonical = %canonical, key = %loop_key, "Directory loop identity");
 
-                match detector.enter(&loop_key, &path) {
+                // Review CR-25: how much depth this route has left decides
+                // whether an earlier listing already covered it.
+                let remaining = config
+                    .max_depth
+                    .map(|max| max.saturating_sub(current_depth));
+                match detector.enter(&loop_key, &path, remaining) {
                     DescendDecision::Cycle { ancestor_path } => {
                         let ancestor = validation::path::strip_long_path_prefix(&ancestor_path);
                         info!(
@@ -830,6 +875,10 @@ fn walk_dir(
                             }));
                         }
                         Ok(entries) => {
+                            // Only a listing counts as enumerated (review
+                            // CR-25) — not a directory at the depth limit or
+                            // one whose listing failed.
+                            detector.listed(&loop_key, &path, remaining);
                             // The walk descends: only here can a second
                             // route go unrecognized.
                             emit_object!(true);
@@ -1419,15 +1468,164 @@ mod tests {
     // cycle/duplicate decision must be validatable without mklink).
     // ----------------------------------------------------------------
 
+    /// Review CR-25: a directory reached first at the depth limit (or whose
+    /// listing failed) was not listed — a later route enters it. A later
+    /// route with more depth left than the first listing enters it too; one
+    /// with no more depth left is a duplicate.
+    #[test]
+    fn loop_detector_counts_only_listings_and_their_depth() {
+        use super::DescendDecision::{DuplicateTarget, Fresh};
+        let mut d = super::LoopDetector::new();
+        // Route 1 at the depth limit: entered, never listed.
+        assert_eq!(d.enter("z", r"C:\r\A\B\J", Some(0)), Fresh);
+        d.leave();
+        // Route 2, shallower: enters, lists with 2 levels left.
+        assert_eq!(d.enter("z", r"C:\r\Z", Some(2)), Fresh);
+        d.listed("z", r"C:\r\Z", Some(2));
+        d.leave();
+        // Route 3 with less depth left: covered.
+        assert!(
+            matches!(d.enter("z", r"C:\r\Y", Some(1)), DuplicateTarget { first_path } if first_path == r"C:\r\Z")
+        );
+        // Route 4 with more depth left: not covered.
+        assert_eq!(d.enter("z", r"C:\r\X", Some(3)), Fresh);
+        d.listed("z", r"C:\r\X", Some(3));
+        d.leave();
+        // Unlimited depth covers everything; a limited listing never covers it.
+        assert_eq!(d.enter("z", r"C:\r\W", None), Fresh);
+        d.listed("z", r"C:\r\W", None);
+        d.leave();
+        assert!(matches!(
+            d.enter("z", r"C:\r\V", Some(9)),
+            DuplicateTarget { .. }
+        ));
+        assert!(super::depth_covers(None, None));
+        assert!(!super::depth_covers(Some(5), None));
+    }
+
+    /// Review CR-25 end to end: a junction at the depth limit is reached
+    /// before the real folder; the folder and its content are still listed.
+    #[test]
+    fn a_junction_at_the_depth_limit_does_not_hide_a_shallower_route() {
+        let base = std::env::temp_dir().join(format!(
+            "adpa-cr25-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(base.join(r"A\B")).unwrap();
+        std::fs::create_dir_all(base.join(r"Z\child")).unwrap();
+        std::fs::write(base.join(r"Z\child\file.txt"), b"x").unwrap();
+        let junction = base.join(r"A\B\J");
+        let made = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&junction)
+            .arg(base.join("Z"))
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !made {
+            let _ = std::fs::remove_dir_all(&base);
+            eprintln!("mklink /J unavailable — test skipped");
+            return;
+        }
+        let result = walk_tree(
+            &base.to_string_lossy(),
+            &WalkConfig { max_depth: Some(3) },
+            &crate::CancellationToken::new(),
+        );
+        let paths: Vec<String> = result.objects.iter().map(|o| o.path.0.clone()).collect();
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "rmdir"])
+            .arg(&junction)
+            .output();
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            paths.iter().any(|p| p.ends_with(r"Z\child\file.txt")),
+            "the folder behind the shallower route must be listed: {paths:#?}"
+        );
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| e.error.to_string().contains("already enumerated")),
+            "nothing was listed before, so nothing is a duplicate: {:#?}",
+            result
+                .errors
+                .iter()
+                .map(|e| format!("{}: {}", e.path, e.error))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Review CR-26: in a case-sensitive directory `Data` and `data` are two
+    /// directories, and both are listed.
+    #[test]
+    fn case_sensitive_siblings_are_two_directories() {
+        let base = std::env::temp_dir().join(format!(
+            "adpa-cr26-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let enabled = std::process::Command::new("fsutil")
+            .args(["file", "setCaseSensitiveInfo"])
+            .arg(&base)
+            .arg("enable")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !enabled
+            || std::fs::create_dir(base.join("Data")).is_err()
+            || std::fs::create_dir(base.join("data")).is_err()
+        {
+            let _ = std::fs::remove_dir_all(&base);
+            eprintln!("case-sensitive directories unavailable — test skipped");
+            return;
+        }
+        std::fs::write(base.join(r"Data\upper.txt"), b"U").unwrap();
+        std::fs::write(base.join(r"data\lower.txt"), b"L").unwrap();
+        let result = walk_tree(
+            &base.to_string_lossy(),
+            &WalkConfig { max_depth: None },
+            &crate::CancellationToken::new(),
+        );
+        let paths: Vec<String> = result.objects.iter().map(|o| o.path.0.clone()).collect();
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            paths.iter().any(|p| p.ends_with(r"Data\upper.txt")),
+            "{paths:#?}"
+        );
+        assert!(
+            paths.iter().any(|p| p.ends_with(r"data\lower.txt")),
+            "{paths:#?}"
+        );
+        assert!(
+            result.errors.is_empty(),
+            "{:#?}",
+            result
+                .errors
+                .iter()
+                .map(|e| format!("{}: {}", e.path, e.error))
+                .collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn loop_detector_duplicate_after_leave_names_first_path() {
         let mut d = super::LoopDetector::new();
         assert_eq!(
-            d.enter("c:\\shared", "C:\\root\\link_a"),
+            d.enter("c:\\shared", "C:\\root\\link_a", None),
             super::DescendDecision::Fresh
         );
+        d.listed("c:\\shared", "C:\\root\\link_a", None);
         d.leave();
-        match d.enter("c:\\shared", "C:\\root\\link_b") {
+        match d.enter("c:\\shared", "C:\\root\\link_b", None) {
             super::DescendDecision::DuplicateTarget { first_path } => {
                 assert_eq!(first_path, "C:\\root\\link_a");
             }
@@ -1770,11 +1968,11 @@ mod tests {
         let id = "fid:9c6e99436e9916dc:000000000000000200000000000071c3";
         let mut d = super::LoopDetector::new();
         assert_eq!(
-            d.enter(id, r"\\?\UNC\srv\share\loop"),
+            d.enter(id, r"\\?\UNC\srv\share\loop", None),
             super::DescendDecision::Fresh
         );
         assert_eq!(
-            d.enter(id, r"\\?\UNC\srv\share\loop\back"),
+            d.enter(id, r"\\?\UNC\srv\share\loop\back", None),
             super::DescendDecision::Cycle {
                 ancestor_path: r"\\?\UNC\srv\share\loop".to_owned()
             }
@@ -1784,13 +1982,16 @@ mod tests {
     #[test]
     fn loop_detector_ancestor_on_active_chain_is_cycle() {
         let mut d = super::LoopDetector::new();
-        assert_eq!(d.enter("c:\\a", "C:\\a"), super::DescendDecision::Fresh);
         assert_eq!(
-            d.enter("c:\\a\\b", "C:\\a\\b"),
+            d.enter("c:\\a", "C:\\a", None),
             super::DescendDecision::Fresh
         );
         assert_eq!(
-            d.enter("c:\\a", "C:\\a\\b\\link"),
+            d.enter("c:\\a\\b", "C:\\a\\b", None),
+            super::DescendDecision::Fresh
+        );
+        assert_eq!(
+            d.enter("c:\\a", "C:\\a\\b\\link", None),
             super::DescendDecision::Cycle {
                 ancestor_path: "C:\\a".to_owned()
             },
@@ -1802,13 +2003,17 @@ mod tests {
     #[test]
     fn loop_detector_left_sibling_is_duplicate_not_cycle() {
         let mut d = super::LoopDetector::new();
-        assert_eq!(d.enter("c:\\a", "C:\\a"), super::DescendDecision::Fresh);
         assert_eq!(
-            d.enter("c:\\a\\b", "C:\\a\\b"),
+            d.enter("c:\\a", "C:\\a", None),
             super::DescendDecision::Fresh
         );
+        assert_eq!(
+            d.enter("c:\\a\\b", "C:\\a\\b", None),
+            super::DescendDecision::Fresh
+        );
+        d.listed("c:\\a\\b", "C:\\a\\b", None);
         d.leave(); // done with c:\a\b — no longer on the active chain
-        match d.enter("c:\\a\\b", "C:\\a\\c_link") {
+        match d.enter("c:\\a\\b", "C:\\a\\c_link", None) {
             super::DescendDecision::DuplicateTarget { first_path } => {
                 assert_eq!(first_path, "C:\\a\\b");
             }

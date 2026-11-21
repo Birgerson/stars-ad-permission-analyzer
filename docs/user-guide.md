@@ -62,6 +62,11 @@ To answer them, Stars reads:
   (a junction back into its own parent chain) and a duplicate target
   (two junctions to the same directory) are told apart and each surfaced
   as its own typed diagnostic, never a silent skip or a double count.
+  A directory counts as enumerated only once it was listed: a route that
+  met it at the `--max-depth` limit, or whose listing failed, does not hide
+  it from a later route, and a later route with more depth left lists it
+  again. In a case-sensitive directory (`fsutil file setCaseSensitiveInfo`)
+  `Data` and `data` are two directories and both are listed.
   Over SMB the duplicate message reads "Directory already enumerated in
   this scan under '…' — this path leads to the same directory (same volume
   serial and file ID)": the server does not reliably say which of the two

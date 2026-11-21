@@ -89,3 +89,32 @@ could appear covered without ever being exercised.
 - **A traversal cap per duplicate target.** Rejected: a cap is a policy
   knob nobody can set correctly; partial duplicate enumeration is harder
   to explain in an audit than "once + named routes".
+
+## Addendum 2026-11-21 (review CR-25, CR-26): only a listing counts, and the case stays
+
+Two cases made the duplicate-target rule skip a directory that had not
+been enumerated. Both were reproduced with the CLI.
+
+1. **A route without a listing.** `LoopDetector::enter` recorded a
+   directory as seen before the walker checked the depth limit or opened
+   the listing. With `--max-depth 3`, the junction `A\B\J → Z` was entered
+   at the limit (not listed), then `Z` at depth 1 was skipped as "already
+   enumerated", and `Z\child` and its file were missing. A failed listing
+   had the same effect. Now `enter()` only decides and pushes the active
+   chain. `listed()` records a directory once its listing succeeded,
+   together with the depth that was left (`None` = unlimited). A later
+   route is a duplicate only when a listing covered at least as much depth
+   as the route has left (`depth_covers`). A later route with more depth
+   left enumerates the directory again. Its subtree may then appear under
+   both routes — never missing.
+2. **Case-sensitive directories.** The identity of a local directory was
+   lowercased. In a directory with case sensitivity on (`fsutil file
+   setCaseSensitiveInfo`), `Data` and `data` are two directories, and
+   `data` was skipped as a duplicate ("reached there through a reparse
+   point", although none was involved). Windows returns the case stored on
+   disk both from `GetFinalPathNameByHandle` (the canonical form) and in a
+   directory listing, so two routes to one directory agree without
+   lowercasing. The identity now keeps the case.
+
+Regression: unit tests for the depth rule, and two walker tests on the
+real file system (a junction at the depth limit, case-sensitive siblings).
