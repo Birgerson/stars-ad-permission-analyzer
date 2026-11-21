@@ -8,7 +8,7 @@ use std::io::Write;
 use adpa_core::{
     error::CoreError,
     model::{AccountStatus, EffectivePermission, LocalGroupEvalStatus, ShareEvalStatus},
-    traits::{AnalysisResult, ExportTarget, Exporter},
+    traits::{AnalysisResult, ExportTarget, Exporter, ScanCoverage},
 };
 use permission_engine::rights_label_compact;
 
@@ -52,7 +52,15 @@ const HEADERS: &[&str] = &[
     "determinable",
     // The reasons, " | "-separated (empty when determinable).
     "not_determinable_reasons",
+    // Review CR-28: "permission" for a result row; a scan export ends with
+    // one "scan_error" row per path the scan could not read or did not
+    // enumerate (path + reason in `explanation`) and one "scan_status" row
+    // (root + complete / cancelled / incomplete in `explanation`).
+    "row_kind",
 ];
+
+/// Columns per row.
+const COLUMNS: usize = 23;
 
 /// Neutralizes spreadsheet formula injection (CWE-1236) in a CSV cell.
 ///
@@ -76,7 +84,18 @@ pub struct CsvExporter;
 impl Exporter for CsvExporter {
     fn export(&self, result: &AnalysisResult, target: ExportTarget) -> Result<(), CoreError> {
         let file = crate::open_export_file(target)?;
-        write_csv(file, &result.permissions)
+        let mut wtr = CsvRowWriter::new(file)
+            .map_err(|e| CoreError::Export(format!("CSV write error: {e}")))?;
+        for perm in &result.permissions {
+            wtr.write(perm)
+                .map_err(|e| CoreError::Export(format!("CSV write error: {e}")))?;
+        }
+        if let Some(coverage) = &result.coverage {
+            wtr.write_coverage(coverage)
+                .map_err(|e| CoreError::Export(format!("CSV write error: {e}")))?;
+        }
+        wtr.finish()
+            .map(|_| ())
             .map_err(|e| CoreError::Export(format!("CSV write error: {e}")))
     }
 }
@@ -110,6 +129,15 @@ impl<W: Write> CsvRowWriter<W> {
     /// Appends one result row.
     pub fn write(&mut self, perm: &EffectivePermission) -> csv::Result<()> {
         self.wtr.write_record(record_for(perm)?)
+    }
+
+    /// Review CR-28: appends the scan's coverage — one `scan_error` row per
+    /// path left out, then the `scan_status` row.
+    pub fn write_coverage(&mut self, coverage: &ScanCoverage) -> csv::Result<()> {
+        for record in coverage_records(coverage) {
+            self.wtr.write_record(record)?;
+        }
+        Ok(())
     }
 
     /// Flushes the rows and returns the writer.
@@ -157,6 +185,16 @@ impl CsvFileWriter {
             target,
             overwrite,
         })
+    }
+
+    /// Review CR-28: appends the scan's coverage before [`Self::finish`].
+    pub fn write_coverage(&mut self, coverage: &ScanCoverage) -> Result<(), CoreError> {
+        match self.rows.as_mut() {
+            Some(rows) => rows
+                .write_coverage(coverage)
+                .map_err(|e| CoreError::Export(format!("CSV write error: {e}"))),
+            None => Err(CoreError::Export("CSV export already finished".to_owned())),
+        }
     }
 
     /// Appends one result row.
@@ -219,7 +257,31 @@ fn evidence_err(field: &str, e: serde_json::Error) -> csv::Error {
     )))
 }
 
-fn record_for(p: &EffectivePermission) -> csv::Result<[String; 22]> {
+/// Review CR-28: the coverage rows of a scan export. Pure.
+fn coverage_records(coverage: &ScanCoverage) -> Vec<[String; COLUMNS]> {
+    let row = |path: &str, text: &str, kind: &str| {
+        let mut r: [String; COLUMNS] = Default::default();
+        r[0] = neutralize_spreadsheet_formula(path);
+        r[12] = neutralize_spreadsheet_formula(text);
+        r[COLUMNS - 1] = kind.to_owned();
+        r
+    };
+    let mut out: Vec<[String; COLUMNS]> = coverage
+        .errors
+        .iter()
+        .map(|e| {
+            let path = e
+                .path
+                .as_ref()
+                .map_or(coverage.root.as_str(), |p| p.0.as_str());
+            row(path, &e.message, "scan_error")
+        })
+        .collect();
+    out.push(row(&coverage.root, &coverage.summary(), "scan_status"));
+    out
+}
+
+fn record_for(p: &EffectivePermission) -> csv::Result<[String; COLUMNS]> {
     let kind = format!("{:?}", p.identity.kind);
     // ADR 0065: the label columns never state an undeterminable value as a
     // fact.
@@ -232,8 +294,12 @@ fn record_for(p: &EffectivePermission) -> csv::Result<[String; 22]> {
         ),
         None => ("(none)".to_owned(), "(none)".to_owned()),
     };
-    let eff_label = rights_label_compact(p.effective_mask.0, uncertainty.is_empty());
-    let determinable = if uncertainty.is_empty() { "yes" } else { "no" };
+    // Review CR-16: the effective right's own determinability — a refused
+    // logon is exact No access even with an open layer (whose reason stays
+    // in `not_determinable_reasons`).
+    let effective_determinable = p.effective_determinable();
+    let eff_label = rights_label_compact(p.effective_mask.0, effective_determinable);
+    let determinable = if effective_determinable { "yes" } else { "no" };
     let reasons: Vec<&str> = uncertainty.iter().map(|u| u.reason.as_str()).collect();
     let explanation = p.path_explanation.steps.join(" | ");
     let (lg_status, lg_error) = local_group_status_fields(&p.local_group_status);
@@ -272,6 +338,7 @@ fn record_for(p: &EffectivePermission) -> csv::Result<[String; 22]> {
         diagnostics_json,
         determinable.to_owned(),
         neutralize_spreadsheet_formula(&reasons.join(" | ")),
+        "permission".to_owned(),
     ])
 }
 
@@ -394,6 +461,58 @@ mod tests {
         }
     }
 
+    /// Review CR-28: a scan export ends with one row per path left out and
+    /// the scan status; result rows say `permission`.
+    #[test]
+    fn a_scan_export_carries_its_coverage() {
+        use adpa_core::model::ScanError;
+        use adpa_core::traits::ScanCoverage;
+        let dir = std::env::temp_dir().join(format!("adpa-cr28-csv-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("scan.csv");
+        let _ = std::fs::remove_file(&path);
+        let result = AnalysisResult {
+            permissions: vec![make_perm(
+                r"C:\D\a",
+                "S-1-5-21-1-1-1-1",
+                "u",
+                MASK_READ,
+                None,
+                MASK_READ,
+                vec![],
+            )],
+            coverage: Some(ScanCoverage {
+                root: r"C:\D".into(),
+                max_depth: None,
+                cancelled: true,
+                errors: vec![ScanError {
+                    path: Some(NormalizedPath(r"C:\D\locked".into())),
+                    message: "Access denied: Cannot enumerate directory".into(),
+                }],
+            }),
+            ..Default::default()
+        };
+        CsvExporter
+            .export(&result, ExportTarget::File(path.clone()))
+            .unwrap();
+        let rows = parse_csv(&std::fs::read(&path).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+        let kind = rows[0].iter().position(|h| h == "row_kind").unwrap();
+        let expl = rows[0].iter().position(|h| h == "explanation").unwrap();
+        assert_eq!(rows.len(), 4, "header, result, error, status: {rows:?}");
+        assert_eq!(rows[1][kind], "permission");
+        assert_eq!(rows[2][kind], "scan_error");
+        assert_eq!(rows[2][0], r"C:\D\locked");
+        assert!(rows[2][expl].contains("Access denied"));
+        assert_eq!(rows[3][kind], "scan_status");
+        assert!(
+            rows[3][expl].contains("cancelled by the user"),
+            "{}",
+            rows[3][expl]
+        );
+        assert!(rows[3][expl].contains("1 path(s)"), "{}", rows[3][expl]);
+    }
+
     fn parse_csv(bytes: &[u8]) -> Vec<Vec<String>> {
         let mut rdr = csv::Reader::from_reader(bytes);
         let headers: Vec<String> = rdr.headers().unwrap().iter().map(str::to_owned).collect();
@@ -463,7 +582,7 @@ mod tests {
         assert_eq!(rows.len(), 1, "only header row for empty input");
         assert_eq!(rows[0][0], "path");
         assert_eq!(rows[0][1], "user_sid");
-        assert_eq!(rows[0].len(), 22);
+        assert_eq!(rows[0].len(), 23);
         assert_eq!(rows[0][20], "determinable");
         assert_eq!(rows[0][21], "not_determinable_reasons");
         assert_eq!(rows[0][13], "unsupported_aces");

@@ -1242,11 +1242,29 @@ every surface says:
   the same wording, the columns `determinable` (`yes`/`no`) and
   `not_determinable_reasons` carry the verdict and the reasons; the
   `*_mask_hex` columns keep the computed value.
-- **JSON** (schema v4): each permission has `determinable`
+- **JSON** (schema v5): each permission has `determinable`
   (`ntfs`/`share`/`effective`), `uncertainty` (`layer` + `reason`) and
   `account_status`.
 - **HTML / GUI**: a `NOT DETERMINABLE` badge or label with the computed
   value as "known data".
+
+**Whether a scan is complete** is part of every scan report (review
+CR-28), so a recipient can tell a complete scan from a partial one:
+
+- **CSV**: the last column `row_kind` is `permission` for a result row. A
+  scan export ends with one `scan_error` row per path the scan could not
+  read or did not enumerate (the path in `path`, the reason in
+  `explanation`) and one `scan_status` row (the scan root in `path`;
+  `explanation` says complete, cancelled, or how many paths are missing).
+  Filter on `row_kind = permission` for the results alone.
+- **JSON** (schema v5): `scan` holds `root`, `max_depth`, `complete`,
+  `cancelled`, `summary` and `errors` (path + message). It is `null` for a
+  single-path analysis.
+- **HTML**: a line at the top says "scan complete", "scan incomplete" or
+  "scan cancelled — partial results", and a table "Paths not covered"
+  lists every path left out with its reason.
+- A cancelled scan exports its partial results, marked as such; up to
+  v1.19.0 a cancelled or incomplete scan exported like a complete one.
 - **Explanation path** (CLI, CSV `explanation`, HTML details, GUI steps):
   the "NTFS effective", "Share permission" and "Effective (NTFS ∩ Share)"
   steps use the same wording. Why the value is uncertain is part of the

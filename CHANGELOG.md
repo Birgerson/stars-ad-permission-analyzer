@@ -38,6 +38,18 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   and the GUI, now resolve the drive to its UNC path first and evaluate
   that; the explanation names the drive. A network drive whose UNC path
   Windows does not return is an error, never a local evaluation.
+- **Scan reports say whether the scan is complete (review CR-28).** The
+  CLI recorded a cancellation on the console and in the scan history, and
+  the GUI built its reports from the results alone. A report recipient could
+  not tell a complete scan from a cancelled or partial one, even when the
+  missing paths decided the audit. Every scan export now carries its
+  coverage: the CSV ends with a `scan_error` row per path left out and a
+  `scan_status` row (new last column `row_kind`); the JSON report (schema
+  v5) has a `scan` section with `complete`, `cancelled` and the paths left
+  out; the HTML report states complete / incomplete / cancelled at the top
+  and lists the paths not covered. The CSV `determinable` column now
+  follows the effective right's own determinability, so a refused logon
+  (CR-16) reads exact there too.
 - **An ACL with entries Stars cannot evaluate is never called empty
   (review CR-24).** An NTFS DACL holding only unsupported entries was
   explained as "Empty DACL — nobody is granted anything", and the share
