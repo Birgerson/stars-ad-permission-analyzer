@@ -217,6 +217,18 @@ impl SidDomainRelation {
     }
 }
 
+/// Review CR-32: what the configured trusted-domain connection did for an
+/// account found only as an FSP or by LSA.
+enum ServingConnection {
+    /// Resolved on the trusted domain's DC.
+    Resolved(Box<PrincipalResolution>),
+    /// No connection, not a trusted-domain account, or the connection serves
+    /// another domain — the FSP / LSA path applies unchanged.
+    NotServing,
+    /// The connection could not be checked; the reason is named.
+    Failed(String),
+}
+
 /// Status of the group resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupResolutionStatus {
@@ -899,10 +911,17 @@ where
                     // Selective Authentication check) instead of through
                     // the FSP, whose home-domain groups are unknown.
                     // Without such a connection nothing changes.
-                    if let Some(resolution) = self.resolve_with_serving_connection(&sid).await {
-                        return Ok(resolution);
-                    }
-                    return self.resolve_fsp_hit(sid, identity).await;
+                    let gap = match self.resolve_with_serving_connection(&sid).await {
+                        ServingConnection::Resolved(resolution) => return Ok(*resolution),
+                        ServingConnection::NotServing => None,
+                        ServingConnection::Failed(reason) => Some(reason),
+                    };
+                    let mut resolution = self.resolve_fsp_hit(sid, identity).await?;
+                    // Review CR-32: the FSP evidence stays; why the
+                    // configured connection could not complete the token is
+                    // named, never dropped.
+                    resolution.group_resolution_gaps.extend(gap);
+                    return Ok(resolution);
                 }
                 let (memberships, group_status, group_gaps, excluded_groups) =
                     self.resolve_groups(&sid).await;
@@ -931,7 +950,7 @@ where
             }
             Ok(None) => self.fall_back_to_lsa(&sid).await,
             Err(e) => {
-                // `Orphaned` verwandeln. ScopeStatus =
+                // An LDAP error is a failed lookup, never an orphaned account.
                 warn!(
                     sid = %sid.0,
                     error = %e,
@@ -968,17 +987,42 @@ where
     /// serves → [`Self::resolve_in_trusted_domain`]. `None` (keep the FSP /
     /// LSA path) without a connection, for a SID of no trusted domain, or
     /// when the connection serves another domain.
-    async fn resolve_with_serving_connection(&self, sid: &Sid) -> Option<PrincipalResolution> {
-        let backend = self.trusted_backend.as_ref()?;
-        let relation = self.identity_backend.classify_unresolved_sid(sid).await;
-        let SidDomainRelation::TrustedDomain { domain_sid, .. } = &relation else {
-            return None;
+    ///
+    /// Review CR-32: when the connection's own domain SID cannot be read,
+    /// the reason is returned (`Failed`) instead of being dropped — the
+    /// caller keeps its FSP / LSA evidence and names why the token could not
+    /// be completed.
+    async fn resolve_with_serving_connection(&self, sid: &Sid) -> ServingConnection {
+        let Some(backend) = self.trusted_backend.as_ref() else {
+            return ServingConnection::NotServing;
         };
-        let served = backend.served_domain_sid().await.ok()?;
+        let relation = self.identity_backend.classify_unresolved_sid(sid).await;
+        let SidDomainRelation::TrustedDomain {
+            partner,
+            domain_sid,
+            ..
+        } = &relation
+        else {
+            return ServingConnection::NotServing;
+        };
+        let served = match backend.served_domain_sid().await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(sid = %sid.0, error = %e, "Trusted-domain connection: domain SID not readable");
+                return ServingConnection::Failed(format!(
+                    "the account belongs to the trusted domain {partner}, but the domain SID of \
+                     the configured trusted-domain connection could not be read ({e}), so its \
+                     groups in {partner} were not resolved there"
+                ));
+            }
+        };
         if !served.eq_ignore_ascii_case(domain_sid) {
-            return None;
+            return ServingConnection::NotServing;
         }
-        self.resolve_in_trusted_domain(sid, &relation).await
+        match self.resolve_in_trusted_domain(sid, &relation).await {
+            Some(resolution) => ServingConnection::Resolved(Box::new(resolution)),
+            None => ServingConnection::NotServing,
+        }
     }
 
     /// ADR 0078: a SID of a trusted domain, and a connection to that domain
@@ -1058,9 +1102,11 @@ where
                 // then a configured trusted-domain connection was never
                 // used on such a machine (ADR 0078 was measured from a
                 // workstation outside the domain).
-                if let Some(resolution) = self.resolve_with_serving_connection(sid).await {
-                    return Ok(resolution);
-                }
+                let gap = match self.resolve_with_serving_connection(sid).await {
+                    ServingConnection::Resolved(resolution) => return Ok(*resolution),
+                    ServingConnection::NotServing => None,
+                    ServingConnection::Failed(reason) => Some(reason),
+                };
                 let identity = Identity {
                     sid: sid.clone(),
                     name: if account.name.is_empty() {
@@ -1094,7 +1140,9 @@ where
                     diagnostics,
                     resolved_via_fsp: false,
                     resolved_via_global_catalog: false,
-                    group_resolution_gaps: Vec::new(),
+                    // Review CR-32: why the configured connection did not
+                    // resolve the groups, when it tried.
+                    group_resolution_gaps: gap.into_iter().collect(),
                     excluded_groups: Vec::new(),
                     trusted_domain: Default::default(),
                 })
@@ -1874,6 +1922,19 @@ mod tests {
         .await;
         assert_eq!(t.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(res.resolved_via_fsp);
+        // Review CR-32: a connection whose domain SID cannot be read keeps
+        // the FSP evidence and names why the token is incomplete.
+        let broken = fake_trusted(None, false);
+        let res = run(Some(broken.clone()), trusted_relation(0x4)).await;
+        assert_eq!(broken.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(res.resolved_via_fsp);
+        assert!(
+            res.group_resolution_gaps
+                .iter()
+                .any(|g| g.contains("could not be read") && g.contains("LDAP bind rejected")),
+            "{:?}",
+            res.group_resolution_gaps
+        );
     }
 
     /// Lab 2026-10-24: on a domain-joined machine the local LSA names an
@@ -1919,6 +1980,25 @@ mod tests {
             res.scope_status,
             IdentityScopeStatus::OutsideConfiguredLdapBase
         );
+        assert!(
+            res.group_resolution_gaps.is_empty(),
+            "another domain is no failure"
+        );
+        // Review CR-32: the same LSA evidence with a broken connection names
+        // the reason, and the engine shows it as an incomplete token.
+        let res = run(Some(fake_trusted(None, false)), trusted_relation(0x4)).await;
+        assert_eq!(
+            res.scope_status,
+            IdentityScopeStatus::OutsideConfiguredLdapBase
+        );
+        assert!(
+            res.group_resolution_gaps
+                .iter()
+                .any(|g| g.contains("trusted domain ext.test") && g.contains("could not be read")),
+            "{:?}",
+            res.group_resolution_gaps
+        );
+        assert!(!res.engine_flags().group_resolution_gaps.is_empty());
     }
 
     /// A connection to the wrong domain is never used for the account.

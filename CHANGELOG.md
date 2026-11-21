@@ -38,6 +38,12 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   and the GUI, now resolve the drive to its UNC path first and evaluate
   that; the explanation names the drive. A network drive whose UNC path
   Windows does not return is an error, never a local evaluation.
+- **A trusted-domain connection that fails says why (review CR-32).**
+  When an account of a trusted domain was found as an FSP or by LSA, a
+  configured trusted-domain connection whose domain SID could not be read
+  was skipped silently, and the result continued with a partial token. The
+  FSP or LSA evidence now stays, and the reason the connection could not
+  complete the token is a named gap (`GroupResolutionIncomplete`).
 - **Reports and the database are never written into the audited tree
   (review CR-17).** The output validators checked names and the parent
   folder only, so a report, its staging file or the scan database could be
@@ -141,7 +147,8 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
 - **German leftovers removed (review CR-35).** Comments, test messages and
   the workspace manifest still held German fragments the language gate did
   not know. They are removed or translated, and the gate now knows their
-  words.
+  words. A second sweep with a wider word list found seven more fragments
+  (`Strukturierte Diagnose-Marker`, `Kette enthalten.`, …); none is left.
 
 ## [1.19.0] — 2026-10-25
 
