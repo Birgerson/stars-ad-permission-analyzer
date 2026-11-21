@@ -1132,6 +1132,10 @@ async fn run_analyze(
     let bind_dn = conn.bind_dn;
     let smb_server = conn.smb_server;
     let share_name = conn.share_name;
+    // Review CR-20: a UNC path is evaluated on the server and share it is
+    // served from; a manual context that names another one is refused.
+    validation::path::check_smb_override(&path, smb_server.as_deref(), share_name.as_deref())
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let mut fso =
         read_fso(&path).map_err(|e| anyhow::anyhow!("Cannot read path '{}': {}", path, e))?;
@@ -1446,6 +1450,10 @@ async fn run_scan(
     let bind_dn = conn.bind_dn;
     let smb_server = conn.smb_server;
     let share_name = conn.share_name;
+    // Review CR-20: a UNC path is evaluated on the server and share it is
+    // served from; a manual context that names another one is refused.
+    validation::path::check_smb_override(&path, smb_server.as_deref(), share_name.as_deref())
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     if let Some(ref db) = db_path {
         validate_db_path(db).map_err(|e| anyhow::anyhow!("Invalid database path: {e}"))?;
     }

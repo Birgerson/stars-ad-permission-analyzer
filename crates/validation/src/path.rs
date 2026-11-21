@@ -303,6 +303,63 @@ impl SmbAuditContext {
     }
 }
 
+/// Review CR-20: an explicit SMB server or share for a UNC path must name the
+/// server and share the path is evaluated on (`evaluated_path`, after the
+/// network-drive and DFS resolution). Otherwise the NTFS DACL would come
+/// from one server and the share DACL, local groups and policies from
+/// another, and the mix could be reported as exact. For a local path the
+/// explicit values are the only SMB context and are not checked here.
+///
+/// A short name and a fully qualified name with the same first label are
+/// the same server (`FS-02` / `FS-02.corp.test`); two fully qualified names
+/// or an IPv4 literal must match exactly. Pure.
+pub fn check_smb_override(
+    evaluated_path: &str,
+    explicit_smb_server: Option<&str>,
+    explicit_share_name: Option<&str>,
+) -> Result<(), CoreError> {
+    let Some((server, share)) = parse_unc_components(evaluated_path) else {
+        return Ok(());
+    };
+    let conflict = |what: &str, given: &str, served: &str| {
+        CoreError::Validation(format!(
+            "The {what} {given} conflicts with the path {evaluated_path}, which is served by \
+             {served}. A UNC path is evaluated on the server and share it is served from — \
+             leave the SMB server and share empty for a UNC path, or give the path on the \
+             server you mean."
+        ))
+    };
+    if let Some(given) = explicit_smb_server.map(str::trim).filter(|s| !s.is_empty()) {
+        if !same_server(given, &server) {
+            return Err(conflict("SMB server", given, &format!("\\\\{server}")));
+        }
+    }
+    if let Some(given) = explicit_share_name.map(str::trim).filter(|s| !s.is_empty()) {
+        if !given.eq_ignore_ascii_case(&share) {
+            return Err(conflict(
+                "share name",
+                given,
+                &format!("the share \\\\{server}\\{share}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `true` when two server names name the same server as far as their text
+/// shows (see [`check_smb_override`]). Pure.
+fn same_server(a: &str, b: &str) -> bool {
+    if a.eq_ignore_ascii_case(b) {
+        return true;
+    }
+    let is_ipv4 = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit() || c == '.');
+    if is_ipv4(a) || is_ipv4(b) || (a.contains('.') && b.contains('.')) {
+        return false;
+    }
+    let first = |s: &str| s.split('.').next().unwrap_or(s).to_owned();
+    first(a).eq_ignore_ascii_case(&first(b))
+}
+
 /// Strips the long-path prefix (`\\?\` or `\\?\UNC\`) and returns the
 /// human-readable form as an owned string. Inverse of
 /// [`to_windows_api_path`]; used to keep `FileSystemObject.path`
@@ -347,6 +404,38 @@ pub fn to_windows_api_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review CR-20: a DFS path resolved to \\FS1\Data with a manual
+    /// \\FS2\Data context is refused; values naming the same server and
+    /// share pass; a local path keeps its manual context.
+    #[test]
+    fn a_conflicting_smb_override_for_a_unc_path_is_refused() {
+        let evaluated = r"\\FS1.corp.test\Data\Projects";
+        let err = check_smb_override(evaluated, Some("FS2"), None).unwrap_err();
+        assert!(
+            err.to_string().contains("FS2 conflicts with the path"),
+            "{err}"
+        );
+        let err = check_smb_override(evaluated, None, Some("Other")).unwrap_err();
+        assert!(err.to_string().contains("share name Other"), "{err}");
+        for (server, share) in [
+            (Some("FS1"), Some("data")),
+            (Some("fs1.CORP.test"), None),
+            (Some(""), Some("")),
+            (None, None),
+        ] {
+            assert!(
+                check_smb_override(evaluated, server, share).is_ok(),
+                "{server:?} {share:?}"
+            );
+        }
+        // Two qualified names or an address must match exactly.
+        assert!(check_smb_override(evaluated, Some("fs1.other.test"), None).is_err());
+        assert!(check_smb_override(r"\\192.168.11.161\Data", Some("192.168.11.16"), None).is_err());
+        assert!(check_smb_override(r"\\192.168.11.161\Data", Some("192.168.11.161"), None).is_ok());
+        // A local path: the manual context is the only one.
+        assert!(check_smb_override(r"C:\Data", Some("FS2"), Some("Data")).is_ok());
+    }
 
     #[test]
     fn valid_unc_path_accepted() {

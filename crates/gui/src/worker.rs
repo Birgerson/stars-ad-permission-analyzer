@@ -1129,6 +1129,10 @@ async fn handle_analyze(
     let smb_server = normalized.smb_server.as_deref();
     let share_name = normalized.share_name.as_deref();
     let ldap = normalized.ldap.as_ref();
+    // Review CR-20: a UNC path is evaluated on the server and share it is
+    // served from; a manual context that names another one is refused.
+    validation::path::check_smb_override(path, smb_server, share_name)
+        .map_err(|e| e.to_string())?;
     let mut fso = read_fso(path).map_err(|e| format!("Failed to read path: {e}"))?;
     // The result names the path as given; the DFS marker names the target.
     if dfs.is_some() {
@@ -1576,6 +1580,11 @@ async fn handle_scan(
     let smb_server = normalized.smb_server.as_deref();
     let share_name = normalized.share_name.as_deref();
     let ldap = normalized.ldap.as_ref();
+    // Review CR-20: a UNC root is scanned on the server and share it is
+    // served from; a manual context that names another one is refused.
+    if let Err(e) = validation::path::check_smb_override(root, smb_server, share_name) {
+        return make_early_summary(e.to_string());
+    }
 
     // Raw identity in — validated and dispatched inside
     // `resolve_identity_sids`. Everything downstream uses the RESOLVED

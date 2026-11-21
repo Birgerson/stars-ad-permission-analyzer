@@ -214,7 +214,10 @@ user can effectively do there.
   [Identity input forms](#identity-input-forms).
 - **SMB share (optional)** — SMB server and share name. Auto-detected
   for UNC paths; on local paths on a share, set manually if you also
-  want the share mask evaluated.
+  want the share mask evaluated. For a UNC path, values that name another
+  server or share than the one the path is served from (after a DFS
+  referral) are refused: the NTFS DACL and the share DACL must come from
+  the same server.
 - **Analyze** — runs the identity-bound evaluation.
 - **Who has access?** — runs the **path-centric trustee table**
   instead: all trustees with their ACEs, NTFS and share separated.
@@ -1586,7 +1589,7 @@ exit code **and** the `determinable` column (CSV) / field (JSON).
 | `--global-catalog` | LDAP commands | forest-wide lookup via the Global Catalog (marked: only universal groups replicate fully) |
 | `--ldap-timeout` | LDAP commands | seconds per LDAP operation, 1–600 (default 10) |
 | `--trust-server`, `--trust-base-dn`, `--trust-bind-dn` | analyze, scan, groups | optional connection to a DC of a **trusted** domain, password via `ADPA_TRUST_BIND_PASSWORD` — see [Accounts of a trusted domain](#accounts-of-a-trusted-domain) |
-| `--smb-server`, `--share-name` | analyze, scan | share context for a local path; both or neither (auto-detected for UNC paths) |
+| `--smb-server`, `--share-name` | analyze, scan | share context for a local path; both or neither (auto-detected for UNC paths; for a UNC path a value naming another server or share than the one serving it is refused) |
 | `--max-depth` | scan | directory levels below `--path`: `0` = only the path, default unlimited, maximum 512 |
 | `--db` | scan; runs, errors | SQLite file for the scan history; without it `scan` stores **no** history (nothing for `runs`, `errors` or the Delta tab) |
 | `-o, --output`, `--force` | see Export formats | |

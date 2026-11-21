@@ -38,6 +38,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   and the GUI, now resolve the drive to its UNC path first and evaluate
   that; the explanation names the drive. A network drive whose UNC path
   Windows does not return is an error, never a local evaluation.
+- **A manual SMB context can no longer mix two servers (review CR-20).**
+  For a DFS path Stars read the NTFS DACL on the referred target, but an
+  explicit `--smb-server` / `--share-name` (or the GUI fields) still decided
+  the account lookup, local groups, policies and the share DACL. With a
+  referral to `\\FS1\Data` and a manual `\\FS2\Data` the result combined
+  both servers and could be marked exact. For a UNC path, values that name
+  another server or share than the one the path is served from are now
+  refused with an explanation; a short name and the FQDN of the same server
+  count as the same. For a local path the manual context stays the only one.
 - **A local scan no longer walks a link into a share (review CR-21).** A
   directory symbolic link below a local scan root that leads to a share
   (Windows follows "local to remote" links by default) was walked, and the
