@@ -38,6 +38,15 @@ Versions prior to `v0.2.0-rc1` are summarized because no formal release notes ex
   and the GUI, now resolve the drive to its UNC path first and evaluate
   that; the explanation names the drive. A network drive whose UNC path
   Windows does not return is an error, never a local evaluation.
+- **A ranged `tokenGroups` answer would be an error, not "absent" (review
+  CR-31).** The review suspected that AD could return `tokenGroups` in
+  ranges, which Stars would read as empty. Measured in the lab: with
+  `MaxValRange` 1,500, an account in 5,000 groups gets `memberOf` in
+  ranges, but `tokenGroups` (3,051 values) and
+  `tokenGroupsGlobalAndUniversal` (2,049) come back whole — AD truncates
+  them silently instead, a case Stars already reports through the
+  1,015-group token limit. As cheap insurance, a ranged answer for these
+  constructed attributes is now an error naming the range.
 - **A trusted-domain connection that fails says why (review CR-32).**
   When an account of a trusted domain was found as an FSP or by LSA, a
   configured trusted-domain connection whose domain SID could not be read

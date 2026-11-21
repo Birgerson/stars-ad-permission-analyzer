@@ -633,6 +633,17 @@ pub(crate) fn parse_range_suffix(key: &str, attr: &str) -> Option<(u32, Option<u
     Some((start, end))
 }
 
+/// Review CR-31: the ranged form of `attr` among the returned attribute
+/// names (string or binary values), if any. Pure.
+fn ranged_constructed_key(entry: &RawEntry, attr: &str) -> Option<String> {
+    entry
+        .attrs
+        .keys()
+        .chain(entry.bin_attrs.keys())
+        .find(|key| parse_range_suffix(key, attr).is_some())
+        .cloned()
+}
+
 fn ranged_key(entry: &RawEntry, attr: &str) -> Option<(String, u32, Option<u32>)> {
     entry
         .attrs
@@ -762,6 +773,16 @@ async fn search_constructed_sid_list(
     let Some(entry) = rs.into_iter().next().map(RawEntry::from_search_entry) else {
         return Ok(None);
     };
+    // Review CR-31: AD returns these constructed attributes whole — measured
+    // with 3,051 values against MaxValRange 1,500 (lab 2026-11-21). Should a
+    // server ever return them in ranges, the list is incomplete: an error,
+    // never read as "not returned".
+    if let Some(key) = ranged_constructed_key(&entry, attr) {
+        return Err(CoreError::LdapQuery(format!(
+            "{attr} of {dn} came back in ranges ({key}), which Stars does not read for this \
+             attribute — the list would be incomplete"
+        )));
+    }
     if entry.value_count(attr) == 0 {
         return Ok(None);
     }
@@ -911,6 +932,41 @@ mod tests {
         assert_eq!(parse_range_suffix("memberOf;range=10-5", "memberOf"), None);
         assert_eq!(parse_range_suffix("memberOf;range=a-5", "memberOf"), None);
         assert_eq!(parse_range_suffix("memberOf;range=0", "memberOf"), None);
+    }
+
+    /// Review CR-31: a ranged constructed SID list is recognised in either
+    /// value map, in any case; the plain name is not a range.
+    #[test]
+    fn a_ranged_constructed_attribute_is_recognised() {
+        let entry = |key: &str, binary: bool| {
+            let mut map: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
+            let mut strings: HashMap<String, Vec<String>> = HashMap::new();
+            if binary {
+                map.insert(key.to_owned(), vec![vec![1, 0]]);
+            } else {
+                strings.insert(key.to_owned(), vec!["x".into()]);
+            }
+            RawEntry {
+                dn: "CN=u".into(),
+                attrs: strings,
+                bin_attrs: map,
+            }
+        };
+        assert_eq!(
+            ranged_constructed_key(&entry("tokenGroups;range=0-1499", true), "tokenGroups"),
+            Some("tokenGroups;range=0-1499".to_owned())
+        );
+        assert!(
+            ranged_constructed_key(&entry("tokengroups;RANGE=0-*", false), "tokenGroups").is_some()
+        );
+        assert_eq!(
+            ranged_constructed_key(&entry("tokenGroups", true), "tokenGroups"),
+            None
+        );
+        assert_eq!(
+            ranged_constructed_key(&entry("tokenGroupsGlobalAndUniversal", true), "tokenGroups"),
+            None
+        );
     }
 
     #[test]
